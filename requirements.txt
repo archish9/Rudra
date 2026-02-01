@@ -1,0 +1,31 @@
+# Core Agent Framework
+deepagents==0.3.9
+
+# LLM Integration - Ollama (local LLMs)
+langchain-ollama==1.0.1
+langchain-community==0.4.1
+
+# CLI Interface & Terminal UI
+typer==0.21.1
+rich==14.2.0
+click==8.1.0
+
+# Web Server (optional API layer)
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
+
+# Environment Configuration
+python-dotenv==1.2.1
+
+# Code Quality & Linting Tools
+ruff==0.14.13
+
+# Testing Framework
+pytest==9.0.2
+
+# Web Search Tools (for up-to-date information)
+tavily-python==0.7.20
+duckduckgo-search==7.0.0
+
+# HTTP Requests (for PyPI version checking tool)
+requests==2.32.0
