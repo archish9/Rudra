@@ -16,7 +16,7 @@ from rudraanvil.agent.sub_agents import SubAgentPool, SubAgentType, get_recommen
 from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem, FileSyncManager, SyncMode
 from rudraanvil.state import TodoList, TodoStatus, CheckpointManager
-from rudraanvil.tools import create_file_tools, create_code_tools, create_git_tools
+from rudraanvil.tools import create_file_tools, create_code_tools
 
 
 @dataclass
@@ -92,7 +92,6 @@ class MainAgent:
         tools = []
         tools.extend(create_file_tools(self.context.vfs))
         tools.extend(create_code_tools(self.context.vfs))
-        tools.extend(create_git_tools(self.context.vfs))
         return tools
     
     def _get_tool_descriptions(self) -> str:
