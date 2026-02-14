@@ -24,7 +24,7 @@ classifiers = [
 
 dependencies = [
     # Core Agent Framework
-    "deepagents>=0.3.9",
+    "deepagents>=0.4.1",
     
     # LLM Integration - Ollama
     "langchain-ollama>=1.0.1",

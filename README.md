@@ -78,40 +78,121 @@ Think of it as having a tireless developer who can work on your codebase while y
 - **Ollama** running locally with the `gpt-oss:20b` model
 - **Git** (for cloning the repo)
 
-### Recommended: Install with pipx (Isolated & Global)
-
-[pipx](https://pypa.github.io/pipx/) installs Python CLI tools in isolated environments while making them available globally. This is the cleanest approach.
+### Step 1: Clone the Repository
 
 ```bash
-# Install pipx (one-time, if you don't have it)
-pip install --user pipx
-pipx ensurepath
-# Restart your terminal after this
-
-# Clone and install RudraAnvil
 git clone https://github.com/archish/RudraAnvil.git
 cd RudraAnvil
+```
+
+### Step 2: Choose Your Installation Method
+
+#### Option A: pipx (Recommended - Global Access, No Activation)
+
+[pipx](https://pypa.github.io/pipx/) installs Python CLI tools in isolated environments while making them globally available. This is the cleanest approach for CLI tools.
+
+**On Debian/Ubuntu/Linux Mint:**
+
+If you get an `externally-managed-environment` error, install pipx via apt:
+
+```bash
+# Install pipx from system package manager
+sudo apt install pipx
+
+# Ensure pipx path is configured
+pipx ensurepath
+
+# Restart your terminal or run:
+source ~/.bashrc
+
+# Install RudraAnvil in editable mode
 pipx install -e .
 
 # Verify installation
 rudraanvil --version
 ```
 
-After installation, `rudraanvil` works from **any directory**—no activation needed.
-
-### Alternative: Install with venv
-
-If you prefer traditional virtual environments:
+**On macOS/Other Systems:**
 
 ```bash
-git clone https://github.com/archish/RudraAnvil.git
-cd RudraAnvil
-python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -e .
+# Install pipx
+pip install --user pipx
+pipx ensurepath
+# Restart your terminal
+
+# Install RudraAnvil
+pipx install -e .
+
+# Verify installation
+rudraanvil --version
 ```
 
-> ⚠️ With venv, you must activate the environment in each new terminal session.
+✅ **Benefits:**
+- Works from any directory
+- No virtual environment activation needed
+- Isolated from system Python
+- Perfect for development (editable mode)
+
+#### Option B: Virtual Environment (Traditional)
+
+If you prefer traditional virtual environments or don't have sudo access:
+
+```bash
+# Create virtual environment
+python3 -m venv .venv
+
+# Activate it
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install in editable mode
+pip install -e .
+
+# Verify installation
+rudraanvil --version
+```
+
+⚠️ **Important:** With venv, you must activate the environment in each new terminal session:
+```bash
+source ~/path/to/RudraAnvil/.venv/bin/activate
+```
+
+### Step 3: Set Up Ollama
+
+RudraAnvil requires Ollama to be running with the appropriate model:
+
+```bash
+# Start Ollama server (in a separate terminal)
+ollama serve
+
+# Pull the required model
+ollama pull gpt-oss:20b
+
+# Verify model is available
+ollama list
+```
+
+### Step 4: Configure Environment (Optional)
+
+```bash
+# Copy example configuration
+cp .env.example .env
+
+# Edit if needed (defaults work for most cases)
+nano .env
+```
+
+### Installation Complete! 🎉
+
+Test your installation:
+
+```bash
+# Check version
+rudraanvil --version
+
+# Try a simple command
+cd ~/my-test-project
+rudraanvil build "Create a hello world Python script"
+```
 
 ---
 
@@ -459,30 +540,183 @@ RudraAnvil stores checkpoints in `.rudraanvil/` inside your project. Add to `.gi
 
 ---
 
+## Development Workflow
+
+### Making Code Changes
+
+Since you installed with `-e` (editable mode), code changes are reflected **immediately** without reinstalling:
+
+```bash
+# 1. Edit any source file
+vim src/rudraanvil/cli.py
+
+# 2. Test immediately - changes are live!
+rudraanvil --version
+```
+
+The `-e` flag creates a symlink to your source code, so Python imports directly from your development directory.
+
+### When to Reinstall
+
+You **only** need to reinstall if you modify:
+
+#### 1. Dependencies (pyproject.toml or requirements.txt)
+
+```bash
+# With pipx
+cd ~/path/to/RudraAnvil
+pipx install -e . --force
+
+# With venv
+source .venv/bin/activate
+pip install -e .
+```
+
+#### 2. Entry Points (CLI command definitions)
+
+If you change the `[project.scripts]` section in `pyproject.toml`:
+
+```bash
+# Same as above - reinstall
+pipx install -e . --force  # or pip install -e .
+```
+
+### Typical Development Cycle
+
+```bash
+# Edit code
+vim src/rudraanvil/agent/main.py
+
+# Test immediately (no reinstall needed)
+rudraanvil chat
+
+# Add a new dependency
+echo "new-package==1.0.0" >> requirements.txt
+
+# Now reinstall to pick up new dependency
+pipx install -e . --force
+```
+
+### Running Tests
+
+```bash
+# With pipx (from anywhere)
+cd ~/path/to/RudraAnvil
+pytest
+
+# With venv (activate first)
+source .venv/bin/activate
+pytest
+```
+
+---
+
 ## Troubleshooting
 
 ### "command not found: rudraanvil"
 
-**With pipx:** Run `pipx ensurepath` and restart your terminal.
-
-**With venv:** Make sure the virtual environment is activated:
+**With pipx:**
 ```bash
-source /path/to/RudraAnvil/.venv/bin/activate
+# Ensure path is configured
+pipx ensurepath
+source ~/.bashrc  # or restart terminal
+
+# Verify installation
+pipx list
 ```
 
-### "Error calling LLM"
+**With venv:**
+```bash
+# Activate the virtual environment
+source ~/path/to/RudraAnvil/.venv/bin/activate
 
-1. Ensure Ollama is running: `ollama serve`
-2. Verify the model is available: `ollama list`
-3. Check `OLLAMA_BASE_URL` in your `.env`
+# Verify installation
+which rudraanvil
+```
+
+### "externally-managed-environment" error
+
+This is common on Debian/Ubuntu systems. **Solution:**
+
+```bash
+# Install pipx via apt instead of pip
+sudo apt install pipx
+pipx ensurepath
+source ~/.bashrc
+
+# Then install RudraAnvil
+cd ~/path/to/RudraAnvil
+pipx install -e .
+```
+
+**Alternative:** Use the venv method (no sudo required).
+
+### "Error calling LLM" or "Connection refused"
+
+1. **Check Ollama is running:**
+   ```bash
+   # Start Ollama server
+   ollama serve
+   ```
+
+2. **Verify model is available:**
+   ```bash
+   ollama list
+   # Should show gpt-oss:20b
+   ```
+
+3. **Check configuration:**
+   ```bash
+   cat .env | grep OLLAMA
+   # Should show: OLLAMA_BASE_URL=http://localhost:11434
+   ```
+
+4. **Test Ollama directly:**
+   ```bash
+   curl http://localhost:11434/api/tags
+   ```
 
 ### "Permission denied" during install
 
-Don't use `sudo pip`. Use pipx or venv instead (see [Installation](#installation)).
+**Never use `sudo pip`** - it can break your system Python.
+
+**Solutions:**
+- Use `sudo apt install pipx` (for pipx itself only)
+- Use venv method (no sudo needed)
+- Use `pip install --user` (not recommended for development)
+
+### Changes not reflecting after editing code
+
+**Check installation mode:**
+```bash
+# With pipx
+pipx list --verbose
+# Should show "editable" next to rudraanvil
+
+# With venv
+pip show rudraanvil
+# Should show: Editable project location: /path/to/RudraAnvil
+```
+
+**If not editable, reinstall:**
+```bash
+pipx install -e . --force
+# or
+pip install -e .
+```
 
 ### Slow on first run
 
-The first run may be slower as dependencies are loaded. Subsequent runs are faster.
+The first run may be slower as dependencies are loaded and Ollama initializes the model. Subsequent runs are much faster.
+
+### Model download is slow
+
+The `gpt-oss:20b` model is large (~12GB). Download time depends on your internet connection:
+
+```bash
+# Check download progress
+ollama pull gpt-oss:20b
+```
 
 ---
 

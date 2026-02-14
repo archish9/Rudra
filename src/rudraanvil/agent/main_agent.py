@@ -1,22 +1,19 @@
-"""Main supervisor agent for RudraAnvil."""
+"""Main supervisor agent for RudraAnvil using deepagents framework."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import Optional
 
-from langchain_ollama import ChatOllama
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from deepagents import create_deep_agent
 from rich.console import Console
 
-from rudraanvil.agent.prompts import SUPERVISOR_PROMPT, COMMAND_PROMPTS
-from rudraanvil.agent.sub_agents import SubAgentPool, SubAgentType, get_recommended_agent_type
 from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem, FileSyncManager, SyncMode
-from rudraanvil.state import TodoList, TodoStatus, CheckpointManager
-from rudraanvil.tools import create_file_tools, create_code_tools
+from rudraanvil.state import TodoList, CheckpointManager
+from rudraanvil.tools import create_code_tools
 
 
 @dataclass
@@ -56,109 +53,145 @@ class AgentResult:
     todo_summary: str = ""
 
 
-class MainAgent:
-    """Main supervisor agent that orchestrates the coding workflow."""
+def build_system_prompt(command: str, task: str, project_path: Path, vfs: VirtualFileSystem, **kwargs) -> str:
+    """Build the system prompt for the agent based on command type."""
     
-    def __init__(self, context: AgentContext):
-        """Initialize the main agent.
+    # Base prompt
+    base_prompt = f"""You are RudraAnvil, an expert autonomous coding agent.
+
+Project root: {project_path}
+
+Project structure:
+{vfs.get_tree()}
+
+You can:
+- Plan and decompose tasks using the write_todos tool
+- Read, write, and edit files using built-in file system tools
+- Run code, tests, and linting
+- Spawn sub-agents for specialized tasks
+
+"""
+    
+    # Add command-specific guidance
+    if command == "build":
+        existing = "This is an existing project." if vfs.files else "Starting from scratch."
+        base_prompt += f"""
+Task: {task}
+{existing}
+
+You MUST complete this task fully. Follow these steps:
+1. **Plan**: Use write_todos to create a task list
+2. **Execute**: Work through EACH todo item:
+   - Use write_file to create new files
+   - Use edit_file to modify files
+   - Mark each todo as complete when done
+3. **Verify**: Ensure all requested features are implemented
+4. **Continue**: Keep working until the task is fully complete
+
+Do NOT stop after just planning. You must create all the files and code.
+
+IMPORTANT - Tool Usage Examples:
+- To create a file: write_file(file_path="filename.txt", content="file content here") 
+- To edit a file: edit_file(file_path="filename.txt", edits=[{{"find": "old", "replace": "new"}}])
+- To read a file: read_file(file_path="filename.txt")
+- To list files: ls(path=".")
+
+CRITICAL - File Path Rules:
+- Use RELATIVE paths only (e.g., "main.py", "app/routes.py", "./config.py")
+- DO NOT use absolute paths (e.g., "/home/user/project/main.py")
+- The working directory is already set to the project root
+- Examples: "requirements.txt", "src/app.py", "tests/test_app.py"
+
+Note: Use 'file_path' parameter (not 'path') for write_file and edit_file tools!
+"""
+    
+    elif command == "chat":
+        user_input = kwargs.get("user_input", task)
+        base_prompt += f"""
+You are in interactive chat mode, helping with ongoing development.
+
+User's request: {user_input}
+
+Help the user with their request. Be conversational but efficient.
+"""
+    
+    elif command == "fix":
+        issue = kwargs.get("issue", task)
+        base_prompt += f"""
+You are debugging and fixing an issue.
+
+Issue description: {issue}
+
+Approach:
+1. Analyze the error/issue carefully
+2. Identify the root cause
+3. Plan a minimal fix
+4. Implement the fix
+5. Verify it works (run tests if applicable)
+"""
+    
+    elif command == "edit":
+        file_path = kwargs.get("file_path", "")
+        instruction = task
+        content = vfs.read_file(file_path) if file_path else ""
+        base_prompt += f"""
+You are making a targeted edit to a specific file.
+
+File: {file_path}
+Instruction: {instruction}
+
+Current file content:
+{content or "File not found"}
+
+Make the requested change precisely. Don't modify unrelated code.
+"""
+    
+    elif command == "review":
+        base_prompt += f"""
+You are reviewing code for quality and issues.
+
+Review the code and provide:
+1. **Security Issues**: Any vulnerabilities or unsafe practices
+2. **Performance Issues**: Inefficiencies or bottlenecks
+3. **Code Quality**: Style, readability, maintainability
+4. **Best Practices**: Violations of common patterns
+5. **Suggestions**: Improvements that could be made
+
+Format as a clear, actionable report. Do NOT make any changes, only report findings.
+"""
+    
+    elif command == "suggest":
+        base_prompt += f"""
+You are suggesting improvements without applying them.
+
+Task: {task}
+
+Provide detailed suggestions including:
+1. What changes would be beneficial
+2. Why they would help
+3. Example code snippets or diffs
+4. Potential risks or trade-offs
+
+Do NOT apply changes. Present them for the user to review.
+"""
+    
+    return base_prompt
+
+
+class RudraAnvilAgent:
+    """Wrapper around deepagents for RudraAnvil-specific functionality."""
+    
+    def __init__(self, context: AgentContext, deep_agent):
+        """Initialize RudraAnvil agent wrapper.
         
         Args:
             context: Agent execution context
+            deep_agent: The deepagents agent instance
         """
         self.context = context
+        self.agent = deep_agent
         self.console = context.console
-        
-        # Initialize LLM
-        self.llm = ChatOllama(
-            model=config.ollama.model,
-            base_url=config.ollama.base_url,
-            temperature=config.ollama.temperature,
-        )
-        
-        # Initialize tools
-        self.tools = self._create_tools()
-        
-        # Sub-agent pool
-        self.sub_agent_pool = SubAgentPool(max_agents=config.agent.max_agents)
-        
-        # Message history
-        self.messages: list = []
-        
-        # Iteration counter
         self.iterations = 0
-    
-    def _create_tools(self) -> list:
-        """Create all available tools."""
-        tools = []
-        tools.extend(create_file_tools(self.context.vfs))
-        tools.extend(create_code_tools(self.context.vfs))
-        return tools
-    
-    def _get_tool_descriptions(self) -> str:
-        """Get formatted tool descriptions for the prompt."""
-        descriptions = []
-        for tool in self.tools:
-            descriptions.append(f"- {tool.name}: {tool.description}")
-        return "\n".join(descriptions)
-    
-    def _build_system_prompt(self) -> str:
-        """Build the system prompt with current context."""
-        return SUPERVISOR_PROMPT.format(
-            project_path=self.context.project_path,
-            project_tree=self.context.vfs.get_tree(),
-            todo_list=self.context.todo_list.summary(),
-            available_tools=self._get_tool_descriptions(),
-        )
-    
-    def _build_command_prompt(self) -> str:
-        """Build the command-specific prompt."""
-        command = self.context.command
-        
-        if command not in COMMAND_PROMPTS:
-            command = "build"
-        
-        template = COMMAND_PROMPTS[command]
-        
-        # Build format kwargs based on command
-        kwargs = {"task": self.context.task}
-        
-        if command == "build":
-            existing = "This is an existing project." if self.context.vfs.files else "Starting from scratch."
-            kwargs["existing_context"] = existing
-            
-        elif command == "chat":
-            kwargs["chat_history"] = self._format_chat_history()
-            kwargs["user_input"] = self.context.task
-            
-        elif command == "fix":
-            kwargs["issue"] = self.context.issue or self.context.task
-            kwargs["error_context"] = ""  # Could be populated with stack traces
-            
-        elif command == "edit":
-            kwargs["file_path"] = self.context.file_path
-            kwargs["instruction"] = self.context.task
-            content = self.context.vfs.read_file(self.context.file_path) if self.context.file_path else ""
-            kwargs["file_content"] = content or "File not found"
-            
-        elif command == "review":
-            kwargs["scope"] = f"Reviewing project at {self.context.project_path}"
-            
-        elif command == "suggest":
-            kwargs["project_context"] = self.context.vfs.get_tree()
-        
-        return template.format(**kwargs)
-    
-    def _format_chat_history(self) -> str:
-        """Format chat history for context."""
-        if not self.context.chat_history:
-            return "No previous messages"
-        
-        lines = []
-        for msg in self.context.chat_history[-10:]:  # Last 10 messages
-            role = msg.get("role", "user")
-            content = msg.get("content", "")[:200]  # Truncate long messages
-            lines.append(f"{role.upper()}: {content}")
-        return "\n".join(lines)
     
     def _log(self, message: str, style: str = "") -> None:
         """Log a message if verbose mode is enabled."""
@@ -172,174 +205,6 @@ class MainAgent:
         """Show a status message."""
         self.console.print(f"[dim]→ {message}[/dim]")
     
-    async def _call_llm(self, messages: list) -> str:
-        """Call the LLM and return the response."""
-        try:
-            response = await asyncio.to_thread(
-                self.llm.invoke,
-                messages
-            )
-            return response.content
-        except Exception as e:
-            return f"Error calling LLM: {str(e)}"
-    
-    async def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
-        """Execute a tool by name with given arguments."""
-        for tool in self.tools:
-            if tool.name == tool_name:
-                try:
-                    result = await asyncio.to_thread(tool.invoke, tool_args)
-                    return str(result)
-                except Exception as e:
-                    return f"Error executing {tool_name}: {str(e)}"
-        return f"Unknown tool: {tool_name}"
-    
-    async def plan(self) -> None:
-        """Generate an initial plan and populate the todo list."""
-        self._status("Planning...")
-        
-        # Build planning prompt
-        messages = [
-            SystemMessage(content=self._build_system_prompt()),
-            HumanMessage(content=f"""Create a detailed plan for the following task. 
-            
-Break it down into specific, actionable todo items. For each item, specify:
-1. A clear title
-2. A brief description
-3. Priority (0-100, higher = more urgent)
-
-Task: {self.context.task}
-
-{self._build_command_prompt()}
-
-Respond with a JSON array of todo items, like:
-[
-    {{"title": "Set up project structure", "description": "Create directories and initial files", "priority": 90}},
-    ...
-]
-
-Only output the JSON array, no other text.
-""")
-        ]
-        
-        response = await self._call_llm(messages)
-        
-        # Parse the response and add to todo list
-        try:
-            import json
-            # Try to extract JSON from the response
-            start = response.find("[")
-            end = response.rfind("]") + 1
-            if start >= 0 and end > start:
-                items = json.loads(response[start:end])
-                for item in items:
-                    self.context.todo_list.add(
-                        title=item.get("title", ""),
-                        description=item.get("description", ""),
-                        priority=item.get("priority", 0),
-                    )
-                self._log(f"Created {len(items)} todo items", "green")
-        except Exception as e:
-            self._log(f"Could not parse plan: {e}", "yellow")
-            # Fall back to a single task
-            self.context.todo_list.add(
-                title=self.context.task,
-                description="Main task from user request",
-                priority=50,
-            )
-    
-    async def execute_iteration(self) -> bool:
-        """Execute one iteration of the agent loop.
-        
-        Returns:
-            True if should continue, False if done
-        """
-        self.iterations += 1
-        
-        if self.iterations > self.context.max_iterations:
-            self._log("Max iterations reached", "yellow")
-            return False
-        
-        # Check if todo list is complete
-        if self.context.todo_list.is_complete():
-            return False
-        
-        # Get next task
-        task = self.context.todo_list.get_next_pending()
-        if not task:
-            return False
-        
-        task.mark_in_progress()
-        self._status(f"Working on: {task.title}")
-        
-        # Build execution prompt
-        messages = [
-            SystemMessage(content=self._build_system_prompt()),
-            HumanMessage(content=f"""Execute this todo item:
-
-Title: {task.title}
-Description: {task.description}
-
-Use the available tools to complete this task. When done, summarize what you did.
-If you encounter issues, describe them so we can add fix tasks.
-
-Available tools: {', '.join(t.name for t in self.tools)}
-
-To use a tool, format your response like:
-TOOL: <tool_name>
-ARGS: {{"arg1": "value1", ...}}
-
-You can use multiple tools, one after another. When completely done, say TASK_COMPLETE.
-""")
-        ]
-        
-        # Add any previous context
-        messages.extend(self.messages[-5:])  # Last 5 messages for context
-        
-        response = await self._call_llm(messages)
-        self._log(f"LLM Response: {response[:200]}...", "dim")
-        
-        # Parse and execute tool calls
-        lines = response.split("\n")
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            if line.startswith("TOOL:"):
-                tool_name = line[5:].strip()
-                
-                # Look for ARGS on next line
-                if i + 1 < len(lines) and lines[i + 1].strip().startswith("ARGS:"):
-                    args_line = lines[i + 1].strip()[5:].strip()
-                    try:
-                        import json
-                        args = json.loads(args_line)
-                        result = await self._execute_tool(tool_name, args)
-                        self._log(f"Tool {tool_name}: {result[:100]}...", "blue")
-                        self.messages.append(AIMessage(content=f"Tool {tool_name} result: {result}"))
-                    except Exception as e:
-                        self._log(f"Tool error: {e}", "red")
-                    i += 1
-            
-            elif "TASK_COMPLETE" in line:
-                task.mark_completed()
-                self._log(f"Completed: {task.title}", "green")
-                break
-            
-            i += 1
-        
-        # If no explicit completion, check if task seems done
-        if task.status != TodoStatus.COMPLETED:
-            task.mark_completed()  # Assume done for now
-        
-        # Save checkpoint periodically
-        if self.iterations % config.agent.checkpoint_interval == 0:
-            self.context.checkpoint_manager.update_todo_list(self.context.todo_list)
-            self.context.checkpoint_manager.update_virtual_fs(self.context.vfs.to_dict())
-            self.context.checkpoint_manager.save()
-        
-        return True
-    
     async def run(self) -> AgentResult:
         """Run the full agent workflow.
         
@@ -347,38 +212,86 @@ You can use multiple tools, one after another. When completely done, say TASK_CO
             AgentResult with execution summary
         """
         try:
-            # Plan
-            await self.plan()
+            self._status("Planning and executing task...")
             
-            # Execute loop
-            while await self.execute_iteration():
-                pass
+            if self.context.verbose:
+                self._log("Invoking deepagents with recursion_limit=100", "cyan")
             
-            # Sync to disk if not dry run
+            # Run deepagents with proper LangGraph configuration
+            # recursion_limit allows the agent to loop through todos and execute work
+            result = await asyncio.to_thread(
+                self.agent.invoke,
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": self.context.task
+                        }
+                    ]
+                },
+                {"recursion_limit": 100}  # Allow agent to iterate through work
+            )
+            
+            # DEBUG: Inspect result structure to find filesystem data
+            if self.context.verbose:
+                self._log(f"Result keys: {list(result.keys())}", "yellow")
+                for key in result.keys():
+                    if "file" in key.lower() or "fs" in key.lower() or "backend" in key.lower():
+                        self._log(f"Found potential filesystem key: {key}", "yellow")
+                        self._log(f"  Value type: {type(result[key])}", "yellow")
+                        if hasattr(result[key], '__dict__'):
+                            self._log(f"  Attributes: {list(result[key].__dict__.keys())}", "yellow")
+            
+            # Log execution details if verbose
+            if self.context.verbose:
+                messages = result.get("messages", [])
+                self._log(f"Agent completed with {len(messages)} messages", "cyan")
+                for i, msg in enumerate(messages):
+                    msg_type = type(msg).__name__
+                    self._log(f"  Message {i+1}/{len(messages)}: {msg_type}", "dim")
+                    if hasattr(msg, 'content') and msg.content:
+                        preview = str(msg.content)[:150].replace('\n', ' ')
+                        self._log(f"    Preview: {preview}...", "dim")
+            
+            # Extract final response
+            # deepagents returns a dict with 'messages' key containing AIMessage objects
+            messages = result.get("messages", [])
+            if messages:
+                final_message = messages[-1]
+                # AIMessage has a .content attribute, not .get() method
+                response_content = final_message.content if hasattr(final_message, 'content') else str(final_message)
+            else:
+                response_content = "No response"
+            
+            self._log(f"Final response preview: {response_content[:200]}...", "dim")
+            
+            # Sync files if not dry run
             if not self.context.dry_run:
+                # Note: deepagents handles its own file system
+                # But we can still track changes for display
                 sync_manager = FileSyncManager(self.context.vfs, self.console)
-                result = sync_manager.sync(mode=SyncMode.BACKUP)
+                sync_result = sync_manager.sync(mode=SyncMode.BACKUP)
                 
                 return AgentResult(
                     success=True,
-                    message="Completed successfully",
-                    files_created=result.files_created,
-                    files_modified=result.files_modified,
+                    message=response_content,
+                    files_created=sync_result.files_created,
+                    files_modified=sync_result.files_modified,
                     iterations=self.iterations,
-                    todo_summary=self.context.todo_list.summary(),
+                    todo_summary=response_content,
                 )
             else:
-                # Dry run - just show what would be done
-                sync_manager = FileSyncManager(self.context.vfs, self.console)
-                sync_manager.preview_changes()
+                # Dry run - show what would be done
+                self._status("Dry run - showing planned changes:")
+                self.console.print(response_content)
                 
                 return AgentResult(
                     success=True,
                     message="Dry run completed (no files written)",
-                    files_created=self.context.vfs.get_new_files(),
-                    files_modified=self.context.vfs.get_modified_files(),
+                    files_created=[],
+                    files_modified=[],
                     iterations=self.iterations,
-                    todo_summary=self.context.todo_list.summary(),
+                    todo_summary=response_content,
                 )
         
         except Exception as e:
@@ -399,15 +312,28 @@ You can use multiple tools, one after another. When completely done, say TASK_CO
         """
         # Add to chat history
         self.context.chat_history.append({"role": "user", "content": user_input})
-        self.context.task = user_input
         
-        # Build chat messages
-        messages = [
-            SystemMessage(content=self._build_system_prompt()),
-            HumanMessage(content=self._build_command_prompt()),
-        ]
+        # Build messages list
+        messages = []
+        for msg in self.context.chat_history:
+            messages.append(msg)
         
-        response = await self._call_llm(messages)
+        # Run agent with recursion limit for chat mode
+        result = await asyncio.to_thread(
+            self.agent.invoke,
+            {"messages": messages},
+            {"recursion_limit": 100}  # Allow agent to execute work in chat mode too
+        )
+        
+        # Extract response
+        # deepagents returns a dict with 'messages' key containing AIMessage objects
+        result_messages = result.get("messages", [])
+        if result_messages:
+            final_message = result_messages[-1]
+            # AIMessage has a .content attribute, not .get() method
+            response = final_message.content if hasattr(final_message, 'content') else str(final_message)
+        else:
+            response = "No response"
         
         # Add to history
         self.context.chat_history.append({"role": "assistant", "content": response})
@@ -423,8 +349,8 @@ def create_main_agent(
     dry_run: bool = False,
     verbose: bool = False,
     **kwargs
-) -> MainAgent:
-    """Factory function to create a main agent.
+) -> RudraAnvilAgent:
+    """Factory function to create a main agent using deepagents.
     
     Args:
         project_path: Path to the project
@@ -436,12 +362,12 @@ def create_main_agent(
         **kwargs: Additional context arguments
         
     Returns:
-        Configured MainAgent instance
+        Configured RudraAnvilAgent instance
     """
     console = console or Console()
     project_path = project_path.resolve()
     
-    # Initialize virtual filesystem
+    # Initialize virtual filesystem (for tracking/preview)
     vfs = VirtualFileSystem(project_path)
     if project_path.exists():
         vfs.load_from_disk()
@@ -451,7 +377,7 @@ def create_main_agent(
     checkpoint_manager = CheckpointManager(checkpoint_dir)
     checkpoint = checkpoint_manager.create(task)
     
-    # Initialize todo list
+    # Initialize todo list (for display purposes)
     todo_list = TodoList()
     
     # Create context
@@ -468,4 +394,52 @@ def create_main_agent(
         **kwargs
     )
     
-    return MainAgent(context)
+    
+    # Create Ollama model explicitly for proper configuration
+    # Deepagents requires a configured model object, not just a string
+    from langchain_ollama import ChatOllama
+    
+    model = ChatOllama(
+        model=config.ollama.model,
+        base_url=config.ollama.base_url,
+        temperature=config.ollama.temperature,
+        num_predict=8192,  # Increased from default (128) to allow complete tool call JSON generation
+    )
+    
+    # Create custom code execution tools (deepagents has file tools built-in)
+    custom_tools = create_code_tools(vfs)
+    
+    # Build system prompt
+    system_prompt = build_system_prompt(
+        command=command,
+        task=task,
+        project_path=project_path,
+        vfs=vfs,
+        **kwargs
+    )
+    
+    # Create deep agent with configured Ollama model and REAL filesystem backend
+    # Deepagents will handle:
+    # - Built-in file system tools (read_file, write_file, edit_file, ls)
+    # - Built-in planning tool (write_todos)
+    # - Subagent spawning
+    # - Tool calling orchestration
+    
+    # Configure FilesystemBackend to write files to actual disk (not just memory)
+    # virtual_mode=True enables path sand boxing and normalization under root_dir
+    from deepagents.backends import FilesystemBackend
+    
+    filesystem_backend = FilesystemBackend(
+        root_dir=str(project_path),  # Must be absolute path
+       virtual_mode=True  # Enables path-based security and normalization
+    )
+    
+    deep_agent = create_deep_agent(
+        model=model,  # Pass configured ChatOllama instance
+        tools=custom_tools,  # Add our custom code execution tools
+        system_prompt=system_prompt,
+        backend=filesystem_backend,  # Write files to actual project directory
+    )
+    
+    # Wrap in RudraAnvil agent for compatibility
+    return RudraAnvilAgent(context, deep_agent)
