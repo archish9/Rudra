@@ -68,7 +68,7 @@ def build(
         None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
-    verbose: bool = typer.Option(False, "--verbose", "-V", help="Show detailed output"),
+    verbose: bool = typer.Option(config.agent.verbose, "--verbose/--no-verbose", "-V", help="Show detailed output (default: VERBOSE in .env)"),
     max_agents: int = typer.Option(6, "--max-agents", help="Maximum number of sub-agents"),
 ) -> None:
     """Build a new project or enhance an existing one.
@@ -124,7 +124,7 @@ def chat(
     project_dir: Optional[Path] = typer.Option(
         None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
     ),
-    verbose: bool = typer.Option(False, "--verbose", "-V", help="Show detailed output"),
+    verbose: bool = typer.Option(config.agent.verbose, "--verbose/--no-verbose", "-V", help="Show detailed output (default: VERBOSE in .env)"),
 ) -> None:
     """Interactive chat mode for ongoing development.
     
@@ -201,7 +201,7 @@ def fix(
     ),
     file: Optional[str] = typer.Option(None, "--file", "-f", help="Specific file to focus on"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview fixes without applying"),
-    verbose: bool = typer.Option(False, "--verbose", "-V", help="Show detailed output"),
+    verbose: bool = typer.Option(config.agent.verbose, "--verbose/--no-verbose", "-V", help="Show detailed output (default: VERBOSE in .env)"),
 ) -> None:
     """Debug and fix a specific issue.
     

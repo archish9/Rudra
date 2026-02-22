@@ -90,6 +90,13 @@ Required steps (execute ALL of them):
 4. **Verify**: Run checks if needed
 5. **Keep working**: Do NOT stop until every file is created and the task is 100% complete
 
+CRITICAL — write_file and edit_file rules:
+- write_file creates a NEW file — if the file already exists, use edit_file instead
+- If write_file returns an "already exists" error, immediately retry with edit_file — do NOT stop
+- Before running run_command in a subdirectory, make sure the directory exists first:
+  either call write_file to create a file in it first, OR prepend mkdir -p:
+  Example: run_command(command="mkdir -p app && cd app && pip install flask")
+
 CRITICAL — write_todos exact schema (todos must be a LIST of objects):
   write_todos(todos=[
     {{"content": "Description of task 1", "status": "pending"}},
@@ -201,16 +208,82 @@ class RudraAnvilAgent:
         self.iterations = 0
     
     def _log(self, message: str, style: str = "") -> None:
-        """Log a message if verbose mode is enabled."""
+        """Log a debug message — only shown if verbose=True."""
         if self.context.verbose:
             if style:
                 self.console.print(f"[{style}]{message}[/{style}]")
             else:
                 self.console.print(message)
-    
+
+    def _log_always(self, message: str, style: str = "") -> None:
+        """Log a message that is ALWAYS shown (not gated by verbose)."""
+        if style:
+            self.console.print(f"[{style}]{message}[/{style}]")
+        else:
+            self.console.print(message)
+
     def _status(self, message: str) -> None:
         """Show a status message."""
         self.console.print(f"[dim]→ {message}[/dim]")
+
+    def _log_messages(self, messages: list) -> None:
+        """Log all agent messages with full detail — always shown by default.
+        
+        Shows tool names, arguments, full outputs, and highlights errors.
+        Controlled by VERBOSE=false in .env to silence.
+        """
+        if not self.context.verbose:
+            return
+
+        self._log_always(f"\n[bold]Agent trace — {len(messages)} messages[/bold]", "cyan")
+        for i, msg in enumerate(messages):
+            msg_type = type(msg).__name__
+            role = getattr(msg, 'type', msg_type).upper()
+
+            # ── AIMessage ──
+            if msg_type == "AIMessage":
+                tool_calls = getattr(msg, 'tool_calls', [])
+                if tool_calls:
+                    for tc in tool_calls:
+                        name = tc.get('name', '?')
+                        args = tc.get('args', {})
+                        args_str = str(args)[:400]
+                        self._log_always(
+                            f"[bold cyan]→ [{i+1}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args_str}"
+                        )
+                else:
+                    content = str(getattr(msg, 'content', ''))[:300].replace('\n', ' ')
+                    self._log_always(f"[bold cyan]← [{i+1}] AI[/bold cyan]  {content}")
+
+            # ── ToolMessage ──
+            elif msg_type == "ToolMessage":
+                content = str(getattr(msg, 'content', ''))
+                tool_name = getattr(msg, 'name', '?')
+                is_error = (
+                    "Error" in content or "error" in content
+                    or "Errno" in content or "Traceback" in content
+                    or "not a valid tool" in content
+                )
+                # Truncate long outputs but keep more for errors
+                limit = 800 if is_error else 400
+                preview = content[:limit].replace('\n', ' ↵ ')
+                if is_error:
+                    self._log_always(
+                        f"[bold red]✗ [{i+1}] ERROR from {tool_name}:[/bold red] {preview}"
+                    )
+                else:
+                    self._log_always(
+                        f"[green]✓ [{i+1}] {tool_name}:[/green] {preview}"
+                    )
+
+            # ── HumanMessage ──
+            elif msg_type == "HumanMessage":
+                content = str(getattr(msg, 'content', ''))[:200].replace('\n', ' ')
+                self._log_always(f"[dim][{i+1}] USER: {content}[/dim]")
+
+            else:
+                content = str(getattr(msg, 'content', ''))[:200].replace('\n', ' ')
+                self._log_always(f"[dim][{i+1}] {msg_type}: {content}[/dim]")
     
     async def run(self) -> AgentResult:
         """Run the full agent workflow.
@@ -239,31 +312,12 @@ class RudraAnvilAgent:
                 {"recursion_limit": 100}  # Allow agent to iterate through work
             )
             
-            # DEBUG: Inspect result structure to find filesystem data
+            # Log all messages with full detail
+            messages = result.get("messages", [])
+            self._log_messages(messages)
+
             if self.context.verbose:
-                self._log(f"Result keys: {list(result.keys())}", "yellow")
-                for key in result.keys():
-                    if "file" in key.lower() or "fs" in key.lower() or "backend" in key.lower():
-                        self._log(f"Found potential filesystem key: {key}", "yellow")
-                        self._log(f"  Value type: {type(result[key])}", "yellow")
-                        if hasattr(result[key], '__dict__'):
-                            self._log(f"  Attributes: {list(result[key].__dict__.keys())}", "yellow")
-            
-            # Log execution details if verbose
-            if self.context.verbose:
-                messages = result.get("messages", [])
-                self._log(f"Agent completed with {len(messages)} messages", "cyan")
-                for i, msg in enumerate(messages):
-                    msg_type = type(msg).__name__
-                    self._log(f"  Message {i+1}/{len(messages)}: {msg_type}", "dim")
-                    if hasattr(msg, 'content') and msg.content:
-                        preview = str(msg.content)[:150].replace('\n', ' ')
-                        self._log(f"    Preview: {preview}...", "dim")
-                    # Show tool_calls — CRITICAL: graph exits if tool_calls is empty on AIMessage
-                    if hasattr(msg, 'tool_calls'):
-                        self._log(f"    tool_calls ({len(msg.tool_calls)}): {[tc.get('name') for tc in msg.tool_calls]}", "yellow")
-                    if hasattr(msg, 'additional_kwargs') and msg.additional_kwargs.get('tool_calls'):
-                        self._log(f"    additional_kwargs.tool_calls: {msg.additional_kwargs['tool_calls']}", "yellow")
+                self._log(f"Result state keys: {list(result.keys())}", "yellow")
             
             # Extract final response
             # deepagents returns a dict with 'messages' key containing AIMessage objects
@@ -426,7 +480,7 @@ def create_main_agent(
         model=config.ollama.model,
         base_url=config.ollama.base_url,
         temperature=config.ollama.temperature,
-        num_predict=8192,  # Increased from default (128) to allow complete tool call JSON generation
+        num_predict=config.ollama.num_predict,  # Increased from default (128) to allow complete tool call JSON generation
     )
     
     # Create custom code execution tools (deepagents has file tools built-in)

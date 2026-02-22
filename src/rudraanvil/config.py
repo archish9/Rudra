@@ -17,6 +17,7 @@ class OllamaConfig:
     model: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "gpt-oss:20b"))
     temperature: float = field(default_factory=lambda: float(os.getenv("OLLAMA_TEMPERATURE", "0.7")))
     timeout: int = field(default_factory=lambda: int(os.getenv("OLLAMA_TIMEOUT", "300")))
+    num_predict: int = field(default_factory=lambda: int(os.getenv("OLLAMA_NUM_PREDICT", "4096")))
 
 
 @dataclass
@@ -26,6 +27,8 @@ class AgentConfig:
     max_agents: int = field(default_factory=lambda: int(os.getenv("MAX_AGENTS", "6")))
     max_iterations: int = field(default_factory=lambda: int(os.getenv("MAX_ITERATIONS", "100")))
     checkpoint_interval: int = field(default_factory=lambda: int(os.getenv("CHECKPOINT_INTERVAL", "5")))
+    # Verbose logging — ON by default, set VERBOSE=false in .env to disable
+    verbose: bool = field(default_factory=lambda: os.getenv("VERBOSE", "true").lower() != "false")
 
 
 @dataclass
