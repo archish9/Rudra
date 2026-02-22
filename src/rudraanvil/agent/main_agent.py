@@ -11,7 +11,7 @@ from deepagents import create_deep_agent
 from rich.console import Console
 
 from rudraanvil.config import config
-from rudraanvil.filesystem import VirtualFileSystem, FileSyncManager, SyncMode
+from rudraanvil.filesystem import VirtualFileSystem
 from rudraanvil.state import TodoList, CheckpointManager
 from rudraanvil.tools import create_code_tools
 
@@ -79,30 +79,37 @@ You can:
 Task: {task}
 {existing}
 
-You MUST complete this task fully. Follow these steps:
-1. **Plan**: Use write_todos to create a task list
-2. **Execute**: Work through EACH todo item:
-   - Use write_file to create new files
-   - Use edit_file to modify files
-   - Mark each todo as complete when done
-3. **Verify**: Ensure all requested features are implemented
-4. **Continue**: Keep working until the task is fully complete
+You MUST complete this task fully. After calling write_todos (or skipping it for simple tasks),
+you MUST IMMEDIATELY start creating files using write_file. Do NOT stop after planning.
+Do NOT wait for confirmation. Do NOT explain what you will do — just DO it.
 
-Do NOT stop after just planning. You must create all the files and code.
+Required steps (execute ALL of them):
+1. **Plan** (optional for simple tasks): Call write_todos with the exact schema below
+2. **Execute immediately**: Call write_file for EVERY file needed. Create ALL files.
+3. **Edit if needed**: Use edit_file to update existing files
+4. **Verify**: Run checks if needed
+5. **Keep working**: Do NOT stop until every file is created and the task is 100% complete
 
-IMPORTANT - Tool Usage Examples:
-- To create a file: write_file(file_path="filename.txt", content="file content here") 
-- To edit a file: edit_file(file_path="filename.txt", edits=[{{"find": "old", "replace": "new"}}])
-- To read a file: read_file(file_path="filename.txt")
-- To list files: ls(path=".")
+CRITICAL — write_todos exact schema (todos must be a LIST of objects):
+  write_todos(todos=[
+    {{"content": "Description of task 1", "status": "pending"}},
+    {{"content": "Description of task 2", "status": "pending"}}
+  ])
+  Valid status values: "pending", "in_progress", "completed"
+  Each item MUST have exactly: "content" (string) and "status" (string)
 
-CRITICAL - File Path Rules:
-- Use RELATIVE paths only (e.g., "main.py", "app/routes.py", "./config.py")
-- DO NOT use absolute paths (e.g., "/home/user/project/main.py")
-- The working directory is already set to the project root
-- Examples: "requirements.txt", "src/app.py", "tests/test_app.py"
+Tool Usage (CURRENT v0.4.x API):
+- List directory:     ls(path=".")
+- Read a file:        read_file(file_path="filename.txt")
+- Create a new file:  write_file(file_path="filename.txt", content="file content here")
+- Edit existing file: edit_file(file_path="filename.txt", old_string="old text", new_string="new text")
+- Search files:       glob(pattern="**/*.py")
+- Search content:     grep(pattern="search term", path=".")
 
-Note: Use 'file_path' parameter (not 'path') for write_file and edit_file tools!
+CRITICAL — File Path Rules:
+- Use RELATIVE paths (e.g., "main.py", "app/routes.py", "requirements.txt")
+- Do NOT use absolute paths (e.g., "/home/user/project/main.py")
+- write_file creates a brand new file — use edit_file to modify an existing file
 """
     
     elif command == "chat":
@@ -252,6 +259,11 @@ class RudraAnvilAgent:
                     if hasattr(msg, 'content') and msg.content:
                         preview = str(msg.content)[:150].replace('\n', ' ')
                         self._log(f"    Preview: {preview}...", "dim")
+                    # Show tool_calls — CRITICAL: graph exits if tool_calls is empty on AIMessage
+                    if hasattr(msg, 'tool_calls'):
+                        self._log(f"    tool_calls ({len(msg.tool_calls)}): {[tc.get('name') for tc in msg.tool_calls]}", "yellow")
+                    if hasattr(msg, 'additional_kwargs') and msg.additional_kwargs.get('tool_calls'):
+                        self._log(f"    additional_kwargs.tool_calls: {msg.additional_kwargs['tool_calls']}", "yellow")
             
             # Extract final response
             # deepagents returns a dict with 'messages' key containing AIMessage objects
@@ -267,16 +279,27 @@ class RudraAnvilAgent:
             
             # Sync files if not dry run
             if not self.context.dry_run:
-                # Note: deepagents handles its own file system
-                # But we can still track changes for display
-                sync_manager = FileSyncManager(self.context.vfs, self.console)
-                sync_result = sync_manager.sync(mode=SyncMode.BACKUP)
+                # deepagents writes files directly to disk via FilesystemBackend.
+                # Reload the VFS from disk to pick up all files written by deepagents,
+                # then diff against the original snapshot to report accurate counts.
+                new_vfs = VirtualFileSystem(self.context.project_path)
+                if self.context.project_path.exists():
+                    new_vfs.load_from_disk()
+                
+                # Determine created vs modified files by comparing with original VFS
+                original_paths = set(self.context.vfs.files.keys())
+                new_paths = set(new_vfs.files.keys())
+                files_created = list(new_paths - original_paths)
+                files_modified = [
+                    p for p in new_paths & original_paths
+                    if new_vfs.files[p] != self.context.vfs.files.get(p)
+                ]
                 
                 return AgentResult(
                     success=True,
                     message=response_content,
-                    files_created=sync_result.files_created,
-                    files_modified=sync_result.files_modified,
+                    files_created=files_created,
+                    files_modified=files_modified,
                     iterations=self.iterations,
                     todo_summary=response_content,
                 )
@@ -431,7 +454,7 @@ def create_main_agent(
     
     filesystem_backend = FilesystemBackend(
         root_dir=str(project_path),  # Must be absolute path
-       virtual_mode=True  # Enables path-based security and normalization
+        virtual_mode=True  # Enables path-based security and normalization
     )
     
     deep_agent = create_deep_agent(
