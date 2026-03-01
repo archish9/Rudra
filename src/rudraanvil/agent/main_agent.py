@@ -79,23 +79,27 @@ You can:
 Task: {task}
 {existing}
 
-You MUST complete this task fully. After calling write_todos (or skipping it for simple tasks),
-you MUST IMMEDIATELY start creating files using write_file. Do NOT stop after planning.
-Do NOT wait for confirmation. Do NOT explain what you will do — just DO it.
+Your ONLY job at this stage is to WRITE CODE FILES. Do NOT install packages, run commands,
+start servers, or execute any code. Installation, environment setup, and testing are handled
+in separate stages. Just focus on generating complete, accurate code.
 
-Required steps (execute ALL of them):
-1. **Plan** (optional for simple tasks): Call write_todos with the exact schema below
-2. **Execute immediately**: Call write_file for EVERY file needed. Create ALL files.
+Required steps:
+1. **Plan** (optional): Call write_todos with the exact schema below
+2. **Write ALL files**: Call write_file for EVERY file the project needs
 3. **Edit if needed**: Use edit_file to update existing files
-4. **Verify**: Run checks if needed
-5. **Keep working**: Do NOT stop until every file is created and the task is 100% complete
+4. **Keep working**: Do NOT stop until every file is written and complete
+
+Write COMPLETE, production-quality code for ANY language (Python, JS, Go, Rust, etc.):
+- No placeholders like "# TODO" or "pass" — every function must be fully implemented
+- Include all imports, all logic, all error handling
+- Include config files and dependency manifests (requirements.txt, package.json, go.mod, etc.)
+- Include a README.md with setup and run instructions
 
 CRITICAL — write_file and edit_file rules:
 - write_file creates a NEW file — if the file already exists, use edit_file instead
 - If write_file returns an "already exists" error, immediately retry with edit_file — do NOT stop
-- Before running run_command in a subdirectory, make sure the directory exists first:
-  either call write_file to create a file in it first, OR prepend mkdir -p:
-  Example: run_command(command="mkdir -p app && cd app && pip install flask")
+- To create files in subdirectories, just use the relative path directly:
+  write_file(file_path="app/main.py", content="...")  — directories are created automatically
 
 CRITICAL — write_todos exact schema (todos must be a LIST of objects):
   write_todos(todos=[
