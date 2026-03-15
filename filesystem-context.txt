@@ -1,0 +1,23 @@
+link: https://blog.langchain.com/how-agents-can-use-filesystems-for-context-engineering/
+
+
+Yes, absolutely! The concepts in that blog post are highly relevant and can significantly improve RudraAnvil's context management and stability.
+
+The core idea of the article is "Context Engineering via Filesystem"—meaning instead of stuffing everything into the LLM's system prompt or conversation history (which costs tokens, causes "needle in a haystack" forgetting, and leads to crashes), the agent should use the filesystem as its "long-term memory" and "scratchpad".
+
+Here is how we can apply these concepts directly to RudraAnvil to make it better:
+
+1. Subagent Communication (Minimizing the "Game of Telephone")
+The Concept: When a subagent finishes a task, instead of returning a massive text summary of what it did back to the main agent's chat history, it should just write its outputs to the filesystem. How it helps RudraAnvil: We actually just took a huge step toward this with my recent fixes! By forcing the coder-subagent to strictly use write_file and output zero conversational text, we prevented the subagent from dumping thousands of lines of generated code into the main agent's chat history. The main agent now just uses list_directory and read_file to verify the work on disk, keeping its own context window small, fast, and focused.
+
+2. Context Offloading for Planning (write_todos)
+The Concept: Writing plans to the filesystem so the agent can read them later, rather than keeping the entire plan in the active prompt. How it helps RudraAnvil: Right now, RudraAnvil uses the write_todos tool, which likely actively tracks the todo list in the agent's memory or system prompt. For a massive project, a 100-item todo list will bloat the context. We could update RudraAnvil so that write_todos simply writes a .rudraanvil/PLAN.md file to disk. The agent can then use read_file to check its next step, or edit_file to cross items off, effectively giving it infinite planning memory without context limits!
+
+3. Storing Project Context & "Skills"
+The Concept: Instead of cramming all instructions into the system prompt, store them as files that the agent can read when needed. How it helps RudraAnvil: In main_agent.py, we currently take the project_context (which includes the Tech Stack, Frameworks, Database, and Architecture Rules) and append it directly to the end of the system_prompt. If the user provides a very long architecture document, this will degrade the agent's performance. Instead, RudraAnvil could save this context to a .rudraanvil/tech_stack.md file, and the agent's prompt would simply say "Read .rudraanvil/tech_stack.md before writing code to understand the architecture." This would drastically save tokens!
+
+4. Working as a "Scratchpad" for Large Tool Outputs
+The Concept: If a tool returns a massive amount of output (like searching the web or reading a 10,000 line log file), write it to a temp file and let the agent grep it, rather than putting the 10,000 lines into the chat history. How it helps RudraAnvil: If we ever add a run_command or search_web tool to RudraAnvil to let it test its own code or read documentation, we should route the massive stdout/stderr logs into a .rudraanvil/logs/ directory. The agent can then use grep to find the specific error line, rather than crashing because a giant stack trace exceeded its token limit.
+
+Would you like to implement any of these architecture changes to RudraAnvil next? (For example, moving the Todo list or the Project Context out of the system prompt and onto the filesystem?)
+
