@@ -95,20 +95,21 @@ Task: {task}
 {existing}
 
 Your ONLY job at this stage is to PLAN AND DELEGATE. Do NOT write code directly in your response.
-Your MUST use the `task` tool to spawn the `coder-subagent` to write the necessary files.
+Your MUST use the `task` tool to spawn the `general-purpose` subagent to write the necessary files.
 You are a project manager. You plan the files needed and then delegate the actual creation to the subagent.
 
 Required steps:
 1. **Plan**: Call write_todos with exactly the schema below to plan the files that need to be created.
-2. **Delegate**: Call the `task` tool with `subagent_type: "coder-subagent"` and give it clear instructions on what code to write.
-3. **Verify**: Check the files using `ls` and `read_file`.
+2. **Delegate**: Call the `task` tool with `subagent_type: "general-purpose"` and give it clear instructions on what code to write. YOU MUST USE "general-purpose".
+3. **Verify**: Check the files using `list_directory` and `read_file`. Do not mark a todo as completed until you verify the file exists on disk.
 4. **Iterate**: If the files are incorrect or missing, use the `task` tool again to fix them.
 
-IMPORTANT: When delegating to the `coder-subagent`, you MUST explicitly specify the primary language and frameworks defined in the "Project Tech Stack Context" above. Do NOT let the subagent default to an incorrect language.
+IMPORTANT: When delegating to the `general-purpose` subagent, you MUST explicitly specify the primary language and frameworks defined in the "Project Tech Stack Context" above. Do NOT let the subagent default to an incorrect language.
 
-CRITICAL: You MUST NEVER output code directly. You MUST ALWAYS use the `task` tool to spawn the `coder-subagent` so it executes `write_file` or `edit_file`.
+CRITICAL: You MUST NEVER output code directly. You MUST ALWAYS use the `task` tool to spawn the `general-purpose` subagent so it executes `write_file` or `edit_file`.
 
-write_file and edit_file are handled by the subagent, NOT you.
+write_file and edit_file are handled by the general-purpose subagent, NOT you. The subagent will not update the todo list. YOU must verify the files are written and then YOU update the todo list to completed.
+Do NOT just mark todos as completed without calling the subagent.
 
 CRITICAL — write_todos exact schema (todos must be a LIST of objects):
   write_todos(todos=[
@@ -131,7 +132,7 @@ CRITICAL — File Path Rules:
 - CRITICAL: NEVER start a path with a slash (e.g., NEVER use "/main.py").
 - write_file creates a brand new file — use edit_file to modify an existing file
 
-CRITICAL: If the subagent fails to write files (e.g. returns text instead of tool calls, or tries to use absolute paths), you MUST RE-RUN the task tool with even more explicit instructions. You are responsible for ensuring the code actually reaches the disk.
+CRITICAL: If the subagent fails to write files (e.g. returns text instead of tool calls, or tries to use absolute paths), you MUST RE-RUN the task tool with even more explicit instructions. You are responsible for ensuring the code actually reaches the disk. Always verify with `list_directory` after the subagent returns.
 """
     
     elif command == "chat":
@@ -280,15 +281,15 @@ class RudraAnvilAgent:
                     or "not a valid tool" in content
                 )
                 # Truncate long outputs but keep more for errors
-                limit = 800 if is_error else 400
-                preview = content[:limit].replace('\n', ' ↵ ')
+                #limit = 800 if is_error else 400
+                #preview = content[:limit].replace('\n', ' ↵ ')
                 if is_error:
                     self._log_always(
-                        f"[bold red]✗ [{i+1}] ERROR from {tool_name}:[/bold red] {preview}"
+                        f"[bold red]✗ [{i+1}] ERROR from {tool_name}:[/bold red] {content}"
                     )
                 else:
                     self._log_always(
-                        f"[green]✓ [{i+1}] {tool_name}:[/green] {preview}"
+                        f"[green]✓ [{i+1}] {tool_name}:[/green] {content}"
                     )
 
             # ── HumanMessage ──
@@ -327,17 +328,15 @@ class RudraAnvilAgent:
                 content.startswith("Error:") or "Error:" in content or "Traceback" in content
                 or "Errno" in content or "not a valid tool" in content
                 or "Input should be a valid string" in content
-            )
-            # Truncate long outputs but keep more for errors
-            limit = 800 if is_error else 400
-            preview = content[:limit].replace('\n', ' ↵ ')
+            )                        
+            
             if is_error:
                 self._log_always(
                     f"[bold red]✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
                 )
             else:
                 self._log_always(
-                    f"[green]✓ [{index}] {tool_name}:[/green] {preview}"
+                    f"[green]✓ [{index}] {tool_name}:[/green] {content}"
                 )
 
         # ── HumanMessage ──
@@ -639,32 +638,20 @@ def create_main_agent(
         virtual_mode=True  # Enabling virtual mode anchors all paths to root_dir and prevents absolute path jumps
     )
 
-    # Force the coder subagent to use write_file
-    from deepagents.middleware.filesystem import FilesystemMiddleware
-    fs_middleware = FilesystemMiddleware(backend=filesystem_backend)
+    # Force the general-purpose subagent to use write_file using our direct tools
+    from rudraanvil.tools.file_tools import create_file_tools
+    all_file_tools = create_file_tools(vfs)
     
     # We find the file tools to bind them
     file_tools = []
-    for tools_group in fs_middleware.tools:
-        if isinstance(tools_group, list):
-             for t in tools_group:
-                 name = getattr(t, 'name', '')
-                 if name in ['write_file', 'edit_file', 'read_file', 'ls']:
-                     file_tools.append(t)
-        else:
-             name = getattr(tools_group, 'name', '')
-             if name in ['write_file', 'edit_file', 'read_file', 'ls']:
-                  file_tools.append(tools_group)
-             
-    coder_model = model
-    if file_tools:
-        # Binding them explicitly ensures they are available and preferred.
-        coder_model = model.bind_tools(file_tools)
+    for t in all_file_tools:
+        if t.name in ['write_file', 'edit_file', 'read_file', 'list_directory']:
+            file_tools.append(t)
     
     # Create subagent system prompt with context
     subagent_prompt = (
         "You are a code generation agent. Your sole purpose is to execute write_file and edit_file to create the necessary code for your given task. "
-        "Use the ls and read_file tools to navigate the project path if necessary. "
+        "Use the list_directory and read_file tools to navigate the project path if necessary. "
         "CRITICAL: You MUST use purely RELATIVE paths (e.g. 'models/User.js') when creating files. NEVER use absolute paths or paths starting with '/' (e.g. NEVER use '/models/User.js'). ALL paths should be relative to the project root. "
         "CRITICAL 2: The 'content' argument for write_file and edit_file MUST be a valid UTF-8 string. NEVER pass objects, dictionaries, or lists as content – convert them to formatted code or JSON strings first. "
         "CRITICAL 3: Do NOT use the write_todos tool. Marking a task as completed in the todo list does NOT create a file. You MUST write all the needed code strictly via tool calls to write_file or edit_file. "
@@ -681,11 +668,11 @@ def create_main_agent(
         backend=filesystem_backend,  # Write files to actual project directory
         subagents=[
             {
-                "name": "coder-subagent",
+                "name": "general-purpose",
                 "description": "An agent specialized in writing code and generating exact implementation files. Launch this subagent to generate files for a given module. The subagent will return only once it has written all files.",
                 "system_prompt": subagent_prompt,
-                "model": coder_model,
-                "tools": [] # inherits default tools 
+                "model": model,
+                "tools": file_tools
             }
         ]
     )

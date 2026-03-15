@@ -1,6 +1,0 @@
-{
-  "primary_language": "Python",
-  "framework": "FastAPI",
-  "database": "PostgreSQL",
-  "additional_context": "Use domain driven design"
-}

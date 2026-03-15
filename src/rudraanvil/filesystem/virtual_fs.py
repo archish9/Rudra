@@ -192,7 +192,7 @@ class VirtualFileSystem:
         return None
     
     def write_file(self, path: str, content: str) -> None:
-        """Write a file to the virtual filesystem.
+        """Write a file to the virtual filesystem AND real filesystem immediately.
         
         Args:
             path: Path to the file (relative to root)
@@ -200,11 +200,18 @@ class VirtualFileSystem:
         """
         path = self._normalize_path(path)
         
+        # Write directly to the real filesystem
+        real_path = self.root_path / path
+        real_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            real_path.write_text(content, encoding="utf-8")
+        except Exception as e:
+            pass # Continue to update VFS state even if disk write fails
+            
         if path in self.files:
             self.files[path].update_content(content)
         else:
             # Check if file exists on real FS
-            real_path = self.root_path / path
             original = None
             is_new = True
             
@@ -246,7 +253,7 @@ class VirtualFileSystem:
         return True
     
     def delete_file(self, path: str) -> bool:
-        """Delete a file from the virtual filesystem.
+        """Delete a file from the virtual filesystem and real filesystem.
         
         Args:
             path: Path to the file
@@ -255,18 +262,33 @@ class VirtualFileSystem:
             True if deleted, False if not found
         """
         path = self._normalize_path(path)
+        
+        real_path = self.root_path / path
+        if real_path.exists():
+            try:
+                real_path.unlink()
+            except Exception:
+                pass
+
         if path in self.files:
             del self.files[path]
             return True
         return False
     
     def create_directory(self, path: str) -> None:
-        """Create a directory in the virtual filesystem.
+        """Create a directory in the virtual filesystem and real filesystem.
         
         Args:
             path: Path to the directory
         """
         path = self._normalize_path(path)
+        
+        real_path = self.root_path / path
+        try:
+            real_path.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+            
         if path not in self.files:
             self.files[path] = VirtualFile(
                 path=path,
