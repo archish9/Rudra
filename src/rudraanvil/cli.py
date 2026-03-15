@@ -16,7 +16,7 @@ from rudraanvil import __version__
 from rudraanvil.agent import create_main_agent
 from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem, FileSyncManager, SyncMode
-from rudraanvil.state import CheckpointManager, TodoList
+from rudraanvil.state import CheckpointManager, TodoList, ProjectConfigManager, ProjectContext
 
 # Create the Typer app
 app = typer.Typer(
@@ -41,6 +41,41 @@ def get_project_path(project_dir: Optional[Path]) -> Path:
     if project_dir:
         return project_dir.resolve()
     return Path.cwd()
+
+
+def get_or_prompt_project_context(project_path: Path) -> ProjectContext:
+    """Load project context or interactively prompt for missing details."""
+    config_manager = ProjectConfigManager(project_path)
+    context = config_manager.load()
+    
+    needs_save = False
+    
+    if not context.primary_language:
+        console.print("\n[bold yellow]Project Context Required[/bold yellow]")
+        console.print("To help the agent write the best code, please provide some details about your stack.")
+        
+        context.primary_language = Prompt.ask(
+            "[cyan]Primary Programming Language[/cyan] (e.g., Python, TypeScript, Go)"
+        )
+        context.framework = Prompt.ask(
+            "[cyan]Frameworks/Libraries[/cyan] (e.g., FastAPI, Next.js, React) [dim](optional)[/dim]", 
+            default=""
+        )
+        context.database = Prompt.ask(
+            "[cyan]Database[/cyan] (e.g., PostgreSQL, MongoDB) [dim](optional)[/dim]", 
+            default=""
+        )
+        context.additional_context = Prompt.ask(
+            "[cyan]Any additional architecture rules or context?[/cyan] [dim](optional)[/dim]", 
+            default=""
+        )
+        needs_save = True
+        
+    if needs_save:
+        config_manager.save(context)
+        console.print("[green]✓ Project context saved for future tasks.[/green]\n")
+        
+    return context
 
 
 @app.callback()
@@ -88,10 +123,14 @@ def build(
     # Update config
     config.agent.max_agents = max_agents
     
+    # Get interactive context
+    project_context = get_or_prompt_project_context(project_path)
+    
     # Create and run agent
     agent = create_main_agent(
         project_path=project_path,
         task=task,
+        project_context=project_context,
         command="build",
         console=console,
         dry_run=dry_run,
@@ -142,11 +181,15 @@ def chat(
         border_style="cyan",
     ))
     
+    # Get interactive context
+    project_context = get_or_prompt_project_context(project_path)
+    
     # Create agent for chat mode
     agent = create_main_agent(
         project_path=project_path,
         task="",
         command="chat",
+        project_context=project_context,
         console=console,
         verbose=verbose,
     )

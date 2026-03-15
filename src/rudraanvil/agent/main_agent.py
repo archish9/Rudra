@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
-from deepagents import create_deep_agent
 from rich.console import Console
+from deepagents import create_deep_agent
 
 from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem
-from rudraanvil.state import TodoList, CheckpointManager
+from rudraanvil.state import TodoList, CheckpointManager, ProjectContext
 from rudraanvil.tools import create_code_tools
 
 
@@ -26,11 +28,13 @@ class AgentContext:
     todo_list: TodoList
     checkpoint_manager: CheckpointManager
     console: Console
+    project_context: Optional[ProjectContext] = None
     
     # Execution settings
     dry_run: bool = False
     verbose: bool = False
     max_iterations: int = 100
+    stop_on_error: bool = True  # If True, abort execution immediately on tool error
     
     # Chat history for chat mode
     chat_history: list[dict] = field(default_factory=list)
@@ -53,7 +57,7 @@ class AgentResult:
     todo_summary: str = ""
 
 
-def build_system_prompt(command: str, task: str, project_path: Path, vfs: VirtualFileSystem, **kwargs) -> str:
+def build_system_prompt(command: str, task: str, project_path: Path, vfs: VirtualFileSystem, project_context: Optional[ProjectContext] = None, **kwargs) -> str:
     """Build the system prompt for the agent based on command type."""
     
     # Base prompt
@@ -67,9 +71,20 @@ Project structure:
 You can:
 - Plan and decompose tasks using the write_todos tool
 - Read, write, and edit files using built-in file system tools
-- Run code, tests, and linting
 - Spawn sub-agents for specialized tasks
 
+CRITICAL: Do NOT attempt to execute code, run tests, or install packages. Your sole purpose is to generate and edit files.
+"""
+
+    if project_context and project_context.primary_language:
+        base_prompt += f"""
+Project Tech Stack Context:
+- Primary Language: {project_context.primary_language}
+- Frameworks/Libraries: {project_context.framework or 'Not specified'}
+- Database: {project_context.database or 'Not specified'}
+- Additional Rules/Architecture: {project_context.additional_context or 'None'}
+
+Please ensure all generated code adheres STRICTLY to the above tech stack.
 """
     
     # Add command-specific guidance
@@ -79,27 +94,21 @@ You can:
 Task: {task}
 {existing}
 
-Your ONLY job at this stage is to WRITE CODE FILES. Do NOT install packages, run commands,
-start servers, or execute any code. Installation, environment setup, and testing are handled
-in separate stages. Just focus on generating complete, accurate code.
+Your ONLY job at this stage is to PLAN AND DELEGATE. Do NOT write code directly in your response.
+Your MUST use the `task` tool to spawn the `coder-subagent` to write the necessary files.
+You are a project manager. You plan the files needed and then delegate the actual creation to the subagent.
 
 Required steps:
-1. **Plan** (optional): Call write_todos with the exact schema below
-2. **Write ALL files**: Call write_file for EVERY file the project needs
-3. **Edit if needed**: Use edit_file to update existing files
-4. **Keep working**: Do NOT stop until every file is written and complete
+1. **Plan**: Call write_todos with exactly the schema below to plan the files that need to be created.
+2. **Delegate**: Call the `task` tool with `subagent_type: "coder-subagent"` and give it clear instructions on what code to write.
+3. **Verify**: Check the files using `ls` and `read_file`.
+4. **Iterate**: If the files are incorrect or missing, use the `task` tool again to fix them.
 
-Write COMPLETE, production-quality code for ANY language (Python, JS, Go, Rust, etc.):
-- No placeholders like "# TODO" or "pass" — every function must be fully implemented
-- Include all imports, all logic, all error handling
-- Include config files and dependency manifests (requirements.txt, package.json, go.mod, etc.)
-- Include a README.md with setup and run instructions
+IMPORTANT: When delegating to the `coder-subagent`, you MUST explicitly specify the primary language and frameworks defined in the "Project Tech Stack Context" above. Do NOT let the subagent default to an incorrect language.
 
-CRITICAL — write_file and edit_file rules:
-- write_file creates a NEW file — if the file already exists, use edit_file instead
-- If write_file returns an "already exists" error, immediately retry with edit_file — do NOT stop
-- To create files in subdirectories, just use the relative path directly:
-  write_file(file_path="app/main.py", content="...")  — directories are created automatically
+CRITICAL: You MUST NEVER output code directly. You MUST ALWAYS use the `task` tool to spawn the `coder-subagent` so it executes `write_file` or `edit_file`.
+
+write_file and edit_file are handled by the subagent, NOT you.
 
 CRITICAL — write_todos exact schema (todos must be a LIST of objects):
   write_todos(todos=[
@@ -119,8 +128,10 @@ Tool Usage (CURRENT v0.4.x API):
 
 CRITICAL — File Path Rules:
 - Use RELATIVE paths (e.g., "main.py", "app/routes.py", "requirements.txt")
-- Do NOT use absolute paths (e.g., "/home/user/project/main.py")
+- CRITICAL: NEVER start a path with a slash (e.g., NEVER use "/main.py").
 - write_file creates a brand new file — use edit_file to modify an existing file
+
+CRITICAL: If the subagent fails to write files (e.g. returns text instead of tool calls, or tries to use absolute paths), you MUST RE-RUN the task tool with even more explicit instructions. You are responsible for ensuring the code actually reaches the disk.
 """
     
     elif command == "chat":
@@ -145,7 +156,7 @@ Approach:
 2. Identify the root cause
 3. Plan a minimal fix
 4. Implement the fix
-5. Verify it works (run tests if applicable)
+5. Review the code to ensure the fix is correct (Do NOT run tests or execute code)
 """
     
     elif command == "edit":
@@ -234,9 +245,9 @@ class RudraAnvilAgent:
         """Log all agent messages with full detail — always shown by default.
         
         Shows tool names, arguments, full outputs, and highlights errors.
-        Controlled by VERBOSE=false in .env to silence.
+        Controlled by VERBOSE=false in .env to silence (except for real-time streaming).
         """
-        if not self.context.verbose:
+        if not self.context.verbose and not getattr(self, "_force_log", False):
             return
 
         self._log_always(f"\n[bold]Agent trace — {len(messages)} messages[/bold]", "cyan")
@@ -288,6 +299,57 @@ class RudraAnvilAgent:
             else:
                 content = str(getattr(msg, 'content', ''))[:200].replace('\n', ' ')
                 self._log_always(f"[dim][{i+1}] {msg_type}: {content}[/dim]")
+                
+    def _log_single_message(self, msg: Any, index: int) -> None:
+        """Log a single message as it arrives in the stream."""
+        msg_type = type(msg).__name__
+        
+        # ── AIMessage ──
+        if msg_type == "AIMessage":
+            tool_calls = getattr(msg, 'tool_calls', [])
+            if tool_calls:
+                for tc in tool_calls:
+                    name = tc.get('name', '?')
+                    args = tc.get('args', {})
+                    args_str = str(args)[:400]
+                    self._log_always(
+                        f"[bold cyan]→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args_str}"
+                    )
+            else:
+                content = str(getattr(msg, 'content', ''))[:300].replace('\n', ' ')
+                self._log_always(f"[bold cyan]← [{index}] AI[/bold cyan]  {content}")
+
+        # ── ToolMessage ──
+        elif msg_type == "ToolMessage":
+            content = str(getattr(msg, 'content', ''))
+            tool_name = getattr(msg, 'name', '?')
+            is_error = (
+                content.startswith("Error:") or "Error:" in content or "Traceback" in content
+                or "Errno" in content or "not a valid tool" in content
+                or "Input should be a valid string" in content
+            )
+            # Truncate long outputs but keep more for errors
+            limit = 800 if is_error else 400
+            preview = content[:limit].replace('\n', ' ↵ ')
+            if is_error:
+                self._log_always(
+                    f"[bold red]✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
+                )
+            else:
+                self._log_always(
+                    f"[green]✓ [{index}] {tool_name}:[/green] {preview}"
+                )
+
+        # ── HumanMessage ──
+        elif msg_type == "HumanMessage":
+            content_str = str(getattr(msg, 'content', ''))
+            content = content_str[:200].replace('\n', ' ')
+            self._log_always(f"[dim][{index}] USER: {content}[/dim]")
+
+        else:
+            content_str = str(getattr(msg, 'content', ''))
+            content = content_str[:200].replace('\n', ' ')
+            self._log_always(f"[dim][{index}] {msg_type}: {content}[/dim]")
     
     async def run(self) -> AgentResult:
         """Run the full agent workflow.
@@ -301,10 +363,16 @@ class RudraAnvilAgent:
             if self.context.verbose:
                 self._log("Invoking deepagents with recursion_limit=100", "cyan")
             
-            # Run deepagents with proper LangGraph configuration
-            # recursion_limit allows the agent to loop through todos and execute work
-            result = await asyncio.to_thread(
-                self.agent.invoke,
+            # Using stream to show real-time progress
+            self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
+            
+            final_state = None
+            processed_messages = 0
+            last_tool_call = None
+            consecutive_failures = 0
+            
+            # Run deepagents as an async generator using astream
+            async for chunk in self.agent.astream(
                 {
                     "messages": [
                         {
@@ -313,19 +381,70 @@ class RudraAnvilAgent:
                         }
                     ]
                 },
-                {"recursion_limit": 100}  # Allow agent to iterate through work
-            )
-            
-            # Log all messages with full detail
-            messages = result.get("messages", [])
-            self._log_messages(messages)
+                {"recursion_limit": 100},  # Allow agent to iterate through work
+                stream_mode="values",
+                subgraphs=True
+            ):
+                namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
 
-            if self.context.verbose:
-                self._log(f"Result state keys: {list(result.keys())}", "yellow")
+                final_state = event
+                messages = event.get("messages", [])
+                
+                # If there are new messages, log them and check for errors
+                while processed_messages < len(messages):
+                    msg = messages[processed_messages]
+                    msg_type = type(msg).__name__
+                    
+                    # Display the namespace if inside a subagent
+                    if namespace:
+                        self._log_always(f"[dim](subagent {':'.join(namespace)})[/dim]")
+                    
+                    self._log_single_message(msg, processed_messages + 1)
+                    
+                    # Error and Loop Detection
+                    if msg_type == "AIMessage" and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                        last_tool_call = str(msg.tool_calls)
+                    
+                    elif msg_type == "ToolMessage":
+                        content = str(getattr(msg, 'content', ''))
+                        is_error = (
+                            content.startswith("Error:") or "Error:" in content or "Traceback" in content
+                            or "Errno" in content or "not a valid tool" in content
+                            or "Input should be a valid string" in content
+                        )
+                        
+                        if is_error:
+                            consecutive_failures += 1
+                            if self.context.stop_on_error:
+                                self._log_always(f"[bold red]!! Halting execution: Tool failure detected in {':'.join(namespace) or 'main agent'}[/bold red]", "red")
+                                self._log_always(f"[bold red]Reason: {content[:1000]}[/bold red]", "red")
+                                return AgentResult(
+                                    success=False, 
+                                    message=f"Execution halted on tool error: {content}", 
+                                    iterations=self.iterations
+                                )
+                            if consecutive_failures >= 3:
+                                return AgentResult(
+                                    success=False,
+                                    message=f"Execution aborted: Detected repeating failure loop.\nLast error: {content}",
+                                    iterations=self.iterations
+                                )
+                        else:
+                            consecutive_failures = 0 # Reset on success
+                            
+                    processed_messages += 1
+
+            if not final_state:
+                 return AgentResult(success=False, message="Agent stream returned no state.", iterations=0)
+
+            if self.context.verbose and isinstance(final_state, dict):
+                self._log(f"Result state keys: {list(final_state.keys())}", "yellow")
             
             # Extract final response
             # deepagents returns a dict with 'messages' key containing AIMessage objects
-            messages = result.get("messages", [])
+            messages = []
+            if isinstance(final_state, dict):
+                 messages = final_state.get("messages", [])
             if messages:
                 final_message = messages[-1]
                 # AIMessage has a .content attribute, not .get() method
@@ -376,12 +495,14 @@ class RudraAnvilAgent:
                 )
         
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return AgentResult(
                 success=False,
                 message=f"Error: {str(e)}",
                 iterations=self.iterations,
             )
-    
+            
     async def chat_turn(self, user_input: str) -> str:
         """Handle a single turn in chat mode.
         
@@ -425,6 +546,7 @@ class RudraAnvilAgent:
 def create_main_agent(
     project_path: Path,
     task: str,
+    project_context: Optional[ProjectContext] = None,
     command: str = "build",
     console: Optional[Console] = None,
     dry_run: bool = False,
@@ -469,6 +591,7 @@ def create_main_agent(
         todo_list=todo_list,
         checkpoint_manager=checkpoint_manager,
         console=console,
+        project_context=project_context,
         dry_run=dry_run,
         verbose=verbose,
         command=command,
@@ -487,7 +610,7 @@ def create_main_agent(
         num_predict=config.ollama.num_predict,  # Increased from default (128) to allow complete tool call JSON generation
     )
     
-    # Create custom code execution tools (deepagents has file tools built-in)
+    # Create empty custom tools list since execution is disabled
     custom_tools = create_code_tools(vfs)
     
     # Build system prompt
@@ -496,6 +619,7 @@ def create_main_agent(
         task=task,
         project_path=project_path,
         vfs=vfs,
+        project_context=project_context,
         **kwargs
     )
     
@@ -507,19 +631,63 @@ def create_main_agent(
     # - Tool calling orchestration
     
     # Configure FilesystemBackend to write files to actual disk (not just memory)
-    # virtual_mode=True enables path sand boxing and normalization under root_dir
+    # virtual_mode=False is safer for general agent access as it won't crash on unanchored paths
     from deepagents.backends import FilesystemBackend
     
     filesystem_backend = FilesystemBackend(
         root_dir=str(project_path),  # Must be absolute path
-        virtual_mode=True  # Enables path-based security and normalization
+        virtual_mode=True  # Enabling virtual mode anchors all paths to root_dir and prevents absolute path jumps
+    )
+
+    # Force the coder subagent to use write_file
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+    fs_middleware = FilesystemMiddleware(backend=filesystem_backend)
+    
+    # We find the file tools to bind them
+    file_tools = []
+    for tools_group in fs_middleware.tools:
+        if isinstance(tools_group, list):
+             for t in tools_group:
+                 name = getattr(t, 'name', '')
+                 if name in ['write_file', 'edit_file', 'read_file', 'ls']:
+                     file_tools.append(t)
+        else:
+             name = getattr(tools_group, 'name', '')
+             if name in ['write_file', 'edit_file', 'read_file', 'ls']:
+                  file_tools.append(tools_group)
+             
+    coder_model = model
+    if file_tools:
+        # Binding them explicitly ensures they are available and preferred.
+        coder_model = model.bind_tools(file_tools)
+    
+    # Create subagent system prompt with context
+    subagent_prompt = (
+        "You are a code generation agent. Your sole purpose is to execute write_file and edit_file to create the necessary code for your given task. "
+        "Use the ls and read_file tools to navigate the project path if necessary. "
+        "CRITICAL: You MUST use purely RELATIVE paths (e.g. 'models/User.js') when creating files. NEVER use absolute paths or paths starting with '/' (e.g. NEVER use '/models/User.js'). ALL paths should be relative to the project root. "
+        "CRITICAL 2: The 'content' argument for write_file and edit_file MUST be a valid UTF-8 string. NEVER pass objects, dictionaries, or lists as content – convert them to formatted code or JSON strings first. "
+        "CRITICAL 3: Do NOT use the write_todos tool. Marking a task as completed in the todo list does NOT create a file. You MUST write all the needed code strictly via tool calls to write_file or edit_file. "
+        "CRITICAL 4: You MUST ONLY output write_file and edit_file tool calls. NEVER output ordinary text, markdown, codeblocks, or explanations. You MUST write all the needed code strictly via tool calls."
     )
     
+    if project_context and project_context.primary_language:
+        subagent_prompt += f"\n\nSTRICT TECH STACK ENFORCEMENT:\n- Primary Language: {project_context.primary_language}\n- Frameworks: {project_context.framework or 'Not specified'}\n- Database: {project_context.database or 'Not specified'}\n\nEnsure ALL code you generate uses this stack."
+
     deep_agent = create_deep_agent(
         model=model,  # Pass configured ChatOllama instance
         tools=custom_tools,  # Add our custom code execution tools
         system_prompt=system_prompt,
         backend=filesystem_backend,  # Write files to actual project directory
+        subagents=[
+            {
+                "name": "coder-subagent",
+                "description": "An agent specialized in writing code and generating exact implementation files. Launch this subagent to generate files for a given module. The subagent will return only once it has written all files.",
+                "system_prompt": subagent_prompt,
+                "model": coder_model,
+                "tools": [] # inherits default tools 
+            }
+        ]
     )
     
     # Wrap in RudraAnvil agent for compatibility
