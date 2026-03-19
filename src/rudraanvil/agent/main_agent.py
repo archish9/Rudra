@@ -16,6 +16,7 @@ from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem
 from rudraanvil.state import TodoList, CheckpointManager, ProjectContext
 from rudraanvil.tools import create_code_tools
+from rudraanvil.tools.planning_tools import create_planning_tools
 
 
 @dataclass
@@ -65,14 +66,23 @@ def build_system_prompt(command: str, task: str, project_path: Path, vfs: Virtua
 
 Project root: {project_path}
 
+## RULE #0 — MANDATORY BEFORE ANYTHING ELSE
+Your very first tool call on every task MUST be update_plan().
+Write a markdown checklist of every file you need to create.
+Do NOT call the `task` tool or any other tool before update_plan has been called.
+Violating this rule breaks the project's context management system.
+
 Project structure:
 {vfs.get_tree()}
 
 You can:
-- Plan and decompose tasks using the write_todos tool
+- Plan and decompose tasks using the update_plan tool (writes to .rudraanvil/PLAN.md)
+- Read your current plan with read_plan() or read_file('.rudraanvil/PLAN.md')
+- Check off completed items with edit_file('.rudraanvil/PLAN.md', '- [ ] <task>', '- [x] <task>')
 - Read, write, and edit files using built-in file system tools
 - Spawn sub-agents for specialized tasks
 
+CRITICAL: NEVER use write_todos — it bloats the context window. Always use update_plan instead.
 CRITICAL: Do NOT attempt to execute code, run tests, or install packages. Your sole purpose is to generate and edit files.
 """
 
@@ -99,25 +109,21 @@ Your MUST use the `task` tool to spawn the `general-purpose` subagent to write t
 You are a project manager. You plan the files needed and then delegate the actual creation to the subagent.
 
 Required steps:
-1. **Plan**: Call write_todos with exactly the schema below to plan the files that need to be created.
+1. **Plan**: Call update_plan() with a markdown checklist of all files to be created. Example:
+   update_plan("# Build Plan\n- [ ] Create main.py\n- [ ] Create requirements.txt\n- [ ] Create README.md")
 2. **Delegate**: Call the `task` tool with `subagent_type: "general-purpose"` and give it clear instructions on what code to write. YOU MUST USE "general-purpose".
-3. **Verify**: Check the files using `list_directory` and `read_file`. Do not mark a todo as completed until you verify the file exists on disk.
-4. **Iterate**: If the files are incorrect or missing, use the `task` tool again to fix them.
+3. **Verify**: Check the files using `list_directory` and `read_file`. Do not mark a plan item as completed until you verify the file exists on disk.
+4. **Check off**: Use edit_file to mark completed items in PLAN.md:
+   edit_file('.rudraanvil/PLAN.md', '- [ ] Create main.py', '- [x] Create main.py')
+5. **Iterate**: If the files are incorrect or missing, use the `task` tool again to fix them.
 
 IMPORTANT: When delegating to the `general-purpose` subagent, you MUST explicitly specify the primary language and frameworks defined in the "Project Tech Stack Context" above. Do NOT let the subagent default to an incorrect language.
 
 CRITICAL: You MUST NEVER output code directly. You MUST ALWAYS use the `task` tool to spawn the `general-purpose` subagent so it executes `write_file` or `edit_file`.
 
-write_file and edit_file are handled by the general-purpose subagent, NOT you. The subagent will not update the todo list. YOU must verify the files are written and then YOU update the todo list to completed.
-Do NOT just mark todos as completed without calling the subagent.
-
-CRITICAL — write_todos exact schema (todos must be a LIST of objects):
-  write_todos(todos=[
-    {{"content": "Description of task 1", "status": "pending"}},
-    {{"content": "Description of task 2", "status": "pending"}}
-  ])
-  Valid status values: "pending", "in_progress", "completed"
-  Each item MUST have exactly: "content" (string) and "status" (string)
+CRITICAL: NEVER use write_todos. The plan lives in .rudraanvil/PLAN.md and is managed by update_plan and edit_file ONLY.
+write_file and edit_file are handled by the general-purpose subagent, NOT you. YOU must verify the files are written and then YOU check off the plan items with edit_file.
+Do NOT mark plan items as completed without first verifying the file was written.
 
 Tool Usage (CURRENT v0.4.x API):
 - List directory:     ls(path=".")
@@ -359,9 +365,6 @@ class RudraAnvilAgent:
         try:
             self._status("Planning and executing task...")
             
-            if self.context.verbose:
-                self._log("Invoking deepagents with recursion_limit=100", "cyan")
-            
             # Using stream to show real-time progress
             self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
             
@@ -370,13 +373,25 @@ class RudraAnvilAgent:
             last_tool_call = None
             consecutive_failures = 0
             
+            # Build the user message. For 'build' command, prepend a hard
+            # planning requirement so local LLMs cannot skip update_plan.
+            user_content = self.context.task
+            if self.context.command == "build":
+                user_content = (
+                    "STEP 1 — YOU MUST DO THIS FIRST: Call update_plan() right now with a "
+                    "markdown checklist of every file this task requires. "
+                    "Do NOT call the `task` tool or write any files until after update_plan has been called. "
+                    "Example: update_plan('# Plan\\n- [ ] Create app.py\\n- [ ] Create models.py')\n\n"
+                    f"STEP 2 — YOUR ACTUAL TASK: {self.context.task}"
+                )
+
             # Run deepagents as an async generator using astream
             async for chunk in self.agent.astream(
                 {
                     "messages": [
                         {
                             "role": "user",
-                            "content": self.context.task
+                            "content": user_content
                         }
                     ]
                 },
@@ -415,13 +430,9 @@ class RudraAnvilAgent:
                         if is_error:
                             consecutive_failures += 1
                             if self.context.stop_on_error:
-                                self._log_always(f"[bold red]!! Halting execution: Tool failure detected in {':'.join(namespace) or 'main agent'}[/bold red]", "red")
-                                self._log_always(f"[bold red]Reason: {content[:1000]}[/bold red]", "red")
-                                return AgentResult(
-                                    success=False, 
-                                    message=f"Execution halted on tool error: {content}", 
-                                    iterations=self.iterations
-                                )
+                                self._log_always(f"[bold red]!! Halting execution: Tool failure detected in {':'.join(namespace) or 'main agent'}[/bold red]")
+                                self._log_always(f"[bold red]{content}[/bold red]")
+                                raise RuntimeError(f"Tool error in {':'.join(namespace) or 'main agent'}:\n{content}")
                             if consecutive_failures >= 3:
                                 return AgentResult(
                                     success=False,
@@ -493,14 +504,11 @@ class RudraAnvilAgent:
                     todo_summary=response_content,
                 )
         
-        except Exception as e:
+        except Exception:
             import traceback
-            traceback.print_exc()
-            return AgentResult(
-                success=False,
-                message=f"Error: {str(e)}",
-                iterations=self.iterations,
-            )
+            self._log_always("[bold red]\n!! Agent crashed — full traceback:[/bold red]")
+            self._log_always(traceback.format_exc())
+            raise
             
     async def chat_turn(self, user_input: str) -> str:
         """Handle a single turn in chat mode.
@@ -606,11 +614,11 @@ def create_main_agent(
         model=config.ollama.model,
         base_url=config.ollama.base_url,
         temperature=config.ollama.temperature,
-        num_predict=config.ollama.num_predict,  # Increased from default (128) to allow complete tool call JSON generation
+        num_predict=config.ollama.num_predict
     )
     
-    # Create empty custom tools list since execution is disabled
-    custom_tools = create_code_tools(vfs)
+    # Custom tools: code tools (currently empty) + filesystem planning tools
+    custom_tools = create_code_tools(vfs) + create_planning_tools(vfs)
     
     # Build system prompt
     system_prompt = build_system_prompt(
@@ -676,6 +684,7 @@ def create_main_agent(
             }
         ]
     )
+
     
     # Wrap in RudraAnvil agent for compatibility
     return RudraAnvilAgent(context, deep_agent)
