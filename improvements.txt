@@ -1,0 +1,5 @@
+Following are major problems for me that i want to solve.
+1. Cuttent system is not fully leveraging Deepagents in-build camabilities/tools/functionalities. For example using sub-agent to generate code.
+2. There is no context management. even if its implemented its not fully implemented. And i want Filesystem-Based Context Management/Sharing.
+3. There is there is in-build Planning capability: They can break down large tasks into manageable subtasks and adjust the plan as work progresses. I want to take full leverage of it. 
+[Recommended Hybrid Architecture, Three-Level Planning System:]
