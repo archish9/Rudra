@@ -1,5 +1,11 @@
-Following are major problems for me that i want to solve.
-1. Cuttent system is not fully leveraging Deepagents in-build camabilities/tools/functionalities. For example using sub-agent to generate code.
-2. There is no context management. even if its implemented its not fully implemented. And i want Filesystem-Based Context Management/Sharing.
-3. There is there is in-build Planning capability: They can break down large tasks into manageable subtasks and adjust the plan as work progresses. I want to take full leverage of it. 
+The following are major problems for me that I want to solve.
+1. Cuttent system is not fully leveraging Deepagents in-build camabilities/tools/functionalities. For example, using a sub-agent to generate code. There is in-build tools in DeepAgents that can be used for all file operations.
+2. There is no context management. Even if it's implemented its not fully implemented. And I want Filesystem-Based Context Management/Sharing. The current system is using only one model for planning and code generation. In the future i want one mode for planning (most probably Qwen3:14 b), and one model for code generation (Qwen3-Coder-30B quantized variant). So context management should be capable of communicating between these two models.
+3. There is there is in-build Planning capability: They can break down large tasks into manageable subtasks and adjust the plan as work progresses. I want to take full leverage of it.
+I just don't want simple planning. Before starting any task i want planning to be equivalenty as good as a senior experienced developer or experienced person do analysis for a project. I want a plan that exactly says to follow the correct/recommended folder structure. To improve planning capabily i am also planning to fine-tune the planning model (most probably qwen3:14b). But I am thinking to do this for the future. The current system is already creating PLAN.md, but I feel it's not sufficient, and very much beginner-level. I know that there is a new feature that I can use to create skills using Claude (for generating code). So if I can use this some how than this will cherry on top.
 [Recommended Hybrid Architecture, Three-Level Planning System:]
+4. There are checkpoint.py and todo.py in src/rudraanvil/state. And it seems they need a total revamp. Rebuild them from biginning if needed. And if they are not needed to achieve what I want, remove them.
+5. In the future i will implement/attach MCP tools. I will also implement a testing feature so that I can test the generated code. But this is also for the future.
+
+
+My current aim is to Generate Correct code. And while achieving the main gold i don't want to miss these - I want to do this leverage Deepagents in-built capabilities/tools/functionalities, Context management, Dual model (planning and generating code).
