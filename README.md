@@ -75,7 +75,7 @@ Think of it as having a tireless developer who can work on your codebase while y
 ### Prerequisites
 
 - **Python 3.12+**
-- **Ollama** running locally with the `gpt-oss:20b` model
+- **Ollama** running locally with the `qwen3:14b` model
 - **Git** (for cloning the repo)
 
 ### Step 1: Clone the Repository
@@ -165,7 +165,7 @@ RudraAnvil requires Ollama to be running with the appropriate model:
 ollama serve
 
 # Pull the required model
-ollama pull gpt-oss:20b
+ollama pull qwen3:14b
 
 # Verify model is available
 ollama list
@@ -516,7 +516,7 @@ Copy `.env.example` to `.env` and customize:
 ```bash
 # Ollama Configuration
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=gpt-oss:20b
+OLLAMA_MODEL=qwen3:14b
 OLLAMA_TEMPERATURE=0.7
 OLLAMA_TIMEOUT=300
 
@@ -662,7 +662,7 @@ pipx install -e .
 2. **Verify model is available:**
    ```bash
    ollama list
-   # Should show gpt-oss:20b
+   # Should show qwen3:14b
    ```
 
 3. **Check configuration:**
@@ -711,11 +711,11 @@ The first run may be slower as dependencies are loaded and Ollama initializes th
 
 ### Model download is slow
 
-The `gpt-oss:20b` model is large (~12GB). Download time depends on your internet connection:
+The `qwen3:14b` model is large (~12GB). Download time depends on your internet connection:
 
 ```bash
 # Check download progress
-ollama pull gpt-oss:20b
+ollama pull qwen3:14b
 ```
 
 ---
