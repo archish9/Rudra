@@ -13,17 +13,18 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from rudraanvil import __version__
-from rudraanvil.agent import create_main_agent
+from rudraanvil.agent import create_main_agent, AgentResult
 from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem, FileSyncManager, SyncMode
-from rudraanvil.state import CheckpointManager, TodoList, ProjectConfigManager, ProjectContext
+from rudraanvil.state import ProjectConfigManager, ProjectContext
 
 # Create the Typer app
 app = typer.Typer(
     name="rudraanvil",
     help="RudraAnvil - Autonomous Coding Agent CLI",
     add_completion=False,
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
 )
 
 console = Console()
@@ -78,22 +79,125 @@ def get_or_prompt_project_context(project_path: Path) -> ProjectContext:
     return context
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
+    prompt: Optional[str] = typer.Argument(None, help="Task or question (e.g., 'Create a hello world script')"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d", help="Project directory (defaults to current directory)"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
+    verbose: bool = typer.Option(config.agent.verbose, "--verbose/--no-verbose", "-V", help="Show detailed output"),
+    max_agents: int = typer.Option(6, "--max-agents", help="Maximum number of sub-agents"),
     version: bool = typer.Option(
-        False,
-        "--version",
-        "-v",
-        callback=version_callback,
-        is_eager=True,
-        help="Show version and exit",
+        False, "--version", "-v", callback=version_callback, is_eager=True, help="Show version and exit"
     ),
 ) -> None:
     """RudraAnvil - Autonomous Coding Agent CLI.
-    
-    Build, debug, and maintain software projects with an AI-powered agent.
+
+    Run with a prompt to execute a task:
+        rudraanvil "Create a hello world Python script"
+
+    Run without arguments to enter interactive chat mode:
+        rudraanvil
     """
-    pass
+    # A subcommand was explicitly given — let it handle everything
+    if ctx.invoked_subcommand is not None:
+        return
+
+    project_path = get_project_path(project_dir)
+    project_context = get_or_prompt_project_context(project_path)
+    config.agent.max_agents = max_agents
+
+    if prompt:
+        # Single-shot task mode (like: rudraanvil "Create hello.py")
+        console.print(Panel(
+            f"[bold]{prompt}[/bold]\n"
+            f"Path: {project_path}",
+            title="RudraAnvil",
+            border_style="blue",
+        ))
+
+        async def _run() -> AgentResult:
+            agent = await create_main_agent(
+                project_path=project_path,
+                task=prompt,
+                project_context=project_context,
+                command="auto",
+                console=console,
+                dry_run=dry_run,
+                verbose=verbose,
+            )
+            try:
+                return await agent.run()
+            finally:
+                await agent.close()
+
+        result: AgentResult = asyncio.run(_run())
+
+        if result.success:
+            console.print(Panel(
+                f"[green]✓[/green] {result.message}\n\n"
+                f"Files created: {len(result.files_created)}\n"
+                f"Files modified: {len(result.files_modified)}\n"
+                f"Iterations: {result.iterations}",
+                title="Complete",
+                border_style="green",
+            ))
+        else:
+            console.print(Panel(
+                f"[red]✗[/red] {result.message}",
+                title="Error",
+                border_style="red",
+            ))
+            raise typer.Exit(1)
+
+    else:
+        # No prompt → interactive REPL mode (like: rudraanvil)
+        console.print(Panel(
+            f"[bold]Interactive mode[/bold]\n"
+            f"Path: {project_path}\n\n"
+            "Type your request and press Enter.\n"
+            "Commands: /exit, /tree",
+            title="RudraAnvil",
+            border_style="cyan",
+        ))
+
+        async def _chat_session():
+            agent = await create_main_agent(
+                project_path=project_path,
+                task="",
+                command="chat",
+                project_context=project_context,
+                console=console,
+                verbose=verbose,
+            )
+            try:
+                while True:
+                    try:
+                        user_input = Prompt.ask("\n[bold cyan]rudraanvil[/bold cyan]")
+                        cmd = user_input.strip().lower()
+
+                        if cmd in ("/exit", "/quit", "exit", "quit"):
+                            console.print("[dim]Goodbye![/dim]")
+                            break
+                        elif cmd == "/tree":
+                            console.print(agent.context.vfs.get_tree())
+                            continue
+                        elif cmd.startswith("/"):
+                            console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
+                            continue
+
+                        if user_input.strip():
+                            response = await agent.chat_turn(user_input)
+                            console.print(f"\n[dim]{response}[/dim]")
+
+                    except KeyboardInterrupt:
+                        console.print("\n[dim]Use /exit to quit[/dim]")
+                    except EOFError:
+                        break
+            finally:
+                await agent.close()
+
+        asyncio.run(_chat_session())
 
 
 @app.command()
@@ -127,17 +231,22 @@ def build(
     project_context = get_or_prompt_project_context(project_path)
     
     # Create and run agent
-    agent = create_main_agent(
-        project_path=project_path,
-        task=task,
-        project_context=project_context,
-        command="build",
-        console=console,
-        dry_run=dry_run,
-        verbose=verbose,
-    )
-    
-    result = asyncio.run(agent.run())
+    async def _run():
+        agent = await create_main_agent(
+            project_path=project_path,
+            task=task,
+            project_context=project_context,
+            command="build",
+            console=console,
+            dry_run=dry_run,
+            verbose=verbose,
+        )
+        try:
+            return await agent.run()
+        finally:
+            await agent.close()
+
+    result = asyncio.run(_run())
     
     # Show result
     if result.success:
@@ -184,56 +293,46 @@ def chat(
     # Get interactive context
     project_context = get_or_prompt_project_context(project_path)
     
-    # Create agent for chat mode
-    agent = create_main_agent(
-        project_path=project_path,
-        task="",
-        command="chat",
-        project_context=project_context,
-        console=console,
-        verbose=verbose,
-    )
-    
-    # Chat loop
-    while True:
+    # Run the entire chat session inside a single event loop
+    async def _chat_session():
+        agent = await create_main_agent(
+            project_path=project_path,
+            task="",
+            command="chat",
+            project_context=project_context,
+            console=console,
+            verbose=verbose,
+        )
         try:
-            user_input = Prompt.ask("\n[bold cyan]rudraanvil[/bold cyan]")
-            
-            # Handle commands
-            cmd = user_input.strip().lower()
-            if cmd in ("/exit", "/quit", "exit", "quit"):
-                console.print("[dim]Goodbye![/dim]")
-                break
-            
-            elif cmd == "/status":
-                console.print(agent.context.todo_list.summary())
-                continue
-            
-            elif cmd == "/save":
-                agent.context.checkpoint_manager.save()
-                console.print("[green]Session saved[/green]")
-                continue
-            
-            elif cmd == "/tree":
-                console.print(agent.context.vfs.get_tree())
-                continue
-            
-            elif cmd.startswith("/"):
-                console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
-                continue
-            
-            # Process with agent
-            if user_input.strip():
-                response = asyncio.run(agent.chat_turn(user_input))
-                console.print(f"\n[dim]{response}[/dim]")
-        
-        except KeyboardInterrupt:
-            console.print("\n[dim]Use /exit to quit[/dim]")
-        except EOFError:
-            break
-    
-    # Save on exit
-    agent.context.checkpoint_manager.save()
+            while True:
+                try:
+                    user_input = Prompt.ask("\n[bold cyan]rudraanvil[/bold cyan]")
+
+                    cmd = user_input.strip().lower()
+                    if cmd in ("/exit", "/quit", "exit", "quit"):
+                        console.print("[dim]Goodbye![/dim]")
+                        break
+
+                    elif cmd == "/tree":
+                        console.print(agent.context.vfs.get_tree())
+                        continue
+
+                    elif cmd.startswith("/"):
+                        console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
+                        continue
+
+                    if user_input.strip():
+                        response = await agent.chat_turn(user_input)
+                        console.print(f"\n[dim]{response}[/dim]")
+
+                except KeyboardInterrupt:
+                    console.print("\n[dim]Use /exit to quit[/dim]")
+                except EOFError:
+                    break
+        finally:
+            await agent.close()
+
+    asyncio.run(_chat_session())
 
 
 @app.command()
@@ -261,18 +360,23 @@ def fix(
         border_style="yellow",
     ))
     
-    agent = create_main_agent(
-        project_path=project_path,
-        task=issue,
-        command="fix",
-        console=console,
-        dry_run=dry_run,
-        verbose=verbose,
-        issue=issue,
-        file_path=file,
-    )
-    
-    result = asyncio.run(agent.run())
+    async def _run():
+        agent = await create_main_agent(
+            project_path=project_path,
+            task=issue,
+            command="fix",
+            console=console,
+            dry_run=dry_run,
+            verbose=verbose,
+            issue=issue,
+            file_path=file,
+        )
+        try:
+            return await agent.run()
+        finally:
+            await agent.close()
+
+    result = asyncio.run(_run())
     
     if result.success:
         console.print(Panel(
@@ -312,17 +416,22 @@ def edit(
         border_style="magenta",
     ))
     
-    agent = create_main_agent(
-        project_path=project_path,
-        task=instruction,
-        command="edit",
-        console=console,
-        dry_run=preview,
-        verbose=False,
-        file_path=file,
-    )
-    
-    result = asyncio.run(agent.run())
+    async def _run():
+        agent = await create_main_agent(
+            project_path=project_path,
+            task=instruction,
+            command="edit",
+            console=console,
+            dry_run=preview,
+            verbose=False,
+            file_path=file,
+        )
+        try:
+            return await agent.run()
+        finally:
+            await agent.close()
+
+    result = asyncio.run(_run())
     
     if result.success:
         console.print(Panel(
@@ -366,16 +475,21 @@ def review(
     if focus:
         task = f"Review the codebase focusing on {focus}"
     
-    agent = create_main_agent(
-        project_path=project_path,
-        task=task,
-        command="review",
-        console=console,
-        dry_run=True,  # Review doesn't write files
-        verbose=True,
-    )
-    
-    result = asyncio.run(agent.run())
+    async def _run():
+        agent = await create_main_agent(
+            project_path=project_path,
+            task=task,
+            command="review",
+            console=console,
+            dry_run=True,
+            verbose=True,
+        )
+        try:
+            return await agent.run()
+        finally:
+            await agent.close()
+
+    result = asyncio.run(_run())
     
     # Output is the review itself
     console.print(Panel(
@@ -406,16 +520,21 @@ def suggest(
         border_style="cyan",
     ))
     
-    agent = create_main_agent(
-        project_path=project_path,
-        task=task,
-        command="suggest",
-        console=console,
-        dry_run=True,  # Suggestions don't write files
-        verbose=True,
-    )
-    
-    result = asyncio.run(agent.run())
+    async def _run():
+        agent = await create_main_agent(
+            project_path=project_path,
+            task=task,
+            command="suggest",
+            console=console,
+            dry_run=True,
+            verbose=True,
+        )
+        try:
+            return await agent.run()
+        finally:
+            await agent.close()
+
+    result = asyncio.run(_run())
     
     console.print(Panel(
         result.todo_summary if result.success else result.message,
@@ -426,97 +545,36 @@ def suggest(
 
 @app.command()
 def resume(
-    session_id: Optional[str] = typer.Argument(None, help="Session ID to resume"),
     project_dir: Optional[Path] = typer.Option(
         None, "--project-dir", "-d", help="Project directory"
     ),
-    list_sessions: bool = typer.Option(
-        False, "--list", "-l", help="List available sessions"
-    ),
 ) -> None:
-    """Resume an interrupted session.
-    
-    Picks up a paused or interrupted task from a checkpoint.
+    """Resume is now automatic — just run build or chat in the same project directory.
+
+    Session history is persisted in .rudraanvil/checkpoints.db and loaded
+    automatically via the stable session ID in .rudraanvil/session_id.txt.
     """
     project_path = get_project_path(project_dir)
-    checkpoint_dir = project_path / ".rudraanvil"
-    checkpoint_manager = CheckpointManager(checkpoint_dir)
-    
-    # List sessions if requested
-    if list_sessions or session_id is None:
-        sessions = checkpoint_manager.list_sessions()
-        
-        if not sessions:
-            console.print("[yellow]No saved sessions found[/yellow]")
-            raise typer.Exit()
-        
-        table = Table(title="Available Sessions")
-        table.add_column("Session ID", style="cyan")
-        table.add_column("Task", style="white")
-        table.add_column("Updated", style="dim")
-        table.add_column("Iterations", style="green")
-        
-        for session in sessions:
-            table.add_row(
-                session["session_id"],
-                session["task"],
-                session["updated_at"],
-                str(session["iterations"]),
-            )
-        
-        console.print(table)
-        
-        if session_id is None:
-            raise typer.Exit()
-    
-    # Resume the session
-    try:
-        checkpoint = checkpoint_manager.load(session_id)
-    except FileNotFoundError:
-        console.print(f"[red]Session not found: {session_id}[/red]")
-        raise typer.Exit(1)
-    
-    console.print(Panel(
-        f"[bold]Resuming session[/bold]\n"
-        f"Session: {session_id}\n"
-        f"Task: {checkpoint.task_description}\n"
-        f"Iterations completed: {checkpoint.iterations_completed}",
-        title="▶️ RudraAnvil Resume",
-        border_style="green",
-    ))
-    
-    # Restore state and continue
-    agent = create_main_agent(
-        project_path=project_path,
-        task=checkpoint.task_description,
-        command="build",
-        console=console,
-    )
-    
-    # Restore todo list and VFS from checkpoint
-    from rudraanvil.state.todo import TodoList
-    from rudraanvil.filesystem.virtual_fs import VirtualFileSystem
-    
-    agent.context.todo_list = TodoList.from_dict(checkpoint.todo_list)
-    if checkpoint.virtual_fs:
-        agent.context.vfs = VirtualFileSystem.from_dict(checkpoint.virtual_fs)
-    agent.iterations = checkpoint.iterations_completed
-    
-    result = asyncio.run(agent.run())
-    
-    if result.success:
+    session_file = project_path / ".rudraanvil" / "session_id.txt"
+
+    if session_file.exists():
+        session_id = session_file.read_text().strip()
         console.print(Panel(
-            f"[green]✓[/green] {result.message}",
-            title="Complete",
+            f"[green]Session ID:[/green] {session_id}\n"
+            f"[green]Checkpoint DB:[/green] {project_path / '.rudraanvil' / 'checkpoints.db'}\n\n"
+            "Run any command in this directory to continue:\n"
+            "  [bold]rudraanvil build \"continue the work\"[/bold]\n"
+            "  [bold]rudraanvil chat[/bold]",
+            title="▶️ Resume is Automatic",
             border_style="green",
         ))
     else:
         console.print(Panel(
-            f"[red]✗[/red] {result.message}",
-            title="Error",
-            border_style="red",
+            "No session found in this directory yet.\n"
+            "Start one with: [bold]rudraanvil build \"your task\"[/bold]",
+            title="▶️ No Session Found",
+            border_style="yellow",
         ))
-        raise typer.Exit(1)
 
 
 @app.command()

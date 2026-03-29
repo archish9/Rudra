@@ -14,32 +14,31 @@ from deepagents import create_deep_agent
 
 from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem
-from rudraanvil.state import TodoList, CheckpointManager, ProjectContext
-from rudraanvil.tools import create_code_tools
+from rudraanvil.state import get_or_create_session_id, ProjectContext
+from rudraanvil.tools.code_tools import create_code_tools
 from rudraanvil.tools.planning_tools import create_planning_tools
+
 
 
 @dataclass
 class AgentContext:
     """Context passed to the agent during execution."""
-    
+
     project_path: Path
     task: str
     vfs: VirtualFileSystem
-    todo_list: TodoList
-    checkpoint_manager: CheckpointManager
     console: Console
     project_context: Optional[ProjectContext] = None
-    
+
     # Execution settings
     dry_run: bool = False
     verbose: bool = False
     max_iterations: int = 100
     stop_on_error: bool = True  # If True, abort execution immediately on tool error
-    
+
     # Chat history for chat mode
     chat_history: list[dict] = field(default_factory=list)
-    
+
     # Command-specific context
     command: str = "build"
     file_path: Optional[str] = None
@@ -104,41 +103,31 @@ Please ensure all generated code adheres STRICTLY to the above tech stack.
 Task: {task}
 {existing}
 
-Your ONLY job at this stage is to PLAN AND DELEGATE. Do NOT write code directly in your response.
-Your MUST use the `task` tool to spawn the `general-purpose` subagent to write the necessary files.
-You are a project manager. You plan the files needed and then delegate the actual creation to the subagent.
+You write ALL files yourself using the built-in file system tools. There is no subagent.
 
-Required steps:
-1. **Plan**: Call update_plan() with a markdown checklist of all files to be created. Example:
+Required workflow:
+1. **Plan**: Call update_plan() with a markdown checklist of every file to create/modify:
    update_plan("# Build Plan\n- [ ] Create main.py\n- [ ] Create requirements.txt\n- [ ] Create README.md")
-2. **Delegate**: Call the `task` tool with `subagent_type: "general-purpose"` and give it clear instructions on what code to write. YOU MUST USE "general-purpose".
-3. **Verify**: Check the files using `list_directory` and `read_file`. Do not mark a plan item as completed until you verify the file exists on disk.
-4. **Check off**: Use edit_file to mark completed items in PLAN.md:
+2. **Write**: Use write_file() to create each file with complete, correct code.
+3. **Verify**: Use ls() or read_file() to confirm the file was written correctly.
+4. **Check off**: Use edit_file() to mark each item done in PLAN.md:
    edit_file('.rudraanvil/PLAN.md', '- [ ] Create main.py', '- [x] Create main.py')
-5. **Iterate**: If the files are incorrect or missing, use the `task` tool again to fix them.
+5. **Iterate**: If a file is wrong or missing, use edit_file() or write_file() again to fix it.
 
-IMPORTANT: When delegating to the `general-purpose` subagent, you MUST explicitly specify the primary language and frameworks defined in the "Project Tech Stack Context" above. Do NOT let the subagent default to an incorrect language.
-
-CRITICAL: You MUST NEVER output code directly. You MUST ALWAYS use the `task` tool to spawn the `general-purpose` subagent so it executes `write_file` or `edit_file`.
-
-CRITICAL: NEVER use write_todos. The plan lives in .rudraanvil/PLAN.md and is managed by update_plan and edit_file ONLY.
-write_file and edit_file are handled by the general-purpose subagent, NOT you. YOU must verify the files are written and then YOU check off the plan items with edit_file.
-Do NOT mark plan items as completed without first verifying the file was written.
-
-Tool Usage (CURRENT v0.4.x API):
+File system tools available (DeepAgents built-ins):
 - List directory:     ls(path=".")
 - Read a file:        read_file(file_path="filename.txt")
-- Create a new file:  write_file(file_path="filename.txt", content="file content here")
+- Create a new file:  write_file(file_path="filename.txt", content="...full file content...")
 - Edit existing file: edit_file(file_path="filename.txt", old_string="old text", new_string="new text")
-- Search files:       glob(pattern="**/*.py")
+- Find files:         glob(pattern="**/*.py")
 - Search content:     grep(pattern="search term", path=".")
 
 CRITICAL — File Path Rules:
-- Use RELATIVE paths (e.g., "main.py", "app/routes.py", "requirements.txt")
-- CRITICAL: NEVER start a path with a slash (e.g., NEVER use "/main.py").
-- write_file creates a brand new file — use edit_file to modify an existing file
+- Use RELATIVE paths only (e.g., "main.py", "app/routes.py", "requirements.txt")
+- NEVER start a path with a slash (NEVER use "/main.py").
+- write_file creates a brand-new file — use edit_file to modify an existing file.
 
-CRITICAL: If the subagent fails to write files (e.g. returns text instead of tool calls, or tries to use absolute paths), you MUST RE-RUN the task tool with even more explicit instructions. You are responsible for ensuring the code actually reaches the disk. Always verify with `list_directory` after the subagent returns.
+CRITICAL: NEVER use write_todos. The plan lives in .rudraanvil/PLAN.md only.
 """
     
     elif command == "chat":
@@ -210,24 +199,63 @@ Provide detailed suggestions including:
 
 Do NOT apply changes. Present them for the user to review.
 """
-    
+
+    else:  # "auto" — default when user runs: rudraanvil "some prompt"
+        existing = "This is an existing project." if vfs.files else "Starting from scratch."
+        base_prompt += f"""
+Task: {task}
+{existing}
+
+Understand the user's intent and act accordingly:
+- If creating or building something → plan with update_plan() then write files
+- If fixing a bug → diagnose, plan a minimal fix, apply it
+- If editing a file → make the targeted change only
+- If asking a question → answer clearly without writing files
+
+When writing or modifying files, follow this workflow:
+1. **Plan**: Call update_plan() with a markdown checklist
+2. **Write/Edit**: Use write_file() for new files, edit_file() for changes
+3. **Verify**: Use ls() or read_file() to confirm changes
+4. **Check off**: Mark items done in PLAN.md with edit_file()
+
+File system tools:
+- ls(path=".")
+- read_file(file_path="filename.txt")
+- write_file(file_path="filename.txt", content="...full content...")
+- edit_file(file_path="filename.txt", old_string="old", new_string="new")
+- glob(pattern="**/*.py")
+- grep(pattern="term", path=".")
+
+CRITICAL — Use RELATIVE paths only. NEVER start with a slash.
+"""
+
     return base_prompt
 
 
 class RudraAnvilAgent:
     """Wrapper around deepagents for RudraAnvil-specific functionality."""
-    
-    def __init__(self, context: AgentContext, deep_agent):
+
+    def __init__(self, context: AgentContext, deep_agent, session_id: str, db_conn=None):
         """Initialize RudraAnvil agent wrapper.
-        
+
         Args:
             context: Agent execution context
             deep_agent: The deepagents agent instance
+            session_id: LangGraph thread_id for this project's checkpoint thread
+            db_conn: aiosqlite connection to close on cleanup
         """
         self.context = context
         self.agent = deep_agent
+        self.session_id = session_id
         self.console = context.console
         self.iterations = 0
+        self._db_conn = db_conn
+
+    async def close(self) -> None:
+        """Close the underlying database connection."""
+        if self._db_conn is not None:
+            await self._db_conn.close()
+            self._db_conn = None
     
     def _log(self, message: str, style: str = "") -> None:
         """Log a debug message — only shown if verbose=True."""
@@ -385,7 +413,13 @@ class RudraAnvilAgent:
                     f"STEP 2 — YOUR ACTUAL TASK: {self.context.task}"
                 )
 
-            # Run deepagents as an async generator using astream
+            # Run deepagents as an async generator using astream.
+            # LangGraph checkpointer requires thread_id in the configurable dict
+            # so it knows which checkpoint thread to save/load from.
+            lg_config = {
+                "recursion_limit": 100,
+                "configurable": {"thread_id": self.session_id},
+            }
             async for chunk in self.agent.astream(
                 {
                     "messages": [
@@ -395,7 +429,7 @@ class RudraAnvilAgent:
                         }
                     ]
                 },
-                {"recursion_limit": 100},  # Allow agent to iterate through work
+                lg_config,
                 stream_mode="values",
                 subgraphs=True
             ):
@@ -527,11 +561,16 @@ class RudraAnvilAgent:
         for msg in self.context.chat_history:
             messages.append(msg)
         
-        # Run agent with recursion limit for chat mode
+        # Run agent with recursion limit for chat mode.
+        # LangGraph checkpointer requires thread_id in configurable dict.
+        lg_config = {
+            "recursion_limit": 100,
+            "configurable": {"thread_id": self.session_id},
+        }
         result = await asyncio.to_thread(
             self.agent.invoke,
             {"messages": messages},
-            {"recursion_limit": 100}  # Allow agent to execute work in chat mode too
+            lg_config
         )
         
         # Extract response
@@ -550,7 +589,7 @@ class RudraAnvilAgent:
         return response
 
 
-def create_main_agent(
+async def create_main_agent(
     project_path: Path,
     task: str,
     project_context: Optional[ProjectContext] = None,
@@ -582,21 +621,11 @@ def create_main_agent(
     if project_path.exists():
         vfs.load_from_disk()
     
-    # Initialize checkpoint manager
-    checkpoint_dir = project_path / ".rudraanvil"
-    checkpoint_manager = CheckpointManager(checkpoint_dir)
-    checkpoint = checkpoint_manager.create(task)
-    
-    # Initialize todo list (for display purposes)
-    todo_list = TodoList()
-    
     # Create context
     context = AgentContext(
         project_path=project_path,
         task=task,
         vfs=vfs,
-        todo_list=todo_list,
-        checkpoint_manager=checkpoint_manager,
         console=console,
         project_context=project_context,
         dry_run=dry_run,
@@ -637,54 +666,40 @@ def create_main_agent(
     # - Subagent spawning
     # - Tool calling orchestration
     
-    # Configure FilesystemBackend to write files to actual disk (not just memory)
-    # virtual_mode=False is safer for general agent access as it won't crash on unanchored paths
     from deepagents.backends import FilesystemBackend
-    
+    import aiosqlite
+    # langgraph 1.x: AsyncSqliteSaver is in `langgraph.checkpoint.sqlite.aio`
+    # (package: langgraph-checkpoint-sqlite). Use for async astream() support.
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
     filesystem_backend = FilesystemBackend(
         root_dir=str(project_path),  # Must be absolute path
-        virtual_mode=True  # Enabling virtual mode anchors all paths to root_dir and prevents absolute path jumps
+        virtual_mode=True  # Anchors all paths to root_dir, prevents absolute path escapes
     )
 
-    # Force the general-purpose subagent to use write_file using our direct tools
-    from rudraanvil.tools.file_tools import create_file_tools
-    all_file_tools = create_file_tools(vfs)
-    
-    # We find the file tools to bind them
-    file_tools = []
-    for t in all_file_tools:
-        if t.name in ['write_file', 'edit_file', 'read_file', 'list_directory']:
-            file_tools.append(t)
-    
-    # Create subagent system prompt with context
-    subagent_prompt = (
-        "You are a code generation agent. Your sole purpose is to execute write_file and edit_file to create the necessary code for your given task. "
-        "Use the list_directory and read_file tools to navigate the project path if necessary. "
-        "CRITICAL: You MUST use purely RELATIVE paths (e.g. 'models/User.js') when creating files. NEVER use absolute paths or paths starting with '/' (e.g. NEVER use '/models/User.js'). ALL paths should be relative to the project root. "
-        "CRITICAL 2: The 'content' argument for write_file and edit_file MUST be a valid UTF-8 string. NEVER pass objects, dictionaries, or lists as content – convert them to formatted code or JSON strings first. "
-        "CRITICAL 3: Do NOT use the write_todos tool. Marking a task as completed in the todo list does NOT create a file. You MUST write all the needed code strictly via tool calls to write_file or edit_file. "
-        "CRITICAL 4: You MUST ONLY output write_file and edit_file tool calls. NEVER output ordinary text, markdown, codeblocks, or explanations. You MUST write all the needed code strictly via tool calls."
-    )
-    
-    if project_context and project_context.primary_language:
-        subagent_prompt += f"\n\nSTRICT TECH STACK ENFORCEMENT:\n- Primary Language: {project_context.primary_language}\n- Frameworks: {project_context.framework or 'Not specified'}\n- Database: {project_context.database or 'Not specified'}\n\nEnsure ALL code you generate uses this stack."
+    # Persistent async checkpointing. aiosqlite.connect() returns an open
+    # connection (not a context manager) — it stays alive for the agent lifetime.
+    rudraanvil_dir = project_path / ".rudraanvil"
+    rudraanvil_dir.mkdir(parents=True, exist_ok=True)
+    checkpoints_db = str(rudraanvil_dir / "checkpoints.db")
+    db_conn = await aiosqlite.connect(checkpoints_db)
+    checkpointer = AsyncSqliteSaver(conn=db_conn)
+    await checkpointer.setup()  # Create tables if they don't exist yet
 
+
+    # Stable thread_id — same across all commands in this project directory
+    session_id = get_or_create_session_id(rudraanvil_dir)
+
+    # Main agent has full access to built-in file tools (read_file, write_file, edit_file,
+    # ls, glob, grep) provided by FilesystemBackend — no subagent needed.
     deep_agent = create_deep_agent(
-        model=model,  # Pass configured ChatOllama instance
-        tools=custom_tools,  # Add our custom code execution tools
+        model=model,
+        tools=custom_tools,
         system_prompt=system_prompt,
-        backend=filesystem_backend,  # Write files to actual project directory
-        subagents=[
-            {
-                "name": "general-purpose",
-                "description": "An agent specialized in writing code and generating exact implementation files. Launch this subagent to generate files for a given module. The subagent will return only once it has written all files.",
-                "system_prompt": subagent_prompt,
-                "model": model,
-                "tools": file_tools
-            }
-        ]
+        backend=filesystem_backend,
+        checkpointer=checkpointer,
     )
 
-    
-    # Wrap in RudraAnvil agent for compatibility
-    return RudraAnvilAgent(context, deep_agent)
+    # Wrap in RudraAnvil agent, passing session_id for thread-based invocation
+    # db_conn is passed so the agent can close it before the event loop shuts down
+    return RudraAnvilAgent(context, deep_agent, session_id, db_conn=db_conn)
