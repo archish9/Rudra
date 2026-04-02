@@ -34,12 +34,10 @@ def create_planning_tools(vfs: VirtualFileSystem) -> list:
 
     @tool
     def update_plan(plan_markdown: str) -> str:
-        """Write or overwrite the agent's task plan to .rudraanvil/PLAN.md.
+        """Write the initial task plan to .rudraanvil/PLAN.md.
 
-        Use this INSTEAD of write_todos to track your task checklist.
-        Write a Markdown checklist using standard checkbox syntax:
-          - `- [ ] task description` for pending items
-          - `- [x] task description` for completed items
+        Call this ONCE at the start with ALL items unchecked (- [ ]).
+        Do NOT pre-mark any items as done — you haven't written the files yet.
 
         Example:
             update_plan(
@@ -49,23 +47,34 @@ def create_planning_tools(vfs: VirtualFileSystem) -> list:
                 "- [ ] Create README.md\\n"
             )
 
-        After writing, use read_plan() to confirm, then use edit_file to
-        check off items as you complete them:
-            edit_file('.rudraanvil/PLAN.md', '- [ ] Create src/main.py', '- [x] Create src/main.py')
+        After creating the plan, do NOT call update_plan() again.
+        Instead, for each item in order:
+          1. Call write_file() with the COMPLETE file content
+          2. Then check it off: edit_file('.rudraanvil/PLAN.md', '- [ ] Create src/main.py', '- [x] Create src/main.py')
 
         Args:
-            plan_markdown: Full markdown content of the plan/checklist.
-                           Should include a heading and a checkbox list.
+            plan_markdown: Markdown checklist. ALL items must be unchecked (- [ ]).
 
         Returns:
-            Confirmation message with next steps
+            Confirmation and next instruction
         """
+        existing = vfs.read_file(_PLAN_PATH)
+        if existing is not None and "- [ ]" in existing and "- [ ]" not in plan_markdown:
+            # Model is trying to overwrite the plan with all items pre-marked done,
+            # bypassing the actual file-writing work.
+            return (
+                "ERROR: You cannot mark items done without first writing the files. "
+                "The plan already has unchecked items. "
+                "Your next step is to call write_file() for the first unchecked item. "
+                "Use read_plan() to see what needs to be done, then write the file."
+            )
+
         vfs.write_file(_PLAN_PATH, plan_markdown)
         return (
             f"Plan written to {_PLAN_PATH}. "
-            "Use read_plan() to review it. "
-            "Use edit_file to check off items as you complete each one: "
-            "edit_file('.rudraanvil/PLAN.md', '- [ ] <task>', '- [x] <task>')"
+            "NEXT: write the first file. Call write_file(file_path='...', content='...complete code...'), "
+            "then check it off with edit_file('.rudraanvil/PLAN.md', '- [ ] <task>', '- [x] <task>'). "
+            "Do NOT call update_plan() again — use edit_file() to check off items."
         )
 
     @tool

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m pip show deepagents)",
+      "Read(//usr/lib/**)",
+      "Bash(.venv/bin/pip show:*)",
+      "Bash(.venv/bin/python -c \"import langchain_ollama; print\\(langchain_ollama.__file__\\)\")",
+      "Bash(.venv/bin/pip list:*)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(pip list:*)",
+      "Bash(/home/a/code/ai-ml/agent/RudraAnvil/.venv/bin/python -m pip list)"
+    ]
+  }
+}

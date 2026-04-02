@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import json
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -16,6 +17,7 @@ from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem
 from rudraanvil.state import get_or_create_session_id, ProjectContext
 from rudraanvil.tools.code_tools import create_code_tools
+from rudraanvil.tools.interaction_tools import create_interaction_tools
 from rudraanvil.tools.planning_tools import create_planning_tools
 
 
@@ -87,13 +89,26 @@ CRITICAL: Do NOT attempt to execute code, run tests, or install packages. Your s
 
     if project_context and project_context.primary_language:
         base_prompt += f"""
-Project Tech Stack Context:
+## Project Tech Stack
 - Primary Language: {project_context.primary_language}
 - Frameworks/Libraries: {project_context.framework or 'Not specified'}
 - Database: {project_context.database or 'Not specified'}
 - Additional Rules/Architecture: {project_context.additional_context or 'None'}
 
-Please ensure all generated code adheres STRICTLY to the above tech stack.
+Ensure all generated code adheres STRICTLY to the above tech stack.
+"""
+    else:
+        base_prompt += """
+## Project Context Unknown
+
+If the current task requires language, framework, or database decisions:
+1. Call ask_user() with ONE focused question relevant to this specific task.
+   Example: ask_user("What programming language should I use for this project?")
+2. Ask only what you need — do NOT ask generic questions if the task is self-evident.
+3. After gathering answers, call save_project_context({"primary_language": "...", ...})
+   to persist them so future sessions start with full context.
+
+If the task needs no tech-stack knowledge (e.g. creating a .gitignore), skip asking entirely.
 """
     
     # Add command-specific guidance
@@ -401,16 +416,24 @@ class RudraAnvilAgent:
             last_tool_call = None
             consecutive_failures = 0
             
-            # Build the user message. For 'build' command, prepend a hard
-            # planning requirement so local LLMs cannot skip update_plan.
+            # Build the user message. For build/auto commands, prepend explicit
+            # step-by-step instructions so local LLMs don't skip write_file.
             user_content = self.context.task
-            if self.context.command == "build":
+            if self.context.command in ("build", "auto"):
                 user_content = (
-                    "STEP 1 — YOU MUST DO THIS FIRST: Call update_plan() right now with a "
-                    "markdown checklist of every file this task requires. "
-                    "Do NOT call the `task` tool or write any files until after update_plan has been called. "
-                    "Example: update_plan('# Plan\\n- [ ] Create app.py\\n- [ ] Create models.py')\n\n"
-                    f"STEP 2 — YOUR ACTUAL TASK: {self.context.task}"
+                    "Follow these steps IN ORDER. Do not skip any step.\n\n"
+                    "STEP 1 — Call update_plan() ONCE with a checklist of every file to create:\n"
+                    "  update_plan('# Plan\\n- [ ] Create app.py\\n- [ ] Create models.py\\n...')\n\n"
+                    "STEP 2 — Work through the plan ONE file at a time:\n"
+                    "  a) Call write_file(file_path='...', content='...COMPLETE file content...') to create the file\n"
+                    "  b) ONLY AFTER writing the file, check it off:\n"
+                    "     edit_file('.rudraanvil/PLAN.md', '- [ ] Create app.py', '- [x] Create app.py')\n"
+                    "  c) Repeat for the next file\n\n"
+                    "CRITICAL RULES:\n"
+                    "- NEVER mark an item done unless you have ALREADY called write_file() for it\n"
+                    "- NEVER call update_plan() a second time — use edit_file() to check off items\n"
+                    "- write_file() content must be COMPLETE, working code — not a placeholder\n\n"
+                    f"YOUR TASK: {self.context.task}"
                 )
 
             # Run deepagents as an async generator using astream.
@@ -643,11 +666,18 @@ async def create_main_agent(
         model=config.ollama.model,
         base_url=config.ollama.base_url,
         temperature=config.ollama.temperature,
-        num_predict=config.ollama.num_predict
+        num_predict=config.ollama.num_predict,
+        reasoning=False,  # Disable qwen3 thinking mode — with think=True the model
+                          # puts all output in message.thinking and content is empty,
+                          # so no tool_calls are ever generated and the graph exits immediately.
     )
     
     # Custom tools: code tools (currently empty) + filesystem planning tools
-    custom_tools = create_code_tools(vfs) + create_planning_tools(vfs)
+    custom_tools = (
+        create_code_tools(vfs)
+        + create_planning_tools(vfs)
+        + create_interaction_tools(console, project_path)
+    )
     
     # Build system prompt
     system_prompt = build_system_prompt(
@@ -687,8 +717,14 @@ async def create_main_agent(
     await checkpointer.setup()  # Create tables if they don't exist yet
 
 
-    # Stable thread_id — same across all commands in this project directory
-    session_id = get_or_create_session_id(rudraanvil_dir)
+    # chat uses a stable session so multi-turn conversations persist.
+    # All other commands (auto, build, fix, edit, …) get a fresh UUID per
+    # invocation — prevents stale/broken checkpoint history from a prior run
+    # from polluting the new request's context.
+    if command == "chat":
+        session_id = get_or_create_session_id(rudraanvil_dir)
+    else:
+        session_id = str(uuid.uuid4())
 
     # Main agent has full access to built-in file tools (read_file, write_file, edit_file,
     # ls, glob, grep) provided by FilesystemBackend — no subagent needed.

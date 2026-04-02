@@ -44,39 +44,14 @@ def get_project_path(project_dir: Optional[Path]) -> Path:
     return Path.cwd()
 
 
-def get_or_prompt_project_context(project_path: Path) -> ProjectContext:
-    """Load project context or interactively prompt for missing details."""
-    config_manager = ProjectConfigManager(project_path)
-    context = config_manager.load()
-    
-    needs_save = False
-    
-    if not context.primary_language:
-        console.print("\n[bold yellow]Project Context Required[/bold yellow]")
-        console.print("To help the agent write the best code, please provide some details about your stack.")
-        
-        context.primary_language = Prompt.ask(
-            "[cyan]Primary Programming Language[/cyan] (e.g., Python, TypeScript, Go)"
-        )
-        context.framework = Prompt.ask(
-            "[cyan]Frameworks/Libraries[/cyan] (e.g., FastAPI, Next.js, React) [dim](optional)[/dim]", 
-            default=""
-        )
-        context.database = Prompt.ask(
-            "[cyan]Database[/cyan] (e.g., PostgreSQL, MongoDB) [dim](optional)[/dim]", 
-            default=""
-        )
-        context.additional_context = Prompt.ask(
-            "[cyan]Any additional architecture rules or context?[/cyan] [dim](optional)[/dim]", 
-            default=""
-        )
-        needs_save = True
-        
-    if needs_save:
-        config_manager.save(context)
-        console.print("[green]✓ Project context saved for future tasks.[/green]\n")
-        
-    return context
+def load_project_context(project_path: Path) -> ProjectContext:
+    """Load saved project context from .rudraanvil/project.json.
+
+    Returns an empty ProjectContext if no file exists yet. The agent will ask
+    the user for missing information dynamically via the ask_user() tool based
+    on what the current task actually requires.
+    """
+    return ProjectConfigManager(project_path).load()
 
 
 @app.callback(invoke_without_command=True)
@@ -104,7 +79,7 @@ def main(
         return
 
     project_path = get_project_path(project_dir)
-    project_context = get_or_prompt_project_context(project_path)
+    project_context = load_project_context(project_path)
     config.agent.max_agents = max_agents
 
     if prompt:
@@ -228,7 +203,7 @@ def build(
     config.agent.max_agents = max_agents
     
     # Get interactive context
-    project_context = get_or_prompt_project_context(project_path)
+    project_context = load_project_context(project_path)
     
     # Create and run agent
     async def _run():
@@ -291,7 +266,7 @@ def chat(
     ))
     
     # Get interactive context
-    project_context = get_or_prompt_project_context(project_path)
+    project_context = load_project_context(project_path)
     
     # Run the entire chat session inside a single event loop
     async def _chat_session():
