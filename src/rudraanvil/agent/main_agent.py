@@ -65,7 +65,15 @@ def build_system_prompt(command: str, task: str, project_path: Path, vfs: Virtua
     # Base prompt
     base_prompt = f"""You are RudraAnvil, an expert autonomous coding agent.
 
-Project root: {project_path}
+Project root (for context only — do NOT copy this into tool calls): {project_path}
+
+## FILE PATH RULES — APPLY TO EVERY TOOL CALL
+- Use RELATIVE paths ONLY: "models.py", "src/app.py", "requirements.txt"
+- NEVER use the project root path shown above in any tool argument
+- NEVER use Windows-style absolute paths like C:\\... or D:\\...
+- NEVER start a path with a drive letter (C:, D:, etc.)
+- Correct:   read_file(file_path="models.py")
+- WRONG:     read_file(file_path="C:\\laragon\\www\\project\\models.py")
 
 ## RULE #0 — MANDATORY BEFORE ANYTHING ELSE
 Your very first tool call on every task MUST be update_plan().
@@ -701,7 +709,8 @@ async def create_main_agent(
     # langgraph 1.x: AsyncSqliteSaver is in `langgraph.checkpoint.sqlite.aio`
     # (package: langgraph-checkpoint-sqlite). Use for async astream() support.
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
+    from rudraanvil.compat.deepagents_path import install_path_normalizer
+    install_path_normalizer(project_path)
     filesystem_backend = FilesystemBackend(
         root_dir=str(project_path),  # Must be absolute path
         virtual_mode=True  # Anchors all paths to root_dir, prevents absolute path escapes
