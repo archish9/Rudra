@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import json
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, Any
 
 from rich.console import Console
 from deepagents import create_deep_agent
 
 from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem
+from rudraanvil.middleware import TaskAnchorMiddleware
 from rudraanvil.state import get_or_create_session_id, ProjectContext
-from rudraanvil.tools.code_tools import create_code_tools
 from rudraanvil.tools.interaction_tools import create_interaction_tools
-from rudraanvil.tools.planning_tools import create_planning_tools
-
 
 
 @dataclass
@@ -32,16 +28,13 @@ class AgentContext:
     console: Console
     project_context: Optional[ProjectContext] = None
 
-    # Execution settings
     dry_run: bool = False
     verbose: bool = False
     max_iterations: int = 100
-    stop_on_error: bool = True  # If True, abort execution immediately on tool error
+    stop_on_error: bool = True
 
-    # Chat history for chat mode
     chat_history: list[dict] = field(default_factory=list)
 
-    # Command-specific context
     command: str = "build"
     file_path: Optional[str] = None
     issue: Optional[str] = None
@@ -50,7 +43,7 @@ class AgentContext:
 @dataclass
 class AgentResult:
     """Result of an agent execution."""
-    
+
     success: bool
     message: str
     files_created: list[str] = field(default_factory=list)
@@ -59,214 +52,146 @@ class AgentResult:
     todo_summary: str = ""
 
 
-def build_system_prompt(command: str, task: str, project_path: Path, vfs: VirtualFileSystem, project_context: Optional[ProjectContext] = None, **kwargs) -> str:
+def build_system_prompt(
+    command: str,
+    task: str,
+    project_path: Path,
+    vfs: VirtualFileSystem,
+    project_context: Optional[ProjectContext] = None,
+    **kwargs,
+) -> str:
     """Build the system prompt for the agent based on command type."""
-    
-    # Base prompt
-    base_prompt = f"""You are RudraAnvil, an expert autonomous coding agent.
 
-Project root (for context only — do NOT copy this into tool calls): {project_path}
+    base = f"""You are RudraAnvil, an expert autonomous coding agent.
 
-## FILE PATH RULES — APPLY TO EVERY TOOL CALL
-- Use RELATIVE paths ONLY: "models.py", "src/app.py", "requirements.txt"
-- NEVER use the project root path shown above in any tool argument
-- NEVER use Windows-style absolute paths like C:\\... or D:\\...
-- NEVER start a path with a drive letter (C:, D:, etc.)
-- Correct:   read_file(file_path="models.py")
-- WRONG:     read_file(file_path="C:\\laragon\\www\\project\\models.py")
+## FILE PATH RULES
+- Use RELATIVE paths only: "app.py", "src/models.py", "requirements.txt"
+- NEVER use absolute paths or paths starting with "/" or a drive letter
+- Correct:   write_file(file_path="models.py", ...)
+- WRONG:     write_file(file_path="/home/user/project/models.py", ...)
 
-## RULE #0 — MANDATORY BEFORE ANYTHING ELSE
-Your very first tool call on every task MUST be update_plan().
-Write a markdown checklist of every file you need to create.
-Do NOT call the `task` tool or any other tool before update_plan has been called.
-Violating this rule breaks the project's context management system.
+## HARD CONSTRAINTS
+- Write COMPLETE, working code — never placeholders, stubs, or "TODO" comments
+- Do NOT execute code, run tests, or install packages — file generation only
+- NEVER use the `task` subagent tool — write all files yourself directly with write_file
 
 Project structure:
 {vfs.get_tree()}
-
-You can:
-- Plan and decompose tasks using the update_plan tool (writes to .rudraanvil/PLAN.md)
-- Read your current plan with read_plan() or read_file('.rudraanvil/PLAN.md')
-- Check off completed items with edit_file('.rudraanvil/PLAN.md', '- [ ] <task>', '- [x] <task>')
-- Read, write, and edit files using built-in file system tools
-- Spawn sub-agents for specialized tasks
-
-CRITICAL: NEVER use write_todos — it bloats the context window. Always use update_plan instead.
-CRITICAL: Do NOT attempt to execute code, run tests, or install packages. Your sole purpose is to generate and edit files.
 """
 
+    # Tech stack context
     if project_context and project_context.primary_language:
-        base_prompt += f"""
+        base += f"""
 ## Project Tech Stack
-- Primary Language: {project_context.primary_language}
-- Frameworks/Libraries: {project_context.framework or 'Not specified'}
-- Database: {project_context.database or 'Not specified'}
-- Additional Rules/Architecture: {project_context.additional_context or 'None'}
+- Language:  {project_context.primary_language}
+- Framework: {project_context.framework or 'Not specified'}
+- Database:  {project_context.database or 'Not specified'}
+- Notes:     {project_context.additional_context or 'None'}
 
-Ensure all generated code adheres STRICTLY to the above tech stack.
+All generated code must strictly follow the above tech stack.
 """
     else:
-        base_prompt += """
-## Project Context Unknown
-
-If the current task requires language, framework, or database decisions:
-1. Call ask_user() with ONE focused question relevant to this specific task.
-   Example: ask_user("What programming language should I use for this project?")
-2. Ask only what you need — do NOT ask generic questions if the task is self-evident.
-3. After gathering answers, call save_project_context({"primary_language": "...", ...})
-   to persist them so future sessions start with full context.
-
-If the task needs no tech-stack knowledge (e.g. creating a .gitignore), skip asking entirely.
+        base += """
+## Tech Stack
+Infer the stack from the task description — do NOT ask the user:
+- "Flask ..."       → Python + Flask
+- "Django ..."      → Python + Django
+- "FastAPI ..."     → Python + FastAPI
+- "React ..."       → JavaScript / TypeScript + React
+- "Next.js ..."     → TypeScript + Next.js
+- "Express ..."     → Node.js + Express
+- "Spring ..."      → Java + Spring Boot
+- "Rails ..."       → Ruby on Rails
+If the stack is truly ambiguous (no framework or language hint), use ask_user() ONCE.
 """
-    
-    # Add command-specific guidance
-    if command == "build":
-        existing = "This is an existing project." if vfs.files else "Starting from scratch."
-        base_prompt += f"""
-Task: {task}
+
+    # Command-specific guidance
+    if command in ("build", "auto"):
+        existing = "Existing project — read relevant files before modifying." if vfs.files else "New project — start from scratch."
+        base += f"""
+## Task
+{task}
 {existing}
 
-You write ALL files yourself using the built-in file system tools. There is no subagent.
+## Workflow
+1. Call write_todos() once with every file you need to create/modify
+2. For each file in order: call write_file() with the COMPLETE file content
+3. Mark each todo as completed immediately after writing the file
+4. Do NOT spawn subagents — write all files yourself
 
-Required workflow:
-1. **Plan**: Call update_plan() with a markdown checklist of every file to create/modify:
-   update_plan("# Build Plan\n- [ ] Create main.py\n- [ ] Create requirements.txt\n- [ ] Create README.md")
-2. **Write**: Use write_file() to create each file with complete, correct code.
-3. **Verify**: Use ls() or read_file() to confirm the file was written correctly.
-4. **Check off**: Use edit_file() to mark each item done in PLAN.md:
-   edit_file('.rudraanvil/PLAN.md', '- [ ] Create main.py', '- [x] Create main.py')
-5. **Iterate**: If a file is wrong or missing, use edit_file() or write_file() again to fix it.
-
-File system tools available (DeepAgents built-ins):
-- List directory:     ls(path=".")
-- Read a file:        read_file(file_path="filename.txt")
-- Create a new file:  write_file(file_path="filename.txt", content="...full file content...")
-- Edit existing file: edit_file(file_path="filename.txt", old_string="old text", new_string="new text")
-- Find files:         glob(pattern="**/*.py")
-- Search content:     grep(pattern="search term", path=".")
-
-CRITICAL — File Path Rules:
-- Use RELATIVE paths only (e.g., "main.py", "app/routes.py", "requirements.txt")
-- NEVER start a path with a slash (NEVER use "/main.py").
-- write_file creates a brand-new file — use edit_file to modify an existing file.
-
-CRITICAL: NEVER use write_todos. The plan lives in .rudraanvil/PLAN.md only.
+## After completing all files
+Update `.rudraanvil/AGENTS.md` using edit_file to record:
+- Confirmed tech stack
+- Files created and what each does
+- Key architecture decisions
+- Anything useful to know for the next session
 """
-    
+
     elif command == "chat":
         user_input = kwargs.get("user_input", task)
-        base_prompt += f"""
-You are in interactive chat mode, helping with ongoing development.
+        base += f"""
+## Chat Request
+{user_input}
 
-User's request: {user_input}
-
-Help the user with their request. Be conversational but efficient.
+Respond conversationally. Make targeted file changes only when explicitly requested.
+You may use ask_user() if you need clarification from the user.
 """
-    
+
     elif command == "fix":
         issue = kwargs.get("issue", task)
-        base_prompt += f"""
-You are debugging and fixing an issue.
+        base += f"""
+## Bug / Issue
+{issue}
 
-Issue description: {issue}
+Workflow: diagnose root cause → plan a minimal fix → apply with edit_file() → review for correctness.
+Do NOT run tests or execute code.
 
-Approach:
-1. Analyze the error/issue carefully
-2. Identify the root cause
-3. Plan a minimal fix
-4. Implement the fix
-5. Review the code to ensure the fix is correct (Do NOT run tests or execute code)
+After fixing: update `.rudraanvil/AGENTS.md` Session Log with what was fixed and why.
 """
-    
+
     elif command == "edit":
         file_path = kwargs.get("file_path", "")
-        instruction = task
         content = vfs.read_file(file_path) if file_path else ""
-        base_prompt += f"""
-You are making a targeted edit to a specific file.
-
+        base += f"""
+## Targeted Edit
 File: {file_path}
-Instruction: {instruction}
+Instruction: {task}
 
-Current file content:
-{content or "File not found"}
+Current content:
+{content or "(file not found)"}
 
-Make the requested change precisely. Don't modify unrelated code.
+Make the requested change precisely with edit_file(). Do not touch unrelated code.
 """
-    
+
     elif command == "review":
-        base_prompt += f"""
-You are reviewing code for quality and issues.
+        base += """
+## Code Review
+Provide a clear, actionable report covering:
+1. Security issues
+2. Performance problems
+3. Code quality / readability
+4. Best-practice violations
+5. Concrete suggestions
 
-Review the code and provide:
-1. **Security Issues**: Any vulnerabilities or unsafe practices
-2. **Performance Issues**: Inefficiencies or bottlenecks
-3. **Code Quality**: Style, readability, maintainability
-4. **Best Practices**: Violations of common patterns
-5. **Suggestions**: Improvements that could be made
-
-Format as a clear, actionable report. Do NOT make any changes, only report findings.
+Do NOT modify any files — report only.
 """
-    
+
     elif command == "suggest":
-        base_prompt += f"""
-You are suggesting improvements without applying them.
-
+        base += f"""
+## Suggestions (read-only)
 Task: {task}
 
-Provide detailed suggestions including:
-1. What changes would be beneficial
-2. Why they would help
-3. Example code snippets or diffs
-4. Potential risks or trade-offs
-
-Do NOT apply changes. Present them for the user to review.
+Provide detailed suggestions with example code snippets or diffs.
+Do NOT apply any changes.
 """
 
-    else:  # "auto" — default when user runs: rudraanvil "some prompt"
-        existing = "This is an existing project." if vfs.files else "Starting from scratch."
-        base_prompt += f"""
-Task: {task}
-{existing}
-
-Understand the user's intent and act accordingly:
-- If creating or building something → plan with update_plan() then write files
-- If fixing a bug → diagnose, plan a minimal fix, apply it
-- If editing a file → make the targeted change only
-- If asking a question → answer clearly without writing files
-
-When writing or modifying files, follow this workflow:
-1. **Plan**: Call update_plan() with a markdown checklist
-2. **Write/Edit**: Use write_file() for new files, edit_file() for changes
-3. **Verify**: Use ls() or read_file() to confirm changes
-4. **Check off**: Mark items done in PLAN.md with edit_file()
-
-File system tools:
-- ls(path=".")
-- read_file(file_path="filename.txt")
-- write_file(file_path="filename.txt", content="...full content...")
-- edit_file(file_path="filename.txt", old_string="old", new_string="new")
-- glob(pattern="**/*.py")
-- grep(pattern="term", path=".")
-
-CRITICAL — Use RELATIVE paths only. NEVER start with a slash.
-"""
-
-    return base_prompt
+    return base
 
 
 class RudraAnvilAgent:
     """Wrapper around deepagents for RudraAnvil-specific functionality."""
 
     def __init__(self, context: AgentContext, deep_agent, session_id: str, db_conn=None):
-        """Initialize RudraAnvil agent wrapper.
-
-        Args:
-            context: Agent execution context
-            deep_agent: The deepagents agent instance
-            session_id: LangGraph thread_id for this project's checkpoint thread
-            db_conn: aiosqlite connection to close on cleanup
-        """
         self.context = context
         self.agent = deep_agent
         self.session_id = session_id
@@ -275,278 +200,150 @@ class RudraAnvilAgent:
         self._db_conn = db_conn
 
     async def close(self) -> None:
-        """Close the underlying database connection."""
         if self._db_conn is not None:
             await self._db_conn.close()
             self._db_conn = None
-    
-    def _log(self, message: str, style: str = "") -> None:
-        """Log a debug message — only shown if verbose=True."""
-        if self.context.verbose:
-            if style:
-                self.console.print(f"[{style}]{message}[/{style}]")
-            else:
-                self.console.print(message)
 
     def _log_always(self, message: str, style: str = "") -> None:
-        """Log a message that is ALWAYS shown (not gated by verbose)."""
         if style:
             self.console.print(f"[{style}]{message}[/{style}]")
         else:
             self.console.print(message)
 
     def _status(self, message: str) -> None:
-        """Show a status message."""
         self.console.print(f"[dim]→ {message}[/dim]")
 
-    def _log_messages(self, messages: list) -> None:
-        """Log all agent messages with full detail — always shown by default.
-        
-        Shows tool names, arguments, full outputs, and highlights errors.
-        Controlled by VERBOSE=false in .env to silence (except for real-time streaming).
-        """
-        if not self.context.verbose and not getattr(self, "_force_log", False):
-            return
-
-        self._log_always(f"\n[bold]Agent trace — {len(messages)} messages[/bold]", "cyan")
-        for i, msg in enumerate(messages):
-            msg_type = type(msg).__name__
-            role = getattr(msg, 'type', msg_type).upper()
-
-            # ── AIMessage ──
-            if msg_type == "AIMessage":
-                tool_calls = getattr(msg, 'tool_calls', [])
-                if tool_calls:
-                    for tc in tool_calls:
-                        name = tc.get('name', '?')
-                        args = tc.get('args', {})
-                        args_str = str(args)[:400]
-                        self._log_always(
-                            f"[bold cyan]→ [{i+1}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args_str}"
-                        )
-                else:
-                    content = str(getattr(msg, 'content', ''))[:300].replace('\n', ' ')
-                    self._log_always(f"[bold cyan]← [{i+1}] AI[/bold cyan]  {content}")
-
-            # ── ToolMessage ──
-            elif msg_type == "ToolMessage":
-                content = str(getattr(msg, 'content', ''))
-                tool_name = getattr(msg, 'name', '?')
-                is_error = (
-                    "Error" in content or "error" in content
-                    or "Errno" in content or "Traceback" in content
-                    or "not a valid tool" in content
-                )
-                # Truncate long outputs but keep more for errors
-                #limit = 800 if is_error else 400
-                #preview = content[:limit].replace('\n', ' ↵ ')
-                if is_error:
-                    self._log_always(
-                        f"[bold red]✗ [{i+1}] ERROR from {tool_name}:[/bold red] {content}"
-                    )
-                else:
-                    self._log_always(
-                        f"[green]✓ [{i+1}] {tool_name}:[/green] {content}"
-                    )
-
-            # ── HumanMessage ──
-            elif msg_type == "HumanMessage":
-                content = str(getattr(msg, 'content', ''))[:200].replace('\n', ' ')
-                self._log_always(f"[dim][{i+1}] USER: {content}[/dim]")
-
-            else:
-                content = str(getattr(msg, 'content', ''))[:200].replace('\n', ' ')
-                self._log_always(f"[dim][{i+1}] {msg_type}: {content}[/dim]")
-                
     def _log_single_message(self, msg: Any, index: int) -> None:
         """Log a single message as it arrives in the stream."""
         msg_type = type(msg).__name__
-        
-        # ── AIMessage ──
+
         if msg_type == "AIMessage":
-            tool_calls = getattr(msg, 'tool_calls', [])
+            tool_calls = getattr(msg, "tool_calls", [])
             if tool_calls:
                 for tc in tool_calls:
-                    name = tc.get('name', '?')
-                    args = tc.get('args', {})
-                    args_str = str(args)[:400]
+                    name = tc.get("name", "?")
+                    args = str(tc.get("args", {}))[:400]
                     self._log_always(
-                        f"[bold cyan]→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args_str}"
+                        f"[bold cyan]→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args}"
                     )
             else:
-                content = str(getattr(msg, 'content', ''))[:300].replace('\n', ' ')
+                content = str(getattr(msg, "content", ""))[:300].replace("\n", " ")
                 self._log_always(f"[bold cyan]← [{index}] AI[/bold cyan]  {content}")
 
-        # ── ToolMessage ──
         elif msg_type == "ToolMessage":
-            content = str(getattr(msg, 'content', ''))
-            tool_name = getattr(msg, 'name', '?')
+            content = str(getattr(msg, "content", ""))
+            tool_name = getattr(msg, "name", "?")
             is_error = (
-                content.startswith("Error:") or "Error:" in content or "Traceback" in content
-                or "Errno" in content or "not a valid tool" in content
+                content.startswith("Error:")
+                or "Error:" in content
+                or "Traceback" in content
+                or "Errno" in content
+                or "not a valid tool" in content
                 or "Input should be a valid string" in content
-            )                        
-            
+            )
             if is_error:
                 self._log_always(
                     f"[bold red]✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
                 )
             else:
-                self._log_always(
-                    f"[green]✓ [{index}] {tool_name}:[/green] {content}"
-                )
+                self._log_always(f"[green]✓ [{index}] {tool_name}:[/green] {content}")
 
-        # ── HumanMessage ──
         elif msg_type == "HumanMessage":
-            content_str = str(getattr(msg, 'content', ''))
-            content = content_str[:200].replace('\n', ' ')
+            content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
             self._log_always(f"[dim][{index}] USER: {content}[/dim]")
 
         else:
-            content_str = str(getattr(msg, 'content', ''))
-            content = content_str[:200].replace('\n', ' ')
+            content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
             self._log_always(f"[dim][{index}] {msg_type}: {content}[/dim]")
-    
+
     async def run(self) -> AgentResult:
-        """Run the full agent workflow.
-        
-        Returns:
-            AgentResult with execution summary
-        """
+        """Run the full agent workflow."""
         try:
             self._status("Planning and executing task...")
-            
-            # Using stream to show real-time progress
             self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
-            
+
             final_state = None
             processed_messages = 0
-            last_tool_call = None
             consecutive_failures = 0
-            
-            # Build the user message. For build/auto commands, prepend explicit
-            # step-by-step instructions so local LLMs don't skip write_file.
-            user_content = self.context.task
-            if self.context.command in ("build", "auto"):
-                user_content = (
-                    "Follow these steps IN ORDER. Do not skip any step.\n\n"
-                    "STEP 1 — Call update_plan() ONCE with a checklist of every file to create:\n"
-                    "  update_plan('# Plan\\n- [ ] Create app.py\\n- [ ] Create models.py\\n...')\n\n"
-                    "STEP 2 — Work through the plan ONE file at a time:\n"
-                    "  a) Call write_file(file_path='...', content='...COMPLETE file content...') to create the file\n"
-                    "  b) ONLY AFTER writing the file, check it off:\n"
-                    "     edit_file('.rudraanvil/PLAN.md', '- [ ] Create app.py', '- [x] Create app.py')\n"
-                    "  c) Repeat for the next file\n\n"
-                    "CRITICAL RULES:\n"
-                    "- NEVER mark an item done unless you have ALREADY called write_file() for it\n"
-                    "- NEVER call update_plan() a second time — use edit_file() to check off items\n"
-                    "- write_file() content must be COMPLETE, working code — not a placeholder\n\n"
-                    f"YOUR TASK: {self.context.task}"
-                )
 
-            # Run deepagents as an async generator using astream.
-            # LangGraph checkpointer requires thread_id in the configurable dict
-            # so it knows which checkpoint thread to save/load from.
             lg_config = {
-                "recursion_limit": 100,
                 "configurable": {"thread_id": self.session_id},
             }
+
             async for chunk in self.agent.astream(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": user_content
-                        }
-                    ]
-                },
+                {"messages": [{"role": "user", "content": self.context.task}]},
                 lg_config,
                 stream_mode="values",
-                subgraphs=True
+                subgraphs=True,
             ):
-                namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+                namespace, event = (
+                    chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+                )
 
                 final_state = event
                 messages = event.get("messages", [])
-                
-                # If there are new messages, log them and check for errors
+
                 while processed_messages < len(messages):
                     msg = messages[processed_messages]
                     msg_type = type(msg).__name__
-                    
-                    # Display the namespace if inside a subagent
+
                     if namespace:
                         self._log_always(f"[dim](subagent {':'.join(namespace)})[/dim]")
-                    
+
                     self._log_single_message(msg, processed_messages + 1)
-                    
-                    # Error and Loop Detection
-                    if msg_type == "AIMessage" and hasattr(msg, 'tool_calls') and msg.tool_calls:
-                        last_tool_call = str(msg.tool_calls)
-                    
-                    elif msg_type == "ToolMessage":
-                        content = str(getattr(msg, 'content', ''))
+
+                    if msg_type == "ToolMessage":
+                        content = str(getattr(msg, "content", ""))
                         is_error = (
-                            content.startswith("Error:") or "Error:" in content or "Traceback" in content
-                            or "Errno" in content or "not a valid tool" in content
+                            content.startswith("Error:")
+                            or "Error:" in content
+                            or "Traceback" in content
+                            or "Errno" in content
+                            or "not a valid tool" in content
                             or "Input should be a valid string" in content
                         )
-                        
                         if is_error:
                             consecutive_failures += 1
-                            if self.context.stop_on_error:
-                                self._log_always(f"[bold red]!! Halting execution: Tool failure detected in {':'.join(namespace) or 'main agent'}[/bold red]")
-                                self._log_always(f"[bold red]{content}[/bold red]")
-                                raise RuntimeError(f"Tool error in {':'.join(namespace) or 'main agent'}:\n{content}")
-                            if consecutive_failures >= 3:
-                                return AgentResult(
-                                    success=False,
-                                    message=f"Execution aborted: Detected repeating failure loop.\nLast error: {content}",
-                                    iterations=self.iterations
+                            if self.context.stop_on_error and consecutive_failures >= 3:
+                                self._log_always(
+                                    "[bold red]!! Halting: 3 consecutive tool failures[/bold red]"
+                                )
+                                raise RuntimeError(
+                                    f"Repeated tool errors in {':'.join(namespace) or 'main agent'}:\n{content}"
                                 )
                         else:
-                            consecutive_failures = 0 # Reset on success
-                            
+                            consecutive_failures = 0
+
                     processed_messages += 1
 
             if not final_state:
-                 return AgentResult(success=False, message="Agent stream returned no state.", iterations=0)
+                return AgentResult(
+                    success=False, message="Agent stream returned no state.", iterations=0
+                )
 
-            if self.context.verbose and isinstance(final_state, dict):
-                self._log(f"Result state keys: {list(final_state.keys())}", "yellow")
-            
-            # Extract final response
-            # deepagents returns a dict with 'messages' key containing AIMessage objects
-            messages = []
-            if isinstance(final_state, dict):
-                 messages = final_state.get("messages", [])
+            messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
             if messages:
-                final_message = messages[-1]
-                # AIMessage has a .content attribute, not .get() method
-                response_content = final_message.content if hasattr(final_message, 'content') else str(final_message)
+                final_msg = messages[-1]
+                response_content = (
+                    final_msg.content if hasattr(final_msg, "content") else str(final_msg)
+                )
             else:
                 response_content = "No response"
-            
-            self._log(f"Final response preview: {response_content[:200]}...", "dim")
-            
-            # Sync files if not dry run
+
             if not self.context.dry_run:
-                # deepagents writes files directly to disk via FilesystemBackend.
-                # Reload the VFS from disk to pick up all files written by deepagents,
-                # then diff against the original snapshot to report accurate counts.
                 new_vfs = VirtualFileSystem(self.context.project_path)
                 if self.context.project_path.exists():
                     new_vfs.load_from_disk()
-                
-                # Determine created vs modified files by comparing with original VFS
+
                 original_paths = set(self.context.vfs.files.keys())
                 new_paths = set(new_vfs.files.keys())
                 files_created = list(new_paths - original_paths)
                 files_modified = [
-                    p for p in new_paths & original_paths
+                    p
+                    for p in new_paths & original_paths
                     if new_vfs.files[p] != self.context.vfs.files.get(p)
                 ]
-                
+
                 return AgentResult(
                     success=True,
                     message=response_content,
@@ -556,10 +353,8 @@ class RudraAnvilAgent:
                     todo_summary=response_content,
                 )
             else:
-                # Dry run - show what would be done
-                self._status("Dry run - showing planned changes:")
+                self._status("Dry run — no files written.")
                 self.console.print(response_content)
-                
                 return AgentResult(
                     success=True,
                     message="Dry run completed (no files written)",
@@ -568,56 +363,73 @@ class RudraAnvilAgent:
                     iterations=self.iterations,
                     todo_summary=response_content,
                 )
-        
+
         except Exception:
             import traceback
+
             self._log_always("[bold red]\n!! Agent crashed — full traceback:[/bold red]")
             self._log_always(traceback.format_exc())
             raise
-            
+
     async def chat_turn(self, user_input: str) -> str:
-        """Handle a single turn in chat mode.
-        
-        Args:
-            user_input: The user's message
-            
-        Returns:
-            Agent's response
-        """
-        # Add to chat history
+        """Handle a single turn in chat mode."""
         self.context.chat_history.append({"role": "user", "content": user_input})
-        
-        # Build messages list
-        messages = []
-        for msg in self.context.chat_history:
-            messages.append(msg)
-        
-        # Run agent with recursion limit for chat mode.
-        # LangGraph checkpointer requires thread_id in configurable dict.
-        lg_config = {
-            "recursion_limit": 100,
-            "configurable": {"thread_id": self.session_id},
-        }
+
+        lg_config = {"configurable": {"thread_id": self.session_id}}
         result = await asyncio.to_thread(
             self.agent.invoke,
-            {"messages": messages},
-            lg_config
+            {"messages": self.context.chat_history},
+            lg_config,
         )
-        
-        # Extract response
-        # deepagents returns a dict with 'messages' key containing AIMessage objects
+
         result_messages = result.get("messages", [])
         if result_messages:
-            final_message = result_messages[-1]
-            # AIMessage has a .content attribute, not .get() method
-            response = final_message.content if hasattr(final_message, 'content') else str(final_message)
+            final_msg = result_messages[-1]
+            response = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
         else:
             response = "No response"
-        
-        # Add to history
+
         self.context.chat_history.append({"role": "assistant", "content": response})
-        
         return response
+
+
+def _ensure_agents_md(rudraanvil_dir: Path, project_context: Optional[ProjectContext]) -> None:
+    """Create a starter AGENTS.md if one does not already exist.
+
+    The file is the agent's persistent cross-session memory. MemoryMiddleware
+    reads it at startup and injects it into every system prompt. The agent
+    updates it via edit_file as it learns about the project.
+
+    Only created on the very first run — never overwritten.
+    """
+    agents_md = rudraanvil_dir / "AGENTS.md"
+    if agents_md.exists():
+        return
+
+    # Pre-populate tech stack from project.json if available
+    stack_lines = []
+    if project_context:
+        if project_context.primary_language:
+            stack_lines.append(f"- Language: {project_context.primary_language}")
+        if project_context.framework:
+            stack_lines.append(f"- Framework: {project_context.framework}")
+        if project_context.database:
+            stack_lines.append(f"- Database: {project_context.database}")
+        if project_context.additional_context:
+            stack_lines.append(f"- Notes: {project_context.additional_context}")
+
+    stack_section = "\n".join(stack_lines) if stack_lines else "(not yet determined — agent will fill in)"
+
+    agents_md.write_text(
+        f"# Project Memory\n\n"
+        f"This file is your persistent memory across sessions.\n"
+        f"Update it using edit_file after completing any task.\n\n"
+        f"## Tech Stack\n{stack_section}\n\n"
+        f"## Project Structure\n(not yet built)\n\n"
+        f"## Architecture Notes\n(none yet)\n\n"
+        f"## Session Log\n(no sessions yet)\n",
+        encoding="utf-8",
+    )
 
 
 async def create_main_agent(
@@ -628,31 +440,16 @@ async def create_main_agent(
     console: Optional[Console] = None,
     dry_run: bool = False,
     verbose: bool = False,
-    **kwargs
+    **kwargs,
 ) -> RudraAnvilAgent:
-    """Factory function to create a main agent using deepagents.
-    
-    Args:
-        project_path: Path to the project
-        task: Task description
-        command: CLI command being executed
-        console: Rich console for output
-        dry_run: If True, don't write files
-        verbose: If True, show detailed output
-        **kwargs: Additional context arguments
-        
-    Returns:
-        Configured RudraAnvilAgent instance
-    """
+    """Factory function to create a main agent using deepagents."""
     console = console or Console()
     project_path = project_path.resolve()
-    
-    # Initialize virtual filesystem (for tracking/preview)
+
     vfs = VirtualFileSystem(project_path)
     if project_path.exists():
         vfs.load_from_disk()
-    
-    # Create context
+
     context = AgentContext(
         project_path=project_path,
         task=task,
@@ -662,89 +459,123 @@ async def create_main_agent(
         dry_run=dry_run,
         verbose=verbose,
         command=command,
-        **kwargs
+        **kwargs,
     )
-    
-    
-    # Create Ollama model explicitly for proper configuration
-    # Deepagents requires a configured model object, not just a string
+
     from langchain_ollama import ChatOllama
-    
+
     model = ChatOllama(
         model=config.ollama.model,
         base_url=config.ollama.base_url,
         temperature=config.ollama.temperature,
         num_predict=config.ollama.num_predict,
-        reasoning=False,  # Disable qwen3 thinking mode — with think=True the model
-                          # puts all output in message.thinking and content is empty,
-                          # so no tool_calls are ever generated and the graph exits immediately.
+        reasoning=False,
     )
-    
-    # Custom tools: code tools (currently empty) + filesystem planning tools
-    custom_tools = (
-        create_code_tools(vfs)
-        + create_planning_tools(vfs)
-        + create_interaction_tools(console, project_path)
-    )
-    
-    # Build system prompt
+
+    # ask_user / save_project_context are only safe in chat mode.
+    # In build/auto/fix/edit the model loses task context after an ask_user
+    # tool call and starts treating the user's one-word answer as a new task.
+    # For those commands the tech stack is inferred from the task text instead.
+    if command == "chat":
+        custom_tools = create_interaction_tools(console, project_path)
+    else:
+        custom_tools = []
+
     system_prompt = build_system_prompt(
         command=command,
         task=task,
         project_path=project_path,
         vfs=vfs,
         project_context=project_context,
-        **kwargs
-    )
-    
-    # Create deep agent with configured Ollama model and REAL filesystem backend
-    # Deepagents will handle:
-    # - Built-in file system tools (read_file, write_file, edit_file, ls)
-    # - Built-in planning tool (write_todos)
-    # - Subagent spawning
-    # - Tool calling orchestration
-    
-    from deepagents.backends import FilesystemBackend
-    import aiosqlite
-    # langgraph 1.x: AsyncSqliteSaver is in `langgraph.checkpoint.sqlite.aio`
-    # (package: langgraph-checkpoint-sqlite). Use for async astream() support.
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    from rudraanvil.compat.deepagents_path import install_path_normalizer
-    install_path_normalizer(project_path)
-    filesystem_backend = FilesystemBackend(
-        root_dir=str(project_path),  # Must be absolute path
-        virtual_mode=True  # Anchors all paths to root_dir, prevents absolute path escapes
+        **kwargs,
     )
 
-    # Persistent async checkpointing. aiosqlite.connect() returns an open
-    # connection (not a context manager) — it stays alive for the agent lifetime.
+    from deepagents.backends import FilesystemBackend
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from rudraanvil.compat.deepagents_path import install_path_normalizer
+
+    install_path_normalizer(project_path)
+
+    filesystem_backend = FilesystemBackend(
+        root_dir=str(project_path),
+        virtual_mode=True,
+    )
+
     rudraanvil_dir = project_path / ".rudraanvil"
     rudraanvil_dir.mkdir(parents=True, exist_ok=True)
+
+    # Ensure persistent memory file exists before MemoryMiddleware tries to load it.
+    _ensure_agents_md(rudraanvil_dir, project_context)
+
     checkpoints_db = str(rudraanvil_dir / "checkpoints.db")
     db_conn = await aiosqlite.connect(checkpoints_db)
     checkpointer = AsyncSqliteSaver(conn=db_conn)
-    await checkpointer.setup()  # Create tables if they don't exist yet
+    await checkpointer.setup()
 
-
-    # chat uses a stable session so multi-turn conversations persist.
-    # All other commands (auto, build, fix, edit, …) get a fresh UUID per
-    # invocation — prevents stale/broken checkpoint history from a prior run
-    # from polluting the new request's context.
     if command == "chat":
         session_id = get_or_create_session_id(rudraanvil_dir)
     else:
         session_id = str(uuid.uuid4())
 
-    # Main agent has full access to built-in file tools (read_file, write_file, edit_file,
-    # ls, glob, grep) provided by FilesystemBackend — no subagent needed.
+    # Subagent system prompt: explicit file-writing workflow.
+    # The subagent does NOT get MemoryMiddleware — it receives full task context
+    # from the main agent's delegation description instead.
+    subagent_prompt = (
+        "You are a file-generation assistant. Your ONLY job is to write complete project files.\n\n"
+        "## WORKFLOW\n"
+        "1. Call write_todos() once to list every file to create\n"
+        "2. For EACH file in the todo list:\n"
+        "   a. Think through the ENTIRE file content in your head first\n"
+        "   b. Call write_file(file_path='...', content='...') with the COMPLETE final code\n"
+        "   c. Mark the todo completed immediately after\n"
+        "3. Repeat step 2 for every file — do NOT stop until all todos are completed\n\n"
+        "## CRITICAL — ONE COMPLETE FILE PER write_file CALL\n"
+        "- write_file CANNOT overwrite an existing file — if you write a partial/skeleton file,\n"
+        "  you are stuck in an edit_file loop that almost always fails\n"
+        "- NEVER write a skeleton, stub, or placeholder that you plan to expand later\n"
+        "- Think through ALL the code before calling write_file — write it once, write it right\n\n"
+        "## ARCHITECTURE — use separate files, never cram everything into one file\n"
+        "For a Flask app, for example, create these separate files:\n"
+        "  - requirements.txt  → all pip dependencies, one per line\n"
+        "  - models.py         → all SQLAlchemy models\n"
+        "  - routes.py         → all Flask routes / blueprints\n"
+        "  - app.py            → Flask app factory + db.init_app + run block ONLY\n"
+        "Write them in this order: requirements.txt → models.py → routes.py → app.py\n"
+        "(app.py is last because it imports from the others)\n\n"
+        "## FILE PATH RULES\n"
+        "- Use RELATIVE paths only: 'app.py', 'src/models.py'\n"
+        "- NEVER use absolute paths\n\n"
+        "## IF edit_file IS EVER NEEDED\n"
+        "- Always call read_file first to get the current file content\n"
+        "- Copy the old_string CHARACTER-FOR-CHARACTER from the read_file output\n"
+        "- Never reconstruct old_string from memory — one wrong space causes failure\n\n"
+        "## HARD CONSTRAINTS\n"
+        "- Write COMPLETE, working code — never stubs, TODOs, or '# ... rest of code'\n"
+        "- Do NOT execute code, run tests, or install packages\n"
+        "- Do NOT spawn further subagents\n\n"
+        f"Task: {task}"
+    )
+
     deep_agent = create_deep_agent(
         model=model,
         tools=custom_tools,
         system_prompt=system_prompt,
         backend=filesystem_backend,
         checkpointer=checkpointer,
+        # MemoryMiddleware: loads .rudraanvil/AGENTS.md and injects into every
+        # system prompt. Silently skips if the file is missing (safe on first run).
+        # The agent updates the file via edit_file as it learns about the project.
+        memory=[".rudraanvil/AGENTS.md"],
+        middleware=[TaskAnchorMiddleware(task)],
+        subagents=[
+            {
+                "name": "general-purpose",
+                "description": "Writes project files using write_file for each planned item.",
+                "system_prompt": subagent_prompt,
+                "middleware": [TaskAnchorMiddleware(task)],
+            }
+        ],
     )
 
-    # Wrap in RudraAnvil agent, passing session_id for thread-based invocation
-    # db_conn is passed so the agent can close it before the event loop shuts down
     return RudraAnvilAgent(context, deep_agent, session_id, db_conn=db_conn)
