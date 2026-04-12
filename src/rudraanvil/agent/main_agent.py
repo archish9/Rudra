@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Any
@@ -13,9 +12,10 @@ from deepagents import create_deep_agent
 
 from rudraanvil.config import config
 from rudraanvil.filesystem import VirtualFileSystem
-from rudraanvil.middleware import TaskAnchorMiddleware
+from rudraanvil.middleware import BlockTaskToolMiddleware, ContinueAfterWriteMiddleware, TaskAnchorMiddleware
 from rudraanvil.state import get_or_create_session_id, ProjectContext
 from rudraanvil.tools.interaction_tools import create_interaction_tools
+from rudraanvil.tools.planning_tools import create_planning_tools
 
 
 @dataclass
@@ -58,6 +58,7 @@ def build_system_prompt(
     project_path: Path,
     vfs: VirtualFileSystem,
     project_context: Optional[ProjectContext] = None,
+    tech_stack_content: str = "",
     **kwargs,
 ) -> str:
     """Build the system prompt for the agent based on command type."""
@@ -71,39 +72,33 @@ def build_system_prompt(
 - WRONG:     write_file(file_path="/home/user/project/models.py", ...)
 
 ## HARD CONSTRAINTS
+- write_file content must be RAW source code — NEVER wrap it in ```markdown fences```
 - Write COMPLETE, working code — never placeholders, stubs, or "TODO" comments
-- Do NOT execute code, run tests, or install packages — file generation only
 - NEVER use the `task` subagent tool — write all files yourself directly with write_file
+- Write ONE file per message — call write_file() ONCE then stop and wait for the result
+- Do NOT make multiple write_file() calls in the same response
+- Plan your work with update_plan(); track progress by checking off items as you go
+
+## WHAT "COMPLETE" MEANS — NO SHORTCUTS
+- Models: every field defined with types, every method fully implemented, no bare `pass`
+- REST APIs: ALL CRUD endpoints — GET (list + single), POST, PUT/PATCH, DELETE — each with
+  full request parsing, DB interaction, and JSON response; no "Hello World" routes
+- Requirements: all dependencies listed with version pins (e.g. Flask>=3.0.0)
+- App: all blueprints registered, DB initialized, error handlers in place
 
 Project structure:
 {vfs.get_tree()}
 """
 
-    # Tech stack context
-    if project_context and project_context.primary_language:
-        base += f"""
-## Project Tech Stack
-- Language:  {project_context.primary_language}
-- Framework: {project_context.framework or 'Not specified'}
-- Database:  {project_context.database or 'Not specified'}
-- Notes:     {project_context.additional_context or 'None'}
-
-All generated code must strictly follow the above tech stack.
-"""
+    # Tech stack: inlined directly so the model never needs to read it from disk
+    if tech_stack_content:
+        base += f"\n## Tech Stack — follow this STRICTLY\n{tech_stack_content}\n"
     else:
-        base += """
-## Tech Stack
-Infer the stack from the task description — do NOT ask the user:
-- "Flask ..."       → Python + Flask
-- "Django ..."      → Python + Django
-- "FastAPI ..."     → Python + FastAPI
-- "React ..."       → JavaScript / TypeScript + React
-- "Next.js ..."     → TypeScript + Next.js
-- "Express ..."     → Node.js + Express
-- "Spring ..."      → Java + Spring Boot
-- "Rails ..."       → Ruby on Rails
-If the stack is truly ambiguous (no framework or language hint), use ask_user() ONCE.
-"""
+        base += (
+            "\n## Tech Stack\n"
+            "Infer the tech stack from the task description. "
+            "Use the exact framework named in the task (e.g. FastAPI → Python + FastAPI).\n"
+        )
 
     # Command-specific guidance
     if command in ("build", "auto"):
@@ -114,17 +109,23 @@ If the stack is truly ambiguous (no framework or language hint), use ask_user() 
 {existing}
 
 ## Workflow
-1. Call write_todos() once with every file you need to create/modify
-2. For each file in order: call write_file() with the COMPLETE file content
-3. Mark each todo as completed immediately after writing the file
-4. Do NOT spawn subagents — write all files yourself
-
-## After completing all files
-Update `.rudraanvil/AGENTS.md` using edit_file to record:
-- Confirmed tech stack
-- Files created and what each does
-- Key architecture decisions
-- Anything useful to know for the next session
+1. Call update_plan() ONCE with a checklist of FILENAMES (not task descriptions)
+   !! Each item must be a real filename: '- [ ] main.py' NOT '- [ ] Create main.py'
+2. Call task() with subagent_type='general-purpose' and a description that includes:
+   - The exact task: "{task}"
+   - Every filename from your plan (EXACT names — subagent must use these)
+   - The full tech stack and framework
+   - "Write COMPLETE, production-ready code for ALL files listed"
+   The task subagent handles ALL file writing in its own isolated context.
+   Do NOT call write_file yourself — that is the subagent's job.
+3. After task() returns, verify every file was written:
+   - For each filename in your plan, call read_file(file_path='<filename>') to check it exists
+   - If any file returns "not found" or an error: call task() AGAIN with ONLY those missing files
+   - Do NOT call task() more than 3 times total
+4. Update .rudraanvil/AGENTS.md using edit_file to record:
+   - Tech stack confirmed
+   - Files created and what each does
+   - Key architecture decisions
 """
 
     elif command == "chat":
@@ -265,6 +266,13 @@ class RudraAnvilAgent:
             final_state = None
             processed_messages = 0
             consecutive_failures = 0
+            _halt = False  # set to True to break out of both the while and async-for loops
+            # Loop detection: count how many times the same (tool, file_path) is called
+            repeated_tool_calls: dict[tuple, int] = {}
+            MAX_REPEATED_CALLS = 5
+            # Separate counter for planning tools — lower threshold since 3 calls is always a loop
+            planning_tool_calls: dict[str, int] = {}
+            MAX_PLANNING_CALLS = 3
 
             lg_config = {
                 "configurable": {"thread_id": self.session_id},
@@ -276,6 +284,9 @@ class RudraAnvilAgent:
                 stream_mode="values",
                 subgraphs=True,
             ):
+                if _halt:
+                    break
+
                 namespace, event = (
                     chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
                 )
@@ -292,10 +303,46 @@ class RudraAnvilAgent:
 
                     self._log_single_message(msg, processed_messages + 1)
 
-                    if msg_type == "ToolMessage":
+                    if msg_type == "AIMessage":
+                        tool_calls = getattr(msg, "tool_calls", [])
+                        for tc in tool_calls:
+                            name = tc.get("name", "")
+                            if name in ("write_file", "edit_file", "read_file"):
+                                args = tc.get("args", {})
+                                key_arg = args.get("file_path", args.get("path", ""))
+                                # PLAN.md is edited once per file (normal check-off) — skip it
+                                if "PLAN.md" not in key_arg:
+                                    call_key = (name, key_arg)
+                                    repeated_tool_calls[call_key] = repeated_tool_calls.get(call_key, 0) + 1
+                                    if repeated_tool_calls[call_key] >= MAX_REPEATED_CALLS:
+                                        self._log_always(
+                                            f"[bold yellow]!! Loop guard: '{name}' on '{key_arg}' "
+                                            f"repeated {repeated_tool_calls[call_key]}x — stopping here, "
+                                            f"keeping files written so far.[/bold yellow]"
+                                        )
+                                        _halt = True
+                                        break  # break inner for-tc loop
+                            if _halt:
+                                break  # break inner for-tc loop (planning check)
+                            if name in ("write_file", "task"):
+                                # The model is progressing (writing files or delegating) —
+                                # reset the planning loop counter.
+                                planning_tool_calls.clear()
+                            elif name in ("update_plan", "read_plan"):
+                                planning_tool_calls[name] = planning_tool_calls.get(name, 0) + 1
+                                if planning_tool_calls[name] >= MAX_PLANNING_CALLS:
+                                    self._log_always(
+                                        f"[bold yellow]!! Loop guard: '{name}' called "
+                                        f"{planning_tool_calls[name]}x without writing files — stopping.[/bold yellow]"
+                                    )
+                                    _halt = True
+                                    break
+
+                    elif msg_type == "ToolMessage":
                         content = str(getattr(msg, "content", ""))
                         is_error = (
                             content.startswith("Error:")
+                            or content.startswith("Cannot write to")
                             or "Error:" in content
                             or "Traceback" in content
                             or "Errno" in content
@@ -306,14 +353,14 @@ class RudraAnvilAgent:
                             consecutive_failures += 1
                             if self.context.stop_on_error and consecutive_failures >= 3:
                                 self._log_always(
-                                    "[bold red]!! Halting: 3 consecutive tool failures[/bold red]"
+                                    "[bold yellow]!! 3 consecutive tool failures — stopping.[/bold yellow]"
                                 )
-                                raise RuntimeError(
-                                    f"Repeated tool errors in {':'.join(namespace) or 'main agent'}:\n{content}"
-                                )
+                                _halt = True
                         else:
                             consecutive_failures = 0
 
+                    if _halt:
+                        break  # break inner while loop
                     processed_messages += 1
 
             if not final_state:
@@ -337,11 +384,16 @@ class RudraAnvilAgent:
 
                 original_paths = set(self.context.vfs.files.keys())
                 new_paths = set(new_vfs.files.keys())
-                files_created = list(new_paths - original_paths)
+                # Exclude .rudraanvil/ state files (PLAN.md, AGENTS.md, etc.)
+                files_created = [
+                    p for p in (new_paths - original_paths)
+                    if Path(p).parts[0] != ".rudraanvil"
+                ]
                 files_modified = [
                     p
                     for p in new_paths & original_paths
                     if new_vfs.files[p] != self.context.vfs.files.get(p)
+                    and Path(p).parts[0] != ".rudraanvil"
                 ]
 
                 return AgentResult(
@@ -432,6 +484,53 @@ def _ensure_agents_md(rudraanvil_dir: Path, project_context: Optional[ProjectCon
     )
 
 
+def _write_tech_stack_file(
+    rudraanvil_dir: Path,
+    project_context: Optional[ProjectContext],
+) -> None:
+    """Write project tech stack context to .rudraanvil/tech_stack.md.
+
+    Called once in create_main_agent() before the agent starts. Offloads
+    tech stack info to disk so the agent reads it via read_file() rather
+    than having it injected into every system prompt call.
+
+    If no project_context is available, writes instructions for the agent
+    to infer the stack from the task description.
+    """
+    tech_stack_path = rudraanvil_dir / "tech_stack.md"
+
+    if project_context and project_context.primary_language:
+        lines = [
+            "# Project Tech Stack\n\n",
+            f"**Primary Language:** {project_context.primary_language}\n\n",
+            f"**Framework:** {project_context.framework or 'Not specified'}\n\n",
+            f"**Database:** {project_context.database or 'Not specified'}\n\n",
+        ]
+        if project_context.additional_context:
+            lines.append(
+                f"## Architecture Rules\n\n{project_context.additional_context}\n"
+            )
+        lines.append("\nAll code you write MUST use this exact tech stack.\n")
+    else:
+        lines = [
+            "# Project Tech Stack\n\n",
+            "No tech stack configured. Infer from the task description:\n\n",
+            "- 'Flask ...' → Python + Flask\n",
+            "- 'Django ...' → Python + Django\n",
+            "- 'FastAPI ...' → Python + FastAPI\n",
+            "- 'React ...' → JavaScript / TypeScript + React\n",
+            "- 'Next.js ...' → TypeScript + Next.js\n",
+            "- 'Express ...' → Node.js + Express\n",
+            "- 'Spring ...' → Java + Spring Boot\n",
+            "- 'Rails ...' → Ruby on Rails\n",
+            "\nIf the stack is truly ambiguous, use ask_user() ONCE.\n",
+        ]
+
+    content = "".join(lines)
+    tech_stack_path.write_text(content, encoding="utf-8")
+    return content
+
+
 async def create_main_agent(
     project_path: Path,
     task: str,
@@ -469,7 +568,7 @@ async def create_main_agent(
         base_url=config.ollama.base_url,
         temperature=config.ollama.temperature,
         num_predict=config.ollama.num_predict,
-        reasoning=False,
+        reasoning=True,
     )
 
     # ask_user / save_project_context are only safe in chat mode.
@@ -479,25 +578,19 @@ async def create_main_agent(
     if command == "chat":
         custom_tools = create_interaction_tools(console, project_path)
     else:
-        custom_tools = []
+        # Planning tools (update_plan / read_plan) go on the MAIN AGENT only.
+        # The subagent is write-only and gets deepagents' built-in file tools.
+        # Code execution tools are intentionally excluded — this agent only generates files.
+        custom_tools = create_planning_tools(vfs, task=task)
 
-    system_prompt = build_system_prompt(
-        command=command,
-        task=task,
-        project_path=project_path,
-        vfs=vfs,
-        project_context=project_context,
-        **kwargs,
-    )
-
-    from deepagents.backends import FilesystemBackend
     import aiosqlite
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from rudraanvil.compat.deepagents_path import install_path_normalizer
+    from rudraanvil.compat.overwrite_backend import OverwriteFilesystemBackend
 
     install_path_normalizer(project_path)
 
-    filesystem_backend = FilesystemBackend(
+    filesystem_backend = OverwriteFilesystemBackend(
         root_dir=str(project_path),
         virtual_mode=True,
     )
@@ -508,53 +601,62 @@ async def create_main_agent(
     # Ensure persistent memory file exists before MemoryMiddleware tries to load it.
     _ensure_agents_md(rudraanvil_dir, project_context)
 
+    # Write tech stack to disk (for reference) and inline into system prompt
+    # so the model doesn't need to read it voluntarily.
+    tech_stack_content = _write_tech_stack_file(rudraanvil_dir, project_context)
+
+    system_prompt = build_system_prompt(
+        command=command,
+        task=task,
+        project_path=project_path,
+        vfs=vfs,
+        project_context=project_context,
+        tech_stack_content=tech_stack_content,
+        **kwargs,
+    )
+
     checkpoints_db = str(rudraanvil_dir / "checkpoints.db")
     db_conn = await aiosqlite.connect(checkpoints_db)
     checkpointer = AsyncSqliteSaver(conn=db_conn)
     await checkpointer.setup()
 
-    if command == "chat":
-        session_id = get_or_create_session_id(rudraanvil_dir)
-    else:
-        session_id = str(uuid.uuid4())
+    # Stable session ID for all commands — gives the LangGraph checkpointer
+    # continuity across CLI invocations in the same project directory.
+    # Delete .rudraanvil/session_id.txt to start a completely fresh session.
+    session_id = get_or_create_session_id(rudraanvil_dir)
 
     # Subagent system prompt: explicit file-writing workflow.
     # The subagent does NOT get MemoryMiddleware — it receives full task context
     # from the main agent's delegation description instead.
     subagent_prompt = (
-        "You are a file-generation assistant. Your ONLY job is to write complete project files.\n\n"
-        "## WORKFLOW\n"
-        "1. Call write_todos() once to list every file to create\n"
-        "2. For EACH file in the todo list:\n"
-        "   a. Think through the ENTIRE file content in your head first\n"
-        "   b. Call write_file(file_path='...', content='...') with the COMPLETE final code\n"
-        "   c. Mark the todo completed immediately after\n"
-        "3. Repeat step 2 for every file — do NOT stop until all todos are completed\n\n"
-        "## CRITICAL — ONE COMPLETE FILE PER write_file CALL\n"
-        "- write_file CANNOT overwrite an existing file — if you write a partial/skeleton file,\n"
-        "  you are stuck in an edit_file loop that almost always fails\n"
-        "- NEVER write a skeleton, stub, or placeholder that you plan to expand later\n"
-        "- Think through ALL the code before calling write_file — write it once, write it right\n\n"
-        "## ARCHITECTURE — use separate files, never cram everything into one file\n"
-        "For a Flask app, for example, create these separate files:\n"
-        "  - requirements.txt  → all pip dependencies, one per line\n"
-        "  - models.py         → all SQLAlchemy models\n"
-        "  - routes.py         → all Flask routes / blueprints\n"
-        "  - app.py            → Flask app factory + db.init_app + run block ONLY\n"
-        "Write them in this order: requirements.txt → models.py → routes.py → app.py\n"
-        "(app.py is last because it imports from the others)\n\n"
-        "## FILE PATH RULES\n"
-        "- Use RELATIVE paths only: 'app.py', 'src/models.py'\n"
-        "- NEVER use absolute paths\n\n"
-        "## IF edit_file IS EVER NEEDED\n"
-        "- Always call read_file first to get the current file content\n"
-        "- Copy the old_string CHARACTER-FOR-CHARACTER from the read_file output\n"
-        "- Never reconstruct old_string from memory — one wrong space causes failure\n\n"
+        "You are a file-writing assistant. You receive a task description listing files to create.\n"
+        "Your ONLY job: write every listed file with COMPLETE, production-ready code.\n\n"
+        "## WORKFLOW — write every file in the task description\n"
+        "For EACH file listed:\n"
+        "  1. Think through the COMPLETE implementation before writing\n"
+        "  2. Call write_file(file_path='filename', content='...full code...') — raw code, no markdown fences\n"
+        "  3. Move immediately to the next file — do NOT stop between files\n"
+        "Keep going until EVERY file in the task description is written.\n\n"
         "## HARD CONSTRAINTS\n"
-        "- Write COMPLETE, working code — never stubs, TODOs, or '# ... rest of code'\n"
-        "- Do NOT execute code, run tests, or install packages\n"
-        "- Do NOT spawn further subagents\n\n"
-        f"Task: {task}"
+        "- RAW source code only in content= — NEVER wrap in ```fences```\n"
+        "- COMPLETE code only — no stubs, no 'pass', no 'TODO', no Hello World\n"
+        "- ONE write_file call per file — write it right the first time\n"
+        "- Do NOT run code, install packages, or spawn subagents\n"
+        "- Do NOT stop or say 'let me know' until ALL files are written\n\n"
+        "## WRITE ORDER — dependencies first\n"
+        "Write files in this order so imports resolve correctly:\n"
+        "  config/deps (requirements.txt) → data models → auth/utility code → route handlers → entry point (app.py/main.py)\n\n"
+        "## FILENAMES — use EXACTLY what the task description gives you\n"
+        "- If the task says 'app.py' — write 'app.py', NOT 'src/app.py' or 'application.py'\n"
+        "- Do NOT reorganize files into subdirectories unless the task explicitly asks for it\n"
+        "- Do NOT rename files or split one file into multiple files\n\n"
+        "## CODE QUALITY\n"
+        "- Every function must be fully implemented with real logic\n"
+        "- Use the EXACT framework named in the task (FastAPI = FastAPI, not Flask)\n"
+        "- Include all imports at the top of each file\n"
+        "- JWT auth: use python-jose or PyJWT; hash passwords with passlib/bcrypt\n"
+        "- Database models: include all fields with correct types\n"
+        "- API routes: full CRUD where appropriate — not just Hello World endpoints\n"
     )
 
     deep_agent = create_deep_agent(
@@ -571,9 +673,10 @@ async def create_main_agent(
         subagents=[
             {
                 "name": "general-purpose",
-                "description": "Writes project files using write_file for each planned item.",
+                "description": "Writes ALL project files with complete code. Use for any coding task.",
                 "system_prompt": subagent_prompt,
-                "middleware": [TaskAnchorMiddleware(task)],
+                "tools": [],  # only deepagents' built-in tools (write_file, edit_file, etc.)
+                "middleware": [TaskAnchorMiddleware(task), ContinueAfterWriteMiddleware(task=task)],
             }
         ],
     )
