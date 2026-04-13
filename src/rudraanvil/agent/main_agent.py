@@ -424,20 +424,40 @@ class RudraAnvilAgent:
             raise
 
     async def chat_turn(self, user_input: str) -> str:
-        """Handle a single turn in chat mode."""
+        """Handle a single turn in chat mode with live streaming trace."""
         self.context.chat_history.append({"role": "user", "content": user_input})
 
         lg_config = {"configurable": {"thread_id": self.session_id}}
-        result = await asyncio.to_thread(
-            self.agent.invoke,
+
+        final_state = None
+        processed_messages = 0
+
+        async for chunk in self.agent.astream(
             {"messages": self.context.chat_history},
             lg_config,
-        )
+            stream_mode="values",
+            subgraphs=True,
+        ):
+            namespace, event = (
+                chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+            )
+            final_state = event
+            messages = event.get("messages", [])
 
-        result_messages = result.get("messages", [])
-        if result_messages:
-            final_msg = result_messages[-1]
-            response = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
+            while processed_messages < len(messages):
+                msg = messages[processed_messages]
+                if namespace:
+                    self._log_always(f"[dim](subagent {':'.join(namespace)})[/dim]")
+                self._log_single_message(msg, processed_messages + 1)
+                processed_messages += 1
+
+        if final_state:
+            messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
+            if messages:
+                final_msg = messages[-1]
+                response = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
+            else:
+                response = "No response"
         else:
             response = "No response"
 
