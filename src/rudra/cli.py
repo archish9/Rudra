@@ -69,14 +69,14 @@ def print_banner() -> None:
     console.print(
         f"  [bold white]Rudra (रुद्र) — The fierce, storm-like form of Shiva; the howler/roarer[/bold white]  "        
     )
-    console.print()
-
     console.print(
-        f"  [bold italic color(214)]* The roaring storm that hammers and purifies code [/bold italic color(214)]  "
+        f"  [bold italic white]The roaring storm that hammers and purifies code [/bold italic white]  "
     )
 
     console.print()
-    console.print()
+    console.print()    
+
+    console.print(f"  [bold color(202)]Archish developed this with ❤️ [/bold color(202)]  ")
     console.print()
 
     console.print(
@@ -109,15 +109,23 @@ def _make_prompt_toolkit_session():
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.styles import Style
+        from prompt_toolkit.key_binding import KeyBindings
 
         style = Style.from_dict({
             "prompt": "ansibrightcyan bold",
             "": "ansiwhite",
         })
 
+        bindings = KeyBindings()
+
+        @bindings.add('escape', 'escape', 'escape')
+        def _(event):
+            event.app.exit(result='/exit')
+
         session = PromptSession(
             style=style,
             mouse_support=False,
+            key_bindings=bindings,
         )
         return session
     except ImportError:
