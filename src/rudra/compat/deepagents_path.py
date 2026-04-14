@@ -20,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Sequence
 
-_ORIGINAL_KEY = "_rudraanvil_original_validate_path"
+_ORIGINAL_KEY = "_rudra_original_validate_path"
 
 
 def install_path_normalizer(project_root: Path) -> None:

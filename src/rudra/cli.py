@@ -1,4 +1,4 @@
-"""RudraAnvil CLI - Autonomous Coding Agent."""
+"""Rudra CLI - Autonomous Coding Agent."""
 
 from __future__ import annotations
 
@@ -12,16 +12,16 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
-from rudraanvil import __version__
-from rudraanvil.agent import create_main_agent, AgentResult
-from rudraanvil.config import config
-from rudraanvil.filesystem import VirtualFileSystem, FileSyncManager, SyncMode
-from rudraanvil.state import ProjectConfigManager, ProjectContext
+from rudra import __version__
+from rudra.agent import create_main_agent, AgentResult
+from rudra.config import config
+from rudra.filesystem import VirtualFileSystem, FileSyncManager, SyncMode
+from rudra.state import ProjectConfigManager, ProjectContext
 
 # Create the Typer app
 app = typer.Typer(
-    name="rudraanvil",
-    help="RudraAnvil - Autonomous Coding Agent CLI",
+    name="rudra",
+    help="Rudra - Autonomous Coding Agent CLI",
     add_completion=False,
     no_args_is_help=False,
     invoke_without_command=True,
@@ -35,12 +35,12 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 BANNER_LINES = [
-    r" ██████╗  ██╗   ██╗ ██████╗  ██████╗   █████╗   █████╗  ███╗   ██╗ ██╗   ██╗ ██╗ ██╗     ",
-    r" ██╔══██╗ ██║   ██║ ██╔══██╗ ██╔══██╗ ██╔══██╗ ██╔══██╗ ████╗  ██║ ██║   ██║ ██║ ██║     ",
-    r" ██████╔╝ ██║   ██║ ██║  ██║ ██████╔╝ ███████║ ███████║ ██╔██╗ ██║ ██║   ██║ ██║ ██║     ",
-    r" ██╔══██╗ ██║   ██║ ██║  ██║ ██╔══██║ ██╔══██║ ██╔══██║ ██║╚██╗██║ ╚██╗ ██╔╝ ██║ ██║     ",
-    r" ██║  ██║ ╚██████╔╝ ██████╔╝ ██║  ██║ ██║  ██║ ██║  ██║ ██║ ╚████║  ╚████╔╝  ██║ ███████╗",
-    r" ╚═╝  ╚═╝  ╚═════╝  ╚═════╝  ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═╝ ╚═╝  ╚═══╝   ╚═══╝   ╚═╝ ╚══════╝",
+    r" ██████╗  ██╗   ██╗ ██████╗  ██████╗   █████╗ ",
+    r" ██╔══██╗ ██║   ██║ ██╔══██╗ ██╔══██╗ ██╔══██╗",
+    r" ██████╔╝ ██║   ██║ ██║  ██║ ██████╔╝ ███████║",
+    r" ██╔══██╗ ██║   ██║ ██║  ██║ ██╔══██║ ██╔══██║",
+    r" ██║  ██║ ╚██████╔╝ ██████╔╝ ██║  ██║ ██║  ██║",
+    r" ╚═╝  ╚═╝  ╚═════╝  ╚═════╝  ╚═╝  ╚═╝ ╚═╝  ╚═╝",
 ]
 
 # Gradient colours cycling through the banner lines (bright yellow-orange → deep orange → red-orange)
@@ -55,7 +55,7 @@ GRADIENT = [
 
 
 def print_banner() -> None:
-    """Print the RudraAnvil branded launch banner, Claude Code-style."""
+    """Print the Rudra branded launch banner, Claude Code-style."""
     console.print()
 
     # ASCII art with per-line colour gradient
@@ -69,15 +69,14 @@ def print_banner() -> None:
     console.print(
         f"  [bold white]Rudra (रुद्र) — The fierce, storm-like form of Shiva; the howler/roarer[/bold white]  "        
     )
-    console.print(
-        f"  [bold white]Anvil — The blacksmith's forge where raw metal is hammered into perfection[/bold white]  "        
-    )
     console.print()
 
     console.print(
         f"  [bold italic color(214)]* The roaring storm that hammers and purifies code [/bold italic color(214)]  "
     )
 
+    console.print()
+    console.print()
     console.print()
 
     console.print(
@@ -148,7 +147,7 @@ async def _prompt_input(session, prompt_text: str) -> str:
 def version_callback(value: bool) -> None:
     """Show version and exit."""
     if value:
-        console.print(f"[bold]RudraAnvil[/bold] v{__version__}")
+        console.print(f"[bold]Rudra[/bold] v{__version__}")
         raise typer.Exit()
 
 
@@ -160,7 +159,7 @@ def get_project_path(project_dir: Optional[Path]) -> Path:
 
 
 def load_project_context(project_path: Path) -> ProjectContext:
-    """Load saved project context from .rudraanvil/project.json."""
+    """Load saved project context from .rudra/project.json."""
     return ProjectConfigManager(project_path).load()
 
 
@@ -180,7 +179,7 @@ def main(
         False, "--version", "-v", callback=version_callback, is_eager=True, help="Show version and exit"
     ),
 ) -> None:
-    """RudraAnvil - Autonomous Coding Agent CLI."""
+    """Rudra - Autonomous Coding Agent CLI."""
     # A subcommand was explicitly given — let it handle everything
     if ctx.invoked_subcommand is not None:
         return
@@ -255,7 +254,7 @@ def main(
             try:
                 while True:
                     try:
-                        user_input = await _prompt_input(pt_session, "rudraanvil ❯")
+                        user_input = await _prompt_input(pt_session, "rudra ❯")
                         cmd = user_input.strip().lower()
 
                         if cmd in ("/exit", "/quit", "exit", "quit"):
@@ -298,19 +297,19 @@ def _print_help() -> None:
     rows = [
         ("/help",   "Show this help message"),
         ("/tree",   "Print the virtual file tree"),
-        ("/exit",   "Quit RudraAnvil"),
+        ("/exit",   "Quit Rudra"),
         ("",        ""),
-        ("build",   "rudraanvil build \"<task>\"  — create/enhance a project"),
-        ("fix",     "rudraanvil fix \"<issue>\"   — debug and repair"),
-        ("edit",    "rudraanvil edit <file> \"<instruction>\""),
-        ("review",  "rudraanvil review          — code quality report"),
-        ("suggest", "rudraanvil suggest \"<task>\" — propose improvements"),
+        ("build",   "rudra build \"<task>\"  — create/enhance a project"),
+        ("fix",     "rudra fix \"<issue>\"   — debug and repair"),
+        ("edit",    "rudra edit <file> \"<instruction>\""),
+        ("review",  "rudra review          — code quality report"),
+        ("suggest", "rudra suggest \"<task>\" — propose improvements"),
     ]
     for cmd, desc in rows:
         table.add_row(cmd, desc)
 
     console.print()
-    console.print(Panel(table, title="[bold cyan]RudraAnvil Help[/bold cyan]", border_style="cyan", padding=(1, 2)))
+    console.print(Panel(table, title="[bold cyan]Rudra Help[/bold cyan]", border_style="cyan", padding=(1, 2)))
     console.print()
 
 
@@ -408,7 +407,7 @@ def chat(
         try:
             while True:
                 try:
-                    user_input = await _prompt_input(pt_session, "rudraanvil ❯")
+                    user_input = await _prompt_input(pt_session, "rudra ❯")
                     cmd = user_input.strip().lower()
 
                     if cmd in ("/exit", "/quit", "exit", "quit"):
@@ -618,24 +617,24 @@ def resume(
 ) -> None:
     """Resume a previous session (automatic — just re-run in the same directory)."""
     project_path = get_project_path(project_dir)
-    session_file = project_path / ".rudraanvil" / "session_id.txt"
+    session_file = project_path / ".rudra" / "session_id.txt"
 
     print_banner()
     if session_file.exists():
         session_id = session_file.read_text().strip()
         console.print(Panel(
             f"[green]Session ID:[/green] {session_id}\n"
-            f"[green]Checkpoint DB:[/green] {project_path / '.rudraanvil' / 'checkpoints.db'}\n\n"
+            f"[green]Checkpoint DB:[/green] {project_path / '.rudra' / 'checkpoints.db'}\n\n"
             "Run any command in this directory to continue:\n"
-            "  [bold]rudraanvil build \"continue the work\"[/bold]\n"
-            "  [bold]rudraanvil chat[/bold]",
+            "  [bold]rudra build \"continue the work\"[/bold]\n"
+            "  [bold]rudra chat[/bold]",
             title="▶️  Resume is Automatic",
             border_style="green",
         ))
     else:
         console.print(Panel(
             "No session found in this directory yet.\n"
-            "Start one with: [bold]rudraanvil build \"your task\"[/bold]",
+            "Start one with: [bold]rudra build \"your task\"[/bold]",
             title="▶️  No Session Found",
             border_style="yellow",
         ))
@@ -683,7 +682,7 @@ def watch(
             console.print(f"[dim]Modified: {rel_path}[/dim]")
 
             if rel_path.endswith(".py"):
-                from rudraanvil.tools.code_tools import create_code_tools
+                from rudra.tools.code_tools import create_code_tools
                 tools = create_code_tools(self.vfs)
                 for tool in tools:
                     if tool.name == "check_syntax":

@@ -1,7 +1,7 @@
 """Planning tools for filesystem-based context management.
 
 Replaces deepagents' built-in write_todos tool with a filesystem-backed
-alternative. The plan is stored in `.rudraanvil/PLAN.md`.
+alternative. The plan is stored in `.rudra/PLAN.md`.
 
 IMPORTANT — filesystem design:
   update_plan / read_plan both operate on the REAL disk file directly,
@@ -13,7 +13,7 @@ IMPORTANT — filesystem design:
 Usage pattern for the agent:
   1. update_plan("- [ ] main.py\\n- [ ] models.py")
   2. write_file(file_path="main.py", content="...")
-  3. edit_file('.rudraanvil/PLAN.md', '- [ ] main.py', '- [x] main.py')
+  3. edit_file('.rudra/PLAN.md', '- [ ] main.py', '- [x] main.py')
   4. Repeat steps 2-3 for each remaining item.
 """
 
@@ -25,7 +25,7 @@ from langchain_core.tools import tool
 
 
 def create_planning_tools(vfs, task: str = "") -> list:
-    """Create planning tools that read/write .rudraanvil/PLAN.md directly on disk.
+    """Create planning tools that read/write .rudra/PLAN.md directly on disk.
 
     Args:
         vfs: VirtualFileSystem anchored to the project root (used for root_path only).
@@ -35,11 +35,11 @@ def create_planning_tools(vfs, task: str = "") -> list:
     Returns:
         List of LangChain tools: [update_plan, read_plan]
     """
-    plan_path: Path = vfs.root_path / ".rudraanvil" / "PLAN.md"
+    plan_path: Path = vfs.root_path / ".rudra" / "PLAN.md"
 
     @tool
     def update_plan(plan_markdown: str) -> str:
-        """Write or overwrite the agent's task plan to .rudraanvil/PLAN.md.
+        """Write or overwrite the agent's task plan to .rudra/PLAN.md.
 
         Each checklist item MUST be an actual filename — NOT a task description.
           CORRECT: - [ ] main.py
@@ -67,8 +67,8 @@ def create_planning_tools(vfs, task: str = "") -> list:
         plan_path.parent.mkdir(parents=True, exist_ok=True)
         plan_path.write_text(plan_markdown, encoding="utf-8")
         # Invalidate VFS cache — pop both separator styles (Windows uses \, POSIX uses /)
-        vfs.files.pop(str(Path(".rudraanvil") / "PLAN.md"), None)
-        vfs.files.pop(".rudraanvil/PLAN.md", None)
+        vfs.files.pop(str(Path(".rudra") / "PLAN.md"), None)
+        vfs.files.pop(".rudra/PLAN.md", None)
 
         pending = [
             line.strip().replace("- [ ]", "").strip()
@@ -89,7 +89,7 @@ def create_planning_tools(vfs, task: str = "") -> list:
 
     @tool
     def read_plan() -> str:
-        """Read the current task plan from .rudraanvil/PLAN.md.
+        """Read the current task plan from .rudra/PLAN.md.
 
         Always reads from disk so it reflects changes made by edit_file.
 

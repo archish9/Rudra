@@ -24,7 +24,7 @@ _BLOCK_MESSAGE = (
     "   If no plan exists yet, call update_plan() first with a full checklist\n"
     "2. Write the first PENDING file: write_file(file_path='...', content='COMPLETE code')\n"
     "   ONE file only — stop and wait for the result\n"
-    "3. Check it off: edit_file('.rudraanvil/PLAN.md', old_string='- [ ] filename', new_string='- [x] filename')\n\n"
+    "3. Check it off: edit_file('.rudra/PLAN.md', old_string='- [ ] filename', new_string='- [x] filename')\n\n"
     "Rules:\n"
     "- Write COMPLETE, working code — no Hello World stubs, no TODOs\n"
     "- Use 'file_path' (NOT 'path') as the parameter name\n"

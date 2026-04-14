@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.syntax import Syntax
 from rich.panel import Panel
 
-from rudraanvil.filesystem.virtual_fs import VirtualFileSystem
+from rudra.filesystem.virtual_fs import VirtualFileSystem
 
 
 class SyncMode(str, Enum):
@@ -78,7 +78,7 @@ class FileSyncManager:
         if not path.exists():
             return None
         
-        backup_dir = self.vfs.root_path / ".rudraanvil" / "backups"
+        backup_dir = self.vfs.root_path / ".rudra" / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

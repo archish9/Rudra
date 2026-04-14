@@ -1,25 +1,25 @@
-# RudraAnvil
+# Rudra
 
 > **Rudra** (रुद्र) — The fierce, storm-like form of Shiva; the howler/roarer
 > **Anvil** — The blacksmith's forge where raw metal is hammered into perfection
 >
 > *The roaring storm that hammers and purifies code*
 
-**RudraAnvil** is an autonomous coding agent CLI that helps you build, debug, and maintain software projects. It uses AI (via Ollama) to understand your requests, plan the work, and execute it—all while you stay in control.
+**Rudra** is an autonomous coding agent CLI that helps you build, debug, and maintain software projects. It uses AI (via Ollama) to understand your requests, plan the work, and execute it—all while you stay in control.
 
 Just describe what you want:
 
 ```bash
-rudraanvil "Build a FastAPI app with JWT authentication"
+rudra "Build a FastAPI app with JWT authentication"
 ```
 
-No need to pick a subcommand. RudraAnvil reads your intent and acts.
+No need to pick a subcommand. Rudra reads your intent and acts.
 
 ---
 
 ## Table of Contents
 
-- [What is RudraAnvil?](#what-is-rudraanvil)
+- [What is Rudra?](#what-is-rudra)
 - [Features](#features)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
@@ -43,9 +43,9 @@ No need to pick a subcommand. RudraAnvil reads your intent and acts.
 
 ---
 
-## What is RudraAnvil?
+## What is Rudra?
 
-RudraAnvil is a **CLI-based autonomous coding agent** that acts as your AI pair programmer. Unlike simple code generators, it:
+Rudra is a **CLI-based autonomous coding agent** that acts as your AI pair programmer. Unlike simple code generators, it:
 
 - **Understands context** — Scans your existing project before making changes
 - **Plans before acting** — Creates a dynamic checklist and works through it systematically
@@ -60,12 +60,12 @@ Think of it as having a tireless developer who can work on your codebase while y
 
 | Task | Command |
 |------|---------|
-| Create a new FastAPI app from scratch | `rudraanvil "Build a FastAPI app with JWT auth and PostgreSQL"` |
-| Add a feature to existing code | `rudraanvil "Add pagination to the todos endpoint"` |
-| Fix a bug | `rudraanvil "Login returns 500 when password is wrong"` |
-| Have an ongoing conversation | `rudraanvil` (interactive mode) |
-| Review code for security issues | `rudraanvil review --focus security` |
-| Make a targeted file edit | `rudraanvil edit app/main.py "Add CORS middleware"` |
+| Create a new FastAPI app from scratch | `rudra "Build a FastAPI app with JWT auth and PostgreSQL"` |
+| Add a feature to existing code | `rudra "Add pagination to the todos endpoint"` |
+| Fix a bug | `rudra "Login returns 500 when password is wrong"` |
+| Have an ongoing conversation | `rudra` (interactive mode) |
+| Review code for security issues | `rudra review --focus security` |
+| Make a targeted file edit | `rudra edit app/main.py "Add CORS middleware"` |
 
 ---
 
@@ -73,8 +73,8 @@ Think of it as having a tireless developer who can work on your codebase while y
 
 | Feature | Description |
 |---------|-------------|
-| **Direct Prompt** | Just run `rudraanvil "your task"` — no subcommand needed |
-| **Interactive REPL** | Run `rudraanvil` with no args for a persistent chat session |
+| **Direct Prompt** | Just run `rudra "your task"` — no subcommand needed |
+| **Interactive REPL** | Run `rudra` with no args for a persistent chat session |
 | **Auto Intent Detection** | The LLM understands whether to build, fix, edit, or explain |
 | **Persistent Sessions** | Checkpoints let you resume exactly where you left off |
 | **Project Context** | Scans your project tree and respects your tech stack |
@@ -93,8 +93,8 @@ Think of it as having a tireless developer who can work on your codebase while y
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/archish/RudraAnvil.git
-cd RudraAnvil
+git clone https://github.com/archish/Rudra.git
+cd Rudra
 ```
 
 ### Step 2: Choose Your Installation Method
@@ -115,11 +115,11 @@ pipx ensurepath
 # Restart your terminal or run:
 source ~/.bashrc
 
-# Install RudraAnvil in editable mode
+# Install Rudra in editable mode
 pipx install -e .
 
 # Verify installation
-rudraanvil --version
+rudra --version
 ```
 
 **On macOS/Other Systems:**
@@ -130,11 +130,11 @@ pip install --user pipx
 pipx ensurepath
 # Restart your terminal
 
-# Install RudraAnvil
+# Install Rudra
 pipx install -e .
 
 # Verify installation
-rudraanvil --version
+rudra --version
 ```
 
 Benefits of pipx:
@@ -156,17 +156,17 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 pip install -e .
 
 # Verify installation
-rudraanvil --version
+rudra --version
 ```
 
 > **Note:** With venv, you must activate the environment in each new terminal session:
 > ```bash
-> source ~/path/to/RudraAnvil/.venv/bin/activate
+> source ~/path/to/Rudra/.venv/bin/activate
 > ```
 
 ### Step 3: Set Up Ollama
 
-RudraAnvil requires Ollama to be running with the appropriate model:
+Rudra requires Ollama to be running with the appropriate model:
 
 ```bash
 # Start Ollama server (in a separate terminal)
@@ -195,11 +195,11 @@ Test your installation:
 
 ```bash
 # Check version
-rudraanvil --version
+rudra --version
 
 # Try a simple task
 cd ~/my-test-project
-rudraanvil "Create a hello world Python script"
+rudra "Create a hello world Python script"
 ```
 
 ---
@@ -211,10 +211,10 @@ rudraanvil "Create a hello world Python script"
 cd my-project
 
 # Run a task directly
-rudraanvil "Create a Flask REST API with SQLite for a todo app"
+rudra "Create a Flask REST API with SQLite for a todo app"
 
 # Or start interactive mode for ongoing work
-rudraanvil
+rudra
 ```
 
 ---
@@ -223,13 +223,13 @@ rudraanvil
 
 ### Direct Prompt (Recommended)
 
-The simplest way to use RudraAnvil — just describe what you want:
+The simplest way to use Rudra — just describe what you want:
 
 ```bash
-rudraanvil "your task or question here"
+rudra "your task or question here"
 ```
 
-RudraAnvil will automatically determine the right approach:
+Rudra will automatically determine the right approach:
 - If you're asking it to **create or build** something, it will plan and write files
 - If you're asking it to **fix** something, it will diagnose and repair
 - If you're asking it to **edit** something, it will make targeted changes
@@ -239,19 +239,19 @@ RudraAnvil will automatically determine the right approach:
 
 ```bash
 # Build something new
-rudraanvil "Create a FastAPI app with JWT authentication and PostgreSQL"
+rudra "Create a FastAPI app with JWT authentication and PostgreSQL"
 
 # Add a feature
-rudraanvil "Add rate limiting to all API endpoints using slowapi"
+rudra "Add rate limiting to all API endpoints using slowapi"
 
 # Fix a bug
-rudraanvil "The login endpoint returns 500 when the password is wrong"
+rudra "The login endpoint returns 500 when the password is wrong"
 
 # Ask about the code
-rudraanvil "Explain how the authentication middleware works"
+rudra "Explain how the authentication middleware works"
 
 # Refactor
-rudraanvil "Refactor the database module to use SQLAlchemy async"
+rudra "Refactor the database module to use SQLAlchemy async"
 ```
 
 **Common options:**
@@ -265,23 +265,23 @@ rudraanvil "Refactor the database module to use SQLAlchemy async"
 
 ```bash
 # Work on a different directory
-rudraanvil "Add tests for the auth module" --project-dir ~/projects/myapp
+rudra "Add tests for the auth module" --project-dir ~/projects/myapp
 
 # Preview without writing
-rudraanvil "Add email verification" --dry-run
+rudra "Add email verification" --dry-run
 
 # Show detailed output
-rudraanvil "Refactor the user model" --verbose
+rudra "Refactor the user model" --verbose
 ```
 
 ---
 
 ### Interactive Mode
 
-Run `rudraanvil` with no arguments to enter an interactive REPL — useful for ongoing work where you want to have a back-and-forth conversation with the agent.
+Run `rudra` with no arguments to enter an interactive REPL — useful for ongoing work where you want to have a back-and-forth conversation with the agent.
 
 ```bash
-rudraanvil
+rudra
 ```
 
 The agent remembers context across messages within the session. Use this when:
@@ -292,22 +292,22 @@ The agent remembers context across messages within the session. Use this when:
 **Example session:**
 
 ```
-$ rudraanvil
-RudraAnvil — Interactive mode
+$ rudra
+Rudra — Interactive mode
 Path: /home/user/my-project
 
-rudraanvil> Add pagination to the GET /todos endpoint, 20 per page
+rudra> Add pagination to the GET /todos endpoint, 20 per page
 → Planning...
 → Working on: Add pagination parameters
 → Working on: Update query logic
 ✓ Done
 
-rudraanvil> Tests are failing now — please fix
+rudra> Tests are failing now — please fix
 → Analyzing test failures...
 → Found issue in test_todos.py
 ✓ Fixed
 
-rudraanvil> /tree
+rudra> /tree
 src/
 ├── app/
 │   ├── main.py
@@ -316,7 +316,7 @@ src/
 └── tests/
     └── test_todos.py
 
-rudraanvil> /exit
+rudra> /exit
 Goodbye!
 ```
 
@@ -334,13 +334,13 @@ Goodbye!
 For users who want precise control, all original subcommands are still available. These are useful when you want to:
 - Guarantee a specific mode (e.g., always `--dry-run` for a review)
 - Use mode-specific flags (e.g., `--focus` for `review`, `--file` for `fix`)
-- Script RudraAnvil in CI or shell pipelines
+- Script Rudra in CI or shell pipelines
 
 ```bash
-rudraanvil build "Create a FastAPI app"
-rudraanvil fix "Login returns 500" --file app/auth.py
-rudraanvil edit app/main.py "Add CORS middleware"
-rudraanvil review --focus security
+rudra build "Create a FastAPI app"
+rudra fix "Login returns 500" --file app/auth.py
+rudra edit app/main.py "Add CORS middleware"
+rudra review --focus security
 ```
 
 See [Subcommand Reference](#subcommand-reference) below for full details.
@@ -354,7 +354,7 @@ See [Subcommand Reference](#subcommand-reference) below for full details.
 Create new projects or enhance existing ones.
 
 ```bash
-rudraanvil build "Your task description"
+rudra build "Your task description"
 ```
 
 | Flag | Description |
@@ -368,23 +368,23 @@ rudraanvil build "Your task description"
 
 ```bash
 # Create a new project
-rudraanvil build "Build a FastAPI app with JWT authentication, PostgreSQL, and CRUD endpoints"
+rudra build "Build a FastAPI app with JWT authentication, PostgreSQL, and CRUD endpoints"
 
 # Enhance existing project
-rudraanvil build "Add rate limiting to all endpoints using slowapi"
+rudra build "Add rate limiting to all endpoints using slowapi"
 
 # Preview without writing
-rudraanvil build "Add email verification" --dry-run
+rudra build "Add email verification" --dry-run
 ```
 
 ---
 
 ### chat
 
-Interactive REPL for ongoing development. Equivalent to running `rudraanvil` with no arguments, but scoped to the `chat` system prompt.
+Interactive REPL for ongoing development. Equivalent to running `rudra` with no arguments, but scoped to the `chat` system prompt.
 
 ```bash
-rudraanvil chat
+rudra chat
 ```
 
 | Command | Action |
@@ -399,7 +399,7 @@ rudraanvil chat
 Debug and fix a specific issue. More targeted than `build` — focuses on diagnosing and repairing a single problem.
 
 ```bash
-rudraanvil fix "Description of the issue"
+rudra fix "Description of the issue"
 ```
 
 | Flag | Description |
@@ -411,10 +411,10 @@ rudraanvil fix "Description of the issue"
 
 ```bash
 # General fix
-rudraanvil fix "JWT token refresh returns 401 unauthorized"
+rudra fix "JWT token refresh returns 401 unauthorized"
 
 # Scoped to a file
-rudraanvil fix "Login validation not working" --file app/routers/auth.py
+rudra fix "Login validation not working" --file app/routers/auth.py
 ```
 
 ---
@@ -424,7 +424,7 @@ rudraanvil fix "Login validation not working" --file app/routers/auth.py
 Make a targeted modification to a specific file. Use this for surgical edits instead of full task runs.
 
 ```bash
-rudraanvil edit <file> "What to change"
+rudra edit <file> "What to change"
 ```
 
 | Flag | Description |
@@ -434,12 +434,12 @@ rudraanvil edit <file> "What to change"
 **Examples:**
 
 ```bash
-rudraanvil edit app/routers/todos.py "Add limit and offset query parameters for pagination"
+rudra edit app/routers/todos.py "Add limit and offset query parameters for pagination"
 
-rudraanvil edit models/user.py "Add email_verified boolean field with default False"
+rudra edit models/user.py "Add email_verified boolean field with default False"
 
 # Preview first
-rudraanvil edit main.py "Add CORS middleware" --preview
+rudra edit main.py "Add CORS middleware" --preview
 ```
 
 ---
@@ -449,7 +449,7 @@ rudraanvil edit main.py "Add CORS middleware" --preview
 Analyze code for quality, security, and best practices. Outputs a report — does not modify any files.
 
 ```bash
-rudraanvil review
+rudra review
 ```
 
 | Flag | Description |
@@ -460,13 +460,13 @@ rudraanvil review
 
 ```bash
 # Full review
-rudraanvil review
+rudra review
 
 # Security-focused
-rudraanvil review --focus security
+rudra review --focus security
 
 # Performance audit
-rudraanvil review --focus performance
+rudra review --focus performance
 ```
 
 **Output includes:**
@@ -483,32 +483,32 @@ rudraanvil review --focus performance
 Propose improvements without applying them. Like `build`, but outputs suggestions and code snippets instead of writing files.
 
 ```bash
-rudraanvil suggest "What improvement to consider"
+rudra suggest "What improvement to consider"
 ```
 
 **Examples:**
 
 ```bash
-rudraanvil suggest "Make the API more secure against SQL injection"
+rudra suggest "Make the API more secure against SQL injection"
 
-rudraanvil suggest "Refactor the authentication module for better testability"
+rudra suggest "Refactor the authentication module for better testability"
 
-rudraanvil suggest "Add caching to improve performance"
+rudra suggest "Add caching to improve performance"
 ```
 
 ---
 
 ### resume
 
-RudraAnvil automatically saves checkpoints after every session. Resuming is automatic — just run any command in the same project directory and the agent continues from where it left off.
+Rudra automatically saves checkpoints after every session. Resuming is automatic — just run any command in the same project directory and the agent continues from where it left off.
 
 The `resume` command shows the current session status:
 
 ```bash
-rudraanvil resume
+rudra resume
 ```
 
-Session state is stored in `.rudraanvil/checkpoints.db` and identified by a stable session ID in `.rudraanvil/session_id.txt`.
+Session state is stored in `.rudra/checkpoints.db` and identified by a stable session ID in `.rudra/session_id.txt`.
 
 ---
 
@@ -517,7 +517,7 @@ Session state is stored in `.rudraanvil/checkpoints.db` and identified by a stab
 Monitor your project for changes in real-time. Watches files and provides instant feedback (linting, syntax checks).
 
 ```bash
-rudraanvil watch
+rudra watch
 ```
 
 | Flag | Description |
@@ -535,14 +535,14 @@ Press `Ctrl+C` to stop watching.
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      User Request                           │
-│          rudraanvil "Build a FastAPI app with JWT"          │
+│          rudra "Build a FastAPI app with JWT"          │
 └─────────────────────────┬───────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                    CLI Layer (cli.py)                        │
 │  • Parses prompt or subcommand                              │
-│  • Loads project context (.rudraanvil/project.json)         │
+│  • Loads project context (.rudra/project.json)         │
 │  • Prompts for tech stack if not yet configured             │
 └─────────────────────────┬───────────────────────────────────┘
                           │
@@ -577,23 +577,23 @@ Press `Ctrl+C` to stop watching.
 
 1. **Request** — You give a task via prompt or subcommand
 2. **Context** — Agent reads the project file tree and your tech stack config
-3. **Planning** — Agent calls `update_plan()` to create a checklist in `.rudraanvil/PLAN.md`
+3. **Planning** — Agent calls `update_plan()` to create a checklist in `.rudra/PLAN.md`
 4. **Execution** — Agent works through the plan, using file tools to read/write/edit
 5. **Verification** — Agent reads back files it wrote to confirm correctness
 6. **Checkpointing** — Progress is saved to SQLite after every step; interrupted sessions resume automatically
 
 ### Session Persistence
 
-RudraAnvil uses a stable session ID (derived from your project path) to maintain continuity across CLI invocations. Every `build`, `fix`, `edit`, or interactive session in the same directory shares the same checkpoint thread. This means:
+Rudra uses a stable session ID (derived from your project path) to maintain continuity across CLI invocations. Every `build`, `fix`, `edit`, or interactive session in the same directory shares the same checkpoint thread. This means:
 
 - The agent remembers what it did in previous sessions
 - You never lose progress if a run is interrupted
-- `rudraanvil resume` shows you the current session status
+- `rudra resume` shows you the current session status
 
-Session files are stored in `.rudraanvil/` inside your project directory. Add this to `.gitignore`:
+Session files are stored in `.rudra/` inside your project directory. Add this to `.gitignore`:
 
 ```
-.rudraanvil/
+.rudra/
 ```
 
 ---
@@ -624,7 +624,7 @@ USE_DUCKDUCKGO=true   # Fallback search
 
 ### Project Context
 
-On first use in a project directory, RudraAnvil will ask you for your tech stack:
+On first use in a project directory, Rudra will ask you for your tech stack:
 
 ```
 Project Context Required
@@ -634,7 +634,7 @@ Database (optional): PostgreSQL
 Any additional architecture rules? (optional):
 ```
 
-This is saved to `.rudraanvil/project.json` and used in every subsequent session to ensure generated code matches your stack. You can delete this file to re-configure.
+This is saved to `.rudra/project.json` and used in every subsequent session to ensure generated code matches your stack. You can delete this file to re-configure.
 
 ---
 
@@ -646,10 +646,10 @@ Since you installed with `-e` (editable mode), code changes are reflected **imme
 
 ```bash
 # 1. Edit any source file
-vim src/rudraanvil/cli.py
+vim src/rudra/cli.py
 
 # 2. Test immediately — changes are live
-rudraanvil --version
+rudra --version
 ```
 
 ### When to Reinstall
@@ -660,7 +660,7 @@ You **only** need to reinstall if you modify:
 
 ```bash
 # With pipx
-cd ~/path/to/RudraAnvil
+cd ~/path/to/Rudra
 pipx install -e . --force
 
 # With venv
@@ -678,7 +678,7 @@ pipx install -e . --force  # or pip install -e .
 
 ```bash
 # With pipx (from anywhere)
-cd ~/path/to/RudraAnvil
+cd ~/path/to/Rudra
 pytest
 
 # With venv (activate first)
@@ -690,7 +690,7 @@ pytest
 
 ## Troubleshooting
 
-### "command not found: rudraanvil"
+### "command not found: rudra"
 
 **With pipx:**
 ```bash
@@ -701,8 +701,8 @@ pipx list         # verify installation
 
 **With venv:**
 ```bash
-source ~/path/to/RudraAnvil/.venv/bin/activate
-which rudraanvil
+source ~/path/to/Rudra/.venv/bin/activate
+which rudra
 ```
 
 ### "externally-managed-environment" error
@@ -713,7 +713,7 @@ Common on Debian/Ubuntu. Fix:
 sudo apt install pipx
 pipx ensurepath
 source ~/.bashrc
-cd ~/path/to/RudraAnvil
+cd ~/path/to/Rudra
 pipx install -e .
 ```
 
@@ -757,11 +757,11 @@ Check installation mode:
 ```bash
 # With pipx
 pipx list --verbose
-# Should show "editable" next to rudraanvil
+# Should show "editable" next to rudra
 
 # With venv
-pip show rudraanvil
-# Should show: Editable project location: /path/to/RudraAnvil
+pip show rudra
+# Should show: Editable project location: /path/to/Rudra
 ```
 
 If not editable, reinstall:

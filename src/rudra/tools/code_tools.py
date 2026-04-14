@@ -1,6 +1,6 @@
 """Code execution tools for agents — with scratchpad log offloading.
 
-run_command writes full stdout/stderr to .rudraanvil/logs/cmd_output.txt
+run_command writes full stdout/stderr to .rudra/logs/cmd_output.txt
 and returns only a short summary to the agent. This prevents large command
 outputs (pip install, pytest, tsc, etc.) from bloating the context window.
 
@@ -21,7 +21,7 @@ _PREVIEW_CHARS = 300
 def create_code_tools(vfs, timeout: int = 60) -> list:
     """Create code execution tools with output scratchpad offloading.
 
-    Full stdout/stderr is written to .rudraanvil/logs/cmd_output.txt.
+    Full stdout/stderr is written to .rudra/logs/cmd_output.txt.
     Only a short summary is returned to the agent.
 
     Args:
@@ -36,7 +36,7 @@ def create_code_tools(vfs, timeout: int = 60) -> list:
     def run_command(command: str) -> str:
         """Run a shell command anchored to the project root directory.
 
-        Full stdout/stderr is saved to .rudraanvil/logs/cmd_output.txt.
+        Full stdout/stderr is saved to .rudra/logs/cmd_output.txt.
         Only a short preview is returned here — use read_file or grep_in_file
         to inspect the full output.
 
@@ -56,7 +56,7 @@ def create_code_tools(vfs, timeout: int = 60) -> list:
             Short summary: exit status + path to full log.
         """
         project_root: Path = vfs.root_path
-        log_dir = project_root / ".rudraanvil" / "logs"
+        log_dir = project_root / ".rudra" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "cmd_output.txt"
 
@@ -83,16 +83,16 @@ def create_code_tools(vfs, timeout: int = 60) -> list:
 
             return (
                 f"Command {status} (exit {result.returncode}). "
-                f"Full output → .rudraanvil/logs/cmd_output.txt\n"
+                f"Full output → .rudra/logs/cmd_output.txt\n"
                 f"Preview: {preview}\n"
-                f"Use read_file('.rudraanvil/logs/cmd_output.txt') or "
+                f"Use read_file('.rudra/logs/cmd_output.txt') or "
                 f"grep_in_file to inspect errors."
             )
 
         except subprocess.TimeoutExpired:
             msg = f"Command timed out after {timeout}s: {command}"
             log_file.write_text(msg, encoding="utf-8")
-            return f"TIMEOUT: {msg}. See .rudraanvil/logs/cmd_output.txt"
+            return f"TIMEOUT: {msg}. See .rudra/logs/cmd_output.txt"
 
         except Exception as exc:
             msg = f"Error executing '{command}': {exc}"

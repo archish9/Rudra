@@ -11,7 +11,7 @@ coding-files/
 ├── auth/
 │   ├── utils.py         (50 lines)  ✅ Password hashing, JWT create/verify, OAuth2 scheme
 │   └── router.py        (55 lines)  ✅ Login endpoint, /users/me, proper error handling
-├── .rudraanvil/                     ← State files (PLAN.md, checkpoints.db, etc.)
+├── .rudra/                     ← State files (PLAN.md, checkpoints.db, etc.)
 └── ❌ app.py            MISSING     ← The main entry point!
     ❌ database.py       MISSING     ← The database connection setup!
 ```
@@ -76,9 +76,9 @@ The model interpreted `database/models` and `auth/utils` as **directory/file pat
 
 ---
 
-## Problem 3 — "Files created: 7" includes .rudraanvil state files
+## Problem 3 — "Files created: 7" includes .rudra state files
 
-The count comes from [main_agent.py:377-383](file:///home/a/code/ai-ml/agent/RudraAnvil/src/rudraanvil/agent/main_agent.py#L377-L383):
+The count comes from [main_agent.py:377-383](file:///home/a/code/ai-ml/agent/Rudra/src/rudra/agent/main_agent.py#L377-L383):
 
 ```python
 new_vfs = VirtualFileSystem(self.context.project_path)
@@ -94,10 +94,10 @@ It scans the entire project directory and counts ALL new files, including:
 3. `database/models.py` ← actual code file
 4. `auth/utils.py` ← actual code file
 5. `auth/router.py` ← actual code file
-6. `.rudraanvil/PLAN.md` ← state file, not code!
-7. `.rudraanvil/tech_stack.md` ← state file, not code!
+6. `.rudra/PLAN.md` ← state file, not code!
+7. `.rudra/tech_stack.md` ← state file, not code!
 
-So **5 actual code files + 2 state files = 7**. The VFS `_is_ignored` pattern for `.rudraanvil/*` should filter these out, but `load_from_disk()` may not be excluding them consistently from the count.
+So **5 actual code files + 2 state files = 7**. The VFS `_is_ignored` pattern for `.rudra/*` should filter these out, but `load_from_disk()` may not be excluding them consistently from the count.
 
 ---
 
@@ -119,7 +119,7 @@ The entire PLAN.md is still **all unchecked** — no item was marked `[x]`. The 
 | **1** | Subagent stops early — forgets remaining files as context grows | **Inject remainder list into each write_file result** (like ContinueAfterWriteMiddleware did, but simpler — just: "Files still to write: app.py, database.py") |
 | **2** | Main agent doesn't verify completeness after task() returns | **Add post-task verification**: read plan, check if all items exist on disk, re-run subagent for missing files |
 | **3** | Subagent deviates from planned filenames | **Include explicit filenames in the subagent system prompt**, not just examples in WRITE ORDER. Or: don't mandate plan filenames at all — let the subagent decide its own structure |
-| **4** | File count includes .rudraanvil/ state files | **Filter `.rudraanvil/` from `files_created` count** |
+| **4** | File count includes .rudra/ state files | **Filter `.rudra/` from `files_created` count** |
 | **5** | Subagent prompt's WRITE ORDER example looks like directory paths | Remove `database/models → auth/utils` from the template — let the model decide structure based on the task |
 
 ### Most impactful fix: Post-task verification in the main agent

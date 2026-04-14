@@ -1,21 +1,21 @@
-# RudraAnvil: Filesystem Context Management — Full Implementation Plan
+# Rudra: Filesystem Context Management — Full Implementation Plan
 
 ## Project Overview
 
-**Repo:** `/home/a/code/ai-ml/agent/RudraAnvil`
-**Source root:** `src/rudraanvil/`
+**Repo:** `/home/a/code/ai-ml/agent/Rudra`
+**Source root:** `src/rudra/`
 
-**Goal:** Replace all in-memory/system-prompt context patterns with filesystem-backed equivalents inside the `.rudraanvil/` directory. This prevents context window bloat, enables infinite planning memory, and creates the foundation for future MCP server integration.
+**Goal:** Replace all in-memory/system-prompt context patterns with filesystem-backed equivalents inside the `.rudra/` directory. This prevents context window bloat, enables infinite planning memory, and creates the foundation for future MCP server integration.
 
 **Core principle (from `filesystem-context.txt`):** The filesystem IS the memory. The agent reads/writes files instead of keeping state in its context window.
 
 ---
 
-## The `.rudraanvil/` Directory (Canonical Layout After All Phases)
+## The `.rudra/` Directory (Canonical Layout After All Phases)
 
 ```
 <project_root>/
-└── .rudraanvil/
+└── .rudra/
     ├── project.json          # Already exists — ProjectContext (tech stack config)
     ├── PLAN.md               # NEW Phase 1 — agent's living todo list (replaces write_todos)
     ├── tech_stack.md         # NEW Phase 2 — human-readable tech context for the agent
@@ -32,13 +32,13 @@
 The deepagents built-in `write_todos` tool stores the agent's plan directly in the LLM's **message history**. A 30-item plan = 30 objects permanently living in the context window for the entire session. This bloats every subsequent API call.
 
 ### Solution
-Replace `write_todos` with a custom `update_plan(plan_markdown: str)` tool that writes a markdown checklist to `.rudraanvil/PLAN.md`. The agent reads its next step via `read_file` and checks off items with `edit_file`. The plan never lives in the context window — only the agent's thought about what it's currently doing does.
+Replace `write_todos` with a custom `update_plan(plan_markdown: str)` tool that writes a markdown checklist to `.rudra/PLAN.md`. The agent reads its next step via `read_file` and checks off items with `edit_file`. The plan never lives in the context window — only the agent's thought about what it's currently doing does.
 
 ### Files to Create / Modify
 
 ---
 
-#### [NEW] `src/rudraanvil/tools/planning_tools.py`
+#### [NEW] `src/rudra/tools/planning_tools.py`
 
 Create this file from scratch:
 
@@ -53,11 +53,11 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import tool
 
 if TYPE_CHECKING:
-    from rudraanvil.filesystem.virtual_fs import VirtualFileSystem
+    from rudra.filesystem.virtual_fs import VirtualFileSystem
 
 
 def create_planning_tools(vfs: VirtualFileSystem) -> list:
-    """Create planning tools that write to .rudraanvil/PLAN.md.
+    """Create planning tools that write to .rudra/PLAN.md.
 
     Args:
         vfs: The virtual filesystem anchored to the project root
@@ -68,13 +68,13 @@ def create_planning_tools(vfs: VirtualFileSystem) -> list:
 
     @tool
     def update_plan(plan_markdown: str) -> str:
-        """Write or overwrite the agent's plan to .rudraanvil/PLAN.md.
+        """Write or overwrite the agent's plan to .rudra/PLAN.md.
 
         Use this INSTEAD of write_todos to track your task checklist.
         Write a Markdown checklist. Use `- [ ] task` for pending items
         and `- [x] task` for completed items.
 
-        After writing the plan, use read_file('.rudraanvil/PLAN.md') to
+        After writing the plan, use read_file('.rudra/PLAN.md') to
         check your next pending item.
 
         Args:
@@ -83,22 +83,22 @@ def create_planning_tools(vfs: VirtualFileSystem) -> list:
         Returns:
             Confirmation message
         """
-        plan_path = ".rudraanvil/PLAN.md"
+        plan_path = ".rudra/PLAN.md"
         vfs.write_file(plan_path, plan_markdown)
         return (
             f"Plan written to {plan_path}. "
-            "Use read_file('.rudraanvil/PLAN.md') to review it. "
+            "Use read_file('.rudra/PLAN.md') to review it. "
             "Use edit_file to check off items as you complete them."
         )
 
     @tool
     def read_plan() -> str:
-        """Read the current plan from .rudraanvil/PLAN.md.
+        """Read the current plan from .rudra/PLAN.md.
 
         Returns:
             Current plan content, or a message if no plan exists yet
         """
-        content = vfs.read_file(".rudraanvil/PLAN.md")
+        content = vfs.read_file(".rudra/PLAN.md")
         if content is None:
             return "No plan found. Use update_plan() to create one first."
         return content
@@ -108,7 +108,7 @@ def create_planning_tools(vfs: VirtualFileSystem) -> list:
 
 ---
 
-#### [MODIFY] `src/rudraanvil/tools/__init__.py`
+#### [MODIFY] `src/rudra/tools/__init__.py`
 
 **Current content:**
 ```python
@@ -118,21 +118,21 @@ def create_planning_tools(vfs: VirtualFileSystem) -> list:
 **Change:** Add export for `create_planning_tools`.
 
 ```python
-from rudraanvil.tools.code_tools import create_code_tools
-from rudraanvil.tools.file_tools import create_file_tools
-from rudraanvil.tools.planning_tools import create_planning_tools
+from rudra.tools.code_tools import create_code_tools
+from rudra.tools.file_tools import create_file_tools
+from rudra.tools.planning_tools import create_planning_tools
 
 __all__ = ["create_code_tools", "create_file_tools", "create_planning_tools"]
 ```
 
 ---
 
-#### [MODIFY] `src/rudraanvil/agent/main_agent.py`
+#### [MODIFY] `src/rudra/agent/main_agent.py`
 
 **Change 1 — Import planning tools** (top of file, near other imports):
 ```python
-# ADD this import alongside `from rudraanvil.tools import create_code_tools`
-from rudraanvil.tools.planning_tools import create_planning_tools
+# ADD this import alongside `from rudra.tools import create_code_tools`
+from rudra.tools.planning_tools import create_planning_tools
 ```
 
 **Change 2 — Add planning tools to custom_tools** (around line 603):
@@ -152,9 +152,9 @@ In the `base_prompt` string, replace this line:
 ```
 With:
 ```
-- Plan and decompose tasks using the update_plan tool (writes to .rudraanvil/PLAN.md)
-- Read your current plan with read_plan() or read_file('.rudraanvil/PLAN.md')
-- Check off items with edit_file('.rudraanvil/PLAN.md', '- [ ] <task>', '- [x] <task>')
+- Plan and decompose tasks using the update_plan tool (writes to .rudra/PLAN.md)
+- Read your current plan with read_plan() or read_file('.rudra/PLAN.md')
+- Check off items with edit_file('.rudra/PLAN.md', '- [ ] <task>', '- [x] <task>')
 - NEVER use write_todos — it bloats context. Always use update_plan instead.
 ```
 
@@ -176,8 +176,8 @@ Also remove the `write_todos exact schema` block (lines 114–120) entirely — 
 
 ### Phase 1 Verification
 
-1. Run: `cd /home/a/code/ai-ml/agent/RudraAnvil && rudraanvil build "Create a hello world Python script" --project-dir /tmp/test_phase1`
-2. After completion, check: `cat /tmp/test_phase1/.rudraanvil/PLAN.md`
+1. Run: `cd /home/a/code/ai-ml/agent/Rudra && rudra build "Create a hello world Python script" --project-dir /tmp/test_phase1`
+2. After completion, check: `cat /tmp/test_phase1/.rudra/PLAN.md`
 3. **Expected:** A markdown checklist exists with `- [x]` items checked off.
 4. **Expected:** Agent logs show calls to `update_plan` but NOT `write_todos`.
 
@@ -206,19 +206,19 @@ if project_context and project_context.primary_language:
 ```
 
 ### Solution
-Write `tech_stack.md` to disk in `cli.py` before the agent starts. Replace all context injections with a single instruction: *"Read `.rudraanvil/tech_stack.md` to understand the architecture."*
+Write `tech_stack.md` to disk in `cli.py` before the agent starts. Replace all context injections with a single instruction: *"Read `.rudra/tech_stack.md` to understand the architecture."*
 
 ### Files to Modify
 
 ---
 
-#### [MODIFY] `src/rudraanvil/cli.py`
+#### [MODIFY] `src/rudra/cli.py`
 
 **Add a helper function** after `get_or_prompt_project_context()` (after line 78):
 
 ```python
 def write_tech_stack_file(project_path: Path, context: ProjectContext) -> None:
-    """Write project tech stack context to .rudraanvil/tech_stack.md.
+    """Write project tech stack context to .rudra/tech_stack.md.
     
     This offloads architecture context from the system prompt to a file,
     reducing token usage on every LLM call.
@@ -227,8 +227,8 @@ def write_tech_stack_file(project_path: Path, context: ProjectContext) -> None:
         project_path: Root directory of the project
         context: The project context to serialize
     """
-    rudraanvil_dir = project_path / ".rudraanvil"
-    rudraanvil_dir.mkdir(parents=True, exist_ok=True)
+    rudra_dir = project_path / ".rudra"
+    rudra_dir.mkdir(parents=True, exist_ok=True)
     
     lines = [
         "# Project Tech Stack\n",
@@ -241,9 +241,9 @@ def write_tech_stack_file(project_path: Path, context: ProjectContext) -> None:
         lines.append("## Architecture Rules & Additional Context\n\n")
         lines.append(context.additional_context + "\n")
     
-    tech_stack_path = rudraanvil_dir / "tech_stack.md"
+    tech_stack_path = rudra_dir / "tech_stack.md"
     tech_stack_path.write_text("".join(lines), encoding="utf-8")
-    console.print(f"[dim]✓ Tech stack context written to .rudraanvil/tech_stack.md[/dim]")
+    console.print(f"[dim]✓ Tech stack context written to .rudra/tech_stack.md[/dim]")
 ```
 
 **Call this function in the `build` command**, right after loading context (after line 127):
@@ -267,7 +267,7 @@ Also call `write_tech_stack_file` in the **`chat` command** (after line 185) sim
 
 ---
 
-#### [MODIFY] `src/rudraanvil/agent/main_agent.py`
+#### [MODIFY] `src/rudra/agent/main_agent.py`
 
 **Change 1 — Remove context injection from main system prompt** (lines 79–88):
 
@@ -285,7 +285,7 @@ Project Tech Stack Context:
 ```python
 # ADD this static instruction instead:
 base_prompt += """
-IMPORTANT: Before writing any code, use read_file('.rudraanvil/tech_stack.md') to understand 
+IMPORTANT: Before writing any code, use read_file('.rudra/tech_stack.md') to understand 
 the required tech stack, frameworks, and architecture rules for this project.
 Always strictly follow what is specified in that file.
 """
@@ -303,7 +303,7 @@ if project_context and project_context.primary_language:
 ```python
 subagent_prompt += (
     "\n\nIMPORTANT: Before writing any code, use read_file to read "
-    "'.rudraanvil/tech_stack.md' — it contains the PRIMARY LANGUAGE, FRAMEWORKS, "
+    "'.rudra/tech_stack.md' — it contains the PRIMARY LANGUAGE, FRAMEWORKS, "
     "and ARCHITECTURE RULES you MUST follow. Failure to read this file will result "
     "in incorrect code."
 )
@@ -319,17 +319,17 @@ Do NOT let the subagent default to an incorrect language.
 
 # REPLACE WITH:
 IMPORTANT: When delegating to the `general-purpose` subagent, include in your instructions
-a reminder that it MUST read `.rudraanvil/tech_stack.md` before writing code.
+a reminder that it MUST read `.rudra/tech_stack.md` before writing code.
 ```
 
 ---
 
 ### Phase 2 Verification
 
-1. Run `rudraanvil build "create a flask REST API" --project-dir /tmp/test_phase2`
-2. Check: `cat /tmp/test_phase2/.rudraanvil/tech_stack.md`
+1. Run `rudra build "create a flask REST API" --project-dir /tmp/test_phase2`
+2. Check: `cat /tmp/test_phase2/.rudra/tech_stack.md`
 3. **Expected:** The file exists with correct language/framework info.
-4. **Expected:** Agent logs show a `read_file` call for `.rudraanvil/tech_stack.md` early in the trace.
+4. **Expected:** Agent logs show a `read_file` call for `.rudra/tech_stack.md` early in the trace.
 5. **Expected:** The string `"Project Tech Stack Context"` does NOT appear in the raw agent messages (can grep the verbose output).
 
 ---
@@ -337,19 +337,19 @@ a reminder that it MUST read `.rudraanvil/tech_stack.md` before writing code.
 ## Phase 3: `run_command` — Scratchpad for Large Tool Outputs
 
 ### Problem
-`src/rudraanvil/tools/code_tools.py` currently returns an empty list — no execution capability exists. When we add `run_command`, naively returning stdout/stderr crashes the context window. A `pip install` log can be 2,000+ lines.
+`src/rudra/tools/code_tools.py` currently returns an empty list — no execution capability exists. When we add `run_command`, naively returning stdout/stderr crashes the context window. A `pip install` log can be 2,000+ lines.
 
 ### Solution
 Implement `run_command` that:
 1. Executes the shell command anchored to `project_path`
-2. Writes **full output** to `.rudraanvil/logs/cmd_output.txt`
+2. Writes **full output** to `.rudra/logs/cmd_output.txt`
 3. Returns **only a 2-line summary** to the agent: exit code + file path
 
 ### Files to Modify
 
 ---
 
-#### [MODIFY] `src/rudraanvil/tools/code_tools.py`
+#### [MODIFY] `src/rudra/tools/code_tools.py`
 
 Replace the entire file:
 
@@ -365,7 +365,7 @@ from typing import TYPE_CHECKING
 from langchain_core.tools import tool
 
 if TYPE_CHECKING:
-    from rudraanvil.filesystem.virtual_fs import VirtualFileSystem
+    from rudra.filesystem.virtual_fs import VirtualFileSystem
 
 # Maximum characters of output to surface directly in the summary
 _PREVIEW_CHARS = 300
@@ -374,7 +374,7 @@ _PREVIEW_CHARS = 300
 def create_code_tools(vfs: VirtualFileSystem, timeout: int = 60) -> list:
     """Create code execution tools with log scratchpad offloading.
 
-    All stdout/stderr is written to .rudraanvil/logs/cmd_output.txt.
+    All stdout/stderr is written to .rudra/logs/cmd_output.txt.
     Only a short summary is returned to the agent to prevent context explosion.
 
     Args:
@@ -389,7 +389,7 @@ def create_code_tools(vfs: VirtualFileSystem, timeout: int = 60) -> list:
     def run_command(command: str) -> str:
         """Run a shell command in the project directory.
 
-        Full output is saved to .rudraanvil/logs/cmd_output.txt.
+        Full output is saved to .rudra/logs/cmd_output.txt.
         Use read_file or grep_file to inspect specific errors.
 
         IMPORTANT: Only use this tool to run safe commands like:
@@ -406,7 +406,7 @@ def create_code_tools(vfs: VirtualFileSystem, timeout: int = 60) -> list:
             Short summary: exit code + path to full log
         """
         project_root = Path(vfs.root_dir)
-        log_dir = project_root / ".rudraanvil" / "logs"
+        log_dir = project_root / ".rudra" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / "cmd_output.txt"
 
@@ -434,16 +434,16 @@ def create_code_tools(vfs: VirtualFileSystem, timeout: int = 60) -> list:
 
             return (
                 f"Command {status} (exit code {result.returncode}). "
-                f"Full output saved to .rudraanvil/logs/cmd_output.txt\n"
+                f"Full output saved to .rudra/logs/cmd_output.txt\n"
                 f"Preview: {preview}\n"
-                f"Use read_file('.rudraanvil/logs/cmd_output.txt') or "
+                f"Use read_file('.rudra/logs/cmd_output.txt') or "
                 f"grep_in_file to analyze the full output."
             )
 
         except subprocess.TimeoutExpired:
             msg = f"Command timed out after {timeout}s: {command}"
             log_file.write_text(msg, encoding="utf-8")
-            return f"TIMEOUT: {msg}. Check .rudraanvil/logs/cmd_output.txt"
+            return f"TIMEOUT: {msg}. Check .rudra/logs/cmd_output.txt"
 
         except Exception as exc:
             msg = f"Error executing command: {exc}"
@@ -483,11 +483,11 @@ def create_code_tools(vfs: VirtualFileSystem, timeout: int = 60) -> list:
     return [run_command, grep_in_file]
 ```
 
-> **Note:** `vfs.root_dir` must be accessible. If `VirtualFileSystem` doesn't expose `root_dir` as a public attribute, look at `src/rudraanvil/filesystem/virtual_fs.py` — the constructor stores the project path; expose it as `self.root_dir = str(root_dir)` if needed.
+> **Note:** `vfs.root_dir` must be accessible. If `VirtualFileSystem` doesn't expose `root_dir` as a public attribute, look at `src/rudra/filesystem/virtual_fs.py` — the constructor stores the project path; expose it as `self.root_dir = str(root_dir)` if needed.
 
 ---
 
-#### [MODIFY] `src/rudraanvil/agent/main_agent.py`
+#### [MODIFY] `src/rudra/agent/main_agent.py`
 
 **Add `run_command` and `grep_in_file` to main agent's tool list.** These stay on the **main agent only** (not the coding subagent, which should only write files).
 
@@ -499,7 +499,7 @@ No change needed — `create_code_tools` now returns `[run_command, grep_in_file
 
 **Update system prompt** to mention the new tools in `base_prompt` (alongside existing file tools):
 ```
-- Run shell commands with run_command (output is saved to .rudraanvil/logs/cmd_output.txt)
+- Run shell commands with run_command (output is saved to .rudra/logs/cmd_output.txt)
 - Search files and logs with grep_in_file(file_path, pattern)
 ```
 
@@ -509,8 +509,8 @@ No change needed — `create_code_tools` now returns `[run_command, grep_in_file
 
 ### Phase 3 Verification
 
-1. Run: `rudraanvil build "create a python flask app and install dependencies" --project-dir /tmp/test_phase3`
-2. Check: `cat /tmp/test_phase3/.rudraanvil/logs/cmd_output.txt`
+1. Run: `rudra build "create a python flask app and install dependencies" --project-dir /tmp/test_phase3`
+2. Check: `cat /tmp/test_phase3/.rudra/logs/cmd_output.txt`
 3. **Expected:** The file exists with the output of `pip install flask`.
 4. **Expected:** The agent trace shows `run_command` returning a short summary, NOT the full pip output.
 
@@ -521,11 +521,11 @@ No change needed — `create_code_tools` now returns `[run_command, grep_in_file
 > ⚠️ **This is the most complex phase. Implement only when Phases 1–3 are stable.**
 
 ### Problem
-Currently, RudraAnvil's tools are LangChain `@tool` handlers — they only work with deepagents/Ollama. No external MCP client (Claude Desktop, Cursor, Cline) can use them.
+Currently, Rudra's tools are LangChain `@tool` handlers — they only work with deepagents/Ollama. No external MCP client (Claude Desktop, Cursor, Cline) can use them.
 
 ### Solution
 Add a **Model Context Protocol (MCP) server** that:
-- Exposes the `.rudraanvil/` filesystem as **MCP Resources** (read-only, lazy-loaded — not injected into context)
+- Exposes the `.rudra/` filesystem as **MCP Resources** (read-only, lazy-loaded — not injected into context)
 - Re-exposes the existing tools as **MCP Tools**
 - Runs as a subprocess/stdio server that any MCP client can connect to
 
@@ -544,27 +544,27 @@ Install: `pip install mcp`
 
 ---
 
-#### [NEW] `src/rudraanvil/mcp/__init__.py`
+#### [NEW] `src/rudra/mcp/__init__.py`
 
 ```python
-"""MCP server for RudraAnvil."""
+"""MCP server for Rudra."""
 ```
 
 ---
 
-#### [NEW] `src/rudraanvil/mcp/server.py`
+#### [NEW] `src/rudra/mcp/server.py`
 
 ```python
-"""RudraAnvil MCP Server.
+"""Rudra MCP Server.
 
-Exposes RudraAnvil's filesystem context and tools via the Model Context Protocol.
-Run with: python -m rudraanvil.mcp.server --project-dir /path/to/project
+Exposes Rudra's filesystem context and tools via the Model Context Protocol.
+Run with: python -m rudra.mcp.server --project-dir /path/to/project
 
 MCP Resources (read-only, fetched on-demand by clients):
-  rudraanvil://plan           → .rudraanvil/PLAN.md
-  rudraanvil://tech_stack     → .rudraanvil/tech_stack.md
-  rudraanvil://project_tree   → live directory tree
-  rudraanvil://logs/latest    → .rudraanvil/logs/cmd_output.txt
+  rudra://plan           → .rudra/PLAN.md
+  rudra://tech_stack     → .rudra/tech_stack.md
+  rudra://project_tree   → live directory tree
+  rudra://logs/latest    → .rudra/logs/cmd_output.txt
 
 MCP Tools (callable actions):
   update_plan(plan_markdown)
@@ -585,10 +585,10 @@ import mcp.types as types
 from mcp.server import Server, NotificationOptions
 from mcp.server.models import InitializationOptions
 
-from rudraanvil.filesystem import VirtualFileSystem
-from rudraanvil.tools.file_tools import create_file_tools
-from rudraanvil.tools.planning_tools import create_planning_tools
-from rudraanvil.tools.code_tools import create_code_tools
+from rudra.filesystem import VirtualFileSystem
+from rudra.tools.file_tools import create_file_tools
+from rudra.tools.planning_tools import create_planning_tools
+from rudra.tools.code_tools import create_code_tools
 
 
 def build_mcp_server(project_path: Path) -> Server:
@@ -598,8 +598,8 @@ def build_mcp_server(project_path: Path) -> Server:
     if project_path.exists():
         vfs.load_from_disk()
 
-    app = Server("rudraanvil")
-    rudraanvil_dir = project_path / ".rudraanvil"
+    app = Server("rudra")
+    rudra_dir = project_path / ".rudra"
 
     # ─── Resources: lazy, on-demand context — never injected automatically ────
 
@@ -607,32 +607,32 @@ def build_mcp_server(project_path: Path) -> Server:
     async def list_resources() -> list[types.Resource]:
         resources = [
             types.Resource(
-                uri="rudraanvil://project_tree",
+                uri="rudra://project_tree",
                 name="Project File Tree",
                 description="Live directory tree of the project",
                 mimeType="text/plain",
             ),
         ]
-        plan_file = rudraanvil_dir / "PLAN.md"
+        plan_file = rudra_dir / "PLAN.md"
         if plan_file.exists():
             resources.append(types.Resource(
-                uri="rudraanvil://plan",
+                uri="rudra://plan",
                 name="Current Plan",
                 description="Agent's active task plan (PLAN.md)",
                 mimeType="text/markdown",
             ))
-        stack_file = rudraanvil_dir / "tech_stack.md"
+        stack_file = rudra_dir / "tech_stack.md"
         if stack_file.exists():
             resources.append(types.Resource(
-                uri="rudraanvil://tech_stack",
+                uri="rudra://tech_stack",
                 name="Tech Stack",
                 description="Project tech stack and architecture rules",
                 mimeType="text/markdown",
             ))
-        log_file = rudraanvil_dir / "logs" / "cmd_output.txt"
+        log_file = rudra_dir / "logs" / "cmd_output.txt"
         if log_file.exists():
             resources.append(types.Resource(
-                uri="rudraanvil://logs/latest",
+                uri="rudra://logs/latest",
                 name="Latest Command Output",
                 description="stdout/stderr from last run_command call",
                 mimeType="text/plain",
@@ -642,16 +642,16 @@ def build_mcp_server(project_path: Path) -> Server:
     @app.read_resource()
     async def read_resource(uri: types.AnyUrl) -> str:
         uri_str = str(uri)
-        if uri_str == "rudraanvil://project_tree":
+        if uri_str == "rudra://project_tree":
             return vfs.get_tree()
-        elif uri_str == "rudraanvil://plan":
-            p = rudraanvil_dir / "PLAN.md"
+        elif uri_str == "rudra://plan":
+            p = rudra_dir / "PLAN.md"
             return p.read_text(encoding="utf-8") if p.exists() else "No plan yet."
-        elif uri_str == "rudraanvil://tech_stack":
-            p = rudraanvil_dir / "tech_stack.md"
+        elif uri_str == "rudra://tech_stack":
+            p = rudra_dir / "tech_stack.md"
             return p.read_text(encoding="utf-8") if p.exists() else "No tech stack defined."
-        elif uri_str == "rudraanvil://logs/latest":
-            p = rudraanvil_dir / "logs" / "cmd_output.txt"
+        elif uri_str == "rudra://logs/latest":
+            p = rudra_dir / "logs" / "cmd_output.txt"
             return p.read_text(encoding="utf-8") if p.exists() else "No command output yet."
         raise ValueError(f"Unknown resource URI: {uri_str}")
 
@@ -700,7 +700,7 @@ async def run_server(project_path: Path) -> None:
             read_stream,
             write_stream,
             InitializationOptions(
-                server_name="rudraanvil",
+                server_name="rudra",
                 server_version="0.1.0",
                 capabilities=app.get_capabilities(
                     notification_options=NotificationOptions(),
@@ -711,7 +711,7 @@ async def run_server(project_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="RudraAnvil MCP Server")
+    parser = argparse.ArgumentParser(description="Rudra MCP Server")
     parser.add_argument(
         "--project-dir",
         type=Path,
@@ -733,8 +733,8 @@ if __name__ == "__main__":
 **Add MCP entrypoint** under `[project.scripts]`:
 ```toml
 [project.scripts]
-rudraanvil = "rudraanvil.cli:app"
-rudraanvil-mcp = "rudraanvil.mcp.server:main"   # ← ADD THIS
+rudra = "rudra.cli:app"
+rudra-mcp = "rudra.mcp.server:main"   # ← ADD THIS
 ```
 
 **Add MCP dependency** under `[project.dependencies]`:
@@ -751,8 +751,8 @@ After `pip install mcp` and the package is installed, users add this to `claude_
 ```json
 {
   "mcpServers": {
-    "rudraanvil": {
-      "command": "rudraanvil-mcp",
+    "rudra": {
+      "command": "rudra-mcp",
       "args": ["--project-dir", "/path/to/your/project"]
     }
   }
@@ -763,10 +763,10 @@ After `pip install mcp` and the package is installed, users add this to `claude_
 
 ### Phase 4 Verification
 
-1. Install the updated package: `pip install -e /home/a/code/ai-ml/agent/RudraAnvil`
-2. In a test project directory with a `.rudraanvil/` dir: `rudraanvil-mcp --project-dir /tmp/mcp_test &`
-3. Use the MCP inspector tool: `npx @modelcontextprotocol/inspector rudraanvil-mcp --project-dir /tmp/mcp_test`
-4. **Expected:** Inspector shows resources `rudraanvil://plan`, `rudraanvil://tech_stack`, `rudraanvil://project_tree`.
+1. Install the updated package: `pip install -e /home/a/code/ai-ml/agent/Rudra`
+2. In a test project directory with a `.rudra/` dir: `rudra-mcp --project-dir /tmp/mcp_test &`
+3. Use the MCP inspector tool: `npx @modelcontextprotocol/inspector rudra-mcp --project-dir /tmp/mcp_test`
+4. **Expected:** Inspector shows resources `rudra://plan`, `rudra://tech_stack`, `rudra://project_tree`.
 5. **Expected:** Tools `update_plan`, `read_file`, `write_file`, `run_command` are listed and callable.
 
 ---
@@ -775,17 +775,17 @@ After `pip install mcp` and the package is installed, users add this to `claude_
 
 | Phase | What Changes | Files Affected | Key Benefit |
 |---|---|---|---|
-| **1 — PLAN.md** | Replace `write_todos` with `update_plan` tool writing to `.rudraanvil/PLAN.md` | `planning_tools.py` [NEW], `main_agent.py`, `tools/__init__.py` | Planning memory never bloats context window |
+| **1 — PLAN.md** | Replace `write_todos` with `update_plan` tool writing to `.rudra/PLAN.md` | `planning_tools.py` [NEW], `main_agent.py`, `tools/__init__.py` | Planning memory never bloats context window |
 | **2 — tech_stack.md** | Remove `ProjectContext` string interpolation from prompts; write to file in `cli.py` | `cli.py`, `main_agent.py` | Tech stack context paid once (file read), not every call |
-| **3 — run_command** | Implement `run_command` that logs to `.rudraanvil/logs/cmd_output.txt` | `code_tools.py` | Scratchpad for large output; agent gets 2-line summaries |
-| **4 — MCP Server** | Add `mcp/server.py` exposing resources + tools via MCP protocol | `mcp/server.py` [NEW], `mcp/__init__.py` [NEW], `pyproject.toml` | Any MCP client (Cursor, Claude Desktop) can use RudraAnvil as backend |
+| **3 — run_command** | Implement `run_command` that logs to `.rudra/logs/cmd_output.txt` | `code_tools.py` | Scratchpad for large output; agent gets 2-line summaries |
+| **4 — MCP Server** | Add `mcp/server.py` exposing resources + tools via MCP protocol | `mcp/server.py` [NEW], `mcp/__init__.py` [NEW], `pyproject.toml` | Any MCP client (Cursor, Claude Desktop) can use Rudra as backend |
 
 ---
 
 ## Implementation Notes for New Chats
 
 - **Phases are independent** — each can be implemented without the others, but implement in order (1 → 2 → 3 → 4).
-- **`vfs.root_dir`**: Check `src/rudraanvil/filesystem/virtual_fs.py` — if `root_dir` isn't a public attribute, add `self.root_dir = str(root)` in its `__init__`.
+- **`vfs.root_dir`**: Check `src/rudra/filesystem/virtual_fs.py` — if `root_dir` isn't a public attribute, add `self.root_dir = str(root)` in its `__init__`.
 - **`tools/__init__.py`**: Always check its current content before editing — it likely imports `create_code_tools`.
 - **No existing tests**: The `tests/` directory is currently empty. Manual verification steps (listed per phase) are the validation method.
 - **deepagents `write_todos`**: This is a built-in tool provided by the `deepagents` library, not one we wrote. We are NOT removing it from the library — we are just instructing the agent in the system prompt to use `update_plan` instead, and not listing `write_todos` in custom tools documentation.

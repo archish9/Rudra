@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "rudraanvil"
+name = "rudra"
 version = "0.1.0"
 description = "Autonomous coding agent CLI tool using deepagents framework"
 readme = "README.md"
@@ -59,14 +59,14 @@ dependencies = [
 ]
 
 [project.scripts]
-rudraanvil = "rudraanvil.cli:app"
+rudra = "rudra.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/archish/RudraAnvil"
-Repository = "https://github.com/archish/RudraAnvil"
+Homepage = "https://github.com/archish/Rudra"
+Repository = "https://github.com/archish/Rudra"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/rudraanvil"]
+packages = ["src/rudra"]
 
 [tool.ruff]
 line-length = 100

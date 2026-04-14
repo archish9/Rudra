@@ -1,4 +1,4 @@
-"""Main supervisor agent for RudraAnvil using deepagents framework."""
+"""Main supervisor agent for Rudra using deepagents framework."""
 
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ from typing import Optional, Any
 from rich.console import Console
 from deepagents import create_deep_agent
 
-from rudraanvil.config import config
-from rudraanvil.filesystem import VirtualFileSystem
-from rudraanvil.middleware import BlockTaskToolMiddleware, ContinueAfterWriteMiddleware, TaskAnchorMiddleware
-from rudraanvil.state import get_or_create_session_id, ProjectContext
-from rudraanvil.tools.interaction_tools import create_interaction_tools
-from rudraanvil.tools.planning_tools import create_planning_tools
+from rudra.config import config
+from rudra.filesystem import VirtualFileSystem
+from rudra.middleware import BlockTaskToolMiddleware, ContinueAfterWriteMiddleware, TaskAnchorMiddleware
+from rudra.state import get_or_create_session_id, ProjectContext
+from rudra.tools.interaction_tools import create_interaction_tools
+from rudra.tools.planning_tools import create_planning_tools
 
 
 @dataclass
@@ -63,7 +63,7 @@ def build_system_prompt(
 ) -> str:
     """Build the system prompt for the agent based on command type."""
 
-    base = f"""You are RudraAnvil, an expert autonomous coding agent.
+    base = f"""You are Rudra, an expert autonomous coding agent.
 
 ## FILE PATH RULES
 - Use RELATIVE paths only: "app.py", "src/models.py", "requirements.txt"
@@ -122,7 +122,7 @@ Project structure:
    - For each filename in your plan, call read_file(file_path='<filename>') to check it exists
    - If any file returns "not found" or an error: call task() AGAIN with ONLY those missing files
    - Do NOT call task() more than 3 times total
-4. Update .rudraanvil/AGENTS.md using edit_file to record:
+4. Update .rudra/AGENTS.md using edit_file to record:
    - Tech stack confirmed
    - Files created and what each does
    - Key architecture decisions
@@ -147,7 +147,7 @@ You may use ask_user() if you need clarification from the user.
 Workflow: diagnose root cause → plan a minimal fix → apply with edit_file() → review for correctness.
 Do NOT run tests or execute code.
 
-After fixing: update `.rudraanvil/AGENTS.md` Session Log with what was fixed and why.
+After fixing: update `.rudra/AGENTS.md` Session Log with what was fixed and why.
 """
 
     elif command == "edit":
@@ -189,8 +189,8 @@ Do NOT apply any changes.
     return base
 
 
-class RudraAnvilAgent:
-    """Wrapper around deepagents for RudraAnvil-specific functionality."""
+class RudraAgent:
+    """Wrapper around deepagents for Rudra-specific functionality."""
 
     def __init__(self, context: AgentContext, deep_agent, session_id: str, db_conn=None):
         self.context = context
@@ -384,16 +384,16 @@ class RudraAnvilAgent:
 
                 original_paths = set(self.context.vfs.files.keys())
                 new_paths = set(new_vfs.files.keys())
-                # Exclude .rudraanvil/ state files (PLAN.md, AGENTS.md, etc.)
+                # Exclude .rudra/ state files (PLAN.md, AGENTS.md, etc.)
                 files_created = [
                     p for p in (new_paths - original_paths)
-                    if Path(p).parts[0] != ".rudraanvil"
+                    if Path(p).parts[0] != ".rudra"
                 ]
                 files_modified = [
                     p
                     for p in new_paths & original_paths
                     if new_vfs.files[p] != self.context.vfs.files.get(p)
-                    and Path(p).parts[0] != ".rudraanvil"
+                    and Path(p).parts[0] != ".rudra"
                 ]
 
                 return AgentResult(
@@ -465,7 +465,7 @@ class RudraAnvilAgent:
         return response
 
 
-def _ensure_agents_md(rudraanvil_dir: Path, project_context: Optional[ProjectContext]) -> None:
+def _ensure_agents_md(rudra_dir: Path, project_context: Optional[ProjectContext]) -> None:
     """Create a starter AGENTS.md if one does not already exist.
 
     The file is the agent's persistent cross-session memory. MemoryMiddleware
@@ -474,7 +474,7 @@ def _ensure_agents_md(rudraanvil_dir: Path, project_context: Optional[ProjectCon
 
     Only created on the very first run — never overwritten.
     """
-    agents_md = rudraanvil_dir / "AGENTS.md"
+    agents_md = rudra_dir / "AGENTS.md"
     if agents_md.exists():
         return
 
@@ -505,10 +505,10 @@ def _ensure_agents_md(rudraanvil_dir: Path, project_context: Optional[ProjectCon
 
 
 def _write_tech_stack_file(
-    rudraanvil_dir: Path,
+    rudra_dir: Path,
     project_context: Optional[ProjectContext],
 ) -> None:
-    """Write project tech stack context to .rudraanvil/tech_stack.md.
+    """Write project tech stack context to .rudra/tech_stack.md.
 
     Called once in create_main_agent() before the agent starts. Offloads
     tech stack info to disk so the agent reads it via read_file() rather
@@ -517,7 +517,7 @@ def _write_tech_stack_file(
     If no project_context is available, writes instructions for the agent
     to infer the stack from the task description.
     """
-    tech_stack_path = rudraanvil_dir / "tech_stack.md"
+    tech_stack_path = rudra_dir / "tech_stack.md"
 
     if project_context and project_context.primary_language:
         lines = [
@@ -560,7 +560,7 @@ async def create_main_agent(
     dry_run: bool = False,
     verbose: bool = False,
     **kwargs,
-) -> RudraAnvilAgent:
+) -> RudraAgent:
     """Factory function to create a main agent using deepagents."""
     console = console or Console()
     project_path = project_path.resolve()
@@ -605,8 +605,8 @@ async def create_main_agent(
 
     import aiosqlite
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    from rudraanvil.compat.deepagents_path import install_path_normalizer
-    from rudraanvil.compat.overwrite_backend import OverwriteFilesystemBackend
+    from rudra.compat.deepagents_path import install_path_normalizer
+    from rudra.compat.overwrite_backend import OverwriteFilesystemBackend
 
     install_path_normalizer(project_path)
 
@@ -615,15 +615,15 @@ async def create_main_agent(
         virtual_mode=True,
     )
 
-    rudraanvil_dir = project_path / ".rudraanvil"
-    rudraanvil_dir.mkdir(parents=True, exist_ok=True)
+    rudra_dir = project_path / ".rudra"
+    rudra_dir.mkdir(parents=True, exist_ok=True)
 
     # Ensure persistent memory file exists before MemoryMiddleware tries to load it.
-    _ensure_agents_md(rudraanvil_dir, project_context)
+    _ensure_agents_md(rudra_dir, project_context)
 
     # Write tech stack to disk (for reference) and inline into system prompt
     # so the model doesn't need to read it voluntarily.
-    tech_stack_content = _write_tech_stack_file(rudraanvil_dir, project_context)
+    tech_stack_content = _write_tech_stack_file(rudra_dir, project_context)
 
     system_prompt = build_system_prompt(
         command=command,
@@ -635,15 +635,15 @@ async def create_main_agent(
         **kwargs,
     )
 
-    checkpoints_db = str(rudraanvil_dir / "checkpoints.db")
+    checkpoints_db = str(rudra_dir / "checkpoints.db")
     db_conn = await aiosqlite.connect(checkpoints_db)
     checkpointer = AsyncSqliteSaver(conn=db_conn)
     await checkpointer.setup()
 
     # Stable session ID for all commands — gives the LangGraph checkpointer
     # continuity across CLI invocations in the same project directory.
-    # Delete .rudraanvil/session_id.txt to start a completely fresh session.
-    session_id = get_or_create_session_id(rudraanvil_dir)
+    # Delete .rudra/session_id.txt to start a completely fresh session.
+    session_id = get_or_create_session_id(rudra_dir)
 
     # Subagent system prompt: explicit file-writing workflow.
     # The subagent does NOT get MemoryMiddleware — it receives full task context
@@ -685,10 +685,10 @@ async def create_main_agent(
         system_prompt=system_prompt,
         backend=filesystem_backend,
         checkpointer=checkpointer,
-        # MemoryMiddleware: loads .rudraanvil/AGENTS.md and injects into every
+        # MemoryMiddleware: loads .rudra/AGENTS.md and injects into every
         # system prompt. Silently skips if the file is missing (safe on first run).
         # The agent updates the file via edit_file as it learns about the project.
-        memory=[".rudraanvil/AGENTS.md"],
+        memory=[".rudra/AGENTS.md"],
         middleware=[TaskAnchorMiddleware(task)],
         subagents=[
             {
@@ -701,4 +701,4 @@ async def create_main_agent(
         ],
     )
 
-    return RudraAnvilAgent(context, deep_agent, session_id, db_conn=db_conn)
+    return RudraAgent(context, deep_agent, session_id, db_conn=db_conn)

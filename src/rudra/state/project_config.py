@@ -36,7 +36,7 @@ class ProjectConfigManager:
             project_dir: Path to the project root directory
         """
         self.project_dir = Path(project_dir)
-        self.config_file = self.project_dir / ".rudraanvil" / "project.json"
+        self.config_file = self.project_dir / ".rudra" / "project.json"
         
     def load(self) -> ProjectContext:
         """Load project configuration if it exists, otherwise return empty context.

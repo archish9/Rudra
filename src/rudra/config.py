@@ -1,4 +1,4 @@
-"""Configuration settings for RudraAnvil."""
+"""Configuration settings for Rudra."""
 
 import os
 from pathlib import Path
@@ -48,7 +48,7 @@ class Config:
     search: SearchConfig = field(default_factory=SearchConfig)
     
     # Paths
-    checkpoint_dir: str = ".rudraanvil"
+    checkpoint_dir: str = ".rudra"
     
     @classmethod
     def load(cls) -> "Config":

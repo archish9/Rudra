@@ -9,7 +9,7 @@ from langchain_core.tools import BaseTool, tool
 from rich.console import Console
 from rich.prompt import Prompt
 
-from rudraanvil.state import ProjectConfigManager
+from rudra.state import ProjectConfigManager
 
 
 def create_interaction_tools(console: Console, project_path: Path) -> list[BaseTool]:
@@ -46,7 +46,7 @@ def create_interaction_tools(console: Console, project_path: Path) -> list[BaseT
 
     @tool
     def save_project_context(context: dict) -> str:
-        """Save project tech stack information to .rudraanvil/project.json.
+        """Save project tech stack information to .rudra/project.json.
 
         Call this after using ask_user() to gather the project's tech stack.
         Only supply the fields you have confirmed answers for — existing fields
