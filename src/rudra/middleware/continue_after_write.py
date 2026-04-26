@@ -16,17 +16,33 @@ model stops rewriting and moves on to genuinely missing files.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from langchain_core.messages import ToolMessage
 from langchain.agents.middleware.types import AgentMiddleware
 
 
 class ContinueAfterWriteMiddleware(AgentMiddleware):
-    """Stateful continuation middleware for the file-writing subagent."""
+    """Stateful continuation middleware for the file-writing agent."""
 
-    def __init__(self, task: str = ""):
+    def __init__(self, task: str = "", plan_path: Path | None = None):
         self.task = task
+        self._plan_path = plan_path
         # Ordered list of unique file paths written in this session
         self._files_written: list[str] = []
+
+    def _get_remaining(self) -> list[str]:
+        """Read PLAN.md and return pending filenames, excluding files already written this session."""
+        if self._plan_path and self._plan_path.exists():
+            pending = [
+                line.strip().replace("- [ ]", "").strip()
+                for line in self._plan_path.read_text(encoding="utf-8").splitlines()
+                if "- [ ]" in line
+            ]
+            # Exclude files already written in this session so the nudge
+            # never tells the model to rewrite a file it just wrote.
+            return [f for f in pending if f not in self._files_written]
+        return []
 
     @staticmethod
     def _normalize(file_path: str) -> str:
@@ -41,23 +57,30 @@ class ContinueAfterWriteMiddleware(AgentMiddleware):
             self._files_written.append(file_path)
 
         written_list = ", ".join(self._files_written) if self._files_written else "none"
-        task_line = f"\nOriginal task: {self.task}" if self.task else ""
+        remaining = self._get_remaining()
 
         if already_written:
             continuation = (
                 f"\n\nWARNING: '{file_path}' was already written in this session.\n"
-                f"Files written so far: {written_list}{task_line}\n"
+                f"Files written so far: {written_list}\n"
                 "Do NOT rewrite files already written. "
-                "Look at the task description above — write a file from it that is NOT in the 'written so far' list. "
-                "If every file in the task is already written, STOP."
             )
+            if remaining:
+                continuation += (
+                    f"Remaining from plan: {', '.join(remaining)}\n"
+                    f"Write the next one NOW: write_file(file_path='{remaining[0]}', content='<complete code here>')"
+                )
+            else:
+                continuation += "All planned files are written. STOP."
         else:
-            continuation = (
-                f"\n\nFile written. Files written so far: {written_list}.{task_line}\n"
-                "Compare 'files written so far' against the task description. "
-                "Write the next file that appears in the task but is NOT yet in the written list. "
-                "If all files in the task are written, STOP — do not add extra files."
-            )
+            continuation = f"\n\nFile written. Files written so far: {written_list}.\n"
+            if remaining:
+                continuation += (
+                    f"Remaining from plan: {', '.join(remaining)}\n"
+                    f"Write the next one NOW: write_file(file_path='{remaining[0]}', content='<complete code here>')"
+                )
+            else:
+                continuation += "All planned files are written. STOP — do not add extra files."
 
         return ToolMessage(
             content=result.content + continuation,

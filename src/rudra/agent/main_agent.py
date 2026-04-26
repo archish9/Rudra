@@ -12,9 +12,8 @@ from deepagents import create_deep_agent
 
 from rudra.config import config
 from rudra.filesystem import VirtualFileSystem
-from rudra.middleware import BlockTaskToolMiddleware, ContinueAfterWriteMiddleware, TaskAnchorMiddleware
-from rudra.state import get_or_create_session_id, ProjectContext
-from rudra.tools.interaction_tools import create_interaction_tools
+from rudra.middleware import BlockPrematureAskMiddleware, BlockTaskToolMiddleware, ContinueAfterWriteMiddleware, FixWriteParamsMiddleware, TaskAnchorMiddleware
+from rudra.state import ProjectContext
 from rudra.tools.planning_tools import create_planning_tools
 
 
@@ -33,9 +32,7 @@ class AgentContext:
     max_iterations: int = 100
     stop_on_error: bool = True
 
-    chat_history: list[dict] = field(default_factory=list)
-
-    command: str = "build"
+    command: str = "auto"
     file_path: Optional[str] = None
     issue: Optional[str] = None
 
@@ -100,90 +97,35 @@ Project structure:
             "Use the exact framework named in the task (e.g. FastAPI → Python + FastAPI).\n"
         )
 
-    # Command-specific guidance
-    if command in ("build", "auto"):
-        existing = "Existing project — read relevant files before modifying." if vfs.files else "New project — start from scratch."
-        base += f"""
+    existing = "Existing project — read relevant files before modifying." if vfs.files else "New project — start from scratch."
+    base += f"""
 ## Task
 {task}
 {existing}
 
-## Workflow
-1. Call update_plan() ONCE with a checklist of FILENAMES (not task descriptions)
-   !! Each item must be a real filename: '- [ ] main.py' NOT '- [ ] Create main.py'
-2. Call task() with subagent_type='general-purpose' and a description that includes:
-   - The exact task: "{task}"
-   - Every filename from your plan (EXACT names — subagent must use these)
-   - The full tech stack and framework
-   - "Write COMPLETE, production-ready code for ALL files listed"
-   The task subagent handles ALL file writing in its own isolated context.
-   Do NOT call write_file yourself — that is the subagent's job.
-3. After task() returns, verify every file was written:
-   - For each filename in your plan, call read_file(file_path='<filename>') to check it exists
-   - If any file returns "not found" or an error: call task() AGAIN with ONLY those missing files
-   - Do NOT call task() more than 3 times total
-4. Update .rudra/AGENTS.md using edit_file to record:
-   - Tech stack confirmed
-   - Files created and what each does
-   - Key architecture decisions
-"""
+## How to Decide What to Do
 
-    elif command == "chat":
-        user_input = kwargs.get("user_input", task)
-        base += f"""
-## Chat Request
-{user_input}
+**BUILD / CREATE / IMPLEMENT** (user wants new files or a new project):
+1. Call update_plan() ONCE with a checklist of FILENAMES — NOT task descriptions
+   Correct: '- [ ] main.py'   Wrong: '- [ ] Create main.py'
+2. Write the first file: write_file(file_path='filename', content='...complete code...')
+3. Check it off: edit_file('.rudra/PLAN.md', '- [ ] filename', '- [x] filename')
+4. Continue until ALL files in the plan are written — do NOT stop early
 
-Respond conversationally. Make targeted file changes only when explicitly requested.
-You may use ask_user() if you need clarification from the user.
-"""
+**FIX / DEBUG** (user reports a bug or error):
+1. Read relevant files to understand the code
+2. Diagnose root cause
+3. Apply minimal fix with edit_file()
 
-    elif command == "fix":
-        issue = kwargs.get("issue", task)
-        base += f"""
-## Bug / Issue
-{issue}
+**EDIT / MODIFY** (user wants to change existing code):
+1. Read the target file
+2. Apply the requested change precisely with edit_file()
+3. Do not touch unrelated code
 
-Workflow: diagnose root cause → plan a minimal fix → apply with edit_file() → review for correctness.
-Do NOT run tests or execute code.
-
-After fixing: update `.rudra/AGENTS.md` Session Log with what was fixed and why.
-"""
-
-    elif command == "edit":
-        file_path = kwargs.get("file_path", "")
-        content = vfs.read_file(file_path) if file_path else ""
-        base += f"""
-## Targeted Edit
-File: {file_path}
-Instruction: {task}
-
-Current content:
-{content or "(file not found)"}
-
-Make the requested change precisely with edit_file(). Do not touch unrelated code.
-"""
-
-    elif command == "review":
-        base += """
-## Code Review
-Provide a clear, actionable report covering:
-1. Security issues
-2. Performance problems
-3. Code quality / readability
-4. Best-practice violations
-5. Concrete suggestions
-
-Do NOT modify any files — report only.
-"""
-
-    elif command == "suggest":
-        base += f"""
-## Suggestions (read-only)
-Task: {task}
-
-Provide detailed suggestions with example code snippets or diffs.
-Do NOT apply any changes.
+**REVIEW / ANALYZE / EXPLAIN / SUGGEST** (user asks a question or wants analysis):
+1. Read the relevant files
+2. Respond with your analysis
+3. Do NOT modify any files — report only
 """
 
     return base
@@ -423,46 +365,6 @@ class RudraAgent:
             self._log_always(traceback.format_exc())
             raise
 
-    async def chat_turn(self, user_input: str) -> str:
-        """Handle a single turn in chat mode with live streaming trace."""
-        self.context.chat_history.append({"role": "user", "content": user_input})
-
-        lg_config = {"configurable": {"thread_id": self.session_id}}
-
-        final_state = None
-        processed_messages = 0
-
-        async for chunk in self.agent.astream(
-            {"messages": self.context.chat_history},
-            lg_config,
-            stream_mode="values",
-            subgraphs=True,
-        ):
-            namespace, event = (
-                chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
-            )
-            final_state = event
-            messages = event.get("messages", [])
-
-            while processed_messages < len(messages):
-                msg = messages[processed_messages]
-                if namespace:
-                    self._log_always(f"[dim](subagent {':'.join(namespace)})[/dim]")
-                self._log_single_message(msg, processed_messages + 1)
-                processed_messages += 1
-
-        if final_state:
-            messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
-            if messages:
-                final_msg = messages[-1]
-                response = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
-            else:
-                response = "No response"
-        else:
-            response = "No response"
-
-        self.context.chat_history.append({"role": "assistant", "content": response})
-        return response
 
 
 def _ensure_agents_md(rudra_dir: Path, project_context: Optional[ProjectContext]) -> None:
@@ -543,7 +445,7 @@ def _write_tech_stack_file(
             "- 'Express ...' → Node.js + Express\n",
             "- 'Spring ...' → Java + Spring Boot\n",
             "- 'Rails ...' → Ruby on Rails\n",
-            "\nIf the stack is truly ambiguous, use ask_user() ONCE.\n",
+            "\nIf the stack is truly ambiguous, infer the most likely one and proceed.\n",
         ]
 
     content = "".join(lines)
@@ -591,19 +493,8 @@ async def create_main_agent(
         reasoning=True,
     )
 
-    # ask_user / save_project_context are only safe in chat mode.
-    # In build/auto/fix/edit the model loses task context after an ask_user
-    # tool call and starts treating the user's one-word answer as a new task.
-    # For those commands the tech stack is inferred from the task text instead.
-    if command == "chat":
-        custom_tools = create_interaction_tools(console, project_path)
-    else:
-        # Planning tools (update_plan / read_plan) go on the MAIN AGENT only.
-        # The subagent is write-only and gets deepagents' built-in file tools.
-        # Code execution tools are intentionally excluded — this agent only generates files.
-        custom_tools = create_planning_tools(vfs, task=task)
-
     import aiosqlite
+    import uuid
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from rudra.compat.deepagents_path import install_path_normalizer
     from rudra.compat.overwrite_backend import OverwriteFilesystemBackend
@@ -640,44 +531,22 @@ async def create_main_agent(
     checkpointer = AsyncSqliteSaver(conn=db_conn)
     await checkpointer.setup()
 
-    # Stable session ID for all commands — gives the LangGraph checkpointer
-    # continuity across CLI invocations in the same project directory.
-    # Delete .rudra/session_id.txt to start a completely fresh session.
-    session_id = get_or_create_session_id(rudra_dir)
+    # Fresh session ID per invocation — each prompt starts from clean state.
+    session_id = uuid.uuid4().hex[:12]
 
-    # Subagent system prompt: explicit file-writing workflow.
-    # The subagent does NOT get MemoryMiddleware — it receives full task context
-    # from the main agent's delegation description instead.
-    subagent_prompt = (
-        "You are a file-writing assistant. You receive a task description listing files to create.\n"
-        "Your ONLY job: write every listed file with COMPLETE, production-ready code.\n\n"
-        "## WORKFLOW — write every file in the task description\n"
-        "For EACH file listed:\n"
-        "  1. Think through the COMPLETE implementation before writing\n"
-        "  2. Call write_file(file_path='filename', content='...full code...') — raw code, no markdown fences\n"
-        "  3. Move immediately to the next file — do NOT stop between files\n"
-        "Keep going until EVERY file in the task description is written.\n\n"
-        "## HARD CONSTRAINTS\n"
-        "- RAW source code only in content= — NEVER wrap in ```fences```\n"
-        "- COMPLETE code only — no stubs, no 'pass', no 'TODO', no Hello World\n"
-        "- ONE write_file call per file — write it right the first time\n"
-        "- Do NOT run code, install packages, or spawn subagents\n"
-        "- Do NOT stop or say 'let me know' until ALL files are written\n\n"
-        "## WRITE ORDER — dependencies first\n"
-        "Write files in this order so imports resolve correctly:\n"
-        "  config/deps (requirements.txt) → data models → auth/utility code → route handlers → entry point (app.py/main.py)\n\n"
-        "## FILENAMES — use EXACTLY what the task description gives you\n"
-        "- If the task says 'app.py' — write 'app.py', NOT 'src/app.py' or 'application.py'\n"
-        "- Do NOT reorganize files into subdirectories unless the task explicitly asks for it\n"
-        "- Do NOT rename files or split one file into multiple files\n\n"
-        "## CODE QUALITY\n"
-        "- Every function must be fully implemented with real logic\n"
-        "- Use the EXACT framework named in the task (FastAPI = FastAPI, not Flask)\n"
-        "- Include all imports at the top of each file\n"
-        "- JWT auth: use python-jose or PyJWT; hash passwords with passlib/bcrypt\n"
-        "- Database models: include all fields with correct types\n"
-        "- API routes: full CRUD where appropriate — not just Hello World endpoints\n"
-    )
+    # Unified tool + middleware stack for all commands.
+    # BlockTaskToolMiddleware forces the model to write files directly instead of
+    # delegating; ContinueAfterWriteMiddleware nudges it to keep writing until the
+    # plan is complete; FixWriteParamsMiddleware silently corrects filename → file_path.
+    plan_path = rudra_dir / "PLAN.md"
+    custom_tools = create_planning_tools(vfs, task=task)
+    main_agent_middleware = [
+        FixWriteParamsMiddleware(),
+        TaskAnchorMiddleware(task),
+        BlockTaskToolMiddleware(),
+        BlockPrematureAskMiddleware(task),
+        ContinueAfterWriteMiddleware(task=task, plan_path=plan_path),
+    ]
 
     deep_agent = create_deep_agent(
         model=model,
@@ -685,20 +554,8 @@ async def create_main_agent(
         system_prompt=system_prompt,
         backend=filesystem_backend,
         checkpointer=checkpointer,
-        # MemoryMiddleware: loads .rudra/AGENTS.md and injects into every
-        # system prompt. Silently skips if the file is missing (safe on first run).
-        # The agent updates the file via edit_file as it learns about the project.
         memory=[".rudra/AGENTS.md"],
-        middleware=[TaskAnchorMiddleware(task)],
-        subagents=[
-            {
-                "name": "general-purpose",
-                "description": "Writes ALL project files with complete code. Use for any coding task.",
-                "system_prompt": subagent_prompt,
-                "tools": [],  # only deepagents' built-in tools (write_file, edit_file, etc.)
-                "middleware": [TaskAnchorMiddleware(task), ContinueAfterWriteMiddleware(task=task)],
-            }
-        ],
+        middleware=main_agent_middleware,
     )
 
     return RudraAgent(context, deep_agent, session_id, db_conn=db_conn)

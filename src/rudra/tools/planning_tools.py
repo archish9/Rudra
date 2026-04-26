@@ -29,8 +29,8 @@ def create_planning_tools(vfs, task: str = "") -> list:
 
     Args:
         vfs: VirtualFileSystem anchored to the project root (used for root_path only).
-        task: The original user task — injected into the update_plan return message
-              to remind the model of the framework/requirements.
+        task: The original user task — injected into return messages to remind the
+              model of the framework/requirements.
 
     Returns:
         List of LangChain tools: [update_plan, read_plan]
@@ -63,6 +63,28 @@ def create_planning_tools(vfs, task: str = "") -> list:
         Returns:
             Confirmation and instruction to write the first file immediately.
         """
+        # Reject shrinking plans — prevents model from destroying its own checklist
+        if plan_path.exists():
+            existing_text = plan_path.read_text(encoding="utf-8")
+            existing_count = sum(1 for l in existing_text.splitlines() if "- [ ]" in l or "- [x]" in l)
+            new_count = sum(1 for l in plan_markdown.splitlines() if "- [ ]" in l or "- [x]" in l)
+            if existing_count > 1 and new_count < existing_count:
+                return (
+                    f"REJECTED: Cannot reduce plan from {existing_count} to {new_count} items.\n"
+                    f"Current plan:\n{existing_text}\n\n"
+                    "Continue from the EXISTING plan. Write the next pending file."
+                )
+
+        # Sanitise: drop any .rudra/ items (e.g. PLAN.md itself) accidentally included.
+        clean_lines = []
+        for line in plan_markdown.splitlines():
+            if "- [ ]" in line or "- [x]" in line:
+                filename = line.strip().replace("- [ ]", "").replace("- [x]", "").strip()
+                if filename.startswith(".rudra/") or filename.startswith(".rudra\\"):
+                    continue  # silently drop internal state files
+            clean_lines.append(line)
+        plan_markdown = "\n".join(clean_lines)
+
         # Write directly to disk — bypasses VFS cache so read_plan stays in sync
         plan_path.parent.mkdir(parents=True, exist_ok=True)
         plan_path.write_text(plan_markdown, encoding="utf-8")
@@ -76,12 +98,10 @@ def create_planning_tools(vfs, task: str = "") -> list:
             if "- [ ]" in line
         ]
         if pending:
-            files_list = ", ".join(pending)
-            task_hint = f" for: {task}" if task else ""
             next_action = (
-                f"Now call task(subagent_type='general-purpose', description='Write these files{task_hint}: "
-                f"{files_list}. Write COMPLETE, production-ready code for ALL of them.'). "
-                "The subagent will write all files. Do NOT call write_file yourself."
+                f"Now write each file yourself with write_file(). "
+                f"Start with the first pending file: {pending[0]}. "
+                "Write ONE file per message — call write_file() once, then stop and wait."
             )
         else:
             next_action = "All items already checked off."
@@ -99,6 +119,12 @@ def create_planning_tools(vfs, task: str = "") -> list:
         # Read directly from disk — never from VFS cache, which may be stale
         if plan_path.exists():
             return plan_path.read_text(encoding="utf-8")
-        return "No plan found. Call update_plan() to create one first."
+        return (
+            f"No plan found. You MUST call update_plan() now with a filename checklist.\n\n"
+            f"Your task: {task}\n\n"
+            f"Example — call update_plan() with something like:\n"
+            f"  update_plan(plan_markdown='- [ ] app.py\\n- [ ] models.py\\n- [ ] requirements.txt')\n\n"
+            f"List ONLY filenames. Do NOT ask the user — decide the files yourself based on the task above."
+        )
 
     return [update_plan, read_plan]
