@@ -127,4 +127,36 @@ def create_planning_tools(vfs, task: str = "") -> list:
             f"List ONLY filenames. Do NOT ask the user — decide the files yourself based on the task above."
         )
 
-    return [update_plan, read_plan]
+    task_path: Path = vfs.root_path / ".rudra" / "current_task.md"
+
+    @tool
+    def write_task_assignment(file_path: str, instructions: str, context_files: str = "") -> str:
+        """Write a coding task assignment to .rudra/current_task.md for the coder agent.
+
+        Call this BEFORE the coder generates each file. The coder reads this file
+        to know exactly what to build.
+
+        Each item in the plan must be written with this tool before the coder runs.
+        After writing the assignment for the first file, STOP — the orchestrator
+        will invoke the coder and then ask you for the next file's assignment.
+
+        Args:
+            file_path: Exact relative path of the file to create (e.g. "src/main.py")
+            instructions: Complete, detailed instructions for what the file must contain.
+                          Include imports, classes, functions, endpoints, DB models, etc.
+            context_files: Comma-separated list of existing files the coder should read first
+
+        Returns:
+            Confirmation message
+        """
+        task_path.parent.mkdir(parents=True, exist_ok=True)
+        content = f"# Task Assignment\n\n**File to create:** `{file_path}`\n\n## Instructions\n\n{instructions}\n"
+        if context_files.strip():
+            content += f"\n## Context Files (read these first)\n\n{context_files}\n"
+        task_path.write_text(content, encoding="utf-8")
+        return (
+            f"Task assignment written for `{file_path}`. "
+            "The coder will read .rudra/current_task.md and write this file. STOP now."
+        )
+
+    return [update_plan, read_plan, write_task_assignment]

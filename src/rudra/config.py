@@ -15,6 +15,8 @@ class OllamaConfig:
     
     base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
     model: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen3:14b"))
+    model_planner: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL_PLANNER") or os.getenv("OLLAMA_MODEL", "qwen3:14b"))
+    model_coder: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL_CODER") or os.getenv("OLLAMA_MODEL", "qwen3:14b"))
     temperature: float = field(default_factory=lambda: float(os.getenv("OLLAMA_TEMPERATURE", "0.3")))
     timeout: int = field(default_factory=lambda: int(os.getenv("OLLAMA_TIMEOUT", "300")))
     num_predict: int = field(default_factory=lambda: int(os.getenv("OLLAMA_NUM_PREDICT", "131072")))

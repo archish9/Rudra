@@ -76,7 +76,7 @@ def print_banner() -> None:
     console.print()
     console.print()    
 
-    console.print(f"  [bold color(202)]Archish developed this with ❤️ [/bold color(202)]  ")
+    console.print(f"  [bold color(202)]Archish built this with ❤️ [/bold color(202)]  ")
     console.print()
 
     console.print(
@@ -196,7 +196,9 @@ def main(
         print_banner()
         console.print(Panel(
             f"[bold]{prompt}[/bold]\n"
-            f"[dim]Path:[/dim] {project_path}",
+            f"[dim]Path:[/dim] {project_path}\n"
+            f"[dim]Planner:[/dim] {config.ollama.model_planner}  "
+            f"[dim]│  Coder:[/dim] {config.ollama.model_coder}",
             title="⚡ Task",
             border_style="bright_cyan",
         ))
@@ -271,7 +273,10 @@ def main(
                         continue
 
                     console.print(Panel(
-                        f"[bold]{user_input}[/bold]\n[dim]Path:[/dim] {project_path}",
+                        f"[bold]{user_input}[/bold]\n"
+                        f"[dim]Path:[/dim] {project_path}\n"
+                        f"[dim]Planner:[/dim] {config.ollama.model_planner}  "
+                        f"[dim]│  Coder:[/dim] {config.ollama.model_coder}",
                         title="⚡ Task",
                         border_style="bright_cyan",
                     ))

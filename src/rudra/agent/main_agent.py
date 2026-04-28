@@ -1,20 +1,18 @@
-"""Main supervisor agent for Rudra using deepagents framework."""
+"""Orchestrator agent for Rudra — coordinates planner and coder agents."""
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Any
+from typing import Any, Optional
 
 from rich.console import Console
 from deepagents import create_deep_agent
 
 from rudra.config import config
 from rudra.filesystem import VirtualFileSystem
-from rudra.middleware import BlockPrematureAskMiddleware, BlockTaskToolMiddleware, ContinueAfterWriteMiddleware, FixWriteParamsMiddleware, TaskAnchorMiddleware
 from rudra.state import ProjectContext
-from rudra.tools.planning_tools import create_planning_tools
 
 
 @dataclass
@@ -36,6 +34,9 @@ class AgentContext:
     file_path: Optional[str] = None
     issue: Optional[str] = None
 
+    planner_model: str = ""
+    coder_model: str = ""
+
 
 @dataclass
 class AgentResult:
@@ -49,98 +50,41 @@ class AgentResult:
     todo_summary: str = ""
 
 
-def build_system_prompt(
-    command: str,
-    task: str,
-    project_path: Path,
-    vfs: VirtualFileSystem,
-    project_context: Optional[ProjectContext] = None,
-    tech_stack_content: str = "",
-    **kwargs,
-) -> str:
-    """Build the system prompt for the agent based on command type."""
+def _parse_pending_files(plan_content: str) -> list[str]:
+    return [
+        line.strip().replace("- [ ]", "").strip()
+        for line in plan_content.splitlines()
+        if "- [ ]" in line
+    ]
 
-    base = f"""You are Rudra, an expert autonomous coding agent.
 
-## FILE PATH RULES
-- Use RELATIVE paths only: "app.py", "src/models.py", "requirements.txt"
-- NEVER use absolute paths or paths starting with "/" or a drive letter
-- Correct:   write_file(file_path="models.py", ...)
-- WRONG:     write_file(file_path="/home/user/project/models.py", ...)
-
-## HARD CONSTRAINTS
-- write_file content must be RAW source code — NEVER wrap it in ```markdown fences```
-- Write COMPLETE, working code — never placeholders, stubs, or "TODO" comments
-- NEVER use the `task` subagent tool — write all files yourself directly with write_file
-- Write ONE file per message — call write_file() ONCE then stop and wait for the result
-- Do NOT make multiple write_file() calls in the same response
-- Plan your work with update_plan(); track progress by checking off items as you go
-
-## WHAT "COMPLETE" MEANS — NO SHORTCUTS
-- Models: every field defined with types, every method fully implemented, no bare `pass`
-- REST APIs: ALL CRUD endpoints — GET (list + single), POST, PUT/PATCH, DELETE — each with
-  full request parsing, DB interaction, and JSON response; no "Hello World" routes
-- Requirements: all dependencies listed with version pins (e.g. Flask>=3.0.0)
-- App: all blueprints registered, DB initialized, error handlers in place
-
-Project structure:
-{vfs.get_tree()}
-"""
-
-    # Tech stack: inlined directly so the model never needs to read it from disk
-    if tech_stack_content:
-        base += f"\n## Tech Stack — follow this STRICTLY\n{tech_stack_content}\n"
-    else:
-        base += (
-            "\n## Tech Stack\n"
-            "Infer the tech stack from the task description. "
-            "Use the exact framework named in the task (e.g. FastAPI → Python + FastAPI).\n"
-        )
-
-    existing = "Existing project — read relevant files before modifying." if vfs.files else "New project — start from scratch."
-    base += f"""
-## Task
-{task}
-{existing}
-
-## How to Decide What to Do
-
-**BUILD / CREATE / IMPLEMENT** (user wants new files or a new project):
-1. Call update_plan() ONCE with a checklist of FILENAMES — NOT task descriptions
-   Correct: '- [ ] main.py'   Wrong: '- [ ] Create main.py'
-2. Write the first file: write_file(file_path='filename', content='...complete code...')
-3. Check it off: edit_file('.rudra/PLAN.md', '- [ ] filename', '- [x] filename')
-4. Continue until ALL files in the plan are written — do NOT stop early
-
-**FIX / DEBUG** (user reports a bug or error):
-1. Read relevant files to understand the code
-2. Diagnose root cause
-3. Apply minimal fix with edit_file()
-
-**EDIT / MODIFY** (user wants to change existing code):
-1. Read the target file
-2. Apply the requested change precisely with edit_file()
-3. Do not touch unrelated code
-
-**REVIEW / ANALYZE / EXPLAIN / SUGGEST** (user asks a question or wants analysis):
-1. Read the relevant files
-2. Respond with your analysis
-3. Do NOT modify any files — report only
-"""
-
-    return base
+def _check_off_file(plan_path: Path, filename: str) -> None:
+    content = plan_path.read_text(encoding="utf-8")
+    updated = content.replace(f"- [ ] {filename}", f"- [x] {filename}", 1)
+    if updated != content:
+        plan_path.write_text(updated, encoding="utf-8")
 
 
 class RudraAgent:
-    """Wrapper around deepagents for Rudra-specific functionality."""
+    """Orchestrates planner + coder agents for Rudra."""
 
-    def __init__(self, context: AgentContext, deep_agent, session_id: str, db_conn=None):
+    def __init__(
+        self,
+        context: AgentContext,
+        planner_agent,
+        session_id: str,
+        db_conn,
+        coder_config: dict,
+        plan_path: Path,
+    ):
         self.context = context
-        self.agent = deep_agent
+        self.planner_agent = planner_agent
         self.session_id = session_id
         self.console = context.console
-        self.iterations = 0
         self._db_conn = db_conn
+        self._coder_config = coder_config
+        self.plan_path = plan_path
+        self.iterations = 0
 
     async def close(self) -> None:
         if self._db_conn is not None:
@@ -156,9 +100,9 @@ class RudraAgent:
     def _status(self, message: str) -> None:
         self.console.print(f"[dim]→ {message}[/dim]")
 
-    def _log_single_message(self, msg: Any, index: int) -> None:
-        """Log a single message as it arrives in the stream."""
+    def _log_single_message(self, msg: Any, index: int, prefix: str = "") -> None:
         msg_type = type(msg).__name__
+        tag = f"[{prefix}] " if prefix else ""
 
         if msg_type == "AIMessage":
             tool_calls = getattr(msg, "tool_calls", [])
@@ -167,11 +111,11 @@ class RudraAgent:
                     name = tc.get("name", "?")
                     args = str(tc.get("args", {}))[:400]
                     self._log_always(
-                        f"[bold cyan]→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args}"
+                        f"[bold cyan]{tag}→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args}"
                     )
             else:
                 content = str(getattr(msg, "content", ""))[:300].replace("\n", " ")
-                self._log_always(f"[bold cyan]← [{index}] AI[/bold cyan]  {content}")
+                self._log_always(f"[bold cyan]{tag}← [{index}] AI[/bold cyan]  {content}")
 
         elif msg_type == "ToolMessage":
             content = str(getattr(msg, "content", ""))
@@ -186,201 +130,298 @@ class RudraAgent:
             )
             if is_error:
                 self._log_always(
-                    f"[bold red]✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
+                    f"[bold red]{tag}✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
                 )
             else:
-                self._log_always(f"[green]✓ [{index}] {tool_name}:[/green] {content}")
+                self._log_always(f"[green]{tag}✓ [{index}] {tool_name}:[/green] {content}")
 
         elif msg_type == "HumanMessage":
             content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
-            self._log_always(f"[dim][{index}] USER: {content}[/dim]")
+            self._log_always(f"[dim]{tag}[{index}] USER: {content}[/dim]")
 
         else:
             content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
-            self._log_always(f"[dim][{index}] {msg_type}: {content}[/dim]")
+            self._log_always(f"[dim]{tag}[{index}] {msg_type}: {content}[/dim]")
 
-    async def run(self) -> AgentResult:
-        """Run the full agent workflow."""
-        try:
-            self._status("Planning and executing task...")
-            self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
+    async def _stream_planner(self, messages: list[dict], thread_id: str) -> bool:
+        """Stream the planner agent. Returns False if halted by guards."""
+        lg_config = {"configurable": {"thread_id": thread_id}}
+        processed = 0
+        consecutive_failures = 0
+        planning_tool_calls: dict[str, int] = {}
+        MAX_PLANNING_CALLS = 4
+        _halt = False
 
-            final_state = None
-            processed_messages = 0
-            consecutive_failures = 0
-            _halt = False  # set to True to break out of both the while and async-for loops
-            # Loop detection: count how many times the same (tool, file_path) is called
-            repeated_tool_calls: dict[tuple, int] = {}
-            MAX_REPEATED_CALLS = 5
-            # Separate counter for planning tools — lower threshold since 3 calls is always a loop
-            planning_tool_calls: dict[str, int] = {}
-            MAX_PLANNING_CALLS = 3
+        async for chunk in self.planner_agent.astream(
+            {"messages": messages},
+            lg_config,
+            stream_mode="values",
+            subgraphs=True,
+        ):
+            if _halt:
+                break
 
-            lg_config = {
-                "configurable": {"thread_id": self.session_id},
-            }
+            namespace, event = (
+                chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+            )
+            msgs = event.get("messages", [])
 
-            async for chunk in self.agent.astream(
-                {"messages": [{"role": "user", "content": self.context.task}]},
-                lg_config,
-                stream_mode="values",
-                subgraphs=True,
-            ):
-                if _halt:
-                    break
+            while processed < len(msgs):
+                msg = msgs[processed]
+                msg_type = type(msg).__name__
 
-                namespace, event = (
-                    chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
-                )
+                if namespace:
+                    self._log_always(f"[dim](planner subagent {':'.join(namespace)})[/dim]")
 
-                final_state = event
-                messages = event.get("messages", [])
+                self._log_single_message(msg, processed + 1, prefix="planner")
 
-                while processed_messages < len(messages):
-                    msg = messages[processed_messages]
-                    msg_type = type(msg).__name__
-
-                    if namespace:
-                        self._log_always(f"[dim](subagent {':'.join(namespace)})[/dim]")
-
-                    self._log_single_message(msg, processed_messages + 1)
-
-                    if msg_type == "AIMessage":
-                        tool_calls = getattr(msg, "tool_calls", [])
-                        for tc in tool_calls:
-                            name = tc.get("name", "")
-                            if name in ("write_file", "edit_file", "read_file"):
-                                args = tc.get("args", {})
-                                key_arg = args.get("file_path", args.get("path", ""))
-                                # PLAN.md is edited once per file (normal check-off) — skip it
-                                if "PLAN.md" not in key_arg:
-                                    call_key = (name, key_arg)
-                                    repeated_tool_calls[call_key] = repeated_tool_calls.get(call_key, 0) + 1
-                                    if repeated_tool_calls[call_key] >= MAX_REPEATED_CALLS:
-                                        self._log_always(
-                                            f"[bold yellow]!! Loop guard: '{name}' on '{key_arg}' "
-                                            f"repeated {repeated_tool_calls[call_key]}x — stopping here, "
-                                            f"keeping files written so far.[/bold yellow]"
-                                        )
-                                        _halt = True
-                                        break  # break inner for-tc loop
-                            if _halt:
-                                break  # break inner for-tc loop (planning check)
-                            if name in ("write_file", "task"):
-                                # The model is progressing (writing files or delegating) —
-                                # reset the planning loop counter.
-                                planning_tool_calls.clear()
-                            elif name in ("update_plan", "read_plan"):
-                                planning_tool_calls[name] = planning_tool_calls.get(name, 0) + 1
-                                if planning_tool_calls[name] >= MAX_PLANNING_CALLS:
-                                    self._log_always(
-                                        f"[bold yellow]!! Loop guard: '{name}' called "
-                                        f"{planning_tool_calls[name]}x without writing files — stopping.[/bold yellow]"
-                                    )
-                                    _halt = True
-                                    break
-
-                    elif msg_type == "ToolMessage":
-                        content = str(getattr(msg, "content", ""))
-                        is_error = (
-                            content.startswith("Error:")
-                            or content.startswith("Cannot write to")
-                            or "Error:" in content
-                            or "Traceback" in content
-                            or "Errno" in content
-                            or "not a valid tool" in content
-                            or "Input should be a valid string" in content
-                        )
-                        if is_error:
-                            consecutive_failures += 1
-                            if self.context.stop_on_error and consecutive_failures >= 3:
+                if msg_type == "AIMessage":
+                    for tc in getattr(msg, "tool_calls", []):
+                        name = tc.get("name", "")
+                        if name in ("write_file", "write_task_assignment"):
+                            planning_tool_calls.clear()
+                        elif name in ("update_plan", "read_plan"):
+                            planning_tool_calls[name] = planning_tool_calls.get(name, 0) + 1
+                            if planning_tool_calls[name] >= MAX_PLANNING_CALLS:
                                 self._log_always(
-                                    "[bold yellow]!! 3 consecutive tool failures — stopping.[/bold yellow]"
+                                    f"[bold yellow]!! Planner loop guard: '{name}' called "
+                                    f"{planning_tool_calls[name]}x — stopping.[/bold yellow]"
                                 )
                                 _halt = True
-                        else:
-                            consecutive_failures = 0
-
+                                break
                     if _halt:
-                        break  # break inner while loop
-                    processed_messages += 1
+                        break
 
-            if not final_state:
-                return AgentResult(
-                    success=False, message="Agent stream returned no state.", iterations=0
-                )
+                elif msg_type == "ToolMessage":
+                    content = str(getattr(msg, "content", ""))
+                    is_error = (
+                        content.startswith("Error:")
+                        or content.startswith("Cannot write to")
+                        or "Error:" in content
+                        or "Traceback" in content
+                        or "Errno" in content
+                    )
+                    if is_error:
+                        consecutive_failures += 1
+                        if consecutive_failures >= 3:
+                            self._log_always("[bold yellow]!! 3 consecutive planner failures — stopping.[/bold yellow]")
+                            _halt = True
+                    else:
+                        consecutive_failures = 0
 
-            messages = final_state.get("messages", []) if isinstance(final_state, dict) else []
-            if messages:
-                final_msg = messages[-1]
-                response_content = (
-                    final_msg.content if hasattr(final_msg, "content") else str(final_msg)
-                )
-            else:
-                response_content = "No response"
+                if _halt:
+                    break
+                processed += 1
 
-            if not self.context.dry_run:
-                new_vfs = VirtualFileSystem(self.context.project_path)
-                if self.context.project_path.exists():
-                    new_vfs.load_from_disk()
+        return not _halt
 
-                original_paths = set(self.context.vfs.files.keys())
-                new_paths = set(new_vfs.files.keys())
-                # Exclude .rudra/ state files (PLAN.md, AGENTS.md, etc.)
-                files_created = [
-                    p for p in (new_paths - original_paths)
-                    if Path(p).parts[0] != ".rudra"
-                ]
-                files_modified = [
-                    p
-                    for p in new_paths & original_paths
-                    if new_vfs.files[p] != self.context.vfs.files.get(p)
-                    and Path(p).parts[0] != ".rudra"
-                ]
+    async def _stream_coder(self, coder_agent, messages: list[dict], thread_id: str) -> bool:
+        """Stream a coder agent. Returns False if halted by guards."""
+        lg_config = {"configurable": {"thread_id": thread_id}}
+        processed = 0
+        consecutive_failures = 0
+        repeated_tool_calls: dict[tuple, int] = {}
+        MAX_REPEATED_CALLS = 3
+        _halt = False
 
-                return AgentResult(
-                    success=True,
-                    message=response_content,
-                    files_created=files_created,
-                    files_modified=files_modified,
-                    iterations=self.iterations,
-                    todo_summary=response_content,
-                )
-            else:
+        async for chunk in coder_agent.astream(
+            {"messages": messages},
+            lg_config,
+            stream_mode="values",
+            subgraphs=True,
+        ):
+            if _halt:
+                break
+
+            namespace, event = (
+                chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+            )
+            msgs = event.get("messages", [])
+
+            while processed < len(msgs):
+                msg = msgs[processed]
+                msg_type = type(msg).__name__
+
+                if namespace:
+                    self._log_always(f"[dim](coder subagent {':'.join(namespace)})[/dim]")
+
+                self._log_single_message(msg, processed + 1, prefix="coder")
+
+                if msg_type == "AIMessage":
+                    for tc in getattr(msg, "tool_calls", []):
+                        name = tc.get("name", "")
+                        if name in ("write_file", "edit_file", "read_file"):
+                            args = tc.get("args", {})
+                            key_arg = args.get("file_path", args.get("path", ""))
+                            call_key = (name, key_arg)
+                            repeated_tool_calls[call_key] = repeated_tool_calls.get(call_key, 0) + 1
+                            if repeated_tool_calls[call_key] >= MAX_REPEATED_CALLS:
+                                self._log_always(
+                                    f"[bold yellow]!! Coder loop guard: '{name}' on '{key_arg}' "
+                                    f"repeated {repeated_tool_calls[call_key]}x — stopping.[/bold yellow]"
+                                )
+                                _halt = True
+                                break
+                    if _halt:
+                        break
+
+                elif msg_type == "ToolMessage":
+                    content = str(getattr(msg, "content", ""))
+                    is_error = (
+                        content.startswith("Error:")
+                        or content.startswith("Cannot write to")
+                        or "Error:" in content
+                        or "Traceback" in content
+                        or "Errno" in content
+                        or "not a valid tool" in content
+                        or "Input should be a valid string" in content
+                    )
+                    if is_error:
+                        consecutive_failures += 1
+                        if self.context.stop_on_error and consecutive_failures >= 3:
+                            self._log_always("[bold yellow]!! 3 consecutive coder failures — stopping.[/bold yellow]")
+                            _halt = True
+                    else:
+                        consecutive_failures = 0
+
+                if _halt:
+                    break
+                processed += 1
+
+        return not _halt
+
+    async def _run_planner_phase(self) -> bool:
+        """Phase 1: run planner to create PLAN.md and first task assignment."""
+        self._log_always(
+            f"\n[bold blue]🔵 Phase 1: Planning (model: {self.context.planner_model})[/bold blue]"
+        )
+        self._status("Analyzing task and creating plan...")
+        return await self._stream_planner(
+            [{"role": "user", "content": self.context.task}],
+            thread_id=f"{self.session_id}-planner",
+        )
+
+    async def _request_task_assignment(self, filename: str) -> bool:
+        """Ask the planner (continuing same thread) to write current_task.md for a file."""
+        msg = (
+            f"Write the task assignment for: `{filename}`\n\n"
+            "Call write_task_assignment() now with:\n"
+            f"- file_path: {filename}\n"
+            "- instructions: complete, detailed spec for this file\n"
+            "- context_files: any existing files the coder should read first\n\n"
+            "STOP after write_task_assignment() returns."
+        )
+        return await self._stream_planner(
+            [{"role": "user", "content": msg}],
+            thread_id=f"{self.session_id}-planner",
+        )
+
+    async def _run_coder_for_file(self, filename: str, index: int) -> bool:
+        """Create a fresh coder agent and write the file specified in current_task.md."""
+        from rudra.agent.coder_agent import create_coder_agent
+
+        coder = create_coder_agent(**self._coder_config)
+        thread_id = f"{self.session_id}-coder-{index}"
+        coder_task = (
+            "Read .rudra/current_task.md and write the file specified there. "
+            "Call write_file() with the exact file_path from the task, then stop."
+        )
+        return await self._stream_coder(
+            coder,
+            [{"role": "user", "content": coder_task}],
+            thread_id=thread_id,
+        )
+
+    async def run(self) -> AgentResult:
+        """Orchestrate planner → coder loop."""
+        try:
+            if self.context.dry_run:
                 self._status("Dry run — no files written.")
-                self.console.print(response_content)
                 return AgentResult(
                     success=True,
                     message="Dry run completed (no files written)",
                     files_created=[],
                     files_modified=[],
-                    iterations=self.iterations,
-                    todo_summary=response_content,
                 )
+
+            self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
+
+            # Phase 1: Planning
+            await self._run_planner_phase()
+
+            if not self.plan_path.exists():
+                return AgentResult(
+                    success=False,
+                    message="Planner did not create PLAN.md — cannot proceed.",
+                )
+
+            plan_content = self.plan_path.read_text(encoding="utf-8")
+            pending_files = _parse_pending_files(plan_content)
+            total = len(pending_files)
+
+            if total == 0:
+                return AgentResult(
+                    success=False,
+                    message="PLAN.md has no pending files.",
+                )
+
+            self._log_always(f"\n[bold]📋 Plan: {total} file(s) to generate[/bold]")
+
+            # Phase 2: Coding loop
+            files_created: list[str] = []
+            for i, filename in enumerate(pending_files, start=1):
+                self._log_always(
+                    f"\n[bold green]🟢 Coding [{i}/{total}]: {filename} "
+                    f"(model: {self.context.coder_model})[/bold green]"
+                )
+
+                # For files after the first, ask planner to write current_task.md
+                if i > 1:
+                    self._log_always(f"[dim]  Requesting task assignment for {filename}...[/dim]")
+                    await self._request_task_assignment(filename)
+
+                # Verify current_task.md exists before running coder
+                task_assignment_path = self.plan_path.parent / "current_task.md"
+                if not task_assignment_path.exists():
+                    self._log_always(f"[red]🔴 No current_task.md for {filename} — skipping[/red]")
+                    continue
+
+                success = await self._run_coder_for_file(filename, i)
+
+                # Verify file was actually written to disk
+                file_on_disk = self.context.project_path / filename
+                if file_on_disk.exists():
+                    _check_off_file(self.plan_path, filename)
+                    files_created.append(filename)
+                    self._log_always(f"[green]✅ {filename} written[/green]")
+                else:
+                    self._log_always(f"[red]🔴 {filename} not found on disk after coder run[/red]")
+
+            self._log_always(
+                f"\n[bold]🏁 Complete: {len(files_created)}/{total} files generated[/bold]"
+            )
+
+            return AgentResult(
+                success=len(files_created) > 0,
+                message=f"{len(files_created)}/{total} files generated",
+                files_created=files_created,
+                files_modified=[],
+                iterations=total,
+            )
 
         except Exception:
             import traceback
-
             self._log_always("[bold red]\n!! Agent crashed — full traceback:[/bold red]")
             self._log_always(traceback.format_exc())
             raise
 
 
-
 def _ensure_agents_md(rudra_dir: Path, project_context: Optional[ProjectContext]) -> None:
-    """Create a starter AGENTS.md if one does not already exist.
-
-    The file is the agent's persistent cross-session memory. MemoryMiddleware
-    reads it at startup and injects it into every system prompt. The agent
-    updates it via edit_file as it learns about the project.
-
-    Only created on the very first run — never overwritten.
-    """
+    """Create a starter AGENTS.md if one does not already exist."""
     agents_md = rudra_dir / "AGENTS.md"
     if agents_md.exists():
         return
 
-    # Pre-populate tech stack from project.json if available
     stack_lines = []
     if project_context:
         if project_context.primary_language:
@@ -409,16 +450,8 @@ def _ensure_agents_md(rudra_dir: Path, project_context: Optional[ProjectContext]
 def _write_tech_stack_file(
     rudra_dir: Path,
     project_context: Optional[ProjectContext],
-) -> None:
-    """Write project tech stack context to .rudra/tech_stack.md.
-
-    Called once in create_main_agent() before the agent starts. Offloads
-    tech stack info to disk so the agent reads it via read_file() rather
-    than having it injected into every system prompt call.
-
-    If no project_context is available, writes instructions for the agent
-    to infer the stack from the task description.
-    """
+) -> str:
+    """Write project tech stack to .rudra/tech_stack.md. Returns the content."""
     tech_stack_path = rudra_dir / "tech_stack.md"
 
     if project_context and project_context.primary_language:
@@ -429,9 +462,7 @@ def _write_tech_stack_file(
             f"**Database:** {project_context.database or 'Not specified'}\n\n",
         ]
         if project_context.additional_context:
-            lines.append(
-                f"## Architecture Rules\n\n{project_context.additional_context}\n"
-            )
+            lines.append(f"## Architecture Rules\n\n{project_context.additional_context}\n")
         lines.append("\nAll code you write MUST use this exact tech stack.\n")
     else:
         lines = [
@@ -463,7 +494,7 @@ async def create_main_agent(
     verbose: bool = False,
     **kwargs,
 ) -> RudraAgent:
-    """Factory function to create a main agent using deepagents."""
+    """Factory function — creates the planner + stores coder config for orchestration."""
     console = console or Console()
     project_path = project_path.resolve()
 
@@ -480,17 +511,9 @@ async def create_main_agent(
         dry_run=dry_run,
         verbose=verbose,
         command=command,
+        planner_model=config.ollama.model_planner,
+        coder_model=config.ollama.model_coder,
         **kwargs,
-    )
-
-    from langchain_ollama import ChatOllama
-
-    model = ChatOllama(
-        model=config.ollama.model,
-        base_url=config.ollama.base_url,
-        temperature=config.ollama.temperature,
-        num_predict=config.ollama.num_predict,
-        reasoning=True,
     )
 
     import aiosqlite
@@ -509,53 +532,43 @@ async def create_main_agent(
     rudra_dir = project_path / ".rudra"
     rudra_dir.mkdir(parents=True, exist_ok=True)
 
-    # Ensure persistent memory file exists before MemoryMiddleware tries to load it.
     _ensure_agents_md(rudra_dir, project_context)
-
-    # Write tech stack to disk (for reference) and inline into system prompt
-    # so the model doesn't need to read it voluntarily.
     tech_stack_content = _write_tech_stack_file(rudra_dir, project_context)
-
-    system_prompt = build_system_prompt(
-        command=command,
-        task=task,
-        project_path=project_path,
-        vfs=vfs,
-        project_context=project_context,
-        tech_stack_content=tech_stack_content,
-        **kwargs,
-    )
 
     checkpoints_db = str(rudra_dir / "checkpoints.db")
     db_conn = await aiosqlite.connect(checkpoints_db)
     checkpointer = AsyncSqliteSaver(conn=db_conn)
     await checkpointer.setup()
 
-    # Fresh session ID per invocation — each prompt starts from clean state.
     session_id = uuid.uuid4().hex[:12]
 
-    # Unified tool + middleware stack for all commands.
-    # BlockTaskToolMiddleware forces the model to write files directly instead of
-    # delegating; ContinueAfterWriteMiddleware nudges it to keep writing until the
-    # plan is complete; FixWriteParamsMiddleware silently corrects filename → file_path.
-    plan_path = rudra_dir / "PLAN.md"
-    custom_tools = create_planning_tools(vfs, task=task)
-    main_agent_middleware = [
-        FixWriteParamsMiddleware(),
-        TaskAnchorMiddleware(task),
-        BlockTaskToolMiddleware(),
-        BlockPrematureAskMiddleware(task),
-        ContinueAfterWriteMiddleware(task=task, plan_path=plan_path),
-    ]
+    from rudra.agent.planner_agent import create_planner_agent
 
-    deep_agent = create_deep_agent(
-        model=model,
-        tools=custom_tools,
-        system_prompt=system_prompt,
-        backend=filesystem_backend,
+    planner = create_planner_agent(
+        task=task,
+        project_path=project_path,
+        vfs=vfs,
+        tech_stack_content=tech_stack_content,
+        filesystem_backend=filesystem_backend,
         checkpointer=checkpointer,
-        memory=[".rudra/AGENTS.md"],
-        middleware=main_agent_middleware,
+        console=console,
     )
 
-    return RudraAgent(context, deep_agent, session_id, db_conn=db_conn)
+    coder_config = {
+        "project_path": project_path,
+        "vfs": vfs,
+        "tech_stack_content": tech_stack_content,
+        "filesystem_backend": filesystem_backend,
+        "checkpointer": checkpointer,
+    }
+
+    plan_path = rudra_dir / "PLAN.md"
+
+    return RudraAgent(
+        context=context,
+        planner_agent=planner,
+        session_id=session_id,
+        db_conn=db_conn,
+        coder_config=coder_config,
+        plan_path=plan_path,
+    )
