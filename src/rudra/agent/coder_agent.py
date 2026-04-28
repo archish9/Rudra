@@ -9,7 +9,7 @@ from langchain_ollama import ChatOllama
 
 from rudra.config import config
 from rudra.filesystem import VirtualFileSystem
-from rudra.middleware import BlockTaskToolMiddleware, FixWriteParamsMiddleware, TaskAnchorMiddleware
+from rudra.middleware import BlockTaskToolMiddleware, EnforceTargetFileMiddleware, FixWriteParamsMiddleware, TaskAnchorMiddleware
 
 _CODER_ANCHOR = (
     "Read .rudra/current_task.md, then write the file specified there using write_file(). "
@@ -50,8 +50,14 @@ def create_coder_agent(
     tech_stack_content: str,
     filesystem_backend,
     checkpointer,
+    target_file: str = "",
 ):
-    """Create a fresh coder deep agent. Call once per file."""
+    """Create a fresh coder deep agent. Call once per file.
+
+    Args:
+        target_file: Exact relative path the coder must write (e.g. "src/models.py").
+                     When provided, EnforceTargetFileMiddleware blocks writes to other files.
+    """
     model = ChatOllama(
         model=config.ollama.model_coder,
         base_url=config.ollama.base_url,
@@ -60,15 +66,19 @@ def create_coder_agent(
         reasoning=True,
     )
 
+    middleware = [
+        FixWriteParamsMiddleware(),
+        TaskAnchorMiddleware(_CODER_ANCHOR),
+        BlockTaskToolMiddleware(),
+    ]
+    if target_file:
+        middleware.append(EnforceTargetFileMiddleware(target_file))
+
     return create_deep_agent(
         model=model,
         tools=[],
         system_prompt=_CODER_SYSTEM_PROMPT,
         backend=filesystem_backend,
         checkpointer=checkpointer,
-        middleware=[
-            FixWriteParamsMiddleware(),
-            TaskAnchorMiddleware(_CODER_ANCHOR),
-            BlockTaskToolMiddleware(),
-        ],
+        middleware=middleware,
     )

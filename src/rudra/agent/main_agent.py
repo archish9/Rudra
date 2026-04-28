@@ -120,13 +120,16 @@ class RudraAgent:
         elif msg_type == "ToolMessage":
             content = str(getattr(msg, "content", ""))
             tool_name = getattr(msg, "name", "?")
+            first_line = content.split("\n")[0] if content else ""
             is_error = (
-                content.startswith("Error:")
-                or "Error:" in content
-                or "Traceback" in content
-                or "Errno" in content
+                first_line.startswith("Error:")
+                or first_line.startswith("Cannot write to")
+                or "Error:" in first_line
+                or "Traceback" in first_line
+                or "Errno" in first_line
                 or "not a valid tool" in content
                 or "Input should be a valid string" in content
+                or "BLOCKED:" in first_line
             )
             if is_error:
                 self._log_always(
@@ -194,12 +197,13 @@ class RudraAgent:
 
                 elif msg_type == "ToolMessage":
                     content = str(getattr(msg, "content", ""))
+                    first_line = content.split("\n")[0] if content else ""
                     is_error = (
-                        content.startswith("Error:")
-                        or content.startswith("Cannot write to")
-                        or "Error:" in content
-                        or "Traceback" in content
-                        or "Errno" in content
+                        first_line.startswith("Error:")
+                        or first_line.startswith("Cannot write to")
+                        or "Error:" in first_line
+                        or "Traceback" in first_line
+                        or "Errno" in first_line
                     )
                     if is_error:
                         consecutive_failures += 1
@@ -267,14 +271,16 @@ class RudraAgent:
 
                 elif msg_type == "ToolMessage":
                     content = str(getattr(msg, "content", ""))
+                    first_line = content.split("\n")[0] if content else ""
                     is_error = (
-                        content.startswith("Error:")
-                        or content.startswith("Cannot write to")
-                        or "Error:" in content
-                        or "Traceback" in content
-                        or "Errno" in content
+                        first_line.startswith("Error:")
+                        or first_line.startswith("Cannot write to")
+                        or "Error:" in first_line
+                        or "Traceback" in first_line
+                        or "Errno" in first_line
                         or "not a valid tool" in content
                         or "Input should be a valid string" in content
+                        or "BLOCKED:" in first_line
                     )
                     if is_error:
                         consecutive_failures += 1
@@ -316,15 +322,19 @@ class RudraAgent:
             thread_id=f"{self.session_id}-planner",
         )
 
-    async def _run_coder_for_file(self, filename: str, index: int) -> bool:
-        """Create a fresh coder agent and write the file specified in current_task.md."""
+    async def _run_coder_for_file(self, filename: str, index: int, attempt: int = 0) -> bool:
+        """Create a fresh coder agent and write the file specified in current_task.md.
+
+        Each attempt gets a distinct thread ID so retries start with a clean context.
+        """
         from rudra.agent.coder_agent import create_coder_agent
 
-        coder = create_coder_agent(**self._coder_config)
-        thread_id = f"{self.session_id}-coder-{index}"
+        coder_config = {**self._coder_config, "target_file": filename}
+        coder = create_coder_agent(**coder_config)
+        thread_id = f"{self.session_id}-coder-{index}-{attempt}"
         coder_task = (
-            "Read .rudra/current_task.md and write the file specified there. "
-            "Call write_file() with the exact file_path from the task, then stop."
+            f"Read .rudra/current_task.md and write the file specified there: `{filename}`.\n"
+            f"Call write_file(file_path='{filename}', content='...') then stop."
         )
         return await self._stream_coder(
             coder,
@@ -367,6 +377,8 @@ class RudraAgent:
 
             self._log_always(f"\n[bold]📋 Plan: {total} file(s) to generate[/bold]")
 
+            MAX_CODER_RETRIES = 2
+
             # Phase 2: Coding loop
             files_created: list[str] = []
             for i, filename in enumerate(pending_files, start=1):
@@ -386,16 +398,31 @@ class RudraAgent:
                     self._log_always(f"[red]🔴 No current_task.md for {filename} — skipping[/red]")
                     continue
 
-                success = await self._run_coder_for_file(filename, i)
+                file_written = False
+                for attempt in range(1 + MAX_CODER_RETRIES):
+                    if attempt > 0:
+                        self._log_always(
+                            f"[yellow]🔄 Retry {attempt}/{MAX_CODER_RETRIES} for {filename}[/yellow]"
+                        )
 
-                # Verify file was actually written to disk
-                file_on_disk = self.context.project_path / filename
-                if file_on_disk.exists():
-                    _check_off_file(self.plan_path, filename)
-                    files_created.append(filename)
-                    self._log_always(f"[green]✅ {filename} written[/green]")
-                else:
-                    self._log_always(f"[red]🔴 {filename} not found on disk after coder run[/red]")
+                    await self._run_coder_for_file(filename, i, attempt=attempt)
+
+                    file_on_disk = self.context.project_path / filename
+                    if file_on_disk.exists():
+                        _check_off_file(self.plan_path, filename)
+                        files_created.append(filename)
+                        self._log_always(f"[green]✅ {filename} written[/green]")
+                        file_written = True
+                        break
+                    else:
+                        self._log_always(
+                            f"[red]🔴 {filename} not found on disk (attempt {attempt + 1})[/red]"
+                        )
+
+                if not file_written:
+                    self._log_always(
+                        f"[bold red]⛔ {filename} failed after {1 + MAX_CODER_RETRIES} attempts — skipping[/bold red]"
+                    )
 
             self._log_always(
                 f"\n[bold]🏁 Complete: {len(files_created)}/{total} files generated[/bold]"
@@ -522,7 +549,7 @@ async def create_main_agent(
     from rudra.compat.deepagents_path import install_path_normalizer
     from rudra.compat.overwrite_backend import OverwriteFilesystemBackend
 
-    install_path_normalizer(project_path)
+    install_path_normalizer(project_path, plan_path=project_path / ".rudra" / "PLAN.md")
 
     filesystem_backend = OverwriteFilesystemBackend(
         root_dir=str(project_path),

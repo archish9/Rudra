@@ -76,7 +76,7 @@ def print_banner() -> None:
     console.print()
     console.print()    
 
-    console.print(f"  [bold color(202)]Archish built this with ❤️ [/bold color(202)]  ")
+    console.print(f"  [bold color(202)]Archish built Rudra (रुद्र) with ❤️ [/bold color(202)]  ")
     console.print()
 
     console.print(
