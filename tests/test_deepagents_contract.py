@@ -22,8 +22,8 @@ from importlib.metadata import version
 EXPECTED_DEEPAGENTS_VERSION = "0.7.4"
 
 
-def _tool_names(agent) -> set[str]:
-    """Extract bound tool names from a compiled deepagents graph.
+def _tools_by_name(agent) -> dict:
+    """Extract the bound tool map from a compiled deepagents graph.
 
     langgraph exposes the ToolNode as a graph node whose ``bound`` attribute
     carries ``tools_by_name``. If this stops working the langgraph internals
@@ -32,11 +32,16 @@ def _tool_names(agent) -> set[str]:
     for node in getattr(agent, "nodes", {}).values():
         tools_by_name = getattr(getattr(node, "bound", None), "tools_by_name", None)
         if tools_by_name:
-            return set(tools_by_name)
+            return tools_by_name
     raise AssertionError(
         "Could not locate a ToolNode via agent.nodes[*].bound.tools_by_name. "
-        "langgraph internals changed; update _tool_names."
+        "langgraph internals changed; update _tools_by_name."
     )
+
+
+def _tool_names(agent) -> set[str]:
+    """The names of the agent's bound tools."""
+    return set(_tools_by_name(agent))
 
 
 def _local_model():
