@@ -28,6 +28,7 @@ Status: `PENDING` · `IN PROGRESS` · `DONE` · `WONTFIX`
 | D13 | **Skills delivered via a user-level cache + `CompositeBackend` route** | Option 2. Answers G6 with no deepagents fork. Required because skills live outside the project root while the backend is rooted at it. See [Section 0.4](#04--skill-delivery-mechanism-d13) |
 | D14 | **MemPalace palace is project-scoped, stored under `<project>/.rudra/memory/`** | Supported natively via `Config(palace_path=...)`. Some MemPalace state stays user-global and must be explicitly overridden. See [Section 0.6](#06--mempalace-storage-scope-d14) |
 | D15 | **`.rudra/` split into durable vs volatile subtrees; Rudra writes `.rudra/.gitignore` scoping only itself** | Committing `.rudra/` must be safe by default, and it is the user's choice — Rudra never edits the project's root `.gitignore`. See [Section 0.7](#07--rudra-directory-layout-d15) |
+| D16 | **Stay pure Python. Do not write Rust components.** | Measured 2026-08-05. Inference dominates non-inference work by 3–4 orders of magnitude (10–60 s vs single-digit ms). The CPU-bound paths are **already Rust** via `pydantic_core`, `jiter`, `orjson`, `regex`, `watchfiles`, and `tokenizers` (with mempalace). The only user-perceptible non-inference cost is **0.59 s startup**, which is the langchain/deepagents import itself — unfixable in Rust without abandoning deepagents. Real wins are Python-side: C9.8 (lazy import) and C9.9 (shell out to `ripgrep`). Revisit only if a single self-contained binary with no Python runtime becomes a goal |
 
 ### 0.1 — Middleware disposition (D4)
 
@@ -545,6 +546,8 @@ The hand-rolled loop is the root cause of most limitations.
 | C9.5 | PENDING | Session transcript persistence + `rudra resume` |
 | C9.6 | PENDING | Cost / latency / token reporting per run |
 | C9.7 | PENDING | Structured logging behind `--debug`, separate from the user-facing trace |
+| C9.8 | PENDING | **Lazy-import the agent module.** `cli.py:16` imports `rudra.agent` at module level, so even `rudra --version` / `--help` pays the full deepagents import. Measured **0.58–0.61 s** startup; breakdown `rudra.cli` 503 ms → `deepagents` 376 ms → `langchain.agents` 234 ms → `langchain_anthropic` 132 ms. Defer the import into the command body |
+| C9.9 | PENDING | **Use `ripgrep` for the grep tool when `rg` is on PATH**, falling back to the Python implementation. Only real CPU win available on large repos; not installed on this machine |
 
 ### Phase 10 — OSS launch
 
