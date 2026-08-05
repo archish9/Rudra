@@ -428,7 +428,12 @@ def test_create_deep_agent_accepts_rudras_kwargs():
 
 
 def test_create_deep_agent_accepts_a_backend_instance(tmp_path):
-    """0.7.4 types `backend` as BackendProtocol only — no BackendFactory."""
+    """0.7.4 types `backend` as BackendProtocol only — no BackendFactory.
+
+    Asserts on the resulting tool set rather than just non-None: the
+    filesystem tools are what Rudra's agents actually depend on, and a
+    backend accepted but not wired through would still return an object.
+    """
     from deepagents import create_deep_agent
 
     agent = create_deep_agent(
@@ -436,7 +441,7 @@ def test_create_deep_agent_accepts_a_backend_instance(tmp_path):
         tools=[],
         backend=_backend(tmp_path),
     )
-    assert agent is not None
+    assert {"read_file", "write_file", "edit_file"} <= _tool_names(agent)
 
 
 # --- U.5: TodoListMiddleware no longer auto-added ----------------------------
@@ -1015,7 +1020,10 @@ def test_expected_version_matches_the_contract_tests():
 
 
 def test_version_check_passes_on_the_pinned_version():
-    require_deepagents_version("U.4")
+    from importlib.metadata import version
+
+    require_deepagents_version("U.4")  # must not raise
+    assert version("deepagents") == EXPECTED_DEEPAGENTS_VERSION
 
 
 def test_version_check_raises_on_mismatch():

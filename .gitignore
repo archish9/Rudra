@@ -214,3 +214,6 @@ coding-files/*
 
 # docs/ and tests/ are tracked — see TODO.md A4.8.
 # Sphinx build output is already ignored above (docs/_build/).
+
+# Subagent-driven development scratch (superpowers)
+.superpowers/
