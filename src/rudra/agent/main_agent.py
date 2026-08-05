@@ -547,11 +547,15 @@ async def create_main_agent(
     import uuid
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
     from rudra.compat.deepagents_path import install_path_normalizer
-    from rudra.compat.overwrite_backend import OverwriteFilesystemBackend
+    from deepagents.backends.filesystem import FilesystemBackend
 
     install_path_normalizer(project_path, plan_path=project_path / ".rudra" / "PLAN.md")
 
-    filesystem_backend = OverwriteFilesystemBackend(
+    # 0.7.4's FilesystemBackend.write() creates or overwrites (O_TRUNC +
+    # O_NOFOLLOW), which is the only reason OverwriteFilesystemBackend
+    # existed. Markdown-fence stripping now lives solely in
+    # FixWriteParamsMiddleware, wired into both agents. See TODO.md U.3.
+    filesystem_backend = FilesystemBackend(
         root_dir=str(project_path),
         virtual_mode=True,
     )
