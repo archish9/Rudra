@@ -16,7 +16,10 @@ from langchain.agents.middleware.types import AgentMiddleware
 from rudra.compat.path_constants import SANDBOX_PREFIXES
 
 
-_FENCE_RE = re.compile(r"^```[a-zA-Z0-9_\-]*\n?(.*?)```\s*$", re.DOTALL)
+# Info string is anything up to the newline — matches the coverage that
+# compat/overwrite_backend.py:43 used to provide before U.3 deleted it.
+# See TODO.md U.15.
+_FENCE_RE = re.compile(r"^```[^\n]*\n?(.*?)```\s*$", re.DOTALL)
 
 # Tools that use file_path but model sometimes passes filename/path instead
 _FILE_TOOLS = {"write_file", "edit_file"}
