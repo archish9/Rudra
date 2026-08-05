@@ -8,9 +8,14 @@ None of these tests need a live model or network access. Agent construction
 is local; no request is issued.
 
 IMPORTANT: this module must never import rudra.agent or call
-rudra.compat.deepagents_path.install_path_normalizer. That function
-monkeypatches validate_path, which would invalidate the identity assertion in
-test_validate_path_is_shared_object.
+rudra.compat.deepagents_path.install_path_normalizer. Not because doing so
+would break the identity assertion in test_validate_path_is_shared_object —
+install_path_normalizer assigns the *same* wrapper function to both patch
+targets, so the identity would still (vacuously) hold afterward. The danger
+is the opposite: that test would keep passing for the wrong reason, no
+longer proving deepagents itself shares one validate_path object before any
+patch runs. test_validate_path_is_shared_object guards against exactly this
+ordering hazard with a sentinel check. See TODO.md U.21.
 """
 
 from __future__ import annotations
@@ -107,9 +112,18 @@ def test_validate_path_is_shared_object():
 
     Patching one module is not enough — this identity is exactly why
     compat/deepagents_path.py patches both targets.
+
+    install_path_normalizer assigns the SAME wrapper to both targets, so this
+    identity would still hold after patching — the assertion would go quiet
+    rather than fail. Refuse to run if the patch is already installed.
     """
     utils = importlib.import_module("deepagents.backends.utils")
     fs_mw = importlib.import_module("deepagents.middleware.filesystem")
+
+    assert getattr(utils, "_rudra_original_validate_path", None) is None, (
+        "install_path_normalizer already ran; this assertion no longer proves "
+        "deepagents shares one validate_path object"
+    )
     assert getattr(fs_mw, "validate_path", None) is utils.validate_path
 
 
@@ -161,7 +175,7 @@ def test_write_does_not_strip_markdown_fences(tmp_path):
 
 
 def test_virtual_mode_writes_through_to_disk(tmp_path):
-    """main_agent.py:556 passes virtual_mode=True and expects real files.
+    """main_agent.py:560 passes virtual_mode=True and expects real files.
 
     The deleted OverwriteFilesystemBackend bypassed the base class with
     Path.write_text. If this fails, U.3's straight swap silently stops
@@ -169,6 +183,14 @@ def test_virtual_mode_writes_through_to_disk(tmp_path):
     """
     _backend(tmp_path, virtual_mode=True).write("f.txt", "x")
     assert (tmp_path / "f.txt").read_text() == "x"
+
+
+def test_write_creates_parent_directories(tmp_path):
+    """Rudra builds multi-file projects with nested layouts. The deleted
+    OverwriteFilesystemBackend called mkdir(parents=True) explicitly; upstream
+    does it too, but nothing asserted it until now. See TODO.md U.20."""
+    _backend(tmp_path).write("src/pkg/mod.py", "x")
+    assert (tmp_path / "src" / "pkg" / "mod.py").read_text() == "x"
 
 
 # --- U.6: create_deep_agent surface ------------------------------------------

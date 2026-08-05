@@ -92,7 +92,7 @@ Table below is verified against **installed 0.4.12** (`.venv/.../deepagents/grap
 | (automatic) | `create_summarization_middleware` — offloads history to `/conversation_history/{thread_id}.md` | ✅ inherited, not designed |
 | (automatic) | `TodoListMiddleware`, `PatchToolCallsMiddleware` | ✅ inherited |
 
-**Critical:** `execute` (shell) only works on a backend implementing `SandboxBackendProtocol`. `LocalShellBackend` does (`backends/local_shell.py:27`). Rudra's `OverwriteFilesystemBackend` extends plain `FilesystemBackend` → **the `execute` tool returns an error → Rudra's agents cannot run tests, linters, builds, or git.**
+**Critical:** `execute` (shell) only works on a backend implementing `SandboxBackendProtocol`. `LocalShellBackend` does (`backends/local_shell.py:27`). Rudra's `OverwriteFilesystemBackend` extends plain `FilesystemBackend` → **the `execute` tool returns an error → Rudra's agents cannot run tests, linters, builds, or git.** (Contradicted by probe under 0.7.4; `execute` **is** registered on a plain `FilesystemBackend` — nobody has invoked it to confirm it's functional, not just registered. See `TODO.md` U.17.)
 
 **Skills compatibility:** superpowers skills (`skills/<name>/SKILL.md` with `name:` + `description:` frontmatter — verified in the local plugin cache) match the format `SkillsMiddleware` parses. Superpowers can be dropped in as a skills source with no format conversion.
 
@@ -176,7 +176,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ## 8. Commands
 
 ```bash
-.venv/bin/ruff check src/            # currently 213 errors
+.venv/bin/ruff check src/            # 164 errors at merge-base b322978; standard is NO INCREASE vs that baseline, not an absolute ceiling
 .venv/bin/pytest                     # tests/ is empty — 0 tests
 .venv/bin/rudra --version            # prints 0.1.0; pyproject says 0.2.0
 .venv/bin/rudra "build a flask app"  # single-shot

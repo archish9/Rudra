@@ -59,11 +59,20 @@ def require_deepagents_attr(module_path: str, attr: str, todo_ref: str) -> Any:
         attr: Attribute name to fetch from it.
         todo_ref: The TODO.md item to name in the error, e.g. ``"U.13"``.
     """
+    # Computed once, before either except handler. If deepagents is not
+    # installed at all, calling version("deepagents") *inside* an except
+    # block would raise PackageNotFoundError from within the handler and
+    # mask the real ImportError/AttributeError. See TODO.md U.25.
+    try:
+        deepagents_version = version("deepagents")
+    except Exception:
+        deepagents_version = "<not installed>"
+
     try:
         module = importlib.import_module(module_path)
     except ImportError as exc:
         raise DeepagentsCompatError(
-            f"deepagents {version('deepagents')} has no module {module_path!r}, "
+            f"deepagents {deepagents_version} has no module {module_path!r}, "
             f"which Rudra depends on. {_UPGRADE_HINT} See TODO.md {todo_ref}."
         ) from exc
 
@@ -71,6 +80,6 @@ def require_deepagents_attr(module_path: str, attr: str, todo_ref: str) -> Any:
         return getattr(module, attr)
     except AttributeError as exc:
         raise DeepagentsCompatError(
-            f"deepagents {version('deepagents')} has no {module_path}.{attr}, "
+            f"deepagents {deepagents_version} has no {module_path}.{attr}, "
             f"which Rudra depends on. {_UPGRADE_HINT} See TODO.md {todo_ref}."
         ) from exc
