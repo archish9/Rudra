@@ -211,6 +211,7 @@ __marimo__/
 .claude
 coding-files/*
 .rudra/
+.venv-probe/
 
 # docs/ and tests/ are tracked — see TODO.md A4.8.
 # Sphinx build output is already ignored above (docs/_build/).
