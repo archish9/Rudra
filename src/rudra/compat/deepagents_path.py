@@ -69,6 +69,19 @@ def install_path_normalizer(
 
     Safe to call multiple times (always wraps the original, never re-wraps).
     """
+    from rudra.compat.version_guard import (
+        require_deepagents_attr,
+        require_deepagents_version,
+    )
+
+    # This function rewrites a deepagents internal in two places. Fail here,
+    # naming the ledger item, rather than deep inside a tool call later.
+    require_deepagents_version("U.4")
+    require_deepagents_attr("deepagents.backends.utils", "validate_path", "U.4")
+    require_deepagents_attr(
+        "deepagents.middleware.filesystem", "validate_path", "U.4"
+    )
+
     import deepagents.backends.utils as _utils
     import deepagents.middleware.filesystem as _fs_mw
 

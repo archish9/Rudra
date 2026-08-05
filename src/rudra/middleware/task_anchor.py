@@ -17,7 +17,12 @@ stable deepagents API for this pattern (same approach as MemoryMiddleware).
 from __future__ import annotations
 
 from langchain.agents.middleware.types import AgentMiddleware
-from deepagents.middleware._utils import append_to_system_message
+from rudra.compat.version_guard import require_deepagents_attr
+
+# Private deepagents module — no stability guarantee. See TODO.md U.13.
+append_to_system_message = require_deepagents_attr(
+    "deepagents.middleware._utils", "append_to_system_message", "U.13"
+)
 
 
 class TaskAnchorMiddleware(AgentMiddleware):
