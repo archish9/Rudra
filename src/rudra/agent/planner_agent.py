@@ -10,7 +10,11 @@ from rich.console import Console
 
 from rudra.config import config
 from rudra.filesystem import VirtualFileSystem
-from rudra.middleware import BlockPrematureAskMiddleware, TaskAnchorMiddleware
+from rudra.middleware import (
+    BlockPrematureAskMiddleware,
+    FixWriteParamsMiddleware,
+    TaskAnchorMiddleware,
+)
 from rudra.tools.interaction_tools import create_interaction_tools
 from rudra.tools.planning_tools import create_planning_tools
 
@@ -90,6 +94,10 @@ def create_planner_agent(
         checkpointer=checkpointer,
         memory=[".rudra/AGENTS.md"],
         middleware=[
+            # First in the list: cleans tool args before anything else sees
+            # them. The planner previously got fence-stripping from
+            # OverwriteFilesystemBackend, which U.3 deletes. See TODO.md U.14.
+            FixWriteParamsMiddleware(),
             TaskAnchorMiddleware(task),
             BlockPrematureAskMiddleware(task),
         ],
