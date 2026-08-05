@@ -297,6 +297,10 @@ import importlib
 import inspect
 from importlib.metadata import version
 
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+
 EXPECTED_DEEPAGENTS_VERSION = "0.7.4"
 
 
@@ -322,11 +326,43 @@ def _tool_names(agent) -> set[str]:
     return set(_tools_by_name(agent))
 
 
-def _local_model():
-    """A real ChatOllama instance. Construction issues no network request."""
-    from langchain_ollama import ChatOllama
+class ScriptedToolModel(BaseChatModel):
+    """A chat model that emits one canned write_file call, then stops.
 
-    return ChatOllama(model="gemma4:31b-cloud", base_url="http://localhost:11434")
+    Contract tests must not depend on a provider being reachable or on a
+    particular model tag existing on the machine, and they must never issue
+    a network request. This drives the real compiled graph — real ToolNode,
+    real backend — from a script.
+
+    deepagents hard-requires tool calling, so ``bind_tools`` must work;
+    returning self is enough because the emitted calls are fixed.
+    """
+
+    calls: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "scripted-tool-model"
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        self.calls += 1
+        if self.calls == 1:
+            message = AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "write_file",
+                        "args": {"file_path": "wired.txt", "content": "ok"},
+                        "id": "call-1",
+                    }
+                ],
+            )
+        else:
+            message = AIMessage(content="done")
+        return ChatResult(generations=[ChatGeneration(message=message)])
 
 
 # --- U.4 / C0.8: version pin -------------------------------------------------
@@ -441,19 +477,22 @@ def test_create_deep_agent_routes_writes_to_the_passed_backend(tmp_path):
     yield identical names. Writing through the agent's own tool and finding
     the file under tmp_path is what actually proves the instance is honored.
 
-    No model call: the tool is invoked directly, so nothing hits the network.
+    The tool cannot be invoked directly: deepagents' write_file takes an
+    injected ``ToolRuntime`` that only langgraph's ToolNode supplies inside
+    a running graph (verified — a bare ``.invoke`` raises TypeError on
+    0.7.4). So the graph is actually run, driven by ScriptedToolModel.
+    No network request is issued. See TODO.md U.19.
     """
     from deepagents import create_deep_agent
 
     agent = create_deep_agent(
-        model=_local_model(),
+        model=ScriptedToolModel(),
         tools=[],
         backend=_backend(tmp_path),
     )
     assert {"read_file", "write_file", "edit_file"} <= _tool_names(agent)
 
-    write_file = _tools_by_name(agent)["write_file"]
-    write_file.invoke({"file_path": "wired.txt", "content": "ok"})
+    agent.invoke({"messages": [{"role": "user", "content": "write it"}]})
 
     assert (tmp_path / "wired.txt").read_text() == "ok"
 
@@ -468,7 +507,7 @@ def test_default_stack_has_no_write_todos_tool(tmp_path):
     from deepagents import create_deep_agent
 
     agent = create_deep_agent(
-        model=_local_model(),
+        model=ScriptedToolModel(),
         tools=[],
         backend=_backend(tmp_path),
     )
