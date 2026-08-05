@@ -211,3 +211,6 @@ __marimo__/
 .claude
 coding-files/*
 .rudra/
+
+docs/
+tests/

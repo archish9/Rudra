@@ -1,7 +1,6 @@
 # Rudra
 
 > **Rudra** (रुद्र) — The fierce, storm-like form of Shiva; the howler/roarer
-> **Anvil** — The blacksmith's forge where raw metal is hammered into perfection
 >
 > *The roaring storm that hammers and purifies code*
 
