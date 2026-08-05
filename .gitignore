@@ -212,5 +212,5 @@ __marimo__/
 coding-files/*
 .rudra/
 
-docs/
-tests/
+# docs/ and tests/ are tracked — see TODO.md A4.8.
+# Sphinx build output is already ignored above (docs/_build/).

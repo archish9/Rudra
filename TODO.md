@@ -358,6 +358,7 @@ All verified. None fixed yet.
 | A4.5 | PENDING | No CONTRIBUTING, CODE_OF_CONDUCT, SECURITY, issue templates. | `ls` |
 | A4.6 | PENDING | pyproject `keywords`/`description` still say "ollama" — contradicts provider-agnostic goal. | `pyproject.toml:8,15` |
 | A4.7 | PENDING | Vendored superpowers (MIT, Jesse Vincent) + MemPalace (MIT) under Apache-2.0 need a NOTICE / THIRD_PARTY file. | licenses verified |
+| A4.8 | **DONE** 2026-08-05 | **`.gitignore` ignored `docs/` and `tests/`.** Fixed: removed both lines; `docs/_build/` (`.gitignore:73`) still covers sphinx output. Verified `git check-ignore -v docs tests` → exit 1 (no match). `tests/` being ignored makes the step-4 CI gate structurally impossible — nothing under `tests/` can ever be tracked, though `pyproject.toml:79-81` configures `testpaths = ["tests"]`. This is the real reason behind A3.2, not merely "nobody wrote tests yet". `docs/` blocks C10.3 (design docs live in `docs/`). **Blocks Step 1** (contract tests + spec are both uncommittable). | `.gitignore:215-216`; `git check-ignore -v docs tests` |
 
 ---
 
@@ -393,7 +394,7 @@ Findings that drive this phase are in [Section F](#section-f--deepagents-074-upg
 |---|---|---|
 | U.1 | PENDING | Bump `deepagents==0.7.4`. Forces `langchain>=1.3.14` (have 1.2.13) and `langchain-core>=1.5.0` (have 1.2.23). Bump `langchain-ollama` → 1.1.0 (`langchain-core>=1.2.21`, compatible) |
 | U.2 | PENDING | New transitive hard deps: `langchain-anthropic>=1.5.3`, `langchain-google-genai>=4.3.1`, `langsmith>=0.10.9`, `wcmatch>=11.0`, `packaging>=23.2`. Declare intentionally |
-| U.3 | PENDING | **Delete `compat/overwrite_backend.py`.** 0.7.4 `FilesystemBackend.write()` overwrites by default (`backends/filesystem.py:489`, uses `O_TRUNC` + `O_NOFOLLOW`). Only the markdown-fence stripping was still load-bearing → moves to `FixWriteParamsMiddleware` (D4) |
+| U.3 | PENDING | **Delete `compat/overwrite_backend.py`.** 0.7.4 `FilesystemBackend.write()` overwrites by default (`backends/filesystem.py:489`, uses `O_TRUNC` + `O_NOFOLLOW`). ~~Only the markdown-fence stripping was still load-bearing → moves to `FixWriteParamsMiddleware` (D4)~~ **CORRECTED 2026-08-05: nothing needs porting.** `FixWriteParamsMiddleware` already strips fences (`fix_write_params.py:19`, `:31-33`, `:63-64`). U.3 reduces to swapping the constructor at `main_agent.py:554` and deleting the 65-line file — its sole instantiation. Two gaps the deletion exposes are tracked as U.14 and U.15 |
 | U.4 | PENDING | Re-verify `compat/deepagents_path.py`. `validate_path` still exists at `backends/utils.py:648` and is still imported into `middleware/filesystem.py:77`, so the two-target monkeypatch still applies — but re-test, and add a version assert that fails loudly on a deepagents bump |
 | U.5 | PENDING | **`TodoListMiddleware` is no longer auto-added** in 0.7.4's main stack (`graph.py:634` comment; it appears only inside the Codex harness profile). If `write_todos` is wanted, pass it explicitly with `system_prompt=""` per upstream's own note |
 | U.6 | PENDING | `backend` param is now typed `BackendProtocol` only (no `BackendFactory`). Rudra passes an instance — verify no factory usage creeps in |
@@ -402,7 +403,10 @@ Findings that drive this phase are in [Section F](#section-f--deepagents-074-upg
 | U.9 | PENDING | Adopt provider profiles (`deepagents.profiles.provider`): `register_provider_profile` + built-in OpenRouter / NVIDIA / OpenAI profiles feed `init_chat_model` kwargs. Feeds directly into Phase 1 |
 | U.10 | PENDING | Evaluate harness profiles (`HarnessProfile`, `register_harness_profile`, `excluded_tools`) for per-model tool visibility and prompt tuning — a clean home for per-model quirks instead of Rudra middleware |
 | U.11 | PENDING | Note `AsyncSubAgentMiddleware` / `AsyncSubAgent` (`graph_id`-keyed) exists for out-of-process subagents. Not needed now; record for Phase 6 |
-| U.12 | PENDING | Smoke test end-to-end on 0.7.4 before touching anything else. This is the riskiest single change in the repo |
+| U.12 | PENDING | Smoke test end-to-end on 0.7.4 before touching anything else. This is the riskiest single change in the repo. Target model: `gemma4:31b-cloud` via Ollama cloud (requires `ollama signin` — currently returns `{"error":"unauthorized"}`) |
+| U.13 | PENDING | **Private deepagents API import.** `task_anchor.py:20` does `from deepagents.middleware._utils import append_to_system_message`. A leading-underscore module carries no stability guarantee, and `TaskAnchorMiddleware` is KEEP-opt-in per D4, wired into **both** agents (`planner_agent.py:93`, `coder_agent.py:71`). Third monkeypatch-class breakage risk alongside U.4. Add a guard that fails with an actionable message, plus a contract test | `src/rudra/middleware/task_anchor.py:20` |
+| U.14 | PENDING | **Planner loses fence-stripping once U.3 lands.** `FixWriteParamsMiddleware` is on the coder only (`coder_agent.py:70`); the planner carries only `TaskAnchorMiddleware` + `BlockPrematureAskMiddleware`. Today `OverwriteFilesystemBackend` covers the planner; after deletion nothing does. Add `FixWriteParamsMiddleware()` to the planner middleware list | `src/rudra/agent/planner_agent.py:92-95` vs `coder_agent.py:70` |
+| U.15 | PENDING | **Fence regex narrower than the backend's.** Middleware `_FENCE_RE` uses `[a-zA-Z0-9_\-]*` for the info string; the backend used `[^\n]*`. Fenced blocks with attributes (` ```py title="x" `) match the backend but not the middleware → coverage shrinks at U.3. Widen to `[^\n]*` | `middleware/fix_write_params.py:19` vs `compat/overwrite_backend.py:43` |
 
 ### Phase 0 — Stabilize
 
@@ -571,7 +575,7 @@ Each numbered step is one fresh session with its own self-contained plan under `
 
 | Step | Work | Depends on | Why here |
 |---|---|---|---|
-| **1** | **U.1 – U.6, U.12** — deepagents 0.7.4 upgrade + smoke test | — | Riskiest change in the repo. Every later phase builds on 0.7.4 APIs. Doing it after new code means porting twice |
+| **1** | **U.1 – U.6, U.12 – U.15** — deepagents 0.7.4 upgrade + smoke test. Design spec: `docs/superpowers/specs/2026-08-05-deepagents-074-upgrade-design.md` | A4.8 (**DONE**) | Riskiest change in the repo. Every later phase builds on 0.7.4 APIs. Doing it after new code means porting twice. A4.8 was pulled forward and fixed first — `tests/` was gitignored, so the contract tests could not be committed |
 | **2** | **C0.2, C0.3, A2.1–A2.6, D7** — delete dead code, delete VFS, add capped `project_tree()` | 1 | Removes ~1,100 lines. Everything after touches less surface. Memory budget fix (D7) |
 | **3** | **A1.1, A1.5, A1.7, A1.11–A1.15, C0.4, C0.7, C0.8** — correctness bugs + ruff + dep hygiene | 2 | Cheap, mechanical, unblocks CI |
 | **4** | **C0.5, C0.6, A3.1–A3.4** — pytest suite + CI green | 3 | **Gate.** No further work without a regression net |
