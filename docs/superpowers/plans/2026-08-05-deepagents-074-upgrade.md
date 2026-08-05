@@ -300,8 +300,8 @@ from importlib.metadata import version
 EXPECTED_DEEPAGENTS_VERSION = "0.7.4"
 
 
-def _tool_names(agent) -> set[str]:
-    """Extract bound tool names from a compiled deepagents graph.
+def _tools_by_name(agent) -> dict:
+    """Extract the bound tool map from a compiled deepagents graph.
 
     langgraph exposes the ToolNode as a graph node whose ``bound`` attribute
     carries ``tools_by_name``. If this stops working the langgraph internals
@@ -310,11 +310,16 @@ def _tool_names(agent) -> set[str]:
     for node in getattr(agent, "nodes", {}).values():
         tools_by_name = getattr(getattr(node, "bound", None), "tools_by_name", None)
         if tools_by_name:
-            return set(tools_by_name)
+            return tools_by_name
     raise AssertionError(
         "Could not locate a ToolNode via agent.nodes[*].bound.tools_by_name. "
-        "langgraph internals changed; update _tool_names."
+        "langgraph internals changed; update _tools_by_name."
     )
+
+
+def _tool_names(agent) -> set[str]:
+    """The names of the agent's bound tools."""
+    return set(_tools_by_name(agent))
 
 
 def _local_model():
@@ -427,12 +432,16 @@ def test_create_deep_agent_accepts_rudras_kwargs():
         assert name in params, f"create_deep_agent lost the {name!r} parameter"
 
 
-def test_create_deep_agent_accepts_a_backend_instance(tmp_path):
+def test_create_deep_agent_routes_writes_to_the_passed_backend(tmp_path):
     """0.7.4 types `backend` as BackendProtocol only — no BackendFactory.
 
-    Asserts on the resulting tool set rather than just non-None: the
-    filesystem tools are what Rudra's agents actually depend on, and a
-    backend accepted but not wired through would still return an object.
+    Asserts on behavior, not on tool names. Tool-name presence cannot tell
+    "the tmp_path-rooted instance I passed was wired through" apart from
+    "the kwarg was ignored and a default backend was substituted" — both
+    yield identical names. Writing through the agent's own tool and finding
+    the file under tmp_path is what actually proves the instance is honored.
+
+    No model call: the tool is invoked directly, so nothing hits the network.
     """
     from deepagents import create_deep_agent
 
@@ -442,6 +451,11 @@ def test_create_deep_agent_accepts_a_backend_instance(tmp_path):
         backend=_backend(tmp_path),
     )
     assert {"read_file", "write_file", "edit_file"} <= _tool_names(agent)
+
+    write_file = _tools_by_name(agent)["write_file"]
+    write_file.invoke({"file_path": "wired.txt", "content": "ok"})
+
+    assert (tmp_path / "wired.txt").read_text() == "ok"
 
 
 # --- U.5: TodoListMiddleware no longer auto-added ----------------------------
