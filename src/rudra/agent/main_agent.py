@@ -329,8 +329,7 @@ class RudraAgent:
         """
         from rudra.agent.coder_agent import create_coder_agent
 
-        coder_config = {**self._coder_config, "target_file": filename}
-        coder = create_coder_agent(**coder_config)
+        coder = create_coder_agent(**self._coder_config)
         thread_id = f"{self.session_id}-coder-{index}-{attempt}"
         coder_task = (
             f"Read .rudra/current_task.md and write the file specified there: `{filename}`.\n"

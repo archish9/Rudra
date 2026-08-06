@@ -11,7 +11,6 @@ from rich.console import Console
 from rudra.config import config
 from rudra.filesystem import VirtualFileSystem
 from rudra.middleware import (
-    BlockPrematureAskMiddleware,
     FixWriteParamsMiddleware,
     TaskAnchorMiddleware,
 )
@@ -99,6 +98,5 @@ def create_planner_agent(
             # OverwriteFilesystemBackend, which U.3 deletes. See TODO.md U.14.
             FixWriteParamsMiddleware(),
             TaskAnchorMiddleware(task),
-            BlockPrematureAskMiddleware(task),
         ],
     )
