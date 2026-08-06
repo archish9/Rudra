@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from deepagents import create_deep_agent
 from langchain_ollama import ChatOllama
 
@@ -44,7 +42,6 @@ Do NOT call run_command. Do NOT call task. Do NOT call update_plan.
 
 
 def create_coder_agent(
-    project_path: Path,
     tech_stack_content: str,
     filesystem_backend,
     checkpointer,

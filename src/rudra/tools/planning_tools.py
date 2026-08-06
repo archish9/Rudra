@@ -111,7 +111,6 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
         Returns:
             Current plan markdown, or a message if no plan exists yet.
         """
-        # Read directly from disk — never from VFS cache, which may be stale
         if plan_path.exists():
             return plan_path.read_text(encoding="utf-8")
         return (

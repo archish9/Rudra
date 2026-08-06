@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
 from rich.console import Console
-from deepagents import create_deep_agent
 
 from rudra.config import config
 from rudra.state import ProjectContext
@@ -25,12 +23,9 @@ class AgentContext:
 
     dry_run: bool = False
     verbose: bool = False
-    max_iterations: int = 100
     stop_on_error: bool = True
 
     command: str = "auto"
-    file_path: Optional[str] = None
-    issue: Optional[str] = None
 
     planner_model: str = ""
     coder_model: str = ""
@@ -45,7 +40,6 @@ class AgentResult:
     files_created: list[str] = field(default_factory=list)
     files_modified: list[str] = field(default_factory=list)
     iterations: int = 0
-    todo_summary: str = ""
 
 
 def _parse_pending_files(plan_content: str) -> list[str]:
@@ -577,7 +571,6 @@ async def create_main_agent(
     )
 
     coder_config = {
-        "project_path": project_path,
         "tech_stack_content": tech_stack_content,
         "filesystem_backend": filesystem_backend,
         "checkpointer": checkpointer,

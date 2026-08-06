@@ -25,30 +25,18 @@ class OllamaConfig:
 @dataclass
 class AgentConfig:
     """Agent execution configuration."""
-    
-    max_agents: int = field(default_factory=lambda: int(os.getenv("MAX_AGENTS", "6")))
-    max_iterations: int = field(default_factory=lambda: int(os.getenv("MAX_ITERATIONS", "100")))
-    checkpoint_interval: int = field(default_factory=lambda: int(os.getenv("CHECKPOINT_INTERVAL", "5")))
+
     # Verbose logging — ON by default, set VERBOSE=false in .env to disable
     verbose: bool = field(default_factory=lambda: os.getenv("VERBOSE", "true").lower() != "false")
 
 
 @dataclass
-class SearchConfig:
-    """Web search tool configuration."""
-    
-    tavily_api_key: str = field(default_factory=lambda: os.getenv("TAVILY_API_KEY", ""))
-    use_duckduckgo: bool = field(default_factory=lambda: os.getenv("USE_DUCKDUCKGO", "true").lower() == "true")
-
-
-@dataclass
 class Config:
     """Main configuration container."""
-    
+
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
-    search: SearchConfig = field(default_factory=SearchConfig)
-    
+
     # Paths
     checkpoint_dir: str = ".rudra"
     

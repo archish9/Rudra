@@ -177,7 +177,6 @@ def main(
     project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d", help="Project directory (defaults to current directory)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
     verbose: bool = typer.Option(config.agent.verbose, "--verbose/--no-verbose", "-V", help="Show detailed output"),
-    max_agents: int = typer.Option(6, "--max-agents", help="Maximum number of sub-agents"),
     version: bool = typer.Option(
         False, "--version", "-v", callback=version_callback, is_eager=True, help="Show version and exit"
     ),
@@ -189,7 +188,6 @@ def main(
 
     project_path = get_project_path(project_dir)
     project_context = load_project_context(project_path)
-    config.agent.max_agents = max_agents
 
     if prompt:
         # ── Single-shot task mode ──────────────────────────────────────────
