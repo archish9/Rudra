@@ -4,11 +4,9 @@ Replaces deepagents' built-in write_todos tool with a filesystem-backed
 alternative. The plan is stored in `.rudra/PLAN.md`.
 
 IMPORTANT — filesystem design:
-  update_plan / read_plan both operate on the REAL disk file directly,
-  bypassing the VirtualFileSystem in-memory cache. This keeps them in sync
-  with deepagents' built-in edit_file / read_file tools, which also write
-  to real disk. If read_plan used vfs.read_file(), it would return a stale
-  cache that was never updated when edit_file ran.
+  update_plan / read_plan both operate on the REAL disk file directly, the
+  same disk deepagents' built-in edit_file / read_file tools write to, so
+  the plan the orchestrator parses is always the plan the agent last wrote.
 
 Usage pattern for the agent:
   1. update_plan("- [ ] main.py\\n- [ ] models.py")
@@ -24,18 +22,18 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 
-def create_planning_tools(vfs, task: str = "") -> list:
+def create_planning_tools(project_path: Path, task: str = "") -> list:
     """Create planning tools that read/write .rudra/PLAN.md directly on disk.
 
     Args:
-        vfs: VirtualFileSystem anchored to the project root (used for root_path only).
+        project_path: Project root directory.
         task: The original user task — injected into return messages to remind the
               model of the framework/requirements.
 
     Returns:
-        List of LangChain tools: [update_plan, read_plan]
+        List of LangChain tools: [update_plan, read_plan, write_task_assignment]
     """
-    plan_path: Path = vfs.root_path / ".rudra" / "PLAN.md"
+    plan_path: Path = project_path / ".rudra" / "PLAN.md"
 
     @tool
     def update_plan(plan_markdown: str) -> str:
@@ -85,12 +83,9 @@ def create_planning_tools(vfs, task: str = "") -> list:
             clean_lines.append(line)
         plan_markdown = "\n".join(clean_lines)
 
-        # Write directly to disk — bypasses VFS cache so read_plan stays in sync
+        # Write directly to disk — the same file read_plan and edit_file see
         plan_path.parent.mkdir(parents=True, exist_ok=True)
         plan_path.write_text(plan_markdown, encoding="utf-8")
-        # Invalidate VFS cache — pop both separator styles (Windows uses \, POSIX uses /)
-        vfs.files.pop(str(Path(".rudra") / "PLAN.md"), None)
-        vfs.files.pop(".rudra/PLAN.md", None)
 
         pending = [
             line.strip().replace("- [ ]", "").strip()
@@ -127,7 +122,7 @@ def create_planning_tools(vfs, task: str = "") -> list:
             f"List ONLY filenames. Do NOT ask the user — decide the files yourself based on the task above."
         )
 
-    task_path: Path = vfs.root_path / ".rudra" / "current_task.md"
+    task_path: Path = project_path / ".rudra" / "current_task.md"
 
     @tool
     def write_task_assignment(file_path: str, instructions: str, context_files: str = "") -> str:

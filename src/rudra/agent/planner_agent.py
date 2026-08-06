@@ -9,7 +9,7 @@ from langchain_ollama import ChatOllama
 from rich.console import Console
 
 from rudra.config import config
-from rudra.filesystem import VirtualFileSystem
+from rudra.filesystem import project_tree
 from rudra.middleware import (
     FixWriteParamsMiddleware,
     TaskAnchorMiddleware,
@@ -20,7 +20,7 @@ from rudra.tools.planning_tools import create_planning_tools
 
 def build_planner_prompt(
     task: str,
-    vfs: VirtualFileSystem,
+    project_path: Path,
     tech_stack_content: str = "",
 ) -> str:
     base = f"""You are a senior software architect and planning agent for Rudra.
@@ -28,7 +28,7 @@ def build_planner_prompt(
 Your ONLY job: ANALYZE tasks and CREATE plans. You NEVER write project code files directly.
 
 ## PROJECT STRUCTURE
-{vfs.get_tree()}
+{project_tree(project_path)}
 """
     if tech_stack_content:
         base += f"\n## Tech Stack\n{tech_stack_content}\n"
@@ -68,7 +68,6 @@ Your ONLY job: ANALYZE tasks and CREATE plans. You NEVER write project code file
 def create_planner_agent(
     task: str,
     project_path: Path,
-    vfs: VirtualFileSystem,
     tech_stack_content: str,
     filesystem_backend,
     checkpointer,
@@ -83,12 +82,12 @@ def create_planner_agent(
         reasoning=True,
     )
 
-    custom_tools = create_planning_tools(vfs, task=task) + create_interaction_tools(console, project_path)
+    custom_tools = create_planning_tools(project_path, task=task) + create_interaction_tools(console, project_path)
 
     return create_deep_agent(
         model=model,
         tools=custom_tools,
-        system_prompt=build_planner_prompt(task, vfs, tech_stack_content),
+        system_prompt=build_planner_prompt(task, project_path, tech_stack_content),
         backend=filesystem_backend,
         checkpointer=checkpointer,
         memory=[".rudra/AGENTS.md"],

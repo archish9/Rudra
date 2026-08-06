@@ -15,7 +15,7 @@ from rich.table import Table
 from rudra import __version__
 from rudra.agent import create_main_agent, AgentResult
 from rudra.config import config
-from rudra.filesystem import VirtualFileSystem, FileSyncManager, SyncMode
+from rudra.filesystem import project_tree
 from rudra.state import ProjectConfigManager, ProjectContext
 
 # Create the Typer app
@@ -260,10 +260,7 @@ def main(
                         _print_help()
                         continue
                     elif cmd == "/tree":
-                        vfs = VirtualFileSystem(project_path)
-                        if project_path.exists():
-                            vfs.load_from_disk()
-                        console.print(vfs.get_tree())
+                        console.print(project_tree(project_path))
                         continue
                     elif cmd.startswith("/"):
                         console.print(f"  [yellow]Unknown command:[/yellow] {cmd}  [dim](type /help)[/dim]")

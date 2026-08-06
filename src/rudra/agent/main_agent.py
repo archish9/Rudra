@@ -11,7 +11,6 @@ from rich.console import Console
 from deepagents import create_deep_agent
 
 from rudra.config import config
-from rudra.filesystem import VirtualFileSystem
 from rudra.state import ProjectContext
 
 
@@ -21,7 +20,6 @@ class AgentContext:
 
     project_path: Path
     task: str
-    vfs: VirtualFileSystem
     console: Console
     project_context: Optional[ProjectContext] = None
 
@@ -524,14 +522,9 @@ async def create_main_agent(
     console = console or Console()
     project_path = project_path.resolve()
 
-    vfs = VirtualFileSystem(project_path)
-    if project_path.exists():
-        vfs.load_from_disk()
-
     context = AgentContext(
         project_path=project_path,
         task=task,
-        vfs=vfs,
         console=console,
         project_context=project_context,
         dry_run=dry_run,
@@ -577,7 +570,6 @@ async def create_main_agent(
     planner = create_planner_agent(
         task=task,
         project_path=project_path,
-        vfs=vfs,
         tech_stack_content=tech_stack_content,
         filesystem_backend=filesystem_backend,
         checkpointer=checkpointer,
@@ -586,7 +578,6 @@ async def create_main_agent(
 
     coder_config = {
         "project_path": project_path,
-        "vfs": vfs,
         "tech_stack_content": tech_stack_content,
         "filesystem_backend": filesystem_backend,
         "checkpointer": checkpointer,

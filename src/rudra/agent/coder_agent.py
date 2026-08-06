@@ -8,7 +8,6 @@ from deepagents import create_deep_agent
 from langchain_ollama import ChatOllama
 
 from rudra.config import config
-from rudra.filesystem import VirtualFileSystem
 from rudra.middleware import FixWriteParamsMiddleware, TaskAnchorMiddleware
 
 _CODER_ANCHOR = (
@@ -46,7 +45,6 @@ Do NOT call run_command. Do NOT call task. Do NOT call update_plan.
 
 def create_coder_agent(
     project_path: Path,
-    vfs: VirtualFileSystem,
     tech_stack_content: str,
     filesystem_backend,
     checkpointer,
