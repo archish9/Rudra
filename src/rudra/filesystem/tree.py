@@ -9,7 +9,8 @@ Listing strategy:
      answer. Git resolves .gitignore semantics itself — negations, leading
      `/`, `**`, trailing `/`, nested .gitignore files, global excludes —
      which is the direct fix for TODO.md A1.10.
-  2. Otherwise an os.walk + wcmatch pass over the root .gitignore.
+  2. Otherwise — including when git succeeds but lists nothing — an
+     os.walk + wcmatch pass over the root .gitignore.
 
 Never reads the content of a listed file. The only file this module opens
 is the root .gitignore, and only on the fallback path.
@@ -55,14 +56,25 @@ def project_tree(
     Returns:
         One relative POSIX path per line, sorted, plus a truncation footer
         when entries were omitted. `"(empty project)"` when nothing matches.
+
+    Note:
+        When git lists nothing, the walk runs and therefore lists files git
+        would have excluded. That is deliberate: in a directory where
+        everything is ignored, "show the agent what is here" is the right
+        answer, and it is what `VirtualFileSystem.get_tree()` did before
+        this module replaced it. See TODO.md A1.19.
     """
     root = Path(root)
     if not root.is_dir():
         return EMPTY_PROJECT
 
+    # `not entries`, not `entries is None`. Git exits 0 with no output when
+    # the root is itself gitignored — a successful answer of "nothing" —
+    # which is indistinguishable from an empty project and must still fall
+    # through to the walk. See TODO.md A1.19.
     entries = _git_listing(root)
-    if entries is None:
-        entries = _walk_listing(root)
+    if not entries:
+        entries = _walk_listing(root, max_depth=max_depth)
 
     kept = sorted(
         {
@@ -122,13 +134,20 @@ def _git_listing(root: Path) -> list[str] | None:
     return [entry for entry in raw.split("\0") if entry]
 
 
-def _walk_listing(root: Path) -> list[str]:
-    """Fallback listing: os.walk pruned by the root .gitignore."""
+def _walk_listing(root: Path, *, max_depth: int) -> list[str]:
+    """Fallback listing: os.walk pruned by the root .gitignore and max_depth."""
     patterns = _gitignore_patterns(root)
     found: list[str] = []
 
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = Path(dirpath).relative_to(root)
+
+        # Bound the walk by construction rather than discarding over-deep
+        # paths after traversing them. Nothing below a directory already at
+        # max_depth can survive the depth filter. `Path(".").parts` is `()`,
+        # so the root itself is depth 0.
+        if len(rel_dir.parts) >= max_depth:
+            dirnames[:] = []
 
         # Prune in place. wcmatch's `**/build` matches `build` but NOT
         # `build/artifact.o`, so pruning the directory is what actually

@@ -98,35 +98,68 @@ def test_builtin_skips_apply_even_when_git_tracks_them(tmp_path: Path) -> None:
     assert "node_modules/pkg/index.js" not in lines
 
 
+@requires_git
+def test_gitignored_root_still_lists_its_own_files(tmp_path: Path) -> None:
+    """A1.19 — a root that git ignores must still be listed.
+
+    `git ls-files --cached --others --exclude-standard` exits **0 with empty
+    stdout** here: the directory is inside a work tree, so git answers, and
+    the answer is "nothing". That is a success, not a failure, so a fallback
+    keyed on `is None` never fires and the directory reports as empty.
+    """
+    _init_repo(tmp_path)
+    _write(tmp_path, ".gitignore", "playground/\n")
+    _write(tmp_path, "playground/main.py")
+    _write(tmp_path, "playground/src/mod.py")
+
+    lines = project_tree(tmp_path / "playground").splitlines()
+
+    assert "main.py" in lines
+    assert "src/mod.py" in lines
+
+
 def _assert_never_reads_content(tmp_path: Path, monkeypatch) -> None:
     """Shared body for the content-blindness guard.
 
     Guards both Path.read_text and Path.read_bytes (Finding 2) so a future
-    regression that reads via either call trips the guard. .gitignore is
-    exempted since _gitignore_patterns legitimately reads it on the
-    fallback path.
+    regression that reads via either call trips the guard.
+
+    The exemption is the **root .gitignore by exact path**, not by filename:
+    `_gitignore_patterns` legitimately reads that one file, and nothing
+    else. Exempting `self.name == ".gitignore"` would silently permit a
+    future implementation that walks into nested .gitignore files (A1.21),
+    which is a content read of a listed path.
     """
     _write(tmp_path, ".gitignore", "build/\n")
     _write(tmp_path, "app.py", "secret" * 1000)
     _write(tmp_path, "src/models.py")
+    _write(tmp_path, "src/.gitignore", "*.tmp\n")
+
+    root_gitignore = (tmp_path / ".gitignore").resolve()
+
+    def _is_exempt(path: Path) -> bool:
+        try:
+            return path.resolve() == root_gitignore
+        except OSError:
+            return False
 
     real_read_text = Path.read_text
     real_read_bytes = Path.read_bytes
 
     def guarded_read_text(self: Path, *args, **kwargs):
-        if self.name != ".gitignore":
+        if not _is_exempt(self):
             raise AssertionError(f"project_tree read file content via read_text: {self}")
         return real_read_text(self, *args, **kwargs)
 
     def guarded_read_bytes(self: Path, *args, **kwargs):
-        if self.name != ".gitignore":
+        if not _is_exempt(self):
             raise AssertionError(f"project_tree read file content via read_bytes: {self}")
         return real_read_bytes(self, *args, **kwargs)
 
     real_open = Path.open
 
     def guarded_open(self: Path, *args, **kwargs):
-        if self.name != ".gitignore":
+        if not _is_exempt(self):
             raise AssertionError(f"project_tree read file content via open: {self}")
         return real_open(self, *args, **kwargs)
 

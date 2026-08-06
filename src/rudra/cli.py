@@ -258,7 +258,10 @@ def main(
                         _print_help()
                         continue
                     elif cmd == "/tree":
-                        console.print(project_tree(project_path))
+                        # markup=False: filenames are data, not Rich markup.
+                        # A file named `[draft].md` would otherwise be parsed
+                        # as a style tag and vanish from the listing.
+                        console.print(project_tree(project_path), markup=False)
                         continue
                     elif cmd.startswith("/"):
                         console.print(f"  [yellow]Unknown command:[/yellow] {cmd}  [dim](type /help)[/dim]")

@@ -246,7 +246,7 @@ class RudraAgent:
                 if msg_type == "AIMessage":
                     for tc in getattr(msg, "tool_calls", []):
                         name = tc.get("name", "")
-                        if name in ("write_file", "edit_file", "read_file"):
+                        if name in ("write_file", "edit_file", "read_file", "task"):
                             args = tc.get("args", {})
                             key_arg = args.get("file_path", args.get("path", ""))
                             call_key = (name, key_arg)
