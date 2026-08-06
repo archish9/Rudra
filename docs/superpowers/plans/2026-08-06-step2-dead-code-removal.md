@@ -18,7 +18,7 @@
 - **Evidence-based claims only.** Every claim about the codebase cites `file.py:line`, verified by reading the file — never copied from `TODO.md`, which has documented line-drift (A4.10).
 - **Verify before claiming done.** Run the command, paste the output. No `DONE` mark without it.
 - **Lint bar: no increase over 164 errors** (`.venv/bin/ruff check src/`), the merge-base figure at `b322978` recorded in `CLAUDE.md:179`. A decrease is expected here.
-- **All 24 existing tests stay green** at every commit. `.venv/bin/pytest tests/ -v`.
+- **All 28 pre-existing tests stay green** at every commit. `.venv/bin/pytest tests/ -v`.
 - **Python interpreter is `.venv/bin/python`**, pytest is `.venv/bin/pytest`, ruff is `.venv/bin/ruff`. Never bare `python`.
 - **Do not touch** `planner_agent.py:64` (the prompt-level ask-block), the `.rudra/` directory layout (C0.9), or anything in step 3's list (A1.1, A1.5, A1.7, A1.11–A1.15). They are deliberately out of scope.
 - Commit messages end with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
@@ -68,7 +68,7 @@
 In `TODO.md`, find the row beginning `| D16 |` (the last row of the Section 0 decision table, about staying pure Python). Add immediately after it:
 
 ```markdown
-| D17 | **Delete the `watch` command and `tools/code_tools.py`.** | Decided 2026-08-06. `watch` (`cli.py:351-414`) is a separate command, not part of a `rudra "<task>"` run, and its only actionable branch dispatches to a tool named `check_syntax` (`cli.py:396`) that exists solely in the dead `execution_tools.py:230` — never in `code_tools.py`, whose tools are `run_command` and `grep_in_file`. The branch has never executed. What remains is a printer of `Modified: <path>` lines. Deleting `watch` removes `code_tools.py`'s only consumer. Command execution returns in **C3.2** (step 7) on backend `execute`, with the log-offload behavior (big output → `.rudra/logs/`, short preview returned) ported as C3.2 already specifies. Run-visibility during a task run is served by `RudraAgent._log_single_message` (`main_agent.py:103-151`), improved later by C9.1/C9.7 |
+| D17 | **Delete the `watch` command and `tools/code_tools.py`.** | Decided 2026-08-06. `watch` (`cli.py:351-414`) is a separate command, not part of a `rudra "<task>"` run, and its only actionable branch dispatches to a tool named `check_syntax` (`cli.py:396`) that exists solely in the dead `execution_tools.py:230` — never in `code_tools.py`, whose tools are `run_command` and `grep_in_file`. The branch has never executed. What remains is a printer of `Modified: <path>` lines. Deleting `watch` removes `code_tools.py`'s only consumer. Command execution returns in **C3.2** (step 7) on backend `execute`, with the log-offload behavior (big output → `.rudra/logs/`, short preview returned) ported as C3.2 already specifies. Run-visibility during a task run is served by `RudraAgent._log_single_message` (`main_agent.py:103-147`), improved later by C9.1/C9.7 |
 ```
 
 - [ ] **Step 2: Add rows A2.7–A2.10 to the Section A2 table**
@@ -505,7 +505,7 @@ Then the whole suite plus lint:
 .venv/bin/pytest tests/ -v
 .venv/bin/ruff check src/
 ```
-Expected: 31 passed (24 + 7); ruff ≤ 164.
+Expected: 35 passed (28 + 7); ruff ≤ 164.
 
 - [ ] **Step 6: Commit**
 
@@ -614,7 +614,7 @@ grep -rn "code_tools\|execution_tools\|create_code_tools\|check_syntax" src/ tes
 .venv/bin/pytest tests/ -v
 .venv/bin/ruff check src/
 ```
-Expected: the grep returns **nothing**; `--help` and `--version` both exit 0 (Typer tolerates zero registered commands — probed on this venv); 31 passed; ruff ≤ 164.
+Expected: the grep returns **nothing**; `--help` and `--version` both exit 0 (Typer tolerates zero registered commands — probed on this venv); 35 passed; ruff ≤ 164.
 
 If `--help` fails, that is a real blocker, not a warning — stop and report rather than working around it.
 
@@ -820,7 +820,7 @@ grep -rn "BlockPrematureAsk\|BlockTaskTool\|ContinueAfterWrite\|EnforceTargetFil
 .venv/bin/pytest tests/ -v
 .venv/bin/ruff check src/
 ```
-Expected: the grep returns **nothing**; imports succeed; 31 passed — including `tests/test_agent_wiring.py::test_planner_wires_fix_write_params_middleware_first`, which still holds because `FixWriteParamsMiddleware` remains first; ruff ≤ 164.
+Expected: the grep returns **nothing**; imports succeed; 35 passed — including `tests/test_agent_wiring.py::test_planner_wires_fix_write_params_middleware_first`, which still holds because `FixWriteParamsMiddleware` remains first; ruff ≤ 164.
 
 - [ ] **Step 7: Commit**
 
@@ -1146,7 +1146,7 @@ grep -rn "VirtualFileSystem\|FileSyncManager\|SyncMode\|virtual_fs\|\bvfs\b" src
 .venv/bin/pytest tests/ -v
 .venv/bin/ruff check src/
 ```
-Expected: the grep returns **nothing**; imports succeed; 31 passed; ruff ≤ 164 and materially lower.
+Expected: the grep returns **nothing**; imports succeed; 35 passed; ruff ≤ 164 and materially lower.
 
 - [ ] **Step 8: Prove the planner prompt still carries real structure**
 
@@ -1352,7 +1352,7 @@ grep -rn "max_agents\|max_iterations\|checkpoint_interval\|SearchConfig\|config.
 .venv/bin/pytest tests/ -v
 .venv/bin/ruff check src/
 ```
-Expected: grep returns nothing (`file_path` will still appear as a *parameter name* in tool signatures — that is unrelated and correct; only the `AgentContext.file_path` field was removed); `config` prints without `search=` or `max_agents=`; `--help` no longer lists `--max-agents`; 31 passed; ruff ≤ 164.
+Expected: grep returns nothing (`file_path` will still appear as a *parameter name* in tool signatures — that is unrelated and correct; only the `AgentContext.file_path` field was removed); `config` prints without `search=` or `max_agents=`; `--help` no longer lists `--max-agents`; 35 passed; ruff ≤ 164.
 
 - [ ] **Step 6: Commit**
 
@@ -1401,7 +1401,7 @@ grep -rn "BlockPrematureAsk\|BlockTaskTool\|ContinueAfterWrite\|EnforceTargetFil
 .venv/bin/rudra --version
 ```
 
-Expected: ruff ≤ 164 (record the exact number — it is the new baseline for step 3); 31 passed; both greps return **nothing**; imports succeed; `--help` and `--version` exit 0.
+Expected: ruff ≤ 164 (record the exact number — it is the new baseline for step 3); 35 passed; both greps return **nothing**; imports succeed; `--help` and `--version` exit 0.
 
 Grep exception, matching the rule A4.9 set for the `overwrite_backend.py` deletion: **prose in a comment explaining why code exists is fine; an import, a call, or a numeric `file:line` citation into a deleted file is not.** If a hit is prose, leave it. If it is a citation with a line number into a now-deleted file, fix it in this task by quoting the relevant code inline instead.
 
