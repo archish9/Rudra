@@ -98,24 +98,63 @@ def test_builtin_skips_apply_even_when_git_tracks_them(tmp_path: Path) -> None:
     assert "node_modules/pkg/index.js" not in lines
 
 
-def test_never_reads_the_content_of_a_listed_file(tmp_path: Path, monkeypatch) -> None:
+def _assert_never_reads_content(tmp_path: Path, monkeypatch) -> None:
+    """Shared body for the content-blindness guard.
+
+    Guards both Path.read_text and Path.read_bytes (Finding 2) so a future
+    regression that reads via either call trips the guard. .gitignore is
+    exempted since _gitignore_patterns legitimately reads it on the
+    fallback path.
+    """
     _write(tmp_path, ".gitignore", "build/\n")
     _write(tmp_path, "app.py", "secret" * 1000)
     _write(tmp_path, "src/models.py")
 
     real_read_text = Path.read_text
+    real_read_bytes = Path.read_bytes
 
-    def guarded(self: Path, *args, **kwargs):
+    def guarded_read_text(self: Path, *args, **kwargs):
         if self.name != ".gitignore":
-            raise AssertionError(f"project_tree read file content: {self}")
+            raise AssertionError(f"project_tree read file content via read_text: {self}")
         return real_read_text(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", guarded)
+    def guarded_read_bytes(self: Path, *args, **kwargs):
+        if self.name != ".gitignore":
+            raise AssertionError(f"project_tree read file content via read_bytes: {self}")
+        return real_read_bytes(self, *args, **kwargs)
+
+    real_open = Path.open
+
+    def guarded_open(self: Path, *args, **kwargs):
+        if self.name != ".gitignore":
+            raise AssertionError(f"project_tree read file content via open: {self}")
+        return real_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+    monkeypatch.setattr(Path, "read_bytes", guarded_read_bytes)
+    monkeypatch.setattr(Path, "open", guarded_open)
 
     lines = project_tree(tmp_path).splitlines()
 
     assert "app.py" in lines
     assert "src/models.py" in lines
+
+
+def test_never_reads_the_content_of_a_listed_file_fallback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # No git repo, so _git_listing returns None and the wcmatch walk runs.
+    _assert_never_reads_content(tmp_path, monkeypatch)
+
+
+@requires_git
+def test_never_reads_the_content_of_a_listed_file_git(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # git ls-files answers directly; this must stay content-blind too —
+    # it is the path that runs in every real repo.
+    _init_repo(tmp_path)
+    _assert_never_reads_content(tmp_path, monkeypatch)
 
 
 def test_empty_or_missing_root(tmp_path: Path) -> None:
