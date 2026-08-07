@@ -10,6 +10,7 @@ from rich.console import Console
 
 from rudra.config import get_config
 from rudra.state import ProjectContext
+from rudra.tools.planning_tools import looks_like_path
 
 
 @dataclass
@@ -43,11 +44,19 @@ class AgentResult:
 
 
 def _parse_pending_files(plan_content: str) -> list[str]:
-    return [
+    """Pending filenames from PLAN.md, skipping anything that is not a path.
+
+    The skip is silent by design. update_plan blocks prose and explains why
+    (A1.7), which is where the model needs feedback; here the file may have
+    been hand-edited by the user or rewritten by the agent's own edit_file, so
+    there is no author to correct.
+    """
+    items = (
         line.strip().replace("- [ ]", "").strip()
         for line in plan_content.splitlines()
         if "- [ ]" in line
-    ]
+    )
+    return [item for item in items if looks_like_path(item)]
 
 
 def _check_off_file(plan_path: Path, filename: str) -> None:

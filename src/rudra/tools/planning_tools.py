@@ -22,6 +22,23 @@ from pathlib import Path
 from langchain_core.tools import tool
 
 
+def looks_like_path(item: str) -> bool:
+    """True if a plan checklist item is plausibly a file path, not a prose task.
+
+    Guards A1.7. The whitespace rule carries the weight: every prose form the
+    ledger and the update_plan docstring record contains a space. Requiring an
+    extension or a slash instead would close the single-word gap (N4) but would
+    reject Makefile, Dockerfile, LICENSE and Procfile unless a static allowlist
+    were carried — and TODO.md §0.5 rules out exactly that kind of lookup table.
+    """
+    item = item.strip()
+    if not item:
+        return False
+    if any(character.isspace() for character in item):
+        return False
+    return item[-1] not in ".,:;!"
+
+
 def create_planning_tools(project_path: Path, task: str = "") -> list:
     """Create planning tools that read/write .rudra/PLAN.md directly on disk.
 
@@ -72,6 +89,25 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
                     f"Current plan:\n{existing_text}\n\n"
                     "Continue from the EXISTING plan. Write the next pending file."
                 )
+
+        # A1.7 — refuse prose before anything reaches disk, so the model gets a
+        # correction signal instead of a silently mangled plan.
+        offenders: list[str] = []
+        for line in plan_markdown.splitlines():
+            if "- [ ]" not in line and "- [x]" not in line:
+                continue
+            item = line.strip().replace("- [ ]", "").replace("- [x]", "").strip()
+            if item and not looks_like_path(item):
+                offenders.append(item)
+
+        if offenders:
+            listed = "\n".join(f"  - {offender}" for offender in offenders)
+            return (
+                "REJECTED: these checklist items are task descriptions, not filenames:\n"
+                f"{listed}\n"
+                "Re-emit the plan with one exact filename per item, "
+                "e.g. '- [ ] auth.py' instead of '- [ ] Set up auth'."
+            )
 
         # Sanitise: drop any .rudra/ items (e.g. PLAN.md itself) accidentally included.
         clean_lines = []
