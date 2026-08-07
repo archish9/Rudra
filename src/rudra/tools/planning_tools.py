@@ -9,9 +9,9 @@ IMPORTANT — filesystem design:
   the plan the orchestrator parses is always the plan the agent last wrote.
 
 Usage pattern for the agent:
-  1. update_plan("- [ ] main.py\\n- [ ] models.py")
-  2. write_file(file_path="main.py", content="...")
-  3. edit_file('.rudra/PLAN.md', '- [ ] main.py', '- [x] main.py')
+  1. update_plan("- [ ] src/main.rs\\n- [ ] Cargo.toml")
+  2. write_file(file_path="src/main.rs", content="...")
+  3. edit_file('.rudra/PLAN.md', '- [ ] src/main.rs', '- [x] src/main.rs')
   4. Repeat steps 2-3 for each remaining item.
 """
 
@@ -57,20 +57,20 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
         """Write or overwrite the agent's task plan to .rudra/PLAN.md.
 
         Each checklist item MUST be an actual filename — NOT a task description.
+          CORRECT: - [ ] src/main.rs
+          CORRECT: - [ ] package.json
           CORRECT: - [ ] main.py
-          CORRECT: - [ ] requirements.txt
-          CORRECT: - [ ] models.py
           WRONG:   - [ ] Create FastAPI project structure
           WRONG:   - [ ] Install dependencies
           WRONG:   - [ ] Set up authentication
 
         Format:
-          - `- [ ] filename.py` for pending files
-          - `- [x] filename.py` for completed files
+          - `- [ ] filename` for pending files
+          - `- [x] filename` for completed files
 
         After writing each file, check it off with edit_file:
-          old_string = '- [ ] app.py'
-          new_string = '- [x] app.py'
+          old_string = '- [ ] app/routes.ts'
+          new_string = '- [x] app/routes.ts'
 
         Args:
             plan_markdown: Full markdown checklist where each item is a filename.
@@ -110,7 +110,7 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
                 "REJECTED: these checklist items are task descriptions, not filenames:\n"
                 f"{listed}\n"
                 "Re-emit the plan with one exact filename per item, "
-                "e.g. '- [ ] auth.py' instead of '- [ ] Set up auth'."
+                "e.g. '- [ ] auth.rs' instead of '- [ ] Set up auth'."
             )
 
         # Sanitise: drop any .rudra/ items (e.g. PLAN.md itself) accidentally included.
@@ -157,7 +157,7 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
             f"No plan found. You MUST call update_plan() now with a filename checklist.\n\n"
             f"Your task: {task}\n\n"
             f"Example — call update_plan() with something like:\n"
-            f"  update_plan(plan_markdown='- [ ] app.py\\n- [ ] models.py\\n- [ ] requirements.txt')\n\n"
+            f"  update_plan(plan_markdown='- [ ] src/main.rs\\n- [ ] Cargo.toml')\n\n"
             f"List ONLY filenames. Do NOT ask the user — decide the files yourself based on the task above."
         )
 
@@ -175,7 +175,7 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
         will invoke the coder and then ask you for the next file's assignment.
 
         Args:
-            file_path: Exact relative path of the file to create (e.g. "src/main.py")
+            file_path: Exact relative path of the file to create (e.g. "src/main.rs")
             instructions: Complete, detailed instructions for what the file must contain.
                           Include imports, classes, functions, endpoints, DB models, etc.
             context_files: Comma-separated list of existing files the coder should read first

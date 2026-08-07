@@ -25,7 +25,7 @@ Your ONLY job: Read .rudra/current_task.md and write the file specified there.
 5. STOP — do not write any additional files
 
 ## FILE PATH RULES
-- Use RELATIVE paths only: "app.py", "src/models.py"
+- Use RELATIVE paths only: "src/main.rs", "package.json"
 - NEVER use absolute paths or paths starting with "/" or a drive letter
 - Use the exact file_path from the task assignment
 
