@@ -153,6 +153,18 @@ def test_malformed_package_json_does_not_crash_detection(tmp_path: Path):
     assert [p.name for p in detect(tmp_path)] == ["node"]
 
 
+def test_list_shaped_package_json_does_not_crash_detection(tmp_path: Path):
+    """Valid JSON that isn't an object (e.g. a bare array) must degrade too."""
+    _write(tmp_path, "package.json", '["react", "vue"]')
+    assert [p.name for p in detect(tmp_path)] == ["node"]
+
+
+def test_scalar_shaped_package_json_does_not_crash_detection(tmp_path: Path):
+    """Valid JSON that isn't an object (e.g. a bare string) must degrade too."""
+    _write(tmp_path, "package.json", '"just a string"')
+    assert [p.name for p in detect(tmp_path)] == ["node"]
+
+
 def test_missing_directory_detects_nothing(tmp_path: Path):
     assert detect(tmp_path / "does-not-exist") == []
 
@@ -179,5 +191,19 @@ def test_resolve_test_command_is_none_when_node_declares_no_test(tmp_path: Path)
 
 def test_resolve_test_command_is_none_when_package_json_is_malformed(tmp_path: Path):
     _write(tmp_path, "package.json", "{ not valid json")
+    node = detect(tmp_path)[0]
+    assert resolve_test_command(tmp_path, node) is None
+
+
+def test_resolve_test_command_is_none_when_package_json_is_list_shaped(tmp_path: Path):
+    """Valid JSON that isn't an object must degrade, not raise."""
+    _write(tmp_path, "package.json", '["react", "vue"]')
+    node = detect(tmp_path)[0]
+    assert resolve_test_command(tmp_path, node) is None
+
+
+def test_resolve_test_command_is_none_when_package_json_is_scalar_shaped(tmp_path: Path):
+    """Valid JSON that isn't an object must degrade, not raise."""
+    _write(tmp_path, "package.json", '"just a string"')
     node = detect(tmp_path)[0]
     assert resolve_test_command(tmp_path, node) is None

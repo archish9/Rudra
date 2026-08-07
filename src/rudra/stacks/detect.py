@@ -15,7 +15,7 @@ from rudra.stacks.registry import PROFILES
 
 
 def _load_package_json(project_path: Path) -> dict:
-    """package.json as a dict, or {} when absent or unparseable.
+    """package.json as a dict, or {} when absent, unparseable, or not a JSON object.
 
     A half-written package.json is a normal intermediate state while an agent
     is working. Degrading to {} keeps detection usable; raising would abort a
@@ -23,9 +23,10 @@ def _load_package_json(project_path: Path) -> dict:
     """
     path = project_path / "package.json"
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        parsed = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _declares_dependency(package_json: dict, name: str) -> bool:
