@@ -321,7 +321,7 @@ All verified. None fixed yet.
 
 | # | Status | Item | Evidence |
 |---|---|---|---|
-| A1.1 | PENDING | `__version__ = "0.1.0"` but pyproject says `0.2.0`. `rudra --version` prints the wrong number. | `src/rudra/__init__.py:3` vs `pyproject.toml:7` |
+| A1.1 | **DONE** 2026-08-07 | `__version__ = "0.1.0"` but pyproject says `0.2.0`. `rudra --version` prints the wrong number. | `src/rudra/__init__.py` now reads from `importlib.metadata.version()` with a `PackageNotFoundError` fallback to `"0.0.0+unknown"`. **Verified 2026-08-07 (Step 3, Task 3):** `.venv/bin/pytest tests/test_package_version.py -v` → 2 passed; `.venv/bin/rudra --version` → `Rudra v0.2.0`; `.venv/bin/pytest -q` → 39 passed (37 baseline + 2 new tests). |
 | A1.2 | PENDING | Session ID is a fresh `uuid4()` every run → LangGraph checkpoints in `.rudra/checkpoints.db` are written but **never resumed**. No cross-run continuity. | `src/rudra/agent/main_agent.py` — the `session_id = uuid.uuid4().hex[:12]` assignment in `create_main_agent` |
 | A1.3 | PENDING | `get_or_create_session_id()` exists precisely to fix A1.2 and has **zero call sites**. | `src/rudra/state/checkpoint.py:19` |
 | A1.4 | **DONE** 2026-08-06 | Disk write failures silently swallowed, then the file is marked as written. Agent believes a failed write succeeded. | `src/rudra/filesystem/virtual_fs.py:206-209` (`except Exception: pass`) — resolved by D7 deletion. **Verified 2026-08-06 (Task 7):** `ls src/rudra/filesystem/` → `__init__.py`, `tree.py` only; `virtual_fs.py` no longer exists. Writes now go through deepagents' `FilesystemBackend.write()`, which raises on failure instead of swallowing it |
