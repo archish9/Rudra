@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from rich.console import Console
 
-from rudra.config import config
+from rudra.config import get_config
 from rudra.state import ProjectContext
 
 
@@ -524,8 +524,8 @@ async def create_main_agent(
         dry_run=dry_run,
         verbose=verbose,
         command=command,
-        planner_model=config.ollama.model_planner,
-        coder_model=config.ollama.model_coder,
+        planner_model=get_config().ollama.model_planner,
+        coder_model=get_config().ollama.model_coder,
         **kwargs,
     )
 

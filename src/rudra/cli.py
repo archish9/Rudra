@@ -14,7 +14,7 @@ from rich.table import Table
 
 from rudra import __version__
 from rudra.agent import create_main_agent, AgentResult
-from rudra.config import config
+from rudra.config import get_config
 from rudra.filesystem import project_tree
 from rudra.state import ProjectConfigManager, ProjectContext
 
@@ -176,7 +176,7 @@ def main(
     prompt: Optional[str] = typer.Argument(None, help="Task or question (e.g., 'Create a hello world script')"),
     project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d", help="Project directory (defaults to current directory)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
-    verbose: bool = typer.Option(config.agent.verbose, "--verbose/--no-verbose", "-V", help="Show detailed output"),
+    verbose: Optional[bool] = typer.Option(None, "--verbose/--no-verbose", "-V", help="Show detailed output"),
     version: bool = typer.Option(
         False, "--version", "-v", callback=version_callback, is_eager=True, help="Show version and exit"
     ),
@@ -185,6 +185,12 @@ def main(
     # A subcommand was explicitly given — let it handle everything
     if ctx.invoked_subcommand is not None:
         return
+
+    # A default of `config.agent.verbose` here would be evaluated when this
+    # module is imported, which is the A1.15 defect. Three-state instead:
+    # absent -> consult config, --verbose -> True, --no-verbose -> False.
+    if verbose is None:
+        verbose = get_config().agent.verbose
 
     project_path = get_project_path(project_dir)
     project_context = load_project_context(project_path)
@@ -195,8 +201,8 @@ def main(
         console.print(Panel(
             f"[bold]{prompt}[/bold]\n"
             f"[dim]Path:[/dim] {project_path}\n"
-            f"[dim]Planner:[/dim] {config.ollama.model_planner}  "
-            f"[dim]│  Coder:[/dim] {config.ollama.model_coder}",
+            f"[dim]Planner:[/dim] {get_config().ollama.model_planner}  "
+            f"[dim]│  Coder:[/dim] {get_config().ollama.model_coder}",
             title="⚡ Task",
             border_style="bright_cyan",
         ))
@@ -273,8 +279,8 @@ def main(
                     console.print(Panel(
                         f"[bold]{user_input}[/bold]\n"
                         f"[dim]Path:[/dim] {project_path}\n"
-                        f"[dim]Planner:[/dim] {config.ollama.model_planner}  "
-                        f"[dim]│  Coder:[/dim] {config.ollama.model_coder}",
+                        f"[dim]Planner:[/dim] {get_config().ollama.model_planner}  "
+                        f"[dim]│  Coder:[/dim] {get_config().ollama.model_coder}",
                         title="⚡ Task",
                         border_style="bright_cyan",
                     ))

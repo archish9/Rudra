@@ -5,7 +5,7 @@ from __future__ import annotations
 from deepagents import create_deep_agent
 from langchain_ollama import ChatOllama
 
-from rudra.config import config
+from rudra.config import get_config
 from rudra.middleware import FixWriteParamsMiddleware, TaskAnchorMiddleware
 
 _CODER_ANCHOR = (
@@ -54,11 +54,12 @@ def create_coder_agent(
     well, but it matched on basename — target `src/models.py` permitted a
     write to `tests/models.py` (TODO.md A1.6) — and is deleted in D4.
     """
+    cfg = get_config()
     model = ChatOllama(
-        model=config.ollama.model_coder,
-        base_url=config.ollama.base_url,
-        temperature=config.ollama.temperature,
-        num_predict=config.ollama.num_predict,
+        model=cfg.ollama.model_coder,
+        base_url=cfg.ollama.base_url,
+        temperature=cfg.ollama.temperature,
+        num_predict=cfg.ollama.num_predict,
         reasoning=True,
     )
 

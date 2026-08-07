@@ -1,18 +1,18 @@
 """Configuration settings for Rudra."""
 
-import os
-from pathlib import Path
-from dataclasses import dataclass, field
-from dotenv import load_dotenv
+from __future__ import annotations
 
-# Load environment variables
-load_dotenv()
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 
 @dataclass
 class OllamaConfig:
     """Ollama LLM configuration."""
-    
+
     base_url: str = field(default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"))
     model: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL", "qwen3:14b"))
     model_planner: str = field(default_factory=lambda: os.getenv("OLLAMA_MODEL_PLANNER") or os.getenv("OLLAMA_MODEL", "qwen3:14b"))
@@ -39,12 +39,22 @@ class Config:
 
     # Paths
     checkpoint_dir: str = ".rudra"
-    
+
     @classmethod
     def load(cls) -> "Config":
-        """Load configuration from environment."""
+        """Load configuration from the environment, reading the project's .env first.
+
+        The .env path is explicit rather than bare `load_dotenv()`, which resolves
+        by walking upward from *this module's* directory — so a .env anywhere above
+        the installed package leaked into every project the user ran Rudra in,
+        regardless of the invocation directory. See TODO.md A5.1.
+
+        `override=False` is python-dotenv's default and is deliberately kept: a
+        real environment variable still beats .env.
+        """
+        load_dotenv(Path.cwd() / ".env")
         return cls()
-    
+
     def get_checkpoint_path(self, project_dir: Path) -> Path:
         """Get the checkpoint directory path for a project."""
         checkpoint_path = project_dir / self.checkpoint_dir
@@ -52,5 +62,25 @@ class Config:
         return checkpoint_path
 
 
-# Global config instance
-config = Config.load()
+_config: Config | None = None
+
+
+def get_config() -> Config:
+    """Return the process-wide Config, loading it on first use.
+
+    Replaces the module-level `config = Config.load()`, which froze the entire
+    environment at first import of this module. See TODO.md A1.15.
+    """
+    global _config
+    if _config is None:
+        _config = Config.load()
+    return _config
+
+
+def reset_config() -> None:
+    """Drop the cached Config so the next get_config() re-reads the environment.
+
+    Test-support only.
+    """
+    global _config
+    _config = None

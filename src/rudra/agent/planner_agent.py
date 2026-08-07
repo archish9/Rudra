@@ -8,7 +8,7 @@ from deepagents import create_deep_agent
 from langchain_ollama import ChatOllama
 from rich.console import Console
 
-from rudra.config import config
+from rudra.config import get_config
 from rudra.filesystem import project_tree
 from rudra.middleware import (
     FixWriteParamsMiddleware,
@@ -74,11 +74,12 @@ def create_planner_agent(
     console: Console,
 ):
     """Create the planner deep agent."""
+    cfg = get_config()
     model = ChatOllama(
-        model=config.ollama.model_planner,
-        base_url=config.ollama.base_url,
-        temperature=config.ollama.temperature,
-        num_predict=config.ollama.num_predict,
+        model=cfg.ollama.model_planner,
+        base_url=cfg.ollama.base_url,
+        temperature=cfg.ollama.temperature,
+        num_predict=cfg.ollama.num_predict,
         reasoning=True,
     )
 
