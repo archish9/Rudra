@@ -190,3 +190,41 @@ def test_empty_or_missing_root(tmp_path: Path) -> None:
 
     assert project_tree(empty) == "(empty project)"
     assert project_tree(tmp_path / "does_not_exist") == "(empty project)"
+
+
+def test_build_output_dirs_are_never_listed(tmp_path: Path) -> None:
+    """F1: without this, a Rust target/ fills the 300-entry budget and
+    truncates away the source the planner needs to see."""
+    _write(tmp_path, "Cargo.toml", "[package]")
+    _write(tmp_path, "src/main.rs", "fn main() {}")
+    _write(tmp_path, "target/debug/app", "binary")
+    _write(tmp_path, "target/debug/deps/libfoo.rlib", "x")
+
+    tree = project_tree(tmp_path)
+
+    assert "src/main.rs" in tree
+    assert "Cargo.toml" in tree
+    assert "target" not in tree
+
+
+def test_frontend_build_dirs_are_never_listed(tmp_path: Path) -> None:
+    _write(tmp_path, "package.json", "{}")
+    _write(tmp_path, "src/app/app.component.ts", "export class App {}")
+    _write(tmp_path, ".next/cache/x", "x")
+    _write(tmp_path, "dist/main.js", "x")
+    _write(tmp_path, ".angular/cache/y", "y")
+
+    tree = project_tree(tmp_path)
+
+    assert "src/app/app.component.ts" in tree
+    assert ".next" not in tree
+    assert "dist/" not in tree
+    assert ".angular" not in tree
+
+
+def test_skip_dirs_are_sourced_from_the_stack_registry() -> None:
+    """Single source of truth: adding a stack must not require editing tree.py."""
+    from rudra.filesystem.tree import _ALWAYS_SKIP_DIRS
+    from rudra.stacks import ALL_SKIP_DIRS
+
+    assert ALL_SKIP_DIRS <= _ALWAYS_SKIP_DIRS

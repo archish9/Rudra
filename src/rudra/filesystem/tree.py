@@ -24,14 +24,19 @@ from pathlib import Path
 
 from wcmatch import glob as wcglob
 
+from rudra.stacks import ALL_SKIP_DIRS
+
 EMPTY_PROJECT = "(empty project)"
 
 _GIT_TIMEOUT_SECONDS = 5
 
 # Applied on BOTH listing paths, so they hold even in a repo that tracks
 # them. `.rudra` is Rudra's own state directory and must never appear in
-# the model's view of the project.
-_ALWAYS_SKIP_DIRS = frozenset({".git", ".rudra", "__pycache__", "node_modules", ".venv", "venv"})
+# the model's view of the project. Build-output directories come from the
+# stack registry so adding a language never requires editing this file
+# (TODO.md D18, C11.1).
+_RUDRA_SKIP_DIRS = frozenset({".git", ".rudra"})
+_ALWAYS_SKIP_DIRS = _RUDRA_SKIP_DIRS | ALL_SKIP_DIRS
 _ALWAYS_SKIP_SUFFIXES = (".pyc",)
 
 _WCMATCH_FLAGS = wcglob.GLOBSTAR | wcglob.NEGATE | wcglob.DOTGLOB
