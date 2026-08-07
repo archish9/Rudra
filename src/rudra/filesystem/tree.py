@@ -41,7 +41,7 @@ _RUDRA_SKIP_DIRS = frozenset({".git", ".rudra"})
 # root* -- they are common English words that also occur as legitimate
 # source directories at any other depth (`src/out/`, a Django app named
 # `target`, ...). Matched at any depth they silently hide real source from
-# the agent with no signal in the truncation footer (TODO.md <FIX_B_ID>).
+# the agent with no signal in the truncation footer (TODO.md A1.29).
 # Skip them only when they are the first path segment.
 _ROOT_ANCHORED_SKIP_DIRS = frozenset({"out", "build", "dist", "target", "coverage"})
 
