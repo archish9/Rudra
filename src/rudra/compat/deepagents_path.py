@@ -2,11 +2,20 @@
 
 WHY THIS EXISTS
 --------------
-deepagents' ``validate_path`` rejects absolute paths with a hard ValueError.
 Some LLMs ignore system-prompt instructions and emit absolute paths regardless
-of the OS — Windows-style (``C:\\project\\models.py``) or POSIX-style
-(``/home/user/project/models.py``).  This shim intercepts both forms before
-deepagents sees them and converts them to relative POSIX paths.
+of the OS — Windows-style (``C:\\project\\models.py``), POSIX-style
+(``/home/user/project/models.py``), or hallucinated sandbox prefixes from
+training data (``/testbed/app/main.py``).  Left alone these resolve to the
+wrong place in the backend's virtual filesystem.
+
+Measured against the pinned deepagents 0.7.4, upstream ``validate_path`` does
+NOT reject absolute paths: ``validate_path("/abs/x.py")`` returns
+``"/abs/x.py"`` unchanged and ``validate_path("main.py")`` returns
+``"/main.py"`` — it prepends ``/``, virtual-root semantics.  An earlier
+revision of this docstring claimed it "rejects absolute paths with a hard
+ValueError"; that was false for 0.7.4 (TODO.md A4.11).  This shim's real job
+is to strip real-machine and sandbox prefixes so the resulting virtual path
+points at the intended file.
 
 ``validate_path`` is only called inside ``deepagents.middleware.filesystem``
 (confirmed by grep across the full deepagents package).  We patch the
