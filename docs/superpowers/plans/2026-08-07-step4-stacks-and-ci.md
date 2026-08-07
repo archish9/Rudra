@@ -27,7 +27,6 @@ Binding on **every** task. From `CLAUDE.md` §2 and the spec.
 - **`deepagents` stays pinned `==0.7.4`** (`pyproject.toml:30`). `src/rudra/compat/` monkeypatches its internals.
 - Python floor 3.12 — `tomllib` is stdlib. Do not add `toml`/`tomli`.
 - Coverage is **reported, never gated**. No `--fail-under`.
-- Commit messages end with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.
 
 ### Measured baseline (2026-08-07, commit `71e54e0`)
 
@@ -146,7 +145,7 @@ paths; measured).
 New C11 section for stack detection — no existing phase-scoped C section
 owns it.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -382,7 +381,7 @@ devDependencies would be inference where an observation is available.
 
 Pure data. No I/O, no subprocess.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -667,7 +666,7 @@ manifest is a normal intermediate state while an agent works.
 
 Closes C11.1.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -796,7 +795,7 @@ the planner needs.
 The build-output half now comes from the stack registry, so adding a language
 is a data change in one place rather than an edit here too.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -1017,7 +1016,7 @@ not reject absolute paths, it returns them unchanged and prepends / to
 relative ones. The module's real job is stripping real-machine and sandbox
 prefixes.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -1229,7 +1228,7 @@ loop are left untested on purpose rather than by omission.
 Fixtures span Rust, Node and Angular filenames alongside Python so no
 single-language assumption calcifies ahead of D18.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -1306,7 +1305,7 @@ to a mixed set spanning Rust, Node, TypeScript and Python.
 Prompt text only -- looks_like_path already accepts every target stack's
 filenames, verified by execution. The test count is unchanged.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -1439,7 +1438,7 @@ yields 0.0.0+unknown and fails.
 
 Closes C0.6 and A3.3; A3.1 and A3.2 closed as satisfied by earlier work.
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -1487,7 +1486,7 @@ Also carry forward, so Step 5 inherits them: `A1.25` (silent plan-item drop repo
 git add TODO.md
 git commit -m "docs(todo): close out Step 4 — stacks, regression net, CI
 
-Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
