@@ -11,10 +11,12 @@ executes a subprocess; running the commands it reports belongs to C3.6.
 from __future__ import annotations
 
 import dataclasses
+import json
+from pathlib import Path
 
 import pytest
 
-from rudra.stacks import ALL_SKIP_DIRS, PROFILES
+from rudra.stacks import ALL_SKIP_DIRS, PROFILES, detect, resolve_test_command
 
 
 def test_profile_is_immutable():
@@ -75,3 +77,107 @@ def test_all_skip_dirs_covers_every_targets_build_output():
 def test_all_skip_dirs_is_the_union_of_the_profiles():
     union = frozenset().union(*(p.skip_dirs for p in PROFILES))
     assert ALL_SKIP_DIRS == union
+
+
+def _write(root: Path, rel: str, content: str = "") -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _package_json(root: Path, *, deps: dict | None = None, test: str | None = None) -> None:
+    body: dict = {"name": "app"}
+    if deps is not None:
+        body["dependencies"] = deps
+    if test is not None:
+        body["scripts"] = {"test": test}
+    _write(root, "package.json", json.dumps(body))
+
+
+def test_empty_directory_detects_nothing(tmp_path: Path):
+    """Greenfield: the model picks the stack and writes the marker file."""
+    assert detect(tmp_path) == []
+
+
+def test_cargo_toml_detects_rust(tmp_path: Path):
+    _write(tmp_path, "Cargo.toml", '[package]\nname = "app"\n')
+    assert [p.name for p in detect(tmp_path)] == ["rust"]
+
+
+def test_pyproject_detects_python(tmp_path: Path):
+    _write(tmp_path, "pyproject.toml", "[project]\nname = 'app'\n")
+    assert [p.name for p in detect(tmp_path)] == ["python"]
+
+
+def test_requirements_txt_alone_detects_python(tmp_path: Path):
+    """markers are ANY-of: one Python marker is enough."""
+    _write(tmp_path, "requirements.txt", "flask\n")
+    assert [p.name for p in detect(tmp_path)] == ["python"]
+
+
+def test_package_json_alone_detects_node(tmp_path: Path):
+    _package_json(tmp_path, test="jest")
+    assert [p.name for p in detect(tmp_path)] == ["node"]
+
+
+def test_angular_outranks_node_and_both_are_reported(tmp_path: Path):
+    _package_json(tmp_path, test="ng test")
+    _write(tmp_path, "angular.json", "{}")
+    assert [p.name for p in detect(tmp_path)] == ["angular", "node"]
+
+
+def test_react_needs_the_dependency_not_just_package_json(tmp_path: Path):
+    _package_json(tmp_path, deps={"vue": "^3.0.0"}, test="vitest run")
+    assert [p.name for p in detect(tmp_path)] == ["node"]
+
+    _package_json(tmp_path, deps={"react": "^18.0.0"}, test="vitest run")
+    assert [p.name for p in detect(tmp_path)] == ["react", "node"]
+
+
+def test_tauri_style_project_reports_both_stacks(tmp_path: Path):
+    """A repo genuinely can be two stacks. Forcing one answer would be wrong."""
+    _write(tmp_path, "Cargo.toml", '[package]\nname = "app"\n')
+    _package_json(tmp_path, test="vitest run")
+    assert sorted(p.name for p in detect(tmp_path)) == ["node", "rust"]
+
+
+def test_angular_json_without_package_json_is_not_angular(tmp_path: Path):
+    """`requires` is ALL-of: angular.json alone is not an Angular workspace."""
+    _write(tmp_path, "angular.json", "{}")
+    assert detect(tmp_path) == []
+
+
+def test_malformed_package_json_does_not_crash_detection(tmp_path: Path):
+    """A half-written package.json is normal mid-task. Degrade, don't raise."""
+    _write(tmp_path, "package.json", "{ not valid json")
+    assert [p.name for p in detect(tmp_path)] == ["node"]
+
+
+def test_missing_directory_detects_nothing(tmp_path: Path):
+    assert detect(tmp_path / "does-not-exist") == []
+
+
+def test_resolve_test_command_returns_the_declared_command(tmp_path: Path):
+    _write(tmp_path, "Cargo.toml", '[package]\nname = "app"\n')
+    rust = detect(tmp_path)[0]
+    assert resolve_test_command(tmp_path, rust) == ["cargo", "test"]
+
+
+def test_resolve_test_command_reads_scripts_test_for_node(tmp_path: Path):
+    _package_json(tmp_path, test="vitest run")
+    node = detect(tmp_path)[0]
+    assert resolve_test_command(tmp_path, node) == ["npm", "test"]
+
+
+def test_resolve_test_command_is_none_when_node_declares_no_test(tmp_path: Path):
+    """Reported as absent, never fabricated. A missing gate is actionable;
+    an invented one is not."""
+    _package_json(tmp_path)
+    node = detect(tmp_path)[0]
+    assert resolve_test_command(tmp_path, node) is None
+
+
+def test_resolve_test_command_is_none_when_package_json_is_malformed(tmp_path: Path):
+    _write(tmp_path, "package.json", "{ not valid json")
+    node = detect(tmp_path)[0]
+    assert resolve_test_command(tmp_path, node) is None

@@ -6,7 +6,14 @@ user's project is written in.
 
 from __future__ import annotations
 
+from rudra.stacks.detect import detect, resolve_test_command
 from rudra.stacks.profile import StackProfile
 from rudra.stacks.registry import ALL_SKIP_DIRS, PROFILES
 
-__all__ = ["ALL_SKIP_DIRS", "PROFILES", "StackProfile"]
+__all__ = [
+    "ALL_SKIP_DIRS",
+    "PROFILES",
+    "StackProfile",
+    "detect",
+    "resolve_test_command",
+]
