@@ -324,17 +324,21 @@ def test_version_matches_pyproject() -> None:
     )
 
 
-def test_version_is_not_hardcoded_in_the_source() -> None:
-    """A literal assignment would silently drift again on the next bump."""
-    source = (Path(rudra.__file__)).read_text(encoding="utf-8")
-    assert '__version__ = "' not in source
+def test_version_is_read_from_package_metadata() -> None:
+    """The drift returns the moment someone reassigns a literal as the primary source."""
+    source = Path(rudra.__file__).read_text(encoding="utf-8")
+    assert "importlib.metadata" in source, (
+        "__init__.py must derive __version__ from installed metadata, not a literal"
+    )
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
 
 Run: `.venv/bin/pytest tests/test_package_version.py -v`
 
-Expected: **both** tests FAIL. `test_version_matches_pyproject` fails with `'0.1.0' != '0.2.0'`; `test_version_is_not_hardcoded_in_the_source` fails because `__init__.py:3` contains the literal.
+Expected: **both** tests FAIL. `test_version_matches_pyproject` fails with `'0.1.0' != '0.2.0'`; `test_version_is_read_from_package_metadata` fails because `__init__.py` does not mention `importlib.metadata` yet.
+
+> A first draft of this test asserted `'__version__ = "' not in source`. That is wrong — the `except PackageNotFoundError` branch in Step 3 assigns exactly that literal, so the test would have failed *on the correct implementation*. Asserting the metadata import is the property that actually matters.
 
 - [ ] **Step 3: Rewrite `src/rudra/__init__.py`**
 
