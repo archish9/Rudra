@@ -38,12 +38,29 @@ def clean_config_state(monkeypatch: pytest.MonkeyPatch):
 
     Without the delenv loop these tests pass or fail based on the developer's
     own shell, which is exactly the class of bug A5.1 describes.
+
+    The post-yield restore below is direct os.environ manipulation, not
+    monkeypatch.delenv/setenv. Config.load() calls the real load_dotenv(),
+    which writes straight to os.environ — monkeypatch never sees that write
+    and so records no undo entry for it. monkeypatch.delenv(raising=False)
+    on a var that was absent when the test started is the same story: no
+    prior value, no undo entry. Either way, monkeypatch's own teardown has
+    nothing to roll back, and the var survives into every later test in the
+    session — the exact leak this fixture's docstring claims to prevent.
+    Snapshotting and restoring the real values ourselves closes that gap
+    regardless of how the variable got there.
     """
+    original = {name: os.environ.get(name) for name in OLLAMA_ENV_VARS}
     for name in OLLAMA_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
     reset_config()
     yield
     reset_config()
+    for name, value in original.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 def test_get_config_is_cached() -> None:
