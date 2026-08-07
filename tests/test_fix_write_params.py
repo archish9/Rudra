@@ -35,8 +35,8 @@ def test_strips_fence_with_info_string_attributes():
 
 
 def test_keeps_inner_fences_when_stripping_outer():
-    content = '```markdown\nSee:\n```\ninner\n```\n```'
-    assert _strip_fences(content) == 'See:\n```\ninner\n```\n'
+    content = "```markdown\nSee:\n```\ninner\n```\n```"
+    assert _strip_fences(content) == "See:\n```\ninner\n```\n"
 
 
 def test_leaves_unterminated_fence_alone():

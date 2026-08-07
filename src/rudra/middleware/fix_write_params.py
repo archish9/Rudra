@@ -15,7 +15,6 @@ from langchain.agents.middleware.types import AgentMiddleware
 
 from rudra.compat.path_constants import SANDBOX_PREFIXES
 
-
 # Info string is anything up to the newline — matches the coverage that
 # compat/overwrite_backend.py:43 used to provide before U.3 deleted it.
 # See TODO.md U.15.
@@ -42,7 +41,7 @@ def _strip_sandbox_prefix(path: str) -> str:
         return path
     for prefix in SANDBOX_PREFIXES:
         if path.startswith(prefix):
-            return path[len(prefix):]
+            return path[len(prefix) :]
     return path
 
 

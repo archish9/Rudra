@@ -78,9 +78,7 @@ def install_path_normalizer(
     # naming the ledger item, rather than deep inside a tool call later.
     require_deepagents_version("U.4")
     require_deepagents_attr("deepagents.backends.utils", "validate_path", "U.4")
-    require_deepagents_attr(
-        "deepagents.middleware.filesystem", "validate_path", "U.4"
-    )
+    require_deepagents_attr("deepagents.middleware.filesystem", "validate_path", "U.4")
 
     import deepagents.backends.utils as _utils
     import deepagents.middleware.filesystem as _fs_mw
@@ -125,7 +123,7 @@ def install_path_normalizer(
         sandbox_stripped: str | None = None
         for prefix in SANDBOX_PREFIXES:
             if path.startswith(prefix):
-                sandbox_stripped = path[len(prefix):]
+                sandbox_stripped = path[len(prefix) :]
                 break
 
         if sandbox_stripped is not None:

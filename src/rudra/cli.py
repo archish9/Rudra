@@ -13,7 +13,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 from rudra import __version__
-from rudra.agent import create_main_agent, AgentResult
+from rudra.agent import AgentResult, create_main_agent
 from rudra.config import get_config
 from rudra.filesystem import project_tree
 from rudra.state import ProjectConfigManager, ProjectContext
@@ -67,16 +67,16 @@ def print_banner() -> None:
 
     # Sub-title row
     console.print(
-        f"  [bold white]Rudra (रुद्र) — The fierce, storm-like form of Shiva; the howler/roarer[/bold white]  "        
+        "  [bold white]Rudra (रुद्र) — The fierce, storm-like form of Shiva; the howler/roarer[/bold white]  "
     )
     console.print(
-        f"  [bold italic white]The roaring storm that hammers and purifies code [/bold italic white]  "
+        "  [bold italic white]The roaring storm that hammers and purifies code [/bold italic white]  "
     )
 
     console.print()
-    console.print()    
+    console.print()
 
-    console.print(f"  [bold color(202)]Archish built Rudra (रुद्र) with ❤️ [/bold color(202)]  ")
+    console.print("  [bold color(202)]Archish built Rudra (रुद्र) with ❤️ [/bold color(202)]  ")
     console.print()
 
     console.print(
@@ -99,23 +99,26 @@ def print_banner() -> None:
 # Blinking REPL prompt (prompt_toolkit preferred, rich fallback)
 # ---------------------------------------------------------------------------
 
+
 def _make_prompt_toolkit_session():
     """Create a prompt_toolkit PromptSession with a blinking cursor."""
     try:
         from prompt_toolkit import PromptSession
-        from prompt_toolkit.styles import Style
         from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.styles import Style
 
-        style = Style.from_dict({
-            "prompt": "ansibrightcyan bold",
-            "": "ansiwhite",
-        })
+        style = Style.from_dict(
+            {
+                "prompt": "ansibrightcyan bold",
+                "": "ansiwhite",
+            }
+        )
 
         bindings = KeyBindings()
 
-        @bindings.add('escape', 'escape', 'escape')
+        @bindings.add("escape", "escape", "escape")
         def _(event):
-            event.app.exit(result='/exit')
+            event.app.exit(result="/exit")
 
         session = PromptSession(
             style=style,
@@ -135,17 +138,21 @@ async def _prompt_input(session, prompt_text: str) -> str:
     """
     if session is not None:
         from prompt_toolkit.formatted_text import HTML
+
         # prompt_async is awaitable — safe to call inside a running event loop
         return await session.prompt_async(HTML(f"<prompt>{prompt_text}</prompt> "))
     # Fallback: rich Prompt (blocking) — run it in a thread executor so we
     # don't block the event loop
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: Prompt.ask(f"[bold cyan]{prompt_text}[/bold cyan]"))
+    return await loop.run_in_executor(
+        None, lambda: Prompt.ask(f"[bold cyan]{prompt_text}[/bold cyan]")
+    )
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def version_callback(value: bool) -> None:
     """Show version and exit."""
@@ -170,15 +177,27 @@ def load_project_context(project_path: Path) -> ProjectContext:
 # Main entry-point / interactive REPL
 # ---------------------------------------------------------------------------
 
+
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    prompt: Optional[str] = typer.Argument(None, help="Task or question (e.g., 'Create a hello world script')"),
-    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d", help="Project directory (defaults to current directory)"),
+    prompt: Optional[str] = typer.Argument(
+        None, help="Task or question (e.g., 'Create a hello world script')"
+    ),
+    project_dir: Optional[Path] = typer.Option(
+        None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
+    ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
-    verbose: Optional[bool] = typer.Option(None, "--verbose/--no-verbose", "-V", help="Show detailed output"),
+    verbose: Optional[bool] = typer.Option(
+        None, "--verbose/--no-verbose", "-V", help="Show detailed output"
+    ),
     version: bool = typer.Option(
-        False, "--version", "-v", callback=version_callback, is_eager=True, help="Show version and exit"
+        False,
+        "--version",
+        "-v",
+        callback=version_callback,
+        is_eager=True,
+        help="Show version and exit",
     ),
 ) -> None:
     """Rudra - Autonomous Coding Agent CLI."""
@@ -198,14 +217,16 @@ def main(
     if prompt:
         # ── Single-shot task mode ──────────────────────────────────────────
         print_banner()
-        console.print(Panel(
-            f"[bold]{prompt}[/bold]\n"
-            f"[dim]Path:[/dim] {project_path}\n"
-            f"[dim]Planner:[/dim] {get_config().ollama.model_planner}  "
-            f"[dim]│  Coder:[/dim] {get_config().ollama.model_coder}",
-            title="⚡ Task",
-            border_style="bright_cyan",
-        ))
+        console.print(
+            Panel(
+                f"[bold]{prompt}[/bold]\n"
+                f"[dim]Path:[/dim] {project_path}\n"
+                f"[dim]Planner:[/dim] {get_config().ollama.model_planner}  "
+                f"[dim]│  Coder:[/dim] {get_config().ollama.model_coder}",
+                title="⚡ Task",
+                border_style="bright_cyan",
+            )
+        )
 
         async def _run() -> AgentResult:
             agent = await create_main_agent(
@@ -225,29 +246,31 @@ def main(
         result: AgentResult = asyncio.run(_run())
 
         if result.success:
-            console.print(Panel(
-                f"[green]✓[/green] {result.message}\n\n"
-                f"Files created:  {len(result.files_created)}\n"
-                f"Files modified: {len(result.files_modified)}\n"
-                f"Iterations:     {result.iterations}",
-                title="✅ Complete",
-                border_style="green",
-            ))
+            console.print(
+                Panel(
+                    f"[green]✓[/green] {result.message}\n\n"
+                    f"Files created:  {len(result.files_created)}\n"
+                    f"Files modified: {len(result.files_modified)}\n"
+                    f"Iterations:     {result.iterations}",
+                    title="✅ Complete",
+                    border_style="green",
+                )
+            )
         else:
-            console.print(Panel(
-                f"[red]✗[/red] {result.message}",
-                title="❌ Error",
-                border_style="red",
-            ))
+            console.print(
+                Panel(
+                    f"[red]✗[/red] {result.message}",
+                    title="❌ Error",
+                    border_style="red",
+                )
+            )
             raise typer.Exit(1)
 
     else:
         # ── Interactive REPL ───────────────────────────────────────────────
         print_banner()
 
-        console.print(
-            f"  [dim]Working directory:[/dim] [bold white]{project_path}[/bold white]\n"
-        )
+        console.print(f"  [dim]Working directory:[/dim] [bold white]{project_path}[/bold white]\n")
 
         pt_session = _make_prompt_toolkit_session()
 
@@ -270,20 +293,24 @@ def main(
                         console.print(project_tree(project_path), markup=False)
                         continue
                     elif cmd.startswith("/"):
-                        console.print(f"  [yellow]Unknown command:[/yellow] {cmd}  [dim](type /help)[/dim]")
+                        console.print(
+                            f"  [yellow]Unknown command:[/yellow] {cmd}  [dim](type /help)[/dim]"
+                        )
                         continue
 
                     if not user_input.strip():
                         continue
 
-                    console.print(Panel(
-                        f"[bold]{user_input}[/bold]\n"
-                        f"[dim]Path:[/dim] {project_path}\n"
-                        f"[dim]Planner:[/dim] {get_config().ollama.model_planner}  "
-                        f"[dim]│  Coder:[/dim] {get_config().ollama.model_coder}",
-                        title="⚡ Task",
-                        border_style="bright_cyan",
-                    ))
+                    console.print(
+                        Panel(
+                            f"[bold]{user_input}[/bold]\n"
+                            f"[dim]Path:[/dim] {project_path}\n"
+                            f"[dim]Planner:[/dim] {get_config().ollama.model_planner}  "
+                            f"[dim]│  Coder:[/dim] {get_config().ollama.model_coder}",
+                            title="⚡ Task",
+                            border_style="bright_cyan",
+                        )
+                    )
 
                     agent = await create_main_agent(
                         project_path=project_path,
@@ -300,19 +327,23 @@ def main(
                         await agent.close()
 
                     if result.success:
-                        console.print(Panel(
-                            f"[green]✓[/green] {result.message}\n\n"
-                            f"Files created:  {len(result.files_created)}\n"
-                            f"Files modified: {len(result.files_modified)}",
-                            title="✅ Complete",
-                            border_style="green",
-                        ))
+                        console.print(
+                            Panel(
+                                f"[green]✓[/green] {result.message}\n\n"
+                                f"Files created:  {len(result.files_created)}\n"
+                                f"Files modified: {len(result.files_modified)}",
+                                title="✅ Complete",
+                                border_style="green",
+                            )
+                        )
                     else:
-                        console.print(Panel(
-                            f"[red]✗[/red] {result.message}",
-                            title="❌ Error",
-                            border_style="red",
-                        ))
+                        console.print(
+                            Panel(
+                                f"[red]✗[/red] {result.message}",
+                                title="❌ Error",
+                                border_style="red",
+                            )
+                        )
 
                 except KeyboardInterrupt:
                     console.print("\n  [dim]Interrupted — type /exit to quit[/dim]")
@@ -330,21 +361,23 @@ def _print_help() -> None:
     table.add_column("desc", style="dim white")
 
     rows = [
-        ("/help",  "Show this help message"),
-        ("/tree",  "Print the project file tree"),
-        ("/exit",  "Quit Rudra"),
+        ("/help", "Show this help message"),
+        ("/tree", "Print the project file tree"),
+        ("/exit", "Quit Rudra"),
         ("", ""),
         ("Examples:", ""),
-        ('"Build a FastAPI app with JWT"',   "Creates a new project"),
-        ('"Fix the login bug in auth.py"',   "Debugs and fixes issues"),
-        ('"Review my code for security"',    "Analyzes without modifying"),
+        ('"Build a FastAPI app with JWT"', "Creates a new project"),
+        ('"Fix the login bug in auth.py"', "Debugs and fixes issues"),
+        ('"Review my code for security"', "Analyzes without modifying"),
         ('"Add CORS middleware to main.py"', "Targeted file edit"),
     ]
     for cmd, desc in rows:
         table.add_row(cmd, desc)
 
     console.print()
-    console.print(Panel(table, title="[bold cyan]Rudra Help[/bold cyan]", border_style="cyan", padding=(1, 2)))
+    console.print(
+        Panel(table, title="[bold cyan]Rudra Help[/bold cyan]", border_style="cyan", padding=(1, 2))
+    )
     console.print()
 
 

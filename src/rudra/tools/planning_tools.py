@@ -81,8 +81,12 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
         # Reject shrinking plans — prevents model from destroying its own checklist
         if plan_path.exists():
             existing_text = plan_path.read_text(encoding="utf-8")
-            existing_count = sum(1 for l in existing_text.splitlines() if "- [ ]" in l or "- [x]" in l)
-            new_count = sum(1 for l in plan_markdown.splitlines() if "- [ ]" in l or "- [x]" in l)
+            existing_count = sum(
+                1 for line in existing_text.splitlines() if "- [ ]" in line or "- [x]" in line
+            )
+            new_count = sum(
+                1 for line in plan_markdown.splitlines() if "- [ ]" in line or "- [x]" in line
+            )
             if existing_count > 1 and new_count < existing_count:
                 return (
                     f"REJECTED: Cannot reduce plan from {existing_count} to {new_count} items.\n"

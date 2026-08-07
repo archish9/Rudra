@@ -3,23 +3,23 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
 @dataclass
 class ProjectContext:
     """Context holding information about the project tech stack."""
-    
+
     primary_language: str = ""
     framework: str = ""
     database: str = ""
     additional_context: str = ""
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary."""
         return asdict(self)
-    
+
     @classmethod
     def from_dict(cls, data: dict) -> ProjectContext:
         """Create from dictionary."""
@@ -28,19 +28,19 @@ class ProjectContext:
 
 class ProjectConfigManager:
     """Manages reading and writing project configuration."""
-    
+
     def __init__(self, project_dir: Path):
         """Initialize the config manager.
-        
+
         Args:
             project_dir: Path to the project root directory
         """
         self.project_dir = Path(project_dir)
         self.config_file = self.project_dir / ".rudra" / "project.json"
-        
+
     def load(self) -> ProjectContext:
         """Load project configuration if it exists, otherwise return empty context.
-        
+
         Returns:
             ProjectContext instance
         """
@@ -51,10 +51,10 @@ class ProjectConfigManager:
             except Exception:
                 pass
         return ProjectContext()
-        
+
     def save(self, context: ProjectContext) -> None:
         """Save project configuration to disk.
-        
+
         Args:
             context: The project context to save
         """

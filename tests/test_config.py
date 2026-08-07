@@ -94,9 +94,7 @@ def test_dotenv_is_looked_up_at_the_cwd_only(
     assert recorded == [tmp_path / ".env"]
 
 
-def test_dotenv_in_the_cwd_is_honored(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_dotenv_in_the_cwd_is_honored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The converse — guards against over-correcting into ignoring .env entirely."""
     (tmp_path / ".env").write_text("OLLAMA_NUM_PREDICT=4096\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -105,9 +103,7 @@ def test_dotenv_in_the_cwd_is_honored(
     assert get_config().ollama.num_predict == 4096
 
 
-def test_a_real_env_var_beats_dotenv(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_a_real_env_var_beats_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """override=False is retained: the documented escape hatch must keep working."""
     (tmp_path / ".env").write_text("OLLAMA_NUM_PREDICT=4096\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)

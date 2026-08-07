@@ -62,9 +62,7 @@ def test_planner_wires_fix_write_params_middleware_first():
     )
 
     names = [
-        getattr(elt.func, "id", None)
-        for elt in middleware_kw.elts
-        if isinstance(elt, ast.Call)
+        getattr(elt.func, "id", None) for elt in middleware_kw.elts if isinstance(elt, ast.Call)
     ]
     assert "FixWriteParamsMiddleware" in names, (
         "FixWriteParamsMiddleware is not wired into the planner (U.14)"
@@ -90,7 +88,10 @@ def test_main_agent_constructs_filesystem_backend_with_virtual_mode():
             assert "OverwriteFilesystemBackend" not in names, (
                 "main_agent.py still imports the deleted OverwriteFilesystemBackend (U.3)"
             )
-        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "OverwriteFilesystemBackend":
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", None) == "OverwriteFilesystemBackend"
+        ):
             raise AssertionError(
                 "main_agent.py still constructs the deleted OverwriteFilesystemBackend (U.3)"
             )
@@ -111,6 +112,5 @@ def test_main_agent_constructs_filesystem_backend_with_virtual_mode():
         "FilesystemBackend(...) in main_agent.py has no virtual_mode= kwarg"
     )
     assert (
-        isinstance(virtual_mode_kw.value, ast.Constant)
-        and virtual_mode_kw.value.value is True
+        isinstance(virtual_mode_kw.value, ast.Constant) and virtual_mode_kw.value.value is True
     ), "main_agent.py's FilesystemBackend is not constructed with virtual_mode=True"

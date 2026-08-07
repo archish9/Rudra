@@ -83,7 +83,9 @@ def create_planner_agent(
         reasoning=True,
     )
 
-    custom_tools = create_planning_tools(project_path, task=task) + create_interaction_tools(console, project_path)
+    custom_tools = create_planning_tools(project_path, task=task) + create_interaction_tools(
+        console, project_path
+    )
 
     return create_deep_agent(
         model=model,

@@ -15,9 +15,7 @@ import pytest
 
 from rudra.filesystem.tree import project_tree
 
-requires_git = pytest.mark.skipif(
-    shutil.which("git") is None, reason="git is not on PATH"
-)
+requires_git = pytest.mark.skipif(shutil.which("git") is None, reason="git is not on PATH")
 
 
 def _write(root: Path, rel: str, content: str = "x") -> Path:
@@ -173,17 +171,13 @@ def _assert_never_reads_content(tmp_path: Path, monkeypatch) -> None:
     assert "src/models.py" in lines
 
 
-def test_never_reads_the_content_of_a_listed_file_fallback(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_never_reads_the_content_of_a_listed_file_fallback(tmp_path: Path, monkeypatch) -> None:
     # No git repo, so _git_listing returns None and the wcmatch walk runs.
     _assert_never_reads_content(tmp_path, monkeypatch)
 
 
 @requires_git
-def test_never_reads_the_content_of_a_listed_file_git(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_never_reads_the_content_of_a_listed_file_git(tmp_path: Path, monkeypatch) -> None:
     # git ls-files answers directly; this must stay content-blind too —
     # it is the path that runs in every real repo.
     _init_repo(tmp_path)

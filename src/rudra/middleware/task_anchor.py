@@ -17,6 +17,7 @@ stable deepagents API for this pattern (same approach as MemoryMiddleware).
 from __future__ import annotations
 
 from langchain.agents.middleware.types import AgentMiddleware
+
 from rudra.compat.version_guard import require_deepagents_attr
 
 # Private deepagents module — no stability guarantee. See TODO.md U.13.

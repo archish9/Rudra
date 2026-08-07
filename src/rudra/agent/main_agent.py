@@ -209,7 +209,9 @@ class RudraAgent:
                     if is_error:
                         consecutive_failures += 1
                         if consecutive_failures >= 3:
-                            self._log_always("[bold yellow]!! 3 consecutive planner failures — stopping.[/bold yellow]")
+                            self._log_always(
+                                "[bold yellow]!! 3 consecutive planner failures — stopping.[/bold yellow]"
+                            )
                             _halt = True
                     else:
                         consecutive_failures = 0
@@ -286,7 +288,9 @@ class RudraAgent:
                     if is_error:
                         consecutive_failures += 1
                         if self.context.stop_on_error and consecutive_failures >= 3:
-                            self._log_always("[bold yellow]!! 3 consecutive coder failures — stopping.[/bold yellow]")
+                            self._log_always(
+                                "[bold yellow]!! 3 consecutive coder failures — stopping.[/bold yellow]"
+                            )
                             _halt = True
                     else:
                         consecutive_failures = 0
@@ -438,6 +442,7 @@ class RudraAgent:
 
         except Exception:
             import traceback
+
             self._log_always("[bold red]\n!! Agent crashed — full traceback:[/bold red]")
             self._log_always(traceback.format_exc())
             raise
@@ -460,7 +465,9 @@ def _ensure_agents_md(rudra_dir: Path, project_context: Optional[ProjectContext]
         if project_context.additional_context:
             stack_lines.append(f"- Notes: {project_context.additional_context}")
 
-    stack_section = "\n".join(stack_lines) if stack_lines else "(not yet determined — agent will fill in)"
+    stack_section = (
+        "\n".join(stack_lines) if stack_lines else "(not yet determined — agent will fill in)"
+    )
 
     agents_md.write_text(
         f"# Project Memory\n\n"
@@ -538,11 +545,13 @@ async def create_main_agent(
         **kwargs,
     )
 
-    import aiosqlite
     import uuid
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    from rudra.compat.deepagents_path import install_path_normalizer
+
+    import aiosqlite
     from deepagents.backends.filesystem import FilesystemBackend
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    from rudra.compat.deepagents_path import install_path_normalizer
 
     install_path_normalizer(project_path, plan_path=project_path / ".rudra" / "PLAN.md")
 

@@ -46,17 +46,13 @@ def test_version_check_raises_on_mismatch():
 
 
 def test_require_attr_returns_the_attribute():
-    fn = require_deepagents_attr(
-        "deepagents.middleware._utils", "append_to_system_message", "U.13"
-    )
+    fn = require_deepagents_attr("deepagents.middleware._utils", "append_to_system_message", "U.13")
     assert callable(fn)
 
 
 def test_require_attr_raises_on_missing_attribute():
     with pytest.raises(DeepagentsCompatError) as excinfo:
-        require_deepagents_attr(
-            "deepagents.middleware._utils", "no_such_function", "U.13"
-        )
+        require_deepagents_attr("deepagents.middleware._utils", "no_such_function", "U.13")
 
     message = str(excinfo.value)
     assert "no_such_function" in message

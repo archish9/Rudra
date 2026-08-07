@@ -8,18 +8,30 @@ Order matters: longest-match-first to avoid "/home/user/" eating "/home/user/rep
 """
 
 SANDBOX_PREFIXES: tuple[str, ...] = (
-    "/testbed/",           # SWE-bench docker containers
-    "/workspace/",         # GitHub Codespaces, Gitpod, Docker
-    "/home/user/repos/",   # Generic Linux training data
-    "/home/user/",         # Generic Linux home
-    "/root/",              # Docker root user
-    "/app/",               # Docker app pattern
-    "/code/",              # Generic code mount
-    "/src/",               # Some containers mount source here
-    "/tmp/",               # Temporary directory
+    "/testbed/",  # SWE-bench docker containers
+    "/workspace/",  # GitHub Codespaces, Gitpod, Docker
+    "/home/user/repos/",  # Generic Linux training data
+    "/home/user/",  # Generic Linux home
+    "/root/",  # Docker root user
+    "/app/",  # Docker app pattern
+    "/code/",  # Generic code mount
+    "/src/",  # Some containers mount source here
+    "/tmp/",  # Temporary directory
 )
 
-BOGUS_DIRS: frozenset[str] = frozenset({
-    "home", "user", "users", "root", "tmp", "var", "opt",
-    "repos", "projects", "workspace", "testbed", "code",
-})
+BOGUS_DIRS: frozenset[str] = frozenset(
+    {
+        "home",
+        "user",
+        "users",
+        "root",
+        "tmp",
+        "var",
+        "opt",
+        "repos",
+        "projects",
+        "workspace",
+        "testbed",
+        "code",
+    }
+)

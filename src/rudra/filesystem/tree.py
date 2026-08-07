@@ -31,9 +31,7 @@ _GIT_TIMEOUT_SECONDS = 5
 # Applied on BOTH listing paths, so they hold even in a repo that tracks
 # them. `.rudra` is Rudra's own state directory and must never appear in
 # the model's view of the project.
-_ALWAYS_SKIP_DIRS = frozenset(
-    {".git", ".rudra", "__pycache__", "node_modules", ".venv", "venv"}
-)
+_ALWAYS_SKIP_DIRS = frozenset({".git", ".rudra", "__pycache__", "node_modules", ".venv", "venv"})
 _ALWAYS_SKIP_SUFFIXES = (".pyc",)
 
 _WCMATCH_FLAGS = wcglob.GLOBSTAR | wcglob.NEGATE | wcglob.DOTGLOB
@@ -155,8 +153,7 @@ def _walk_listing(root: Path, *, max_depth: int) -> list[str]:
         dirnames[:] = [
             name
             for name in dirnames
-            if name not in _ALWAYS_SKIP_DIRS
-            and not _matches((rel_dir / name).as_posix(), patterns)
+            if name not in _ALWAYS_SKIP_DIRS and not _matches((rel_dir / name).as_posix(), patterns)
         ]
 
         for name in filenames:
@@ -175,9 +172,7 @@ def _gitignore_patterns(root: Path) -> list[str]:
         return []
 
     patterns: list[str] = []
-    for raw_line in gitignore.read_text(
-        encoding="utf-8", errors="replace"
-    ).splitlines():
+    for raw_line in gitignore.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
