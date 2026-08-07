@@ -37,28 +37,33 @@ def _init_repo(root: Path) -> None:
 
 @requires_git
 def test_gitignored_paths_are_excluded(tmp_path: Path) -> None:
+    # `logs/` is deliberately NOT one of tree.py's builtin skip dirs (unlike
+    # `build/`, which _ALWAYS_SKIP_DIRS discards on its own since TODO.md
+    # A1.26) -- otherwise this test would pass even with the gitignore
+    # mechanism gutted. See TODO.md A1.28.
     _init_repo(tmp_path)
-    _write(tmp_path, ".gitignore", "build/\n")
+    _write(tmp_path, ".gitignore", "logs/\n")
     _write(tmp_path, "app.py")
-    _write(tmp_path, "build/artifact.o")
+    _write(tmp_path, "logs/artifact.o")
 
     lines = project_tree(tmp_path).splitlines()
 
     assert "app.py" in lines
-    assert "build/artifact.o" not in lines
+    assert "logs/artifact.o" not in lines
 
 
 def test_fallback_honors_gitignore_without_a_repo(tmp_path: Path) -> None:
     # No `git init` at all, so _git_listing returns None and the wcmatch
-    # walk runs. Same expected output as the git path above.
-    _write(tmp_path, ".gitignore", "build/\n")
+    # walk runs. Same expected output as the git path above. `logs/` again
+    # chosen to not overlap the builtin skip set -- see TODO.md A1.28.
+    _write(tmp_path, ".gitignore", "logs/\n")
     _write(tmp_path, "app.py")
-    _write(tmp_path, "build/artifact.o")
+    _write(tmp_path, "logs/artifact.o")
 
     lines = project_tree(tmp_path).splitlines()
 
     assert "app.py" in lines
-    assert "build/artifact.o" not in lines
+    assert "logs/artifact.o" not in lines
 
 
 def test_max_depth_drops_deeper_paths(tmp_path: Path) -> None:
@@ -222,9 +227,42 @@ def test_frontend_build_dirs_are_never_listed(tmp_path: Path) -> None:
     assert ".angular" not in tree
 
 
+def test_root_level_generic_build_dirs_are_still_hidden(tmp_path: Path) -> None:
+    """TODO.md A1.29: root-anchoring must not regress the root-level case
+    that A1.26 fixed -- `out/` at the project root is still build output."""
+    _write(tmp_path, "package.json", "{}")
+    _write(tmp_path, "src/app.ts", "export {}")
+    _write(tmp_path, "out/bundle.js", "x")
+
+    tree = project_tree(tmp_path)
+
+    assert "src/app.ts" in tree
+    assert "out/bundle.js" not in tree
+
+
+def test_nested_generic_named_dirs_are_not_hidden(tmp_path: Path) -> None:
+    """TODO.md A1.29: `out`, `build`, `dist`, `target`, `coverage` are only
+    build output *by convention at the project root*. A nested `src/out/`
+    is an ordinary source directory and must be listed, not silently
+    dropped -- the pre-fix behavior made the agent plan to recreate files
+    that already exist on disk."""
+    _write(tmp_path, "package.json", "{}")
+    _write(tmp_path, "src/out/writer.py")
+
+    tree = project_tree(tmp_path)
+
+    assert "src/out/writer.py" in tree
+
+
 def test_skip_dirs_are_sourced_from_the_stack_registry() -> None:
-    """Single source of truth: adding a stack must not require editing tree.py."""
-    from rudra.filesystem.tree import _ALWAYS_SKIP_DIRS
+    """Single source of truth: adding a stack must not require editing tree.py.
+
+    Every registry skip-dir name is covered by one of tree.py's two skip
+    mechanisms -- matched at any depth (`_ALWAYS_SKIP_DIRS`) or matched only
+    at the project root (`_ROOT_ANCHORED_SKIP_DIRS`, TODO.md A1.29). Neither
+    set alone is a superset of the registry any more, by design.
+    """
+    from rudra.filesystem.tree import _ALWAYS_SKIP_DIRS, _ROOT_ANCHORED_SKIP_DIRS
     from rudra.stacks import ALL_SKIP_DIRS
 
-    assert ALL_SKIP_DIRS <= _ALWAYS_SKIP_DIRS
+    assert ALL_SKIP_DIRS <= (_ALWAYS_SKIP_DIRS | _ROOT_ANCHORED_SKIP_DIRS)

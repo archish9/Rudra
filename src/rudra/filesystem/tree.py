@@ -36,7 +36,18 @@ _GIT_TIMEOUT_SECONDS = 5
 # stack registry so adding a language never requires editing this file
 # (TODO.md D18, C11.1).
 _RUDRA_SKIP_DIRS = frozenset({".git", ".rudra"})
-_ALWAYS_SKIP_DIRS = _RUDRA_SKIP_DIRS | ALL_SKIP_DIRS
+
+# These five names are only build output *by convention at the project
+# root* -- they are common English words that also occur as legitimate
+# source directories at any other depth (`src/out/`, a Django app named
+# `target`, ...). Matched at any depth they silently hide real source from
+# the agent with no signal in the truncation footer (TODO.md <FIX_B_ID>).
+# Skip them only when they are the first path segment.
+_ROOT_ANCHORED_SKIP_DIRS = frozenset({"out", "build", "dist", "target", "coverage"})
+
+# Unambiguous tool/VCS directories -- no legitimate project names a source
+# directory `node_modules` or `.venv`. Matched at any depth.
+_ALWAYS_SKIP_DIRS = (_RUDRA_SKIP_DIRS | ALL_SKIP_DIRS) - _ROOT_ANCHORED_SKIP_DIRS
 _ALWAYS_SKIP_SUFFIXES = (".pyc",)
 
 _WCMATCH_FLAGS = wcglob.GLOBSTAR | wcglob.NEGATE | wcglob.DOTGLOB
@@ -100,8 +111,16 @@ def project_tree(
 
 
 def _is_always_skipped(rel_posix: str) -> bool:
-    """True when any path segment is in the builtin skip set."""
-    if any(part in _ALWAYS_SKIP_DIRS for part in rel_posix.split("/")):
+    """True when any path segment is in the builtin skip set.
+
+    `_ALWAYS_SKIP_DIRS` names are matched at any depth. `_ROOT_ANCHORED_SKIP_DIRS`
+    names are matched only as the first path segment -- see the module-level
+    comment on that set for why.
+    """
+    parts = rel_posix.split("/")
+    if any(part in _ALWAYS_SKIP_DIRS for part in parts):
+        return True
+    if parts[0] in _ROOT_ANCHORED_SKIP_DIRS:
         return True
     return rel_posix.endswith(_ALWAYS_SKIP_SUFFIXES)
 
@@ -144,6 +163,7 @@ def _walk_listing(root: Path, *, max_depth: int) -> list[str]:
 
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = Path(dirpath).relative_to(root)
+        is_root = rel_dir == Path(".")
 
         # Bound the walk by construction rather than discarding over-deep
         # paths after traversing them. Nothing below a directory already at
@@ -155,10 +175,14 @@ def _walk_listing(root: Path, *, max_depth: int) -> list[str]:
         # Prune in place. wcmatch's `**/build` matches `build` but NOT
         # `build/artifact.o`, so pruning the directory is what actually
         # keeps an ignored subtree out — filtering files alone would not.
+        # `_ROOT_ANCHORED_SKIP_DIRS` only prunes at the root; elsewhere those
+        # names are ordinary source directories.
         dirnames[:] = [
             name
             for name in dirnames
-            if name not in _ALWAYS_SKIP_DIRS and not _matches((rel_dir / name).as_posix(), patterns)
+            if name not in _ALWAYS_SKIP_DIRS
+            and not (is_root and name in _ROOT_ANCHORED_SKIP_DIRS)
+            and not _matches((rel_dir / name).as_posix(), patterns)
         ]
 
         for name in filenames:
