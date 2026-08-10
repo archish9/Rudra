@@ -540,8 +540,8 @@ async def create_main_agent(
         dry_run=dry_run,
         verbose=verbose,
         command=command,
-        planner_model=get_config().ollama.model_planner,
-        coder_model=get_config().ollama.model_coder,
+        planner_model=get_config().model_for("planner").model,
+        coder_model=get_config().model_for("coder").model,
         **kwargs,
     )
 
