@@ -36,9 +36,19 @@ def test_valid_modes_are_exactly_the_d5_set() -> None:
 
 
 def test_reserved_sections_name_the_step_that_implements_them() -> None:
-    assert set(RESERVED_SECTIONS) == {"skills", "memory", "tools", "mcp"}
+    assert set(RESERVED_SECTIONS) == {"skills", "memory", "mcp"}
     for section, note in RESERVED_SECTIONS.items():
         assert "Step" in note, f"{section} must tell the user when it arrives"
+
+
+def test_tools_is_no_longer_reserved() -> None:
+    """It named Step 7 as its implementing step, and Step 7 implemented it.
+
+    A section that stays reserved past its own step reads as an oversight,
+    so this asserts the transition happened rather than trusting the set
+    above to have been edited.
+    """
+    assert "tools" not in RESERVED_SECTIONS
 
 
 def test_model_keys_match_the_model_config_fields() -> None:

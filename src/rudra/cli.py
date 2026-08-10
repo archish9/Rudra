@@ -9,6 +9,7 @@ from typing import Optional
 import click
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
@@ -258,19 +259,27 @@ def models_test(
         raise typer.Exit(code=1)
 
 
+EXIT_NO_TTY = 2
+
+_MODE_DESCRIPTIONS = {
+    "ask": "prompting before each write, edit, delete, or command",
+    "auto": "approving everything without prompting",
+    "plan": "making no project changes and running no commands",
+}
+
+
 def _permission_notice(cfg) -> str:
     """One line, shown on every run — not only when a flag is passed.
 
-    A user reading `mode = "ask"` reasonably concludes Rudra will prompt
-    before touching files. It will not: enforcement is Step 7 and today
-    files are overwritten silently (TODO.md A1.16). Saying so on the
-    default path is the point; an inert --yolo is harmless by comparison,
-    because it claims less safety rather than more.
+    Step 6 shipped this saying NOT ENFORCED, deliberately: an inert default
+    of `ask` claims more safety than you get. Step 7 enforces it, so the
+    line now describes what the mode actually does.
     """
-    return (
-        f"permissions: {cfg.permissions.mode} — NOT ENFORCED (Step 7); "
-        f"files are written and overwritten without prompting"
-    )
+    described = _MODE_DESCRIPTIONS.get(cfg.permissions.mode, cfg.permissions.mode)
+    line = f"permissions: {cfg.permissions.mode} — {described}"
+    if cfg.permissions.floor_disable:
+        line += f" · floor disabled: {', '.join(cfg.permissions.floor_disable)}"
+    return line
 
 
 def _load_config_or_exit(project_dir: Optional[Path]):
@@ -284,7 +293,11 @@ def _load_config_or_exit(project_dir: Optional[Path]):
     try:
         return build_config(get_project_path(project_dir))
     except ConfigError as exc:
-        console.print(f"[red]Configuration error:[/red] {exc}")
+        # escape() because these messages are built around bracketed section
+        # names ("[tools] shell must be true or false") and Rich would parse
+        # every one of them as a style tag, printing the error without the
+        # section it exists to identify. See TODO.md A1.48.
+        console.print(f"[red]Configuration error:[/red] {escape(str(exc))}")
         raise typer.Exit(code=1) from None
 
 
@@ -300,6 +313,9 @@ def _flatten(cfg) -> list[tuple[str, object]]:
     rows.append(("permissions.mode", cfg.permissions.mode))
     rows.append(("permissions.allow", list(cfg.permissions.allow)))
     rows.append(("permissions.deny", list(cfg.permissions.deny)))
+    rows.append(("permissions.floor_disable", list(cfg.permissions.floor_disable)))
+    rows.append(("tools.shell", cfg.tools.shell))
+    rows.append(("tools.shell_in_auto", cfg.tools.shell_in_auto))
     rows.append(("compat.task_anchor", cfg.compat.task_anchor))
     rows.append(("compat.sandbox_paths", cfg.compat.sandbox_paths))
     return rows
@@ -414,14 +430,31 @@ def doctor_command(
         f"{installed} (pinned {EXPECTED_DEEPAGENTS_VERSION})",
     )
 
+    floor_off = cfg.permissions.floor_disable
     table.add_row(
         "permissions",
-        "warn",
-        f"mode = {cfg.permissions.mode} — NOT ENFORCED. Enforcement arrives in Step 7; "
-        f"Rudra currently writes and overwrites files without prompting. "
-        f"allow/deny are parsed but unused ({len(cfg.permissions.allow)} allow, "
-        f"{len(cfg.permissions.deny)} deny).",
+        "warn" if floor_off else "ok",
+        f"mode = {cfg.permissions.mode} — {_MODE_DESCRIPTIONS.get(cfg.permissions.mode, '')}. "
+        f"{len(cfg.permissions.allow)} allow, {len(cfg.permissions.deny)} deny. "
+        f"Deny floor: {'disabled ' + ', '.join(floor_off) if floor_off else 'all rules active'}.",
     )
+
+    # escape() for the same reason as the config-error path: Rich parses
+    # "[tools]" as a style tag and prints nothing where the section name
+    # should be. See TODO.md A1.48.
+    if not cfg.tools.shell:
+        shell_state = "disabled by [tools] shell = false — the execute tool is absent"
+    elif cfg.tools.shell_in_auto:
+        shell_state = (
+            "enabled, including under --auto ([tools] shell_in_auto = true). "
+            "Unattended commands are not confined to the project — see TODO.md A1.49"
+        )
+    else:
+        shell_state = (
+            "enabled in ask mode; disabled under --auto unless --allow-shell "
+            "or [tools] shell_in_auto = true"
+        )
+    table.add_row("shell", "warn" if cfg.tools.shell_in_auto else "ok", escape(shell_state))
 
     if not offline:
         from rudra.llm.probe import ROLES_TO_PROBE, probe_role
@@ -489,10 +522,15 @@ def main(
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
     auto: bool = typer.Option(
-        False, "--auto", "--yolo", help="Permission mode: auto (not enforced until Step 7)"
+        False, "--auto", "--yolo", help="Approve every action without prompting"
     ),
     plan: bool = typer.Option(
-        False, "--plan", help="Permission mode: plan (not enforced until Step 7)"
+        False, "--plan", help="Plan only: make no project changes, run no commands"
+    ),
+    allow_shell: bool = typer.Option(
+        False,
+        "--allow-shell",
+        help="Let --auto run commands too (off by default: nobody reads them first)",
     ),
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
@@ -529,9 +567,32 @@ def main(
     # get_config() to fall back to the cwd. See TODO.md A5.2.
     project_path = get_project_path(project_dir)
     permission_mode = "auto" if auto else "plan" if plan else None
-    cfg = get_config(project_path, verbose=verbose, permission_mode=permission_mode)
-    if permission_mode is not None:
-        console.print(f"[yellow]Note:[/yellow] {_permission_notice(cfg)}")
+    cfg = get_config(
+        project_path,
+        verbose=verbose,
+        permission_mode=permission_mode,
+        allow_shell=True if allow_shell else None,
+    )
+
+    from rudra.permissions import disabled_floor_notice, stdin_is_interactive
+
+    # Before load_project_context, before ensure_layout, before any model.
+    # In ask mode every write is gated and writing files is Rudra's whole
+    # job, so a non-TTY ask run hits a prompt within seconds — failing at
+    # second zero is the honest version of failing at second thirty, and it
+    # leaves nothing behind on disk. See the Step 7 design spec §6.5.
+    if cfg.permissions.mode == "ask" and not stdin_is_interactive():
+        console.print(
+            '[red]Error:[/red] permissions.mode = "ask" needs an interactive '
+            "terminal, but stdin is not a TTY.\n\n"
+            "  --auto                      approve everything (unattended)\n"
+            '  permissions.mode = "auto"   same, persisted in .rudra/config.toml'
+        )
+        raise typer.Exit(EXIT_NO_TTY)
+
+    floor_notice = disabled_floor_notice(cfg)
+    if floor_notice:
+        console.print(f"[yellow]Warning:[/yellow] {floor_notice}")
 
     # A default of `config.agent.verbose` here would be evaluated when this
     # module is imported, which is the A1.15 defect. Three-state instead:

@@ -19,10 +19,25 @@ BUILTIN_ROLES = ("default", "planner", "coder")
 VALID_PROVIDERS = frozenset({"ollama", "openai_compatible", "openai", "anthropic", "google"})
 VALID_MODES = ("ask", "auto", "plan")
 
+# Declared literally rather than imported from `rudra.permissions.floor`,
+# for the same reason VALID_PROVIDERS is: this module imports nothing from
+# the rest of Rudra, so it stays readable and testable with no agent
+# machinery. Kept in agreement by test_config_permissions_and_tools.py::
+# test_the_schema_names_the_same_floor_rules_the_floor_module_does.
+FLOOR_RULE_NAMES = ("outside-root", "git-dir", "catastrophic-command")
+
+# `outside-root` is deliberately absent: for the tools it covers, confinement
+# comes from the backend's virtual_mode=True, not from Rudra's floor, so
+# disabling it changed nothing and silently redirected the write into the
+# project instead. Accepting a name and then not honouring it is worse than
+# rejecting it. See TODO.md A1.50.
+DISABLEABLE_FLOOR_RULES = ("git-dir", "catastrophic-command")
+
+# `tools` was reserved here naming Step 7 as its implementing step. Step 7
+# implements it, so it is a real section now — see ToolsConfig.
 RESERVED_SECTIONS = {
     "skills": "not supported yet — arrives in Step 11 (C5.1)",
     "memory": "not supported yet — arrives in Step 14 (C8.1)",
-    "tools": "not supported yet — arrives in Step 7 (C3.1)",
     "mcp": "MCP is configured in a separate .mcp.json, not here — arrives in Step 13 (C4.2)",
 }
 
@@ -56,15 +71,18 @@ class AgentConfig:
 
 @dataclass(frozen=True)
 class PermissionsConfig:
-    """Parsed but NOT enforced in Step 6 — enforcement is Step 7 (C3.3, U.7).
+    """Enforced from Step 7 (C3.3). See the Step 7 design spec §4.
 
-    `allow` and `deny` are shape-validated and stored; nothing reads them yet.
-    `rudra doctor` says so explicitly rather than leaving the user to assume.
+    `allow`/`deny` are `tool` or `tool:pattern` strings using real tool
+    names. `floor_disable` names built-in floor rules to switch off; it is
+    per-rule rather than a boolean so one legitimate exception costs one
+    name instead of surrendering the whole floor (spec §4.5).
     """
 
     mode: str
     allow: tuple[str, ...]
     deny: tuple[str, ...]
+    floor_disable: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -73,6 +91,25 @@ class CompatConfig:
 
     task_anchor: bool
     sandbox_paths: bool
+
+
+@dataclass(frozen=True)
+class ToolsConfig:
+    """The tool layer. Un-reserved in Step 7, which implements it.
+
+    The oversized-tool-result threshold that would naturally live here is
+    unreachable through `create_deep_agent` (TODO.md A1.47), and a key that
+    silently does nothing is worse than no key.
+
+    `shell_in_auto` is off by default. Under `--auto` nobody reads the
+    command before it runs, and a shell command can write anywhere the user
+    can — measured, not theorised (A1.49). Unattended runs therefore get
+    the filesystem tools, which the backend genuinely confines, unless the
+    user opts in once. `ask` mode is unaffected.
+    """
+
+    shell: bool
+    shell_in_auto: bool
 
 
 MODEL_KEYS = frozenset(f.name for f in fields(ModelConfig))
@@ -91,13 +128,16 @@ DEFAULTS: dict[str, Any] = {
         }
     },
     "agent": {"verbose": True},
-    "permissions": {"mode": "ask", "allow": [], "deny": []},
+    "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},
+    "tools": {"shell": True, "shell_in_auto": False},
 }
 
 __all__ = [
     "BUILTIN_ROLES",
     "DEFAULTS",
+    "DISABLEABLE_FLOOR_RULES",
+    "FLOOR_RULE_NAMES",
     "MODEL_KEYS",
     "RESERVED_SECTIONS",
     "VALID_MODES",
@@ -106,4 +146,5 @@ __all__ = [
     "CompatConfig",
     "ModelConfig",
     "PermissionsConfig",
+    "ToolsConfig",
 ]

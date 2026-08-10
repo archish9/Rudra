@@ -166,6 +166,14 @@ def env_layer(known_roles: Iterable[str]) -> dict[str, Any]:
         if tail == "PERMISSIONS_MODE":
             put("permissions", "mode", value=raw.strip())
             continue
+        # Before _split_role_and_suffix, which would otherwise read SHELL as
+        # a role-and-suffix pair.
+        if tail == "SHELL":
+            put("tools", "shell", value=_as_bool(raw))
+            continue
+        if tail == "SHELL_IN_AUTO":
+            put("tools", "shell_in_auto", value=_as_bool(raw))
+            continue
         role, suffix = _split_role_and_suffix(tail, roles)
         if suffix in MODEL_KEYS:
             value: Any = _as_number(raw) if suffix in _NUMERIC_MODEL_KEYS else raw
@@ -202,13 +210,19 @@ def env_layer(known_roles: Iterable[str]) -> dict[str, Any]:
     return layer
 
 
-def cli_layer(verbose: bool | None, permission_mode: str | None) -> dict[str, Any]:
+def cli_layer(
+    verbose: bool | None,
+    permission_mode: str | None,
+    allow_shell: bool | None = None,
+) -> dict[str, Any]:
     """Layer 5. Only flags the user actually passed appear."""
     layer: dict[str, Any] = {}
     if verbose is not None:
         layer["agent"] = {"verbose": verbose}
     if permission_mode is not None:
         layer["permissions"] = {"mode": permission_mode}
+    if allow_shell is not None:
+        layer["tools"] = {"shell_in_auto": allow_shell}
     return layer
 
 

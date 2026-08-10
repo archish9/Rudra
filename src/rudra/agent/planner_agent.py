@@ -93,6 +93,7 @@ def create_planner_agent(
     filesystem_backend,
     checkpointer,
     console: Console,
+    gate=None,
 ):
     """Create the planner deep agent."""
     model = build_model("planner")
@@ -102,6 +103,19 @@ def create_planner_agent(
         console, project_path
     )
 
+    middleware = build_planner_middleware(
+        task,
+        compat_task_anchor=cfg.compat.task_anchor,
+        compat_sandbox_paths=cfg.compat.sandbox_paths,
+    )
+    if gate is not None:
+        # First in the list: a denied call must be stopped before any other
+        # middleware rewrites its arguments.
+        middleware.insert(0, gate.middleware)
+
+    # permissions= is deliberately absent. It raises NotImplementedError on
+    # any execute-capable backend, which is every backend Rudra now builds.
+    # See TODO.md U.7.
     return create_deep_agent(
         model=model,
         tools=custom_tools,
@@ -109,9 +123,6 @@ def create_planner_agent(
         backend=filesystem_backend,
         checkpointer=checkpointer,
         memory=[".rudra/AGENTS.md"],
-        middleware=build_planner_middleware(
-            task,
-            compat_task_anchor=cfg.compat.task_anchor,
-            compat_sandbox_paths=cfg.compat.sandbox_paths,
-        ),
+        middleware=middleware,
+        interrupt_on=gate.interrupt_on if gate is not None else None,
     )

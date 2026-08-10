@@ -69,3 +69,24 @@ def test_no_source_names_a_stale_volatile_path() -> None:
 def test_agents_md_reference_is_left_alone() -> None:
     """AGENTS.md is durable; the planner's memory= must still point at it."""
     assert ".rudra/AGENTS.md" in _sources()
+
+
+def test_the_artifacts_route_matches_the_paths_module(tmp_path) -> None:
+    """The composite's route prefix and the on-disk directory must agree.
+
+    Two independent spellings of the same location — a route string in
+    main_agent.build_backend and a Path in state.paths — is exactly the
+    drift this module exists to catch.
+    """
+    from rudra.agent.main_agent import build_backend
+    from rudra.config.loader import build_config, reset_config
+    from rudra.state.paths import ensure_layout, rudra_paths
+
+    reset_config()
+    try:
+        ensure_layout(tmp_path)
+        backend = build_backend(build_config(tmp_path), tmp_path)
+        assert "/artifacts/" in backend.routes
+        assert rudra_paths(tmp_path).artifacts.is_dir()
+    finally:
+        reset_config()

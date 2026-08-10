@@ -55,6 +55,7 @@ class RudraPaths:
     tech_stack_md: Path
     session_id_txt: Path
     logs: Path
+    artifacts: Path
 
 
 def rudra_paths(project_root: Path) -> RudraPaths:
@@ -76,6 +77,11 @@ def rudra_paths(project_root: Path) -> RudraPaths:
         tech_stack_md=run / "tech_stack.md",
         session_id_txt=run / "session_id.txt",
         logs=run / "logs",
+        # deepagents evicts oversized tool results and offloads conversation
+        # history to <artifacts_root>. That root defaults to the backend
+        # root -- the user's project -- so Step 7 routes it here instead.
+        # See TODO.md A1.45.
+        artifacts=run / "artifacts",
     )
 
 
@@ -86,7 +92,14 @@ def ensure_layout(project_root: Path) -> RudraPaths:
     own patterns keeps them across runs.
     """
     paths = rudra_paths(project_root)
-    for directory in (paths.root, paths.run, paths.logs, paths.memory_export, paths.memory_palace):
+    for directory in (
+        paths.root,
+        paths.run,
+        paths.logs,
+        paths.artifacts,
+        paths.memory_export,
+        paths.memory_palace,
+    ):
         directory.mkdir(parents=True, exist_ok=True)
 
     gitignore = paths.root / ".gitignore"

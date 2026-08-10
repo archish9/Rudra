@@ -3,8 +3,16 @@
 
   - planner_agent.py wires FixWriteParamsMiddleware, first in the list, so it
     cleans tool args before anything else sees them (U.14).
-  - main_agent.py constructs plain FilesystemBackend(virtual_mode=True), not
-    the deleted OverwriteFilesystemBackend (U.3).
+  - main_agent.py does not construct the deleted OverwriteFilesystemBackend
+    (U.3).
+
+Step 7 extended this to the permission gate: when one is supplied it must
+be middleware[0] — ahead of FixWriteParamsMiddleware, so a denial lands
+before anything rewrites the call's arguments — and its interrupt_on map
+must reach create_deep_agent. Those are asserted by recording the real
+call rather than by reading the source, because Step 7 moved the middleware
+list into a local and the previous AST assertion broke while the property
+it named still held.
 
 IMPORTANT: this module must never call
 rudra.compat.deepagents_path.install_path_normalizer, directly or
@@ -32,6 +40,11 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import os
+
+import pytest
+
+from rudra.config.loader import reset_config
 
 
 def test_planner_agent_module_does_not_call_install_path_normalizer():
@@ -65,21 +78,118 @@ def test_planner_wires_fix_write_params_middleware_first():
         )
 
 
-def test_planner_passes_its_built_stack_to_create_deep_agent():
-    """The builder is only meaningful if create_deep_agent actually gets it."""
-    module = importlib.import_module("rudra.agent.planner_agent")
-    tree = ast.parse(inspect.getsource(module))
+@pytest.fixture(autouse=True)
+def _clean_config(monkeypatch):
+    """Isolate every test here from the developer's own environment.
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "create_deep_agent":
-            for kw in node.keywords:
-                if kw.arg == "middleware":
-                    assert (
-                        isinstance(kw.value, ast.Call)
-                        and getattr(kw.value.func, "id", None) == "build_planner_middleware"
-                    ), "planner's middleware= must come from build_planner_middleware"
-                    return
-    raise AssertionError("create_deep_agent(..., middleware=...) not found in planner_agent.py")
+    Without this, build_config() picks up a real VERBOSE or OLLAMA_* var,
+    fires its deprecation warning, and populates the process-global
+    warn-once set — which made test_config's own warn-once assertion fail
+    in the full suite while passing alone.
+    """
+    for name in list(os.environ):
+        if name.startswith(("RUDRA_", "OLLAMA_")) or name == "VERBOSE":
+            monkeypatch.delenv(name, raising=False)
+    reset_config()
+    yield
+    reset_config()
+
+
+def _record_create_deep_agent(monkeypatch, module_name: str) -> dict:
+    """Capture the kwargs the agent factory hands to create_deep_agent.
+
+    Behavioral rather than syntactic: Step 7 moved the middleware list into
+    a local so the gate could be inserted, and the previous AST assertion
+    broke while the property it named still held. Recording the real call
+    survives any spelling.
+    """
+    module = importlib.import_module(module_name)
+    captured: dict = {}
+
+    def fake_create_deep_agent(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(module, "create_deep_agent", fake_create_deep_agent)
+    monkeypatch.setattr(module, "build_model", lambda *a, **k: object())
+    return captured
+
+
+def test_planner_passes_its_built_stack_to_create_deep_agent(monkeypatch, tmp_path):
+    """The builder is only meaningful if create_deep_agent actually gets it."""
+    from rich.console import Console
+
+    from rudra.agent.planner_agent import build_planner_middleware, create_planner_agent
+
+    captured = _record_create_deep_agent(monkeypatch, "rudra.agent.planner_agent")
+    create_planner_agent(
+        task="t",
+        project_path=tmp_path,
+        tech_stack_content="",
+        filesystem_backend=object(),
+        checkpointer=None,
+        console=Console(quiet=True),
+    )
+
+    expected = [type(m).__name__ for m in build_planner_middleware("t")]
+    assert [type(m).__name__ for m in captured["middleware"]] == expected
+
+
+def test_planner_puts_the_permission_gate_first(monkeypatch, tmp_path):
+    """A denial must land before any middleware rewrites the call's args."""
+    from rich.console import Console
+
+    from rudra.agent.planner_agent import create_planner_agent
+    from rudra.config.loader import build_config, reset_config
+    from rudra.permissions import build_gate
+
+    reset_config()
+    try:
+        gate = build_gate(build_config(tmp_path), tmp_path)
+        captured = _record_create_deep_agent(monkeypatch, "rudra.agent.planner_agent")
+        create_planner_agent(
+            task="t",
+            project_path=tmp_path,
+            tech_stack_content="",
+            filesystem_backend=object(),
+            checkpointer=None,
+            console=Console(quiet=True),
+            gate=gate,
+        )
+        assert captured["middleware"][0] is gate.middleware
+        assert captured["interrupt_on"] is gate.interrupt_on
+    finally:
+        reset_config()
+
+
+def test_coder_puts_the_permission_gate_first(monkeypatch, tmp_path):
+    from rudra.agent.coder_agent import create_coder_agent
+    from rudra.config.loader import build_config, reset_config
+    from rudra.permissions import build_gate
+
+    reset_config()
+    try:
+        gate = build_gate(build_config(tmp_path), tmp_path)
+        captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
+        create_coder_agent(
+            tech_stack_content="",
+            filesystem_backend=object(),
+            checkpointer=None,
+            gate=gate,
+        )
+        assert captured["middleware"][0] is gate.middleware
+        assert captured["interrupt_on"] is gate.interrupt_on
+    finally:
+        reset_config()
+
+
+def test_no_gate_means_no_interrupt_config(monkeypatch, tmp_path):
+    """A caller without a gate must still build a working agent."""
+    from rudra.agent.coder_agent import create_coder_agent
+
+    captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
+    create_coder_agent(tech_stack_content="", filesystem_backend=object(), checkpointer=None)
+    assert captured["interrupt_on"] is None
 
 
 def test_main_agent_constructs_filesystem_backend_with_virtual_mode():
