@@ -6,17 +6,50 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
+import click
 import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
+from typer.core import TyperGroup
 
 from rudra import __version__
 from rudra.agent import AgentResult, create_main_agent
 from rudra.config import get_config
 from rudra.filesystem import project_tree
 from rudra.state import ProjectConfigManager, ProjectContext
+
+
+class TaskOrCommandGroup(TyperGroup):
+    """Let a bare first argument be a task prompt, not a command name.
+
+    Rudra's primary interface is `rudra "<task>"`, but click resolves the
+    first positional token as a subcommand name and fails on anything it
+    does not recognize. Declaring the prompt as a positional Argument on the
+    callback instead makes the opposite trade — the callback consumes the
+    token before command resolution runs, so `rudra models` launches an
+    agent run for a task called "models" and `rudra models test` reports
+    "No such command 'test'".
+
+    Both forms have to work, so command resolution stays in charge and only
+    unrecognized tokens fall through to the callback as ctx.args.
+
+    `_protected_args` is click-internal (8.3.1: Group.parse_args splits
+    `rest` into `ctx._protected_args` and `ctx.args`). It is read
+    defensively and covered by tests that exercise both invocation forms
+    end to end, so a click upgrade that renames it fails visibly.
+    """
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        parsed = super().parse_args(ctx, args)
+        protected = getattr(ctx, "_protected_args", [])
+        if protected and protected[0] not in self.commands:
+            ctx.args = [*protected, *ctx.args]
+            ctx._protected_args = []
+            return ctx.args
+        return parsed
+
 
 # Create the Typer app
 app = typer.Typer(
@@ -25,6 +58,7 @@ app = typer.Typer(
     add_completion=False,
     no_args_is_help=False,
     invoke_without_command=True,
+    cls=TaskOrCommandGroup,
 )
 
 models_app = typer.Typer(help="Inspect and test configured models.")

@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_cli_module_imports():
@@ -107,13 +108,61 @@ def test_a_subcommand_name_is_not_swallowed_as_a_task_prompt() -> None:
     assert "Probe one role only" in result.output
 
 
-def test_a_quoted_task_still_reaches_the_prompt() -> None:
-    """The other half of the same contract: fixing subcommand dispatch must
-    not break `rudra "<task>"`, which is the primary documented interface."""
-    import inspect
+def parse_cli(argv: list[str]):
+    """Parse argv exactly as the real CLI would, without invoking anything.
 
-    from rudra import cli
+    CliRunner().invoke() would run main() for real — which reaches
+    create_main_agent, calls install_path_normalizer, and monkeypatches
+    deepagents' validate_path for the rest of the session. That broke
+    test_deepagents_contract's shared-object assertion from a different
+    file, and would have made a network call besides. Parsing is the whole
+    of what these tests are about, so they stop at make_context.
+    """
+    from typer.main import get_command
 
-    source = inspect.getsource(cli.main)
+    from rudra.cli import app
 
-    assert 'prompt: Optional[str] = " ".join(ctx.args).strip() or None' in source
+    command = get_command(app)
+    ctx = command.make_context("rudra", list(argv))
+    return command, ctx
+
+
+def test_a_quoted_task_is_not_mistaken_for_a_command(tmp_path: Path) -> None:
+    """The other half of the contract, and the reason this asserts behavior.
+
+    An earlier version of this test checked that a particular line of source
+    existed in cli.main. It passed while `rudra "<task>"` — the primary
+    documented interface — was completely broken, exiting with "No such
+    command". Source-shape assertions cannot catch that; only parsing can.
+    """
+    _, ctx = parse_cli(["--project-dir", str(tmp_path), "reverse a string in python"])
+
+    assert ctx.args == ["reverse a string in python"]
+
+
+def test_an_unknown_subcommand_style_token_is_treated_as_a_task(tmp_path: Path) -> None:
+    """`models` resolves as a command; `modelz` is just an odd task name."""
+    _, ctx = parse_cli(["--project-dir", str(tmp_path), "modelz"])
+
+    assert ctx.args == ["modelz"]
+
+
+def test_a_real_command_name_still_dispatches() -> None:
+    """The inverse of the test above: `models` must NOT become a task.
+
+    Asserted at parse level as "the token was claimed for dispatch rather
+    than left in ctx.args". ctx.invoked_subcommand is not usable here — it
+    is populated during invoke(), so at make_context time it is None for
+    every input and an assertion against it would pass vacuously.
+    """
+    _, ctx = parse_cli(["models"])
+
+    assert ctx.args == [], "'models' leaked through as a task prompt"
+    assert getattr(ctx, "_protected_args", []) == ["models"]
+
+
+def test_an_unquoted_multi_word_task_is_rejoined() -> None:
+    """`rudra build a flask app` and the quoted form must agree."""
+    _, ctx = parse_cli(["build", "a", "flask", "app"])
+
+    assert " ".join(ctx.args) == "build a flask app"
