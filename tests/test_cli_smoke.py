@@ -11,6 +11,7 @@ from __future__ import annotations
 import inspect
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 
@@ -70,10 +71,28 @@ def test_project_path_is_resolved_before_config_loads() -> None:
 
 
 def test_the_first_get_config_call_passes_the_project_path() -> None:
-    """Ordering alone is not enough — the path has to be handed over."""
+    """Ordering alone is not enough — the path has to be handed over.
+
+    Matched on the call's first argument rather than the whole call text:
+    Step 6 added keyword arguments (`verbose=`, `permission_mode=`) to the
+    same call, which broke an exact-string check while the property it
+    guards — project_path is the first thing handed to get_config — was
+    unchanged. See TODO.md A5.2.
+    """
+    import ast
+
     from rudra import cli
 
-    assert "get_config(project_path)" in inspect.getsource(cli.main)
+    tree = ast.parse(textwrap.dedent(inspect.getsource(cli.main)))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "get_config":
+            assert node.args, "get_config() in cli.main must be given the project path"
+            assert getattr(node.args[0], "id", None) == "project_path", (
+                "cli.main()'s first get_config() argument must be project_path, "
+                "or --project-dir cannot affect which config and .env are read (A5.2)."
+            )
+            return
+    raise AssertionError("no get_config() call found in cli.main")
 
 
 def test_models_test_is_a_registered_subcommand() -> None:

@@ -258,6 +258,21 @@ def models_test(
         raise typer.Exit(code=1)
 
 
+def _permission_notice(cfg) -> str:
+    """One line, shown on every run — not only when a flag is passed.
+
+    A user reading `mode = "ask"` reasonably concludes Rudra will prompt
+    before touching files. It will not: enforcement is Step 7 and today
+    files are overwritten silently (TODO.md A1.16). Saying so on the
+    default path is the point; an inert --yolo is harmless by comparison,
+    because it claims less safety rather than more.
+    """
+    return (
+        f"permissions: {cfg.permissions.mode} — NOT ENFORCED (Step 7); "
+        f"files are written and overwritten without prompting"
+    )
+
+
 def _load_config_or_exit(project_dir: Optional[Path]):
     """Build a Config, turning ConfigError into a clean message.
 
@@ -473,6 +488,12 @@ def main(
         None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
+    auto: bool = typer.Option(
+        False, "--auto", "--yolo", help="Permission mode: auto (not enforced until Step 7)"
+    ),
+    plan: bool = typer.Option(
+        False, "--plan", help="Permission mode: plan (not enforced until Step 7)"
+    ),
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
     ),
@@ -507,7 +528,10 @@ def main(
     # --verbose or --no-verbose is passed, leaving the first downstream
     # get_config() to fall back to the cwd. See TODO.md A5.2.
     project_path = get_project_path(project_dir)
-    cfg = get_config(project_path)
+    permission_mode = "auto" if auto else "plan" if plan else None
+    cfg = get_config(project_path, verbose=verbose, permission_mode=permission_mode)
+    if permission_mode is not None:
+        console.print(f"[yellow]Note:[/yellow] {_permission_notice(cfg)}")
 
     # A default of `config.agent.verbose` here would be evaluated when this
     # module is imported, which is the A1.15 defect. Three-state instead:
@@ -524,8 +548,9 @@ def main(
             Panel(
                 f"[bold]{prompt}[/bold]\n"
                 f"[dim]Path:[/dim] {project_path}\n"
-                f"[dim]Planner:[/dim] {get_config().model_for('planner').model}  "
-                f"[dim]│  Coder:[/dim] {get_config().model_for('coder').model}",
+                f"[dim]Planner:[/dim] {cfg.model_for('planner').model}  "
+                f"[dim]│  Coder:[/dim] {cfg.model_for('coder').model}\n"
+                f"[yellow]{_permission_notice(cfg)}[/yellow]",
                 title="⚡ Task",
                 border_style="bright_cyan",
             )
@@ -608,8 +633,9 @@ def main(
                         Panel(
                             f"[bold]{user_input}[/bold]\n"
                             f"[dim]Path:[/dim] {project_path}\n"
-                            f"[dim]Planner:[/dim] {get_config().model_for('planner').model}  "
-                            f"[dim]│  Coder:[/dim] {get_config().model_for('coder').model}",
+                            f"[dim]Planner:[/dim] {cfg.model_for('planner').model}  "
+                            f"[dim]│  Coder:[/dim] {cfg.model_for('coder').model}\n"
+                            f"[yellow]{_permission_notice(cfg)}[/yellow]",
                             title="⚡ Task",
                             border_style="bright_cyan",
                         )

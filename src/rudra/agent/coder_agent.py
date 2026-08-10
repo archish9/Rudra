@@ -4,8 +4,26 @@ from __future__ import annotations
 
 from deepagents import create_deep_agent
 
+from rudra.config import get_config
 from rudra.llm import build_model
 from rudra.middleware import FixWriteParamsMiddleware, TaskAnchorMiddleware
+
+
+def build_coder_middleware(
+    compat_task_anchor: bool = False,
+    compat_sandbox_paths: bool = False,
+) -> list:
+    """The coder's middleware stack, with both D4 workarounds gated.
+
+    TaskAnchorMiddleware is opt-in per D4 (`[compat] task_anchor`). Fence
+    stripping stays unconditional — it is required, not a workaround, since
+    0.7.4's FilesystemBackend.write() no longer strips (TODO.md U.3, U.15).
+    """
+    middleware: list = [FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths)]
+    if compat_task_anchor:
+        middleware.append(TaskAnchorMiddleware(_CODER_ANCHOR))
+    return middleware
+
 
 _CODER_ANCHOR = (
     "Read .rudra/run/current_task.md, then write the file specified there using write_file(). "
@@ -54,11 +72,7 @@ def create_coder_agent(
     write to `tests/models.py` (TODO.md A1.6) — and is deleted in D4.
     """
     model = build_model("coder")
-
-    middleware = [
-        FixWriteParamsMiddleware(),
-        TaskAnchorMiddleware(_CODER_ANCHOR),
-    ]
+    cfg = get_config()
 
     return create_deep_agent(
         model=model,
@@ -66,5 +80,8 @@ def create_coder_agent(
         system_prompt=_CODER_SYSTEM_PROMPT,
         backend=filesystem_backend,
         checkpointer=checkpointer,
-        middleware=middleware,
+        middleware=build_coder_middleware(
+            compat_task_anchor=cfg.compat.task_anchor,
+            compat_sandbox_paths=cfg.compat.sandbox_paths,
+        ),
     )

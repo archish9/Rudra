@@ -7,6 +7,7 @@ from pathlib import Path
 from deepagents import create_deep_agent
 from rich.console import Console
 
+from rudra.config import get_config
 from rudra.filesystem import project_tree
 from rudra.llm import build_model
 from rudra.middleware import (
@@ -64,6 +65,27 @@ Your ONLY job: ANALYZE tasks and CREATE plans. You NEVER write project code file
     return base
 
 
+def build_planner_middleware(
+    task: str,
+    compat_task_anchor: bool = False,
+    compat_sandbox_paths: bool = False,
+) -> list:
+    """The planner's middleware stack, with both D4 workarounds gated.
+
+    FixWriteParamsMiddleware is first so it cleans tool args before anything
+    else sees them. The planner previously got fence-stripping from
+    OverwriteFilesystemBackend, which U.3 deletes — see TODO.md U.14.
+
+    TaskAnchorMiddleware is opt-in per D4 (`[compat] task_anchor`): it was
+    built for qwen3:14b losing the task mid-run, and the minimum model is
+    now 32B (D6).
+    """
+    middleware: list = [FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths)]
+    if compat_task_anchor:
+        middleware.append(TaskAnchorMiddleware(task))
+    return middleware
+
+
 def create_planner_agent(
     task: str,
     project_path: Path,
@@ -74,6 +96,7 @@ def create_planner_agent(
 ):
     """Create the planner deep agent."""
     model = build_model("planner")
+    cfg = get_config()
 
     custom_tools = create_planning_tools(project_path, task=task) + create_interaction_tools(
         console, project_path
@@ -86,11 +109,9 @@ def create_planner_agent(
         backend=filesystem_backend,
         checkpointer=checkpointer,
         memory=[".rudra/AGENTS.md"],
-        middleware=[
-            # First in the list: cleans tool args before anything else sees
-            # them. The planner previously got fence-stripping from
-            # OverwriteFilesystemBackend, which U.3 deletes. See TODO.md U.14.
-            FixWriteParamsMiddleware(),
-            TaskAnchorMiddleware(task),
-        ],
+        middleware=build_planner_middleware(
+            task,
+            compat_task_anchor=cfg.compat.task_anchor,
+            compat_sandbox_paths=cfg.compat.sandbox_paths,
+        ),
     )

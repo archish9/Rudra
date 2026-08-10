@@ -46,7 +46,23 @@ def _strip_sandbox_prefix(path: str) -> str:
 
 
 class FixWriteParamsMiddleware(AgentMiddleware):
-    """Auto-correct file tool parameters: rename args, clean paths, strip fences."""
+    """Auto-correct file tool parameters: rename args, clean paths, strip fences.
+
+    D4 splits this middleware in two:
+
+    * **Always on** — markdown-fence stripping and `filename`/`path` ->
+      `file_path` aliasing. Fence stripping is *required*, not a small-model
+      workaround: 0.7.4's `FilesystemBackend.write()` no longer strips, so
+      nothing else in the stack does (TODO.md U.3, U.15).
+    * **Opt-in** — sandbox-prefix stripping, behind `[compat] sandbox_paths`.
+      It was built for a training-sandbox path shape that a 32B model on a
+      normal machine does not emit, and it rewrites legitimate absolute
+      paths when it does fire.
+    """
+
+    def __init__(self, strip_sandbox_prefixes: bool = False) -> None:
+        super().__init__()
+        self.strip_sandbox_prefixes = strip_sandbox_prefixes
 
     def _fix_args(self, request):
         name = request.tool_call.get("name")
@@ -65,12 +81,14 @@ class FixWriteParamsMiddleware(AgentMiddleware):
             if "content" in args:
                 args["content"] = _strip_fences(args["content"])
 
-        # Strip sandbox prefixes from all path-bearing args (second defense layer)
-        for key in _PATH_ARG_KEYS:
-            if key in args and isinstance(args[key], str):
-                cleaned = _strip_sandbox_prefix(args[key])
-                if cleaned != args[key]:
-                    args[key] = cleaned
+        # Strip sandbox prefixes from all path-bearing args (second defense
+        # layer). Opt-in per D4 — see the class docstring.
+        if self.strip_sandbox_prefixes:
+            for key in _PATH_ARG_KEYS:
+                if key in args and isinstance(args[key], str):
+                    cleaned = _strip_sandbox_prefix(args[key])
+                    if cleaned != args[key]:
+                        args[key] = cleaned
 
         request.tool_call["args"] = args
         return request
