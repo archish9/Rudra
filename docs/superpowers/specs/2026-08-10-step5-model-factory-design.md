@@ -20,8 +20,8 @@ Section E step 5 lists `C1.1 – C1.8, U.9`. Three additions:
 | `C7.6` | Duplicate of `C1.4a` whose row says "**Decide which in C1.1** — it is a model-factory concern". Decided here; the row closes as an alias | §5.4 |
 | `A5.2` | Its row says the fix "should land before the Step 5 model factory (`C1.x`) inherits the same cwd-vs-project-root assumption". Owner confirmed inclusion 2026-08-10 | §7 |
 
-Four defects found while exploring are **logged as PENDING before being fixed**, per CLAUDE.md
-session rule 2. Listed in §10 as `N1`–`N4`.
+Five defects found while exploring are **logged as PENDING before being fixed**, per CLAUDE.md
+session rule 2. Listed in §10 as `N1`–`N5`.
 
 ### Out of scope
 
@@ -72,6 +72,42 @@ the OpenAI Responses-API default) with no global writes and no role collisions.
 `apply_provider_profile` is **beta-flagged** (`provider_profiles.py` module docstring: "exposes beta
 APIs that may receive minor changes in future releases"). It therefore joins the U.4 monkeypatch on
 the upgrade-hazard list and gets a version guard — logged as `N4`, implemented in §9.1.
+
+Its two-argument form does the merging for us: `apply_provider_profile(spec, role_kwargs)` returns
+profile defaults with `role_kwargs` layered on top, caller winning on collision. Measured:
+
+```
+apply_provider_profile('openai:gpt-5.4')                          -> {'use_responses_api': True}
+apply_provider_profile('openai:gpt-5.4', {'temperature': 0.3})    -> {'use_responses_api': True,
+                                                                      'temperature': 0.3}
+apply_provider_profile('openai:gpt-5.4', {'use_responses_api': False})
+                                                                  -> {'use_responses_api': False}
+```
+
+### 2.7 — `openai_compatible` must suppress the Responses API (N5)
+
+The `count(":") > 1` rejection of §2.4 is **not** limited to harness profiles — the provider
+registry rejects the same specs:
+
+```
+openai:gpt-5.4                                  -> {'use_responses_api': True}
+openai:nvidia/nemotron-3-ultra-550b-a55b:free   -> {}
+ollama:qwen3:32b                                -> {}
+```
+
+`openai_compatible` maps to the `openai` lc prefix (§5.2), so it inherits deepagents' built-in
+OpenAI profile — `ProviderProfile(init_kwargs={"use_responses_api": True})`
+(`profiles/provider/_openai.py:21-23`). Every OpenAI-compatible endpoint Rudra targets serves
+`/chat/completions`; none of vLLM, LM Studio, Groq, or Together serves OpenAI's `/responses`, and
+deepagents' own OpenRouter profile documents OpenRouter's `/responses` as a stateless beta that
+breaks multi-turn reasoning.
+
+The dev model escapes purely because its identifier contains a colon. A user configuring
+`openai_compatible` with a colon-free model id would get `use_responses_api=True` injected into an
+endpoint that cannot serve it.
+
+**Therefore `openai_compatible` sets `use_responses_api=False` explicitly**, relying on the
+caller-wins semantics measured above. The real `openai` provider keeps the profile default.
 
 ### 2.2 — Startup check is static; the live probe is opt-in (S5-3)
 
@@ -236,7 +272,7 @@ imports from the rest of Rudra. `factory.py` depends only on `providers` + `conf
 1.  settings = (cfg or get_config()).model_for(role)      # unknown role -> default
 2.  entry    = PROVIDERS[settings.provider]               # unknown -> UnknownProviderError
 3.  spec     = f"{entry.lc_prefix}:{settings.model}"
-4.  kwargs   = {**apply_provider_profile(spec), **entry.build_kwargs(settings)}      # U.9
+4.  kwargs   = apply_provider_profile(spec, entry.build_kwargs(settings))            # U.9, §2.1
 5.  if entry.needs_api_key: kwargs["api_key"] = env[settings.api_key_env] or raise   # C1.5
 6.  model    = init_chat_model(spec, **kwargs)
 7.  if settings.context_tokens:                                                      # C1.4a
@@ -259,7 +295,7 @@ Each row is a frozen dataclass. Adding a provider is one row, not a new code pat
 | rudra provider | lc prefix | max-output kwarg | context kwarg | key kwarg | timeout | extra |
 |---|---|---|---|---|---|---|
 | `ollama` | `ollama` | `num_predict` | `num_ctx` **+ profile** | — | **omit** | `reasoning=True` |
-| `openai_compatible` | `openai` | `max_tokens` | profile only | `api_key` | `timeout` | — |
+| `openai_compatible` | `openai` | `max_tokens` | profile only | `api_key` | `timeout` | `use_responses_api=False` (§2.7) |
 | `openai` | `openai` | `max_tokens` | profile only | `api_key` | `timeout` | — |
 | `anthropic` | `anthropic` | `max_tokens` | profile only | `api_key` | `timeout` | — |
 | `google` | `google_genai` | `max_output_tokens` | profile only | `api_key` | `timeout` | — |
@@ -386,6 +422,8 @@ grep -rn "langchain_ollama\|langchain_openai\|langchain_anthropic\|langchain_goo
 - Role fallback: `build_model("reviewer")` resolves through `default`
 - Deprecation shim: each of seven `OLLAMA_*` variables maps correctly, warns once, loses to
   `RUDRA_*`
+- `N5`: `openai_compatible` never emits `use_responses_api=True`, including for a colon-free model
+  id where the built-in OpenAI profile does apply; the real `openai` provider still gets it
 - Errors: unknown provider / unset key variable / `tool_calling: False` each raise their own type,
   **and the key value never appears in any message**
 - `A5.2`: `Config.load(root)` reads `root/.env`, not the cwd's, when `-d` names another directory
@@ -434,6 +472,7 @@ both. Evidence gets recorded when it happens.
 | `N1` | `config.py:19` defaults `OLLAMA_MODEL` to `qwen3:14b`, below the D6 32B floor, while `.env.example:9` says `qwen3:32b`. Same class as `A1.23`, different file | `src/rudra/config.py:19` vs `.env.example:9` | **Fixed in-step** — the default moves into `ModelConfig` regardless |
 | `N2` | Built-in harness profiles can never match a Rudra model. `graph.py:584` sets `_model_spec = model if isinstance(model, str) else None`, and Rudra passes instances; the instance fallback in `_harness_profile_for_model` then fails because `_get_harness_profile` rejects any spec with `count(":") > 1`, which every Ollama tag (`qwen3:32b`) and the OpenRouter `:free` suffix produce. Measured for the dev model: `ls_provider=openai`, identifier `nvidia/nemotron-3-ultra-550b-a55b:free` → `HarnessProfile()` default, so the shipped Nemotron 3 Ultra profile (`profiles/harness/_nvidia_nemotron_3_ultra.py:52`, registered as `openrouter:nvidia/nemotron-3-ultra-550b-a55b`) never loads | `deepagents/graph.py:584,605`; `profiles/harness/harness_profiles.py:1078,1086-1087,1283-1301`; live probe §2.4 | **Deferred to `U.10`.** Detecting the miss would require the factory to guess a canonical spec from user config (is `:free` a tag or half a model name?), which is exactly the judgment `U.10` exists to make. Step 5 instead emits one DEBUG line per build recording spec, `ls_provider`, and identifier, so `U.10` starts with real data rather than re-deriving it |
 | `N3` | `OllamaConfig.timeout` (`config.py:33`) is dead config — no call site passes it, and `ChatOllama` would silently swallow it if one did (§2.6). Honest support means `client_kwargs={"timeout": n}` | `src/rudra/config.py:33`; `planner_agent.py:78-84`, `coder_agent.py:58-64` pass only model/base_url/temperature/num_predict/reasoning | **Deferred** — behavior change, not a rename |
+| `N5` | The `count(":") > 1` spec rejection applies to **provider** profiles as well as harness profiles, so `openai_compatible` silently inherits `use_responses_api=True` for any colon-free model id — injecting OpenAI's Responses API into vLLM / LM Studio / Groq / Together / OpenRouter endpoints that serve only `/chat/completions`. The dev model escapes only because its identifier contains a colon | measured: `apply_provider_profile('openai:gpt-5.4')` → `{'use_responses_api': True}` vs `apply_provider_profile('openai:nvidia/nemotron-3-ultra-550b-a55b:free')` → `{}`; `profiles/provider/_openai.py:21-23` | **Fixed in-step** — `openai_compatible` sets `use_responses_api=False`, §2.7 |
 | `N4` | `apply_provider_profile` is a beta-flagged deepagents API now load-bearing in `build_model`, joining the U.4 monkeypatch on the upgrade-hazard list | `deepagents/profiles/provider/provider_profiles.py` module docstring; `pyproject.toml:30` pins `deepagents==0.7.4` | **Guarded in-step** — version-guard test, §9.1 |
 
 ### Rows updated, not closed
