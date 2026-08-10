@@ -26,6 +26,13 @@ VALID_MODES = ("ask", "auto", "plan")
 # test_the_schema_names_the_same_floor_rules_the_floor_module_does.
 FLOOR_RULE_NAMES = ("outside-root", "git-dir", "catastrophic-command")
 
+# `outside-root` is deliberately absent: for the tools it covers, confinement
+# comes from the backend's virtual_mode=True, not from Rudra's floor, so
+# disabling it changed nothing and silently redirected the write into the
+# project instead. Accepting a name and then not honouring it is worse than
+# rejecting it. See TODO.md A1.50.
+DISABLEABLE_FLOOR_RULES = ("git-dir", "catastrophic-command")
+
 # `tools` was reserved here naming Step 7 as its implementing step. Step 7
 # implements it, so it is a real section now — see ToolsConfig.
 RESERVED_SECTIONS = {
@@ -90,12 +97,19 @@ class CompatConfig:
 class ToolsConfig:
     """The tool layer. Un-reserved in Step 7, which implements it.
 
-    One key, deliberately. The oversized-tool-result threshold that would
-    naturally live here is unreachable through `create_deep_agent` (TODO.md
-    A1.47), and a key that silently does nothing is worse than no key.
+    The oversized-tool-result threshold that would naturally live here is
+    unreachable through `create_deep_agent` (TODO.md A1.47), and a key that
+    silently does nothing is worse than no key.
+
+    `shell_in_auto` is off by default. Under `--auto` nobody reads the
+    command before it runs, and a shell command can write anywhere the user
+    can — measured, not theorised (A1.49). Unattended runs therefore get
+    the filesystem tools, which the backend genuinely confines, unless the
+    user opts in once. `ask` mode is unaffected.
     """
 
     shell: bool
+    shell_in_auto: bool
 
 
 MODEL_KEYS = frozenset(f.name for f in fields(ModelConfig))
@@ -116,12 +130,13 @@ DEFAULTS: dict[str, Any] = {
     "agent": {"verbose": True},
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},
-    "tools": {"shell": True},
+    "tools": {"shell": True, "shell_in_auto": False},
 }
 
 __all__ = [
     "BUILTIN_ROLES",
     "DEFAULTS",
+    "DISABLEABLE_FLOOR_RULES",
     "FLOOR_RULE_NAMES",
     "MODEL_KEYS",
     "RESERVED_SECTIONS",

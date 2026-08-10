@@ -151,8 +151,10 @@ class PermissionEngine:
         floor_disable: tuple[str, ...],
         project_root: Path,
         grants: SessionGrants | None = None,
+        shell_in_auto: bool = False,
     ) -> None:
         self.mode = mode
+        self.shell_in_auto = shell_in_auto
         self.allow = tuple(parse_rule(entry) for entry in allow)
         self.deny = tuple(parse_rule(entry) for entry in deny)
         self.floor_disable = frozenset(floor_disable)
@@ -226,6 +228,16 @@ class PermissionEngine:
         if tool in READ_ONLY_TOOLS or tool in _OTHER_TOOLS:
             return _final("allow", None, "mode-default")
         if self.mode == "auto":
+            # Unattended shell is opt-in. Nobody reads the command before it
+            # runs, and a shell command can write anywhere the user can --
+            # measured, not theorised (A1.49). Filesystem tools stay allowed
+            # because the backend genuinely confines them (A1.50).
+            #
+            # This sits AFTER the allow rules deliberately: a user who writes
+            # `allow = ["execute:pytest*"]` has named exactly what may run,
+            # which is opting in for that command.
+            if tool == "execute" and not self.shell_in_auto:
+                return Decision("deny", "<auto:shell-not-opted-in>", "auto-shell")
             return _final("allow", None, "mode-default")
         if self.mode == "plan":
             return Decision("deny", None, "mode-default")

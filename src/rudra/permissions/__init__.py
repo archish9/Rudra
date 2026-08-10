@@ -92,6 +92,7 @@ def build_gate(cfg: Config, project_path: Path) -> Gate:
         floor_disable=cfg.permissions.floor_disable,
         project_root=project_path,
         grants=grants,
+        shell_in_auto=cfg.tools.shell_in_auto,
     )
     audit = AuditLog(rudra_paths(project_path).logs / "permissions.jsonl")
     return Gate(

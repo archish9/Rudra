@@ -32,8 +32,8 @@ def test_floor_disable_defaults_to_empty(tmp_path):
 
 
 def test_floor_disable_is_read_from_toml(tmp_path):
-    root = write_config(tmp_path, '[permissions]\nfloor_disable = ["outside-root"]\n')
-    assert build_config(root).permissions.floor_disable == ("outside-root",)
+    root = write_config(tmp_path, '[permissions]\nfloor_disable = ["git-dir"]\n')
+    assert build_config(root).permissions.floor_disable == ("git-dir",)
 
 
 def test_an_unknown_floor_rule_name_is_a_config_error(tmp_path):
@@ -143,3 +143,42 @@ def test_the_init_template_round_trips_through_the_loader(tmp_path):
     cfg = build_config(root)
     assert cfg.permissions.floor_disable == ()
     assert cfg.tools.shell is True
+
+
+def test_outside_root_cannot_be_disabled(tmp_path):
+    """A1.50: accepting the name and not honouring it is worse than rejecting."""
+    root = write_config(tmp_path, '[permissions]\nfloor_disable = ["outside-root"]\n')
+    with pytest.raises(ConfigError, match="cannot contain 'outside-root'"):
+        build_config(root)
+
+
+def test_the_outside_root_error_explains_where_confinement_comes_from(tmp_path):
+    root = write_config(tmp_path, '[permissions]\nfloor_disable = ["outside-root"]\n')
+    try:
+        build_config(root)
+    except ConfigError as exc:
+        assert "backend" in str(exc)
+        assert "git-dir" in str(exc)
+    else:
+        raise AssertionError("expected ConfigError")
+
+
+def test_the_other_floor_rules_are_still_disableable(tmp_path):
+    root = write_config(
+        tmp_path, '[permissions]\nfloor_disable = ["git-dir", "catastrophic-command"]\n'
+    )
+    assert build_config(root).permissions.floor_disable == ("git-dir", "catastrophic-command")
+
+
+def test_shell_in_auto_defaults_off(tmp_path):
+    assert build_config(tmp_path).tools.shell_in_auto is False
+
+
+def test_shell_in_auto_is_read_from_toml(tmp_path):
+    root = write_config(tmp_path, "[tools]\nshell_in_auto = true\n")
+    assert build_config(root).tools.shell_in_auto is True
+
+
+def test_env_layer_sets_shell_in_auto(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUDRA_SHELL_IN_AUTO", "true")
+    assert build_config(tmp_path).tools.shell_in_auto is True

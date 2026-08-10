@@ -188,6 +188,7 @@ model    = "qwen3-coder:30b"
 
 [tools]
 shell = true                            # false removes the execute tool
+shell_in_auto = false                   # may --auto run commands? (A1.49)
 
 [permissions]
 mode  = "ask"                           # ask | auto | plan
@@ -202,7 +203,9 @@ deny  = ["execute:rm -rf *", "write_file:.env"]
 
 # Built-in rules denied in EVERY mode, including --auto. Name one to switch
 # it off; the run says so, and calls it would have blocked are still audited.
-#   outside-root · git-dir · catastrophic-command
+#   git-dir · catastrophic-command
+# ("outside-root" is rejected here: the backend confines writes, not this
+#  rule, so disabling it would change nothing — see A1.50)
 floor_disable = []
 
 # Reserved, not yet accepted — listed to show where they will go:
@@ -243,7 +246,8 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 .venv/bin/rudra doctor --offline     # diagnose config, layout, deps; --offline skips network
 .venv/bin/rudra models test          # verify each role is reachable and can call tools
 .venv/bin/rudra "build a flask app"  # single-shot; prompts before each write and command
-.venv/bin/rudra --auto "..."         # unattended: approve everything (the deny floor still holds)
+.venv/bin/rudra --auto "..."         # unattended: files yes, commands no (A1.49)
+.venv/bin/rudra --auto --allow-shell "..."   # ...and commands too, opted in explicitly
 .venv/bin/rudra --plan "..."         # plan only: no project writes, no commands
 .venv/bin/rudra                      # REPL
 ```
@@ -252,15 +256,25 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 model call rather than hanging on a prompt nobody can answer. Use `--auto` for
 unattended runs.
 
-**`--auto` plus shell is not contained (A1.49).** The deny floor's path rules
-cover `write_file`/`edit_file`/`delete`; `execute` is checked only against
-`rm -rf /`-shaped commands. A shell command can write anywhere the user can,
-and the Step 7 acceptance run measured a model finding that route on its own —
-denied twice on `write_file`, it ran `echo "hello" > /abs/path` and succeeded.
-`ask` mode is unaffected, because the user reads the command first. Every
-`execute` is recorded in `run/logs/permissions.jsonl` even under `--auto`, and
-that audit trail is currently the only compensating control. Real containment
-needs OS-level isolation, not more pattern matching.
+**Unattended shell is opt-in (A1.49).** `--auto` alone runs the filesystem
+tools only. Those the backend genuinely confines to the project via
+`virtual_mode=True` — which, not Rudra's floor, is what actually contains them
+(A1.50). `execute` is denied under `--auto` unless the user says so once, with
+`--allow-shell` or `[tools] shell_in_auto = true`.
+
+The reason is measured, not theoretical. The floor's path rules cover
+`write_file`/`edit_file`/`delete`; `execute` is checked only against
+`rm -rf /`-shaped commands, and a shell command can write anywhere the user
+can. Before this gate existed, the Step 7 acceptance run watched the model
+find that route by itself — denied twice on `write_file`, it ran
+`echo "hello" > /abs/path` and succeeded. Re-running the same task now denies
+the shell attempt (`source: "auto-shell"`) and nothing leaves the project.
+
+`ask` mode is unaffected and keeps full shell, because there the user reads
+each command before it runs. An explicit `allow = ["execute:pytest*"]` also
+counts as opting in for that command — naming it *is* the consent. Turning
+`shell_in_auto` on restores the original exposure; the audit log is then the
+only control, and real containment would need OS-level isolation.
 
 ## 9. Repo Hygiene Facts
 

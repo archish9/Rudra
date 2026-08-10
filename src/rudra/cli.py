@@ -315,6 +315,7 @@ def _flatten(cfg) -> list[tuple[str, object]]:
     rows.append(("permissions.deny", list(cfg.permissions.deny)))
     rows.append(("permissions.floor_disable", list(cfg.permissions.floor_disable)))
     rows.append(("tools.shell", cfg.tools.shell))
+    rows.append(("tools.shell_in_auto", cfg.tools.shell_in_auto))
     rows.append(("compat.task_anchor", cfg.compat.task_anchor))
     rows.append(("compat.sandbox_paths", cfg.compat.sandbox_paths))
     return rows
@@ -438,13 +439,22 @@ def doctor_command(
         f"Deny floor: {'disabled ' + ', '.join(floor_off) if floor_off else 'all rules active'}.",
     )
 
-    table.add_row(
-        "shell",
-        "ok" if cfg.tools.shell else "warn",
-        "enabled — agents can run tests, linters, and git"
-        if cfg.tools.shell
-        else "disabled by [tools] shell = false — the execute tool is absent",
-    )
+    # escape() for the same reason as the config-error path: Rich parses
+    # "[tools]" as a style tag and prints nothing where the section name
+    # should be. See TODO.md A1.48.
+    if not cfg.tools.shell:
+        shell_state = "disabled by [tools] shell = false — the execute tool is absent"
+    elif cfg.tools.shell_in_auto:
+        shell_state = (
+            "enabled, including under --auto ([tools] shell_in_auto = true). "
+            "Unattended commands are not confined to the project — see TODO.md A1.49"
+        )
+    else:
+        shell_state = (
+            "enabled in ask mode; disabled under --auto unless --allow-shell "
+            "or [tools] shell_in_auto = true"
+        )
+    table.add_row("shell", "warn" if cfg.tools.shell_in_auto else "ok", escape(shell_state))
 
     if not offline:
         from rudra.llm.probe import ROLES_TO_PROBE, probe_role
@@ -517,6 +527,11 @@ def main(
     plan: bool = typer.Option(
         False, "--plan", help="Plan only: make no project changes, run no commands"
     ),
+    allow_shell: bool = typer.Option(
+        False,
+        "--allow-shell",
+        help="Let --auto run commands too (off by default: nobody reads them first)",
+    ),
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
     ),
@@ -552,7 +567,12 @@ def main(
     # get_config() to fall back to the cwd. See TODO.md A5.2.
     project_path = get_project_path(project_dir)
     permission_mode = "auto" if auto else "plan" if plan else None
-    cfg = get_config(project_path, verbose=verbose, permission_mode=permission_mode)
+    cfg = get_config(
+        project_path,
+        verbose=verbose,
+        permission_mode=permission_mode,
+        allow_shell=True if allow_shell else None,
+    )
 
     from rudra.permissions import disabled_floor_notice, stdin_is_interactive
 

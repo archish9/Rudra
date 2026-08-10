@@ -261,3 +261,50 @@ def test_a_deny_rule_beats_a_session_grant(tmp_path):
         "execute", {"command": "git push"}
     )
     assert (decision.effect, decision.source) == ("deny", "deny")
+
+
+# -- unattended shell (A1.49) ---------------------------------------------
+
+
+def test_auto_mode_denies_execute_unless_opted_in(tmp_path):
+    """A1.49: nobody reads the command in unattended mode."""
+    decision = engine(tmp_path, mode="auto").decide("execute", {"command": "pytest -q"})
+    assert (decision.effect, decision.source) == ("deny", "auto-shell")
+
+
+def test_auto_mode_allows_execute_once_opted_in(tmp_path):
+    decision = engine(tmp_path, mode="auto", shell_in_auto=True).decide(
+        "execute", {"command": "pytest -q"}
+    )
+    assert decision.effect == "allow"
+
+
+def test_auto_mode_still_allows_filesystem_tools(tmp_path):
+    """The backend genuinely confines these, so they stay available."""
+    for tool, args in (
+        ("write_file", {"file_path": "a.py"}),
+        ("edit_file", {"file_path": "a.py"}),
+        ("delete", {"file_path": "a.py"}),
+    ):
+        assert engine(tmp_path, mode="auto").decide(tool, args).effect == "allow", tool
+
+
+def test_an_explicit_allow_rule_is_itself_opting_in(tmp_path):
+    """Naming the command IS the opt-in — the check sits after allow rules."""
+    decision = engine(tmp_path, mode="auto", allow=("execute:pytest*",)).decide(
+        "execute", {"command": "pytest -q"}
+    )
+    assert decision.effect == "allow"
+
+
+def test_ask_mode_is_unaffected_by_the_opt_in(tmp_path):
+    """In ask mode the user reads the command, so the gap does not exist."""
+    decision = engine(tmp_path, mode="ask").decide("execute", {"command": "pytest -q"})
+    assert decision.effect == "ask"
+
+
+def test_plan_mode_denies_execute_regardless(tmp_path):
+    decision = engine(tmp_path, mode="plan", shell_in_auto=True).decide(
+        "execute", {"command": "pytest -q"}
+    )
+    assert decision.effect == "deny"

@@ -61,14 +61,22 @@ deny  = []
 # Built-in rules denied in every mode, including --auto. Name one here to
 # switch it off; the run prints which are disabled, and calls they would
 # have blocked are still written to the audit log.
-#   outside-root          write or delete outside this project
 #   git-dir               write or delete under .git/
 #   catastrophic-command  rm -rf /, mkfs, dd of=/dev/*
+# ("outside-root" is not listed and is rejected here: writes are confined to
+#  the project by the backend, not by this rule, so there is nothing to
+#  disable. Shell commands are not confined by it either.)
 floor_disable = []
 
 [tools]
-# false removes the execute tool: no tests, no linters, no git.
+# false removes the execute tool entirely: no tests, no linters, no git.
 shell = true
+
+# Whether --auto may run commands. Off by default: in unattended mode nobody
+# reads the command before it runs, and a shell command can write anywhere
+# you can — Rudra's confinement covers the file-writing tools, not the shell.
+# Turn it on if you want unattended test runs, knowing that.
+shell_in_auto = false
 
 [compat]
 # Workarounds kept for small models. Both off by default — see TODO.md D4.

@@ -46,7 +46,7 @@ def make_config(**overrides) -> Config:
         agent=AgentConfig(verbose=False),
         permissions=PermissionsConfig(mode="ask", allow=(), deny=(), floor_disable=()),
         compat=CompatConfig(task_anchor=False, sandbox_paths=False),
-        tools=ToolsConfig(shell=True),
+        tools=ToolsConfig(shell=True, shell_in_auto=False),
         models={"default": settings, "planner": settings, "coder": settings},
     )
 

@@ -27,6 +27,7 @@ from rudra.config.layers import (
 )
 from rudra.config.schema import (
     BUILTIN_ROLES,
+    DISABLEABLE_FLOOR_RULES,
     FLOOR_RULE_NAMES,
     MODEL_KEYS,
     RESERVED_SECTIONS,
@@ -44,7 +45,7 @@ _TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools")
 _AGENT_KEYS = frozenset({"verbose"})
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
-_TOOLS_KEYS = frozenset({"shell"})
+_TOOLS_KEYS = frozenset({"shell", "shell_in_auto"})
 _POSITIVE_INT_KEYS = ("context_tokens", "max_output_tokens", "timeout")
 
 
@@ -160,6 +161,15 @@ def validate(
     # floor rule armed that the user believes they turned off, and they find
     # out by being blocked mid-run.
     for name in permissions.get("floor_disable", []):
+        if name == "outside-root":
+            raise ConfigError(
+                "[permissions] floor_disable cannot contain 'outside-root'. "
+                "Writes, edits and deletes are confined to the project by the "
+                "backend itself, not by this rule, so disabling it would change "
+                "nothing and silently redirect the write back into the project. "
+                "Shell commands are not confined by it either — see TODO.md "
+                f"A1.49. Disableable rules: {', '.join(DISABLEABLE_FLOOR_RULES)}."
+            )
         if name not in FLOOR_RULE_NAMES:
             raise ConfigError(
                 f"Unknown floor rule '{name}' in [permissions] floor_disable "
@@ -176,8 +186,8 @@ def validate(
     for key, value in merged.get("tools", {}).items():
         if key not in _TOOLS_KEYS:
             raise ConfigError(f"Unknown key '{key}' in [tools].{_suggest(key, _TOOLS_KEYS)}")
-        if key == "shell" and not isinstance(value, bool):
-            raise ConfigError(f"[tools] shell must be true or false, got {value!r}.")
+        if not isinstance(value, bool):
+            raise ConfigError(f"[tools] {key} must be true or false, got {value!r}.")
 
 
 @dataclass(frozen=True)
@@ -228,6 +238,7 @@ def build_config(
     *,
     verbose: bool | None = None,
     permission_mode: str | None = None,
+    allow_shell: bool | None = None,
 ) -> Config:
     """Read all five layers, merge, validate, construct."""
     root = Path(project_root) if project_root is not None else Path.cwd()
@@ -248,7 +259,7 @@ def build_config(
         ("user", user),
         ("project", project),
         ("env", env_layer(declared)),
-        ("cli", cli_layer(verbose, permission_mode)),
+        ("cli", cli_layer(verbose, permission_mode, allow_shell)),
     ]
     merged, provenance = deep_merge(ordered)
 
@@ -289,6 +300,7 @@ def get_config(
     *,
     verbose: bool | None = None,
     permission_mode: str | None = None,
+    allow_shell: bool | None = None,
 ) -> Config:
     """Return the process-wide Config, loading it on first use.
 
@@ -298,7 +310,12 @@ def get_config(
     """
     global _config
     if _config is None:
-        _config = build_config(project_root, verbose=verbose, permission_mode=permission_mode)
+        _config = build_config(
+            project_root,
+            verbose=verbose,
+            permission_mode=permission_mode,
+            allow_shell=allow_shell,
+        )
     return _config
 
 

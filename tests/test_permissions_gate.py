@@ -80,9 +80,21 @@ def test_rules_from_config_reach_the_engine(tmp_path):
 
 
 def test_floor_disable_from_config_reaches_the_engine(tmp_path):
-    root = write_config(tmp_path, '[permissions]\nfloor_disable = ["outside-root"]\n')
+    root = write_config(tmp_path, '[permissions]\nfloor_disable = ["git-dir"]\n')
     gate = build_gate(build_config(root), root)
-    assert gate.engine.floor_disable == frozenset({"outside-root"})
+    assert gate.engine.floor_disable == frozenset({"git-dir"})
+
+
+def test_shell_in_auto_reaches_the_engine(tmp_path):
+    """A1.49: the opt-in has to survive the trip from TOML to decide()."""
+    root = write_config(tmp_path, '[permissions]\nmode = "auto"\n')
+    gate = build_gate(build_config(root), root)
+    assert gate.engine.decide("execute", {"command": "pytest -q"}).effect == "deny"
+
+    reset_config()
+    root = write_config(tmp_path, '[permissions]\nmode = "auto"\n\n[tools]\nshell_in_auto = true\n')
+    gate = build_gate(build_config(root), root)
+    assert gate.engine.decide("execute", {"command": "pytest -q"}).effect == "allow"
 
 
 def test_a_malformed_rule_raises_at_build_time_not_at_first_call(tmp_path):
@@ -107,9 +119,11 @@ def test_no_floor_notice_when_nothing_is_disabled(tmp_path):
 
 
 def test_the_floor_notice_names_every_disabled_rule(tmp_path):
-    root = write_config(tmp_path, '[permissions]\nfloor_disable = ["outside-root", "git-dir"]\n')
+    root = write_config(
+        tmp_path, '[permissions]\nfloor_disable = ["git-dir", "catastrophic-command"]\n'
+    )
     notice = disabled_floor_notice(build_config(root))
-    assert "outside-root" in notice and "git-dir" in notice
+    assert "git-dir" in notice and "catastrophic-command" in notice
 
 
 def test_stdin_is_interactive_is_false_under_pytest_capture():

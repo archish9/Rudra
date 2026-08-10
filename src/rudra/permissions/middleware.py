@@ -23,6 +23,14 @@ from rudra.permissions.rules import PermissionEngine, gated_arg
 
 def _denial_text(tool: str, arg: str | None, rule: str | None) -> str:
     target = f" on {arg!r}" if arg else ""
+    if rule == "<auto:shell-not-opted-in>":
+        return (
+            "Permission denied: running commands is disabled in unattended "
+            "('auto') mode unless the user opts in, because nobody reads the "
+            "command before it runs. Do not retry this call — write the files "
+            "you need and describe what should be run instead. The user can "
+            "enable it with --allow-shell or [tools] shell_in_auto = true."
+        )
     if rule and rule.startswith("<floor:"):
         name = rule[len("<floor:") : -1]
         return (

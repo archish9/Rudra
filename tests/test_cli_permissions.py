@@ -136,7 +136,43 @@ def test_a_disabled_floor_rule_is_announced_at_run_start(tmp_path, monkeypatch):
     rudra = tmp_path / ".rudra"
     rudra.mkdir(parents=True)
     (rudra / "config.toml").write_text(
-        '[permissions]\nfloor_disable = ["outside-root"]\n', encoding="utf-8"
+        '[permissions]\nfloor_disable = ["git-dir"]\n', encoding="utf-8"
     )
     result = runner.invoke(app, ["-d", str(tmp_path), "x"])
-    assert "outside-root" in result.output
+    assert "git-dir" in result.output
+
+
+def test_doctor_never_swallows_a_section_name(tmp_path):
+    """A1.48 again, in the doctor table this time.
+
+    Rich parses `[tools]` as a style tag wherever it appears, not only in
+    the error path fixed earlier. Any console string naming a config
+    section has to be escaped, so this asserts the rendered output rather
+    than trusting each call site to have remembered.
+    """
+    result = runner.invoke(app, ["doctor", "--offline", "-d", str(tmp_path)])
+    assert "[tools]" in result.output
+
+
+def test_shell_in_auto_is_visible_to_config_list(tmp_path):
+    from rudra.cli import _flatten
+    from rudra.config.loader import build_config
+
+    keys = {key for key, _ in _flatten(build_config(tmp_path))}
+    assert "tools.shell_in_auto" in keys
+
+
+def test_allow_shell_flag_reaches_the_config(tmp_path, monkeypatch):
+    monkeypatch.setattr("rudra.permissions.stdin_is_interactive", lambda: False)
+    runner.invoke(app, ["-d", str(tmp_path), "--auto", "--allow-shell", "x"])
+    from rudra.config.loader import get_config
+
+    assert get_config().tools.shell_in_auto is True
+
+
+def test_auto_without_the_flag_leaves_shell_opted_out(tmp_path, monkeypatch):
+    monkeypatch.setattr("rudra.permissions.stdin_is_interactive", lambda: False)
+    runner.invoke(app, ["-d", str(tmp_path), "--auto", "x"])
+    from rudra.config.loader import get_config
+
+    assert get_config().tools.shell_in_auto is False
