@@ -27,6 +27,7 @@ from rudra.config.layers import (
 )
 from rudra.config.schema import (
     BUILTIN_ROLES,
+    FLOOR_RULE_NAMES,
     MODEL_KEYS,
     RESERVED_SECTIONS,
     VALID_MODES,
@@ -35,13 +36,15 @@ from rudra.config.schema import (
     CompatConfig,
     ModelConfig,
     PermissionsConfig,
+    ToolsConfig,
 )
 from rudra.state.paths import rudra_paths
 
-_TOP_LEVEL = ("model", "agent", "permissions", "compat")
+_TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools")
 _AGENT_KEYS = frozenset({"verbose"})
-_PERMISSION_KEYS = frozenset({"mode", "allow", "deny"})
+_PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
+_TOOLS_KEYS = frozenset({"shell"})
 _POSITIVE_INT_KEYS = ("context_tokens", "max_output_tokens", "timeout")
 
 
@@ -149,16 +152,32 @@ def validate(
             f"({_where(provenance, sources, 'permissions.mode')}). "
             f"Valid modes: {', '.join(VALID_MODES)}."
         )
-    for key in ("allow", "deny"):
+    for key in ("allow", "deny", "floor_disable"):
         value = permissions.get(key, [])
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise ConfigError(f"[permissions] {key} must be a list of strings, got {value!r}.")
+    # A typo must be fatal here specifically: silently ignoring one leaves a
+    # floor rule armed that the user believes they turned off, and they find
+    # out by being blocked mid-run.
+    for name in permissions.get("floor_disable", []):
+        if name not in FLOOR_RULE_NAMES:
+            raise ConfigError(
+                f"Unknown floor rule '{name}' in [permissions] floor_disable "
+                f"({_where(provenance, sources, 'permissions.floor_disable')})."
+                f"{_suggest(name, FLOOR_RULE_NAMES)}"
+            )
 
     for key, value in merged.get("compat", {}).items():
         if key not in _COMPAT_KEYS:
             raise ConfigError(f"Unknown key '{key}' in [compat].{_suggest(key, _COMPAT_KEYS)}")
         if not isinstance(value, bool):
             raise ConfigError(f"[compat] {key} must be true or false, got {value!r}.")
+
+    for key, value in merged.get("tools", {}).items():
+        if key not in _TOOLS_KEYS:
+            raise ConfigError(f"Unknown key '{key}' in [tools].{_suggest(key, _TOOLS_KEYS)}")
+        if key == "shell" and not isinstance(value, bool):
+            raise ConfigError(f"[tools] shell must be true or false, got {value!r}.")
 
 
 @dataclass(frozen=True)
@@ -168,6 +187,7 @@ class Config:
     agent: AgentConfig
     permissions: PermissionsConfig
     compat: CompatConfig
+    tools: ToolsConfig
     models: dict[str, ModelConfig]
     provenance: dict[str, str] = field(default_factory=dict)
     sources: dict[str, Path | None] = field(default_factory=dict)
@@ -250,8 +270,10 @@ def build_config(
             mode=permissions.get("mode", "ask"),
             allow=tuple(permissions.get("allow", [])),
             deny=tuple(permissions.get("deny", [])),
+            floor_disable=tuple(permissions.get("floor_disable", [])),
         ),
         compat=CompatConfig(**merged.get("compat", {})),
+        tools=ToolsConfig(**merged.get("tools", {})),
         models=_build_models(merged),
         provenance=provenance,
         sources=sources,

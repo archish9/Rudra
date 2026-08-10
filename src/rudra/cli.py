@@ -9,6 +9,7 @@ from typing import Optional
 import click
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
@@ -284,7 +285,11 @@ def _load_config_or_exit(project_dir: Optional[Path]):
     try:
         return build_config(get_project_path(project_dir))
     except ConfigError as exc:
-        console.print(f"[red]Configuration error:[/red] {exc}")
+        # escape() because these messages are built around bracketed section
+        # names ("[tools] shell must be true or false") and Rich would parse
+        # every one of them as a style tag, printing the error without the
+        # section it exists to identify. See TODO.md A1.48.
+        console.print(f"[red]Configuration error:[/red] {escape(str(exc))}")
         raise typer.Exit(code=1) from None
 
 
@@ -300,6 +305,8 @@ def _flatten(cfg) -> list[tuple[str, object]]:
     rows.append(("permissions.mode", cfg.permissions.mode))
     rows.append(("permissions.allow", list(cfg.permissions.allow)))
     rows.append(("permissions.deny", list(cfg.permissions.deny)))
+    rows.append(("permissions.floor_disable", list(cfg.permissions.floor_disable)))
+    rows.append(("tools.shell", cfg.tools.shell))
     rows.append(("compat.task_anchor", cfg.compat.task_anchor))
     rows.append(("compat.sandbox_paths", cfg.compat.sandbox_paths))
     return rows

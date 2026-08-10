@@ -45,11 +45,30 @@ verbose = true
 [permissions]
 # ask | auto | plan
 #
-# NOT ENFORCED YET. Enforcement arrives in Step 7; today Rudra writes and
-# overwrites files without prompting regardless of this setting.
+#   ask   prompt before each write, edit, delete, or command
+#   auto  approve everything (same as --auto / --yolo)
+#   plan  write no project files and run no commands
 mode  = "ask"
+
+# Rules are "tool" or "tool:pattern", using real tool names:
+#   read_file  ls  glob  grep  write_file  edit_file  delete  execute  task
+# A pattern starting with / matches the absolute path; otherwise it matches
+# the project-relative path. For execute, it matches the command string.
+# deny beats allow.
 allow = []
 deny  = []
+
+# Built-in rules denied in every mode, including --auto. Name one here to
+# switch it off; the run prints which are disabled, and calls they would
+# have blocked are still written to the audit log.
+#   outside-root          write or delete outside this project
+#   git-dir               write or delete under .git/
+#   catastrophic-command  rm -rf /, mkfs, dd of=/dev/*
+floor_disable = []
+
+[tools]
+# false removes the execute tool: no tests, no linters, no git.
+shell = true
 
 [compat]
 # Workarounds kept for small models. Both off by default — see TODO.md D4.
@@ -57,7 +76,7 @@ task_anchor   = false
 sandbox_paths = false
 
 # Not supported yet, listed so you know where they will go:
-#   [skills]  Step 11    [tools]  Step 7    [memory]  Step 14
+#   [skills]  Step 11    [memory]  Step 14
 # MCP servers are configured in a separate .mcp.json (Step 13).
 """
 

@@ -166,6 +166,11 @@ def env_layer(known_roles: Iterable[str]) -> dict[str, Any]:
         if tail == "PERMISSIONS_MODE":
             put("permissions", "mode", value=raw.strip())
             continue
+        # Before _split_role_and_suffix, which would otherwise read SHELL as
+        # a role-and-suffix pair.
+        if tail == "SHELL":
+            put("tools", "shell", value=_as_bool(raw))
+            continue
         role, suffix = _split_role_and_suffix(tail, roles)
         if suffix in MODEL_KEYS:
             value: Any = _as_number(raw) if suffix in _NUMERIC_MODEL_KEYS else raw

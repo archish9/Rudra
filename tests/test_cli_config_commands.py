@@ -85,10 +85,20 @@ def test_the_template_contains_no_api_key_value(tmp_path: Path) -> None:
     assert "sk-" not in body
 
 
-def test_the_template_states_that_permissions_are_not_enforced(tmp_path: Path) -> None:
+def test_the_template_documents_what_each_permission_mode_does(tmp_path: Path) -> None:
+    """Step 6 shipped this template saying permissions were NOT ENFORCED.
+
+    Step 7 enforces them, so that warning is now false and must be gone.
+    Asserting its absence alone would pass against an empty file, so the
+    real content is asserted too.
+    """
     runner.invoke(app, ["init", "-d", str(tmp_path)])
     body = (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8")
-    assert "NOT ENFORCED" in body
+    assert "NOT ENFORCED" not in body
+    for mode in ("ask", "auto", "plan"):
+        assert mode in body
+    assert "floor_disable" in body
+    assert "[tools]" in body
 
 
 # --------------------------------------------------------------------------

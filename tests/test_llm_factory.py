@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from rudra.config import AgentConfig, CompatConfig, Config, ModelConfig, PermissionsConfig
+from rudra.config import (
+    AgentConfig,
+    CompatConfig,
+    Config,
+    ModelConfig,
+    PermissionsConfig,
+    ToolsConfig,
+)
 from rudra.llm import build_model
 from rudra.llm.errors import (
     MissingApiKeyError,
@@ -37,8 +44,9 @@ def make_config(**overrides) -> Config:
     # the kind of quiet default Step 6 exists to remove.
     return Config(
         agent=AgentConfig(verbose=False),
-        permissions=PermissionsConfig(mode="ask", allow=(), deny=()),
+        permissions=PermissionsConfig(mode="ask", allow=(), deny=(), floor_disable=()),
         compat=CompatConfig(task_anchor=False, sandbox_paths=False),
+        tools=ToolsConfig(shell=True),
         models={"default": settings, "planner": settings, "coder": settings},
     )
 
