@@ -1,0 +1,64 @@
+"""The commented scaffold `rudra init` writes.
+
+Kept as a literal rather than generated from DEFAULTS: the comments are the
+point, and no TOML writer in the standard library preserves them. That is
+also why `rudra config set` does not exist — see TODO.md S6.1.
+"""
+
+CONFIG_TEMPLATE = """\
+# Rudra configuration.
+#
+# Load order, later overriding earlier:
+#   1. built-in defaults
+#   2. ~/.config/rudra/config.toml
+#   3. this file
+#   4. RUDRA_* environment variables (and .env)
+#   5. command-line flags
+#
+# `rudra config list` shows every effective value and which layer set it.
+
+[model.default]
+# ollama | openai_compatible | anthropic | openai | google
+provider    = "ollama"
+base_url    = "http://localhost:11434"
+model       = "qwen3:32b"
+temperature = 0.3
+
+# The NAME of an environment variable holding your key — never the key
+# itself. Rudra reads the variable at run time and never stores its value.
+# api_key_env = "RUDRA_API_KEY"
+
+# Your model's real context window. Without it, history compaction never
+# triggers for local models. See TODO.md A1.17 / C1.4a.
+# context_tokens = 32768
+
+# Per-role overrides. Anything omitted is inherited from [model.default].
+[model.planner]
+model = "qwen3:32b"
+
+[model.coder]
+model = "qwen3-coder:32b"
+
+[agent]
+verbose = true
+
+[permissions]
+# ask | auto | plan
+#
+# NOT ENFORCED YET. Enforcement arrives in Step 7; today Rudra writes and
+# overwrites files without prompting regardless of this setting.
+mode  = "ask"
+allow = []
+deny  = []
+
+[compat]
+# Workarounds kept for small models. Both off by default — see TODO.md D4.
+task_anchor   = false
+sandbox_paths = false
+
+# Not supported yet, listed so you know where they will go:
+#   [skills]  Step 11    [tools]  Step 7    [memory]  Step 14
+# MCP servers are configured in a separate .mcp.json (Step 13).
+"""
+
+__all__ = ["CONFIG_TEMPLATE"]

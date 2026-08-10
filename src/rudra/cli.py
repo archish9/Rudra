@@ -64,6 +64,9 @@ app = typer.Typer(
 models_app = typer.Typer(help="Inspect and test configured models.")
 app.add_typer(models_app, name="models")
 
+config_app = typer.Typer(help="Inspect effective configuration (read-only).")
+app.add_typer(config_app, name="config")
+
 console = Console()
 
 
@@ -255,6 +258,219 @@ def models_test(
         raise typer.Exit(code=1)
 
 
+def _permission_notice(cfg) -> str:
+    """One line, shown on every run — not only when a flag is passed.
+
+    A user reading `mode = "ask"` reasonably concludes Rudra will prompt
+    before touching files. It will not: enforcement is Step 7 and today
+    files are overwritten silently (TODO.md A1.16). Saying so on the
+    default path is the point; an inert --yolo is harmless by comparison,
+    because it claims less safety rather than more.
+    """
+    return (
+        f"permissions: {cfg.permissions.mode} — NOT ENFORCED (Step 7); "
+        f"files are written and overwritten without prompting"
+    )
+
+
+def _load_config_or_exit(project_dir: Optional[Path]):
+    """Build a Config, turning ConfigError into a clean message.
+
+    A malformed config file is a user error, not a crash — never show a
+    traceback for one.
+    """
+    from rudra.config import ConfigError, build_config
+
+    try:
+        return build_config(get_project_path(project_dir))
+    except ConfigError as exc:
+        console.print(f"[red]Configuration error:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+
+
+def _flatten(cfg) -> list[tuple[str, object]]:
+    """Every effective leaf as a dotted key, in a stable order."""
+    from dataclasses import asdict
+
+    rows: list[tuple[str, object]] = []
+    for role in sorted(cfg.models):
+        for key, value in asdict(cfg.models[role]).items():
+            rows.append((f"model.{role}.{key}", value))
+    rows.append(("agent.verbose", cfg.agent.verbose))
+    rows.append(("permissions.mode", cfg.permissions.mode))
+    rows.append(("permissions.allow", list(cfg.permissions.allow)))
+    rows.append(("permissions.deny", list(cfg.permissions.deny)))
+    rows.append(("compat.task_anchor", cfg.compat.task_anchor))
+    rows.append(("compat.sandbox_paths", cfg.compat.sandbox_paths))
+    return rows
+
+
+def _source_of(cfg, key: str) -> str:
+    """Which layer set this key.
+
+    A role that inherits a value has no provenance entry of its own, so the
+    lookup falls back to the default role's — otherwise every inherited key
+    would misreport as 'builtin'.
+    """
+    source = cfg.provenance.get(key)
+    if source is None and key.startswith("model."):
+        _, _, leaf = key.split(".", 2)
+        source = cfg.provenance.get(f"model.default.{leaf}")
+    return source or "builtin"
+
+
+@config_app.command("list")
+def config_list(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+    role: Optional[str] = typer.Option(None, "--role", help="Show one model role only"),
+) -> None:
+    """Show every effective value and the layer that set it."""
+    cfg = _load_config_or_exit(project_dir)
+
+    table = Table(title="Effective configuration", header_style="bold")
+    for column in ("Key", "Value", "Source"):
+        table.add_column(column, overflow="fold")
+
+    for key, value in _flatten(cfg):
+        if role and key.startswith("model.") and not key.startswith(f"model.{role}."):
+            continue
+        table.add_row(key, "-" if value is None else str(value), _source_of(cfg, key))
+
+    console.print(table)
+    for layer in ("user", "project"):
+        path = cfg.sources.get(layer)
+        console.print(f"[dim]{layer:>8}:[/dim] {path or '(none)'}")
+
+
+@config_app.command("get")
+def config_get(
+    key: str = typer.Argument(..., help="Dotted key, e.g. model.planner.model"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Print one value and where it came from."""
+    cfg = _load_config_or_exit(project_dir)
+    for candidate, value in _flatten(cfg):
+        if candidate == key:
+            shown = "-" if value is None else value
+            console.print(f"{shown}  [dim](from {_source_of(cfg, key)})[/dim]")
+            return
+    console.print(f"[red]Unknown key '{key}'.[/red] Run `rudra config list` to see valid keys.")
+    raise typer.Exit(code=1)
+
+
+@app.command("doctor")
+def doctor_command(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+    offline: bool = typer.Option(
+        False, "--offline", help="Skip model reachability checks (no network calls)"
+    ),
+) -> None:
+    """Diagnose configuration, layout, and model reachability."""
+    from importlib.metadata import version
+
+    from rudra.compat.version_guard import EXPECTED_DEEPAGENTS_VERSION
+    from rudra.state.paths import rudra_paths
+
+    project_path = get_project_path(project_dir)
+    cfg = _load_config_or_exit(project_dir)
+    paths = rudra_paths(project_path)
+
+    table = Table(title="rudra doctor", header_style="bold")
+    for column in ("Check", "Status", "Detail"):
+        table.add_column(column, overflow="fold")
+
+    table.add_row("project", "ok", str(project_path))
+    for layer in ("user", "project"):
+        path = cfg.sources.get(layer)
+        table.add_row(
+            f"config ({layer})", "ok" if path else "-", str(path) if path else "not present"
+        )
+
+    dotenv = project_path / ".env"
+    table.add_row(
+        ".env",
+        "ok" if dotenv.exists() else "-",
+        str(dotenv) if dotenv.exists() else "not present",
+    )
+
+    table.add_row(
+        ".rudra layout",
+        "ok" if paths.run.is_dir() else "missing",
+        str(paths.root) if paths.run.is_dir() else "run `rudra init`",
+    )
+
+    stale = paths.root / "checkpoints.db"
+    if stale.exists():
+        table.add_row(
+            "stale checkpoints.db",
+            "warn",
+            f"{stale} predates the run/ layout and is unused — safe to delete",
+        )
+
+    installed = version("deepagents")
+    table.add_row(
+        "deepagents",
+        "ok" if installed == EXPECTED_DEEPAGENTS_VERSION else "warn",
+        f"{installed} (pinned {EXPECTED_DEEPAGENTS_VERSION})",
+    )
+
+    table.add_row(
+        "permissions",
+        "warn",
+        f"mode = {cfg.permissions.mode} — NOT ENFORCED. Enforcement arrives in Step 7; "
+        f"Rudra currently writes and overwrites files without prompting. "
+        f"allow/deny are parsed but unused ({len(cfg.permissions.allow)} allow, "
+        f"{len(cfg.permissions.deny)} deny).",
+    )
+
+    if not offline:
+        from rudra.llm.probe import ROLES_TO_PROBE, probe_role
+
+        for name in ROLES_TO_PROBE:
+            result = probe_role(name)
+            table.add_row(
+                f"model ({name})",
+                "ok" if result.ok else "fail",
+                f"{result.provider} {result.model} — {result.reach}, tools: {result.tools}",
+            )
+
+    console.print(table)
+    console.print(
+        "[dim]MCP servers, skills, and memory are not checked — they arrive in "
+        "Steps 13, 11, and 14.[/dim]"
+    )
+
+
+@app.command("init")
+def init_command(
+    project_dir: Optional[Path] = typer.Option(
+        None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
+    ),
+    global_: bool = typer.Option(
+        False, "--global", help="Write ~/.config/rudra/config.toml instead of the project file"
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing config file"),
+) -> None:
+    """Scaffold a commented config.toml and create the .rudra/ layout."""
+    from rudra.config import user_toml_path
+    from rudra.config.template import CONFIG_TEMPLATE
+    from rudra.state.paths import ensure_layout
+
+    if global_:
+        target = user_toml_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        target = ensure_layout(get_project_path(project_dir)).config_toml
+
+    if target.exists() and not force:
+        console.print(f"[red]{target} already exists.[/red] Pass --force to overwrite it.")
+        raise typer.Exit(code=1)
+
+    target.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+    console.print(f"[green]Wrote[/green] {target}")
+    console.print("[dim]Edit it, then run `rudra models test` to check your model.[/dim]")
+
+
 @app.callback(
     invoke_without_command=True,
     # The task prompt arrives through ctx.args rather than as a declared
@@ -272,6 +488,12 @@ def main(
         None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
+    auto: bool = typer.Option(
+        False, "--auto", "--yolo", help="Permission mode: auto (not enforced until Step 7)"
+    ),
+    plan: bool = typer.Option(
+        False, "--plan", help="Permission mode: plan (not enforced until Step 7)"
+    ),
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
     ),
@@ -306,7 +528,10 @@ def main(
     # --verbose or --no-verbose is passed, leaving the first downstream
     # get_config() to fall back to the cwd. See TODO.md A5.2.
     project_path = get_project_path(project_dir)
-    cfg = get_config(project_path)
+    permission_mode = "auto" if auto else "plan" if plan else None
+    cfg = get_config(project_path, verbose=verbose, permission_mode=permission_mode)
+    if permission_mode is not None:
+        console.print(f"[yellow]Note:[/yellow] {_permission_notice(cfg)}")
 
     # A default of `config.agent.verbose` here would be evaluated when this
     # module is imported, which is the A1.15 defect. Three-state instead:
@@ -323,8 +548,9 @@ def main(
             Panel(
                 f"[bold]{prompt}[/bold]\n"
                 f"[dim]Path:[/dim] {project_path}\n"
-                f"[dim]Planner:[/dim] {get_config().model_for('planner').model}  "
-                f"[dim]│  Coder:[/dim] {get_config().model_for('coder').model}",
+                f"[dim]Planner:[/dim] {cfg.model_for('planner').model}  "
+                f"[dim]│  Coder:[/dim] {cfg.model_for('coder').model}\n"
+                f"[yellow]{_permission_notice(cfg)}[/yellow]",
                 title="⚡ Task",
                 border_style="bright_cyan",
             )
@@ -407,8 +633,9 @@ def main(
                         Panel(
                             f"[bold]{user_input}[/bold]\n"
                             f"[dim]Path:[/dim] {project_path}\n"
-                            f"[dim]Planner:[/dim] {get_config().model_for('planner').model}  "
-                            f"[dim]│  Coder:[/dim] {get_config().model_for('coder').model}",
+                            f"[dim]Planner:[/dim] {cfg.model_for('planner').model}  "
+                            f"[dim]│  Coder:[/dim] {cfg.model_for('coder').model}\n"
+                            f"[yellow]{_permission_notice(cfg)}[/yellow]",
                             title="⚡ Task",
                             border_style="bright_cyan",
                         )

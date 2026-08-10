@@ -44,34 +44,42 @@ def test_planner_agent_module_does_not_call_install_path_normalizer():
 
 
 def test_planner_wires_fix_write_params_middleware_first():
-    module = importlib.import_module("rudra.agent.planner_agent")
-    source = inspect.getsource(module)
-    tree = ast.parse(source)
+    """U.14. Checked by building the stack, not by parsing the call site.
 
-    middleware_kw = None
+    This used to assert that `middleware=` was a list literal whose first
+    element was FixWriteParamsMiddleware. Step 6 moved the stack behind
+    `build_planner_middleware` so `[compat]` can gate TaskAnchorMiddleware
+    (C1.8), which made the AST shape wrong while the property it guarded
+    was still true. Calling the builder tests the property directly and
+    survives the next refactor of the call site.
+    """
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    for task_anchor in (False, True):
+        stack = build_planner_middleware("a task", compat_task_anchor=task_anchor)
+        names = [type(m).__name__ for m in stack]
+        assert names[0] == "FixWriteParamsMiddleware", (
+            f"planner's first middleware is {names[0]!r}, expected "
+            "FixWriteParamsMiddleware — it must clean tool args before "
+            "anything else in the chain sees them (U.14)"
+        )
+
+
+def test_planner_passes_its_built_stack_to_create_deep_agent():
+    """The builder is only meaningful if create_deep_agent actually gets it."""
+    module = importlib.import_module("rudra.agent.planner_agent")
+    tree = ast.parse(inspect.getsource(module))
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "create_deep_agent":
             for kw in node.keywords:
                 if kw.arg == "middleware":
-                    middleware_kw = kw.value
-    assert middleware_kw is not None, (
-        "create_deep_agent(..., middleware=...) not found in planner_agent.py"
-    )
-    assert isinstance(middleware_kw, ast.List) and middleware_kw.elts, (
-        "planner's middleware= is not a nonempty list literal"
-    )
-
-    names = [
-        getattr(elt.func, "id", None) for elt in middleware_kw.elts if isinstance(elt, ast.Call)
-    ]
-    assert "FixWriteParamsMiddleware" in names, (
-        "FixWriteParamsMiddleware is not wired into the planner (U.14)"
-    )
-    assert names[0] == "FixWriteParamsMiddleware", (
-        f"planner's first middleware is {names[0]!r}, expected "
-        "FixWriteParamsMiddleware — it must clean tool args before anything "
-        "else in the chain sees them (U.14)"
-    )
+                    assert (
+                        isinstance(kw.value, ast.Call)
+                        and getattr(kw.value.func, "id", None) == "build_planner_middleware"
+                    ), "planner's middleware= must come from build_planner_middleware"
+                    return
+    raise AssertionError("create_deep_agent(..., middleware=...) not found in planner_agent.py")
 
 
 def test_main_agent_constructs_filesystem_backend_with_virtual_mode():

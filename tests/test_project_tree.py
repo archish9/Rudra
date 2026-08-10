@@ -90,14 +90,14 @@ def test_max_entries_truncates_and_reports_remainder(tmp_path: Path) -> None:
 def test_builtin_skips_apply_even_when_git_tracks_them(tmp_path: Path) -> None:
     _init_repo(tmp_path)
     _write(tmp_path, "app.py")
-    _write(tmp_path, ".rudra/PLAN.md")
+    _write(tmp_path, ".rudra/run/PLAN.md")
     _write(tmp_path, "node_modules/pkg/index.js")
-    _git(tmp_path, "add", "-f", "app.py", ".rudra/PLAN.md", "node_modules/pkg/index.js")
+    _git(tmp_path, "add", "-f", "app.py", ".rudra/run/PLAN.md", "node_modules/pkg/index.js")
 
     lines = project_tree(tmp_path).splitlines()
 
     assert "app.py" in lines
-    assert ".rudra/PLAN.md" not in lines
+    assert ".rudra/run/PLAN.md" not in lines
     assert "node_modules/pkg/index.js" not in lines
 
 

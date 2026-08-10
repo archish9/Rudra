@@ -16,6 +16,8 @@ Point it at **any model you like** — a local Ollama model on your own machine,
 >
 > Rudra is **alpha software under active development**. It plans a set of files and writes them, and that part works. It does **not** yet run your tests, execute shell commands, or review its own output — those are being built.
 >
+> It also **writes and overwrites files without asking.** There is a `[permissions]` setting, but nothing enforces it yet; approval prompts arrive with shell support. Rudra says so on every run rather than letting the setting read as a guarantee.
+>
 > Use it on scratch projects and new folders. Don't point it at a repo you can't afford to have edited. See **[Project Status](Documentation/08-project-status.md)** for an honest, up-to-date list of what works and what doesn't.
 
 ---
@@ -62,29 +64,40 @@ Full walkthrough, including OS-specific notes: **[Installation](Documentation/01
 
 ## Connect a model
 
-Copy the example config and edit it:
+Scaffold a config file in your project:
 
 ```bash
-cp .env.example .env
+rudra init
 ```
+
+That writes a commented `.rudra/config.toml`. Edit the bits you care about.
 
 **Running models locally with Ollama** (nothing leaves your machine):
 
-```bash
-RUDRA_PROVIDER=ollama
-RUDRA_BASE_URL=http://localhost:11434
-RUDRA_MODEL=qwen3:32b
+```toml
+[model.default]
+provider = "ollama"
+base_url = "http://localhost:11434"
+model    = "qwen3:32b"
 ```
 
 **Using a hosted model** — OpenRouter, vLLM, LM Studio, Groq, Together all work the same way:
 
-```bash
-RUDRA_PROVIDER=openai_compatible
-RUDRA_BASE_URL=https://openrouter.ai/api/v1
-RUDRA_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
-RUDRA_API_KEY_ENV=OPENROUTER_API_KEY
-OPENROUTER_API_KEY=sk-or-v1-...
+```toml
+[model.default]
+provider    = "openai_compatible"
+base_url    = "https://openrouter.ai/api/v1"
+model       = "nvidia/nemotron-3-ultra-550b-a55b:free"
+api_key_env = "OPENROUTER_API_KEY"    # the NAME of the variable, not the key
 ```
+
+Put the key itself in the environment or in `.env` (gitignored):
+
+```bash
+echo 'OPENROUTER_API_KEY=sk-or-v1-...' >> .env
+```
+
+Environment variables still work and override the file, so `RUDRA_MODEL=...` is a fine way to try something without editing anything.
 
 Then check it actually works before trusting it with a task:
 
@@ -104,7 +117,23 @@ rudra models test
 
 All four columns `ok` means you're ready. Anything else tells you exactly which part to fix — details in **[Configuration](Documentation/02-configuration.md)**.
 
-> **Your API key never goes in a config file.** `RUDRA_API_KEY_ENV` holds the *name* of an environment variable; the key itself lives in your environment or in `.env`, which is gitignored.
+For everything else — which config files were found, which `.env` was read, whether your install is intact:
+
+```bash
+rudra doctor
+```
+
+> **Your API key never goes in a config file.** `api_key_env` holds the *name* of an environment variable; the key itself lives in your environment or in `.env`, which is gitignored. Rudra reads the value at run time and never stores, logs, or prints it.
+
+### Where settings come from
+
+Five layers, each overriding the one above:
+
+```
+built-in defaults  →  ~/.config/rudra/config.toml  →  .rudra/config.toml  →  RUDRA_* env vars  →  CLI flags
+```
+
+You don't have to track that. `rudra config list` prints every effective value **and the layer that set it**, so a setting that isn't taking effect is traceable rather than mysterious.
 
 ---
 
@@ -112,16 +141,28 @@ All four columns `ok` means you're ready. Anything else tells you exactly which 
 
 ```bash
 mkdir ~/rudra-playground && cd ~/rudra-playground
+rudra init
 rudra "write wordcount.py: an argparse CLI that counts lines, words and characters in a file"
 ```
 
-Rudra writes a plan to `.rudra/PLAN.md`, then writes each file. When it's finished:
+Rudra writes a plan to `.rudra/run/PLAN.md`, then writes each file. When it's finished:
 
 ```bash
 python wordcount.py some-file.txt
 ```
 
 Want to chat instead of firing one-off tasks? Run `rudra` with no arguments for an interactive session.
+
+### What Rudra leaves in your project
+
+```
+.rudra/
+  config.toml     your settings          ← worth committing
+  AGENTS.md       project notes          ← worth committing
+  run/            plan, logs, checkpoints  (regenerated every run)
+```
+
+Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committing `.rudra/` is safe by default. It never touches your project's own `.gitignore` — whether you commit any of it is your call.
 
 ---
 
@@ -130,9 +171,9 @@ Want to chat instead of firing one-off tasks? Run `rudra` with no arguments for 
 | Guide | What's inside |
 |---|---|
 | **[1. Getting Started](Documentation/01-getting-started.md)** | Install step by step, set up a model, run your first task |
-| **[2. Configuration](Documentation/02-configuration.md)** | Every setting, per-role models, `.env` files, precedence rules |
+| **[2. Configuration](Documentation/02-configuration.md)** | `config.toml`, the five layers, per-role models, permissions |
 | **[3. Choosing a Model](Documentation/03-providers.md)** | Ollama, OpenRouter, vLLM, Anthropic, OpenAI, Google — with working examples |
-| **[4. CLI Reference](Documentation/04-cli-reference.md)** | Every command, flag, and interactive-mode shortcut |
+| **[4. CLI Reference](Documentation/04-cli-reference.md)** | `init`, `config`, `doctor`, `models test`, flags, interactive mode |
 | **[5. How It Works](Documentation/05-how-it-works.md)** | What happens between your prompt and the files on disk |
 | **[6. Troubleshooting](Documentation/06-troubleshooting.md)** | Error messages, what they mean, how to fix them |
 | **[7. Development](Documentation/07-development.md)** | Running tests, project layout, contributing |

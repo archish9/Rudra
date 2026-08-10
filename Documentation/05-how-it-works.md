@@ -37,8 +37,8 @@ Runs once at the start, then again before each file. It:
 
 - reads your request and the project's file tree
 - decides the complete list of files
-- writes that list to `.rudra/PLAN.md` as a checklist of bare filenames
-- writes detailed instructions for one file at a time into `.rudra/current_task.md`
+- writes that list to `.rudra/run/PLAN.md` as a checklist of bare filenames
+- writes detailed instructions for one file at a time into `.rudra/run/current_task.md`
 
 It never writes project code itself.
 
@@ -56,8 +56,8 @@ Filenames only, no prose — the orchestrator parses this file, so entries that 
 
 Created fresh for every single file, with a clean conversation each time. It:
 
-- reads `.rudra/current_task.md` for its assignment
-- reads `.rudra/tech_stack.md` for language and framework constraints
+- reads `.rudra/run/current_task.md` for its assignment
+- reads `.rudra/run/tech_stack.md` for language and framework constraints
 - reads any files it was told to look at for context
 - writes exactly one file
 - stops
@@ -84,7 +84,7 @@ Rudra builds a file tree of your project, skipping `.git`, `node_modules`, `targ
 
 **4. It works out your stack**
 
-From the files present — `Cargo.toml` means Rust, `package.json` means Node, and so on — writing the result to `.rudra/tech_stack.md`. Recognised stacks: Python, Rust, Node, React/Next.js, Angular.
+From the files present — `Cargo.toml` means Rust, `package.json` means Node, and so on — writing the result to `.rudra/run/tech_stack.md`. Recognised stacks: Python, Rust, Node, React/Next.js, Angular.
 
 **5. The planner plans**
 
@@ -94,7 +94,7 @@ It produces `PLAN.md` and the first task assignment, then stops.
 
 For each unticked file:
 
-- the planner writes instructions into `.rudra/current_task.md`
+- the planner writes instructions into `.rudra/run/current_task.md`
 - a brand-new coder reads them and writes the file
 - Rudra checks the file exists; if not, it retries, up to three attempts
 - on success the item is ticked off in `PLAN.md`

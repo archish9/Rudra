@@ -40,7 +40,7 @@ Install is editable, so source edits take effect immediately. Reinstall only aft
 ```
 
 ```
-187 passed, 2 skipped
+286 passed, 2 skipped
 ```
 
 The two skips are live tests, which need a real model — see [below](#testing-against-a-real-model).
@@ -83,8 +83,12 @@ Both must be clean before anything merges. CI enforces it.
 
 ```
 src/rudra/
-├── cli.py            Typer entry point: the main callback and `models test`
-├── config.py         ModelConfig, Config.model_for(role), env resolution
+├── cli.py            Typer entry point: main callback, `models`, `config`, `init`, `doctor`
+├── config/           Layered configuration
+│   ├── schema.py     Dataclasses, DEFAULTS, reserved sections — imports nothing from Rudra
+│   ├── layers.py     The five readers; each returns a dict, none knows precedence
+│   ├── loader.py     deep_merge + provenance + validate + Config
+│   └── template.py   The commented scaffold `rudra init` writes
 ├── llm/              Model construction — the only place providers are known
 │   ├── factory.py    build_model(role) → BaseChatModel
 │   ├── providers.py  Per-provider kwarg policy table
@@ -99,10 +103,16 @@ src/rudra/
 ├── stacks/           Language/framework detection
 ├── filesystem/       Project tree walking
 ├── compat/           deepagents version guards and monkeypatches
-└── state/            Project config persistence
+└── state/            paths.py (the .rudra/ layout), project config persistence
 ```
 
-**The one architectural rule worth knowing:** no module outside `rudra/llm/` may import a provider package. `tests/test_no_direct_provider_imports.py` parses every module with `ast` and fails if one does. Ask for a model with `build_model(role)` instead.
+**Three architectural rules worth knowing:**
+
+*No module outside `rudra/llm/` may import a provider package.* `tests/test_no_direct_provider_imports.py` parses every module with `ast` and fails if one does. Ask for a model with `build_model(role)` instead.
+
+*Configuration precedence lives in exactly one function*, `config/loader.py::deep_merge`, and every value records which layer set it. This shape exists because the two worst config bugs this project shipped were both "which source won?" questions that a per-field `x or y or default` chain structurally cannot answer. Don't reintroduce per-field resolution.
+
+*Never build a `.rudra/...` path by hand.* Ask `state/paths.py`. `rudra_paths()` is pure; `ensure_layout()` is the only function that creates anything. Agent-facing prompts name these paths as literal strings, so if a path moves the prompt text must move in the same commit — `tests/test_rudra_dir_migration.py` fails if they ever disagree.
 
 ---
 
@@ -114,16 +124,25 @@ Live tests are skipped by default so CI needs no secrets. Two conditions must bo
 RUDRA_LIVE_TESTS=1 .venv/bin/pytest -m live -q
 ```
 
-They read your real `.env`, so they test the configuration in front of you. Everything else in the suite is hermetic — those tests `chdir` to an empty directory so a developer's `.env` can't change the result. Keep it that way; a test that passes in CI and fails locally is worse than no test.
+They read your real `.env`, so they test the configuration in front of you. Everything else in the suite is hermetic — config tests clear every `RUDRA_*`/`OLLAMA_*` variable and point `XDG_CONFIG_HOME` at a temp directory, so neither a developer's `.env` nor their personal `~/.config/rudra/config.toml` can change a result. Keep it that way; a test that passes in CI and fails locally is worse than no test.
 
 For a full end-to-end check, run the real thing in a scratch directory:
 
 ```bash
 cd "$(mktemp -d)"
-cp /path/to/Rudra/.env .
+/path/to/Rudra/.venv/bin/rudra init
+$EDITOR .rudra/config.toml          # point it at a reachable model
 /path/to/Rudra/.venv/bin/rudra "write hello.py that prints hello world"
 python hello.py
 ```
+
+To prove the config file itself is doing the work rather than an inherited environment variable, run it under `env -i`:
+
+```bash
+env -i HOME="$HOME" PATH="$PATH" /path/to/Rudra/.venv/bin/rudra models test
+```
+
+With no `RUDRA_*` or `OLLAMA_*` set at all, anything that still works came from `config.toml`. That is exactly how the layered-config work was accepted, and it catches a class of false pass that copying a `.env` into the scratch directory hides.
 
 ---
 

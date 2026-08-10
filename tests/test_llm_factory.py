@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from rudra.config import Config, ModelConfig
+from rudra.config import AgentConfig, CompatConfig, Config, ModelConfig, PermissionsConfig
 from rudra.llm import build_model
 from rudra.llm.errors import (
     MissingApiKeyError,
@@ -32,7 +32,15 @@ def make_config(**overrides) -> Config:
     }
     base.update(overrides)
     settings = ModelConfig(**base)
-    return Config(models={"default": settings, "planner": settings, "coder": settings})
+    # Config takes agent/permissions/compat explicitly — a half-specified
+    # Config is not a valid one, and defaulting them here would be exactly
+    # the kind of quiet default Step 6 exists to remove.
+    return Config(
+        agent=AgentConfig(verbose=False),
+        permissions=PermissionsConfig(mode="ask", allow=(), deny=()),
+        compat=CompatConfig(task_anchor=False, sandbox_paths=False),
+        models={"default": settings, "planner": settings, "coder": settings},
+    )
 
 
 def test_ollama_builds_a_chat_ollama() -> None:

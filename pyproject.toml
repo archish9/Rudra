@@ -67,8 +67,8 @@ dev = [
 rudra = "rudra.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/archish9/RudraAnvil"
-Repository = "https://github.com/archish9/RudraAnvil"
+Homepage = "https://github.com/archish9/Rudra"
+Repository = "https://github.com/archish9/Rudra"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/rudra"]

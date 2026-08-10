@@ -65,7 +65,9 @@ def test_update_plan_rejects_prose_without_writing(tmp_path: Path) -> None:
     assert result.startswith("REJECTED:")
     assert "Set up auth" in result
     assert "Install dependencies" in result
-    assert not (tmp_path / ".rudra" / "PLAN.md").exists(), "nothing may be written on rejection"
+    assert not (tmp_path / ".rudra" / "run" / "PLAN.md").exists(), (
+        "nothing may be written on rejection"
+    )
 
 
 def test_update_plan_accepts_a_clean_plan(tmp_path: Path) -> None:
@@ -74,7 +76,7 @@ def test_update_plan_accepts_a_clean_plan(tmp_path: Path) -> None:
     result = update_plan.invoke({"plan_markdown": "- [ ] main.py\n- [ ] models.py"})
 
     assert result.startswith("Plan saved.")
-    assert (tmp_path / ".rudra" / "PLAN.md").read_text(encoding="utf-8") == (
+    assert (tmp_path / ".rudra" / "run" / "PLAN.md").read_text(encoding="utf-8") == (
         "- [ ] main.py\n- [ ] models.py"
     )
 

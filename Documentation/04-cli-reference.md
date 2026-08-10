@@ -5,6 +5,9 @@ Everything `rudra` accepts. It's a short list — that's deliberate.
 - [Running a task](#running-a-task)
 - [Interactive mode](#interactive-mode)
 - [`rudra models test`](#rudra-models-test)
+- [`rudra init`](#rudra-init)
+- [`rudra config`](#rudra-config)
+- [`rudra doctor`](#rudra-doctor)
 - [Global flags](#global-flags)
 - [Exit codes](#exit-codes)
 - [Commands that no longer exist](#commands-that-no-longer-exist)
@@ -117,6 +120,58 @@ Read that as: configuration is correct, the quota is spent. Later stages are ski
 
 ---
 
+## `rudra init`
+
+Writes a commented `.rudra/config.toml` and creates the `.rudra/` directory
+layout.
+
+```bash
+rudra init                  # project config
+rudra init --global         # ~/.config/rudra/config.toml instead
+rudra init --force          # overwrite an existing file
+```
+
+Refuses to overwrite without `--force`, so it is safe to re-run.
+
+---
+
+## `rudra config`
+
+Read-only inspection of the effective configuration.
+
+```bash
+rudra config list                       # every value, with the layer that set it
+rudra config list --role planner        # one model role
+rudra config get model.planner.model    # one value
+```
+
+`list` prints a `Source` column — `builtin`, `user`, `project`, `env`, or
+`cli`. When a setting isn't taking effect, that column tells you which layer
+overrode it.
+
+There is no `config set`; edit `.rudra/config.toml` in your editor. The
+reasoning is in [Configuration](02-configuration.md).
+
+---
+
+## `rudra doctor`
+
+Checks the whole setup and prints a table.
+
+```bash
+rudra doctor              # includes a live model check
+rudra doctor --offline    # skip the network, check everything else
+```
+
+It reports which config files were found and in what order, which `.env` was
+read, whether the `.rudra/` layout is intact, the pinned versus installed
+`deepagents` version, and — prominently — that permission mode is **not
+enforced** yet.
+
+MCP servers, skills, and memory aren't checked because they don't exist yet.
+
+---
+
 ## Global flags
 
 | Flag | Short | Does |
@@ -125,6 +180,8 @@ Read that as: configuration is correct, the quota is spent. Later stages are ski
 | `--verbose` / `--no-verbose` | `-V` | Show or hide detailed tool-call output |
 | `--version` | `-v` | Print the version and exit |
 | `--dry-run` | | **Not functional yet** — see below |
+| `--auto` / `--yolo` | | Set permission mode to `auto` — **not enforced yet** |
+| `--plan` | | Set permission mode to `plan` — **not enforced yet** |
 | `--help` | | Show help |
 
 ```bash
@@ -132,7 +189,9 @@ rudra "add error handling" -d ~/projects/api
 rudra "refactor the parser" --verbose
 ```
 
-`--project-dir` also decides which `.env` is read, so a project's configuration follows the project rather than your shell's location.
+`--project-dir` decides which `.env` **and** which `.rudra/config.toml` are read, so a project's configuration follows the project rather than your shell's location.
+
+> **`--auto`, `--yolo`, and `--plan` set a value nothing reads yet.** They record the permission mode and print a notice saying so. No approval prompts exist, so `--auto` grants nothing that the default doesn't already allow.
 
 > **`--dry-run` does not preview anything.** It exits immediately, reporting `Dry run completed (no files written)`, without planning or writing. It is a placeholder. Don't rely on it to inspect what Rudra *would* do.
 
@@ -145,7 +204,9 @@ rudra "refactor the parser" --verbose
 | `0` | Success |
 | `1` | Something failed |
 
-Be aware of one rough edge: if a model call fails partway through a run, Rudra exits `1` even if files were already written successfully. Check `.rudra/PLAN.md` and your working directory before assuming nothing happened.
+Be aware of one rough edge: if a model call fails partway through a run, Rudra exits `1` even if files were already written successfully. Check `.rudra/run/PLAN.md` and your working directory before assuming nothing happened.
+
+`rudra models test` and `rudra doctor` exit `1` when a check fails, which makes them usable in a setup script.
 
 ---
 

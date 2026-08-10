@@ -9,7 +9,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from rudra.config import get_config
-from rudra.state import ProjectContext
+from rudra.state import ProjectContext, ensure_layout
 from rudra.tools.planning_tools import looks_like_path
 
 
@@ -337,7 +337,7 @@ class RudraAgent:
         coder = create_coder_agent(**self._coder_config)
         thread_id = f"{self.session_id}-coder-{index}-{attempt}"
         coder_task = (
-            f"Read .rudra/current_task.md and write the file specified there: `{filename}`.\n"
+            f"Read .rudra/run/current_task.md and write the file specified there: `{filename}`.\n"
             f"Call write_file(file_path='{filename}', content='...') then stop."
         )
         return await self._stream_coder(
@@ -482,11 +482,14 @@ def _ensure_agents_md(rudra_dir: Path, project_context: Optional[ProjectContext]
 
 
 def _write_tech_stack_file(
-    rudra_dir: Path,
+    run_dir: Path,
     project_context: Optional[ProjectContext],
 ) -> str:
-    """Write project tech stack to .rudra/tech_stack.md. Returns the content."""
-    tech_stack_path = rudra_dir / "tech_stack.md"
+    """Write project tech stack to .rudra/run/tech_stack.md. Returns the content.
+
+    Volatile: rewritten on every run, so it lives in the run/ subtree (D15).
+    """
+    tech_stack_path = run_dir / "tech_stack.md"
 
     if project_context and project_context.primary_language:
         lines = [
@@ -553,7 +556,9 @@ async def create_main_agent(
 
     from rudra.compat.deepagents_path import install_path_normalizer
 
-    install_path_normalizer(project_path, plan_path=project_path / ".rudra" / "PLAN.md")
+    paths = ensure_layout(project_path)
+
+    install_path_normalizer(project_path, plan_path=paths.plan_md)
 
     # 0.7.4's FilesystemBackend.write() creates or overwrites (O_TRUNC +
     # O_NOFOLLOW), which is the only reason OverwriteFilesystemBackend
@@ -564,13 +569,12 @@ async def create_main_agent(
         virtual_mode=True,
     )
 
-    rudra_dir = project_path / ".rudra"
-    rudra_dir.mkdir(parents=True, exist_ok=True)
+    # AGENTS.md is durable and stays at the .rudra/ root; tech_stack.md is
+    # rewritten every run and lives under run/. See TODO.md D15 / §0.7.
+    _ensure_agents_md(paths.root, project_context)
+    tech_stack_content = _write_tech_stack_file(paths.run, project_context)
 
-    _ensure_agents_md(rudra_dir, project_context)
-    tech_stack_content = _write_tech_stack_file(rudra_dir, project_context)
-
-    checkpoints_db = str(rudra_dir / "checkpoints.db")
+    checkpoints_db = str(paths.checkpoints_db)
     db_conn = await aiosqlite.connect(checkpoints_db)
     checkpointer = AsyncSqliteSaver(conn=db_conn)
     await checkpointer.setup()
@@ -594,7 +598,7 @@ async def create_main_agent(
         "checkpointer": checkpointer,
     }
 
-    plan_path = rudra_dir / "PLAN.md"
+    plan_path = paths.plan_md
 
     return RudraAgent(
         context=context,
