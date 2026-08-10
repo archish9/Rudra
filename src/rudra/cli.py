@@ -343,6 +343,89 @@ def config_get(
     raise typer.Exit(code=1)
 
 
+@app.command("doctor")
+def doctor_command(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+    offline: bool = typer.Option(
+        False, "--offline", help="Skip model reachability checks (no network calls)"
+    ),
+) -> None:
+    """Diagnose configuration, layout, and model reachability."""
+    from importlib.metadata import version
+
+    from rudra.compat.version_guard import EXPECTED_DEEPAGENTS_VERSION
+    from rudra.state.paths import rudra_paths
+
+    project_path = get_project_path(project_dir)
+    cfg = _load_config_or_exit(project_dir)
+    paths = rudra_paths(project_path)
+
+    table = Table(title="rudra doctor", header_style="bold")
+    for column in ("Check", "Status", "Detail"):
+        table.add_column(column, overflow="fold")
+
+    table.add_row("project", "ok", str(project_path))
+    for layer in ("user", "project"):
+        path = cfg.sources.get(layer)
+        table.add_row(
+            f"config ({layer})", "ok" if path else "-", str(path) if path else "not present"
+        )
+
+    dotenv = project_path / ".env"
+    table.add_row(
+        ".env",
+        "ok" if dotenv.exists() else "-",
+        str(dotenv) if dotenv.exists() else "not present",
+    )
+
+    table.add_row(
+        ".rudra layout",
+        "ok" if paths.run.is_dir() else "missing",
+        str(paths.root) if paths.run.is_dir() else "run `rudra init`",
+    )
+
+    stale = paths.root / "checkpoints.db"
+    if stale.exists():
+        table.add_row(
+            "stale checkpoints.db",
+            "warn",
+            f"{stale} predates the run/ layout and is unused — safe to delete",
+        )
+
+    installed = version("deepagents")
+    table.add_row(
+        "deepagents",
+        "ok" if installed == EXPECTED_DEEPAGENTS_VERSION else "warn",
+        f"{installed} (pinned {EXPECTED_DEEPAGENTS_VERSION})",
+    )
+
+    table.add_row(
+        "permissions",
+        "warn",
+        f"mode = {cfg.permissions.mode} — NOT ENFORCED. Enforcement arrives in Step 7; "
+        f"Rudra currently writes and overwrites files without prompting. "
+        f"allow/deny are parsed but unused ({len(cfg.permissions.allow)} allow, "
+        f"{len(cfg.permissions.deny)} deny).",
+    )
+
+    if not offline:
+        from rudra.llm.probe import ROLES_TO_PROBE, probe_role
+
+        for name in ROLES_TO_PROBE:
+            result = probe_role(name)
+            table.add_row(
+                f"model ({name})",
+                "ok" if result.ok else "fail",
+                f"{result.provider} {result.model} — {result.reach}, tools: {result.tools}",
+            )
+
+    console.print(table)
+    console.print(
+        "[dim]MCP servers, skills, and memory are not checked — they arrive in "
+        "Steps 13, 11, and 14.[/dim]"
+    )
+
+
 @app.command("init")
 def init_command(
     project_dir: Optional[Path] = typer.Option(

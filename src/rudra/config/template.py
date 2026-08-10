@@ -5,7 +5,7 @@ point, and no TOML writer in the standard library preserves them. That is
 also why `rudra config set` does not exist — see TODO.md S6.1.
 """
 
-CONFIG_TEMPLATE = '''\
+CONFIG_TEMPLATE = """\
 # Rudra configuration.
 #
 # Load order, later overriding earlier:
@@ -59,6 +59,6 @@ sandbox_paths = false
 # Not supported yet, listed so you know where they will go:
 #   [skills]  Step 11    [tools]  Step 7    [memory]  Step 14
 # MCP servers are configured in a separate .mcp.json (Step 13).
-'''
+"""
 
 __all__ = ["CONFIG_TEMPLATE"]
