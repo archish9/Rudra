@@ -189,6 +189,23 @@ def test_an_anchored_pattern_matches_the_absolute_path(tmp_path):
     assert decision.effect == "deny"
 
 
+def test_an_execute_pattern_matches_across_slashes(tmp_path):
+    """Found by executing the plan. A command is not a path.
+
+    Glob `*` refuses to cross `/`, so matching a command as a path made
+    `execute:pytest*` fail against `pytest -q tests/x` — the exact case
+    `always` exists to cover, and the one a fix loop hits every iteration.
+    """
+    eng = engine(tmp_path, allow=("execute:pytest*",))
+    for command in ("pytest -q", "pytest -q tests/x", "pytest tests/a/b/c.py::test_x"):
+        assert eng.decide("execute", {"command": command}).effect == "allow", command
+
+
+def test_an_execute_deny_also_matches_across_slashes(tmp_path):
+    eng = engine(tmp_path, deny=("execute:rm *",))
+    assert eng.decide("execute", {"command": "rm -rf build/artifacts"}).effect == "deny"
+
+
 def test_a_bare_tool_rule_matches_every_call_to_that_tool(tmp_path):
     decision = engine(tmp_path, deny=("execute",)).decide("execute", {"command": "ls"})
     assert decision.effect == "deny"

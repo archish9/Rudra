@@ -11,6 +11,7 @@ compiled agent.
 
 from __future__ import annotations
 
+import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -126,6 +127,13 @@ def rule_matches(
         return False
     if rule.pattern is None:
         return True
+
+    # A command is not a path. Glob `*` refuses to cross `/`, so matching a
+    # command as one makes `execute:pytest*` fail against
+    # `pytest -q tests/x` -- the exact case `always` exists to cover.
+    if tool == "execute":
+        return any(fnmatch.fnmatchcase(subject, rule.pattern) for subject in absolute)
+
     candidates = absolute if rule.pattern.startswith("/") else (relative or absolute)
     return any(
         wcglob.globmatch(subject, rule.pattern, flags=_WCMATCH_FLAGS) for subject in candidates
