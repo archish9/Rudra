@@ -179,9 +179,10 @@ MCP servers, skills, and memory aren't checked because they don't exist yet.
 | `--project-dir PATH` | `-d` | Work in that directory instead of the current one |
 | `--verbose` / `--no-verbose` | `-V` | Show or hide detailed tool-call output |
 | `--version` | `-v` | Print the version and exit |
-| `--dry-run` | | **Not functional yet** — see below |
-| `--auto` / `--yolo` | | Set permission mode to `auto` — **not enforced yet** |
-| `--plan` | | Set permission mode to `plan` — **not enforced yet** |
+| `--dry-run` | | **Not functional yet** — see below. Use `--plan` |
+| `--auto` / `--yolo` | | Approve every file operation without prompting |
+| `--allow-shell` | | Let `--auto` run commands too. Off by default |
+| `--plan` | | Plan only: no project files written, no commands run |
 | `--help` | | Show help |
 
 ```bash
@@ -191,7 +192,9 @@ rudra "refactor the parser" --verbose
 
 `--project-dir` decides which `.env` **and** which `.rudra/config.toml` are read, so a project's configuration follows the project rather than your shell's location.
 
-> **`--auto`, `--yolo`, and `--plan` set a value nothing reads yet.** They record the permission mode and print a notice saying so. No approval prompts exist, so `--auto` grants nothing that the default doesn't already allow.
+> **`--auto` skips the approval prompts; `--allow-shell` is separate on purpose.** File operations are confined to your project whatever the model asks; a shell command is not. In an unattended run nobody reads the command first, so commands stay off until you say otherwise. See [Permissions](09-permissions.md#running-unattended).
+
+> **The default mode needs a terminal.** `mode = "ask"` prompts before each write, so piped or redirected stdin exits `2` immediately rather than hanging. Use `--auto` for scripts.
 
 > **`--dry-run` does not preview anything.** It exits immediately, reporting `Dry run completed (no files written)`, without planning or writing. It is a placeholder. Don't rely on it to inspect what Rudra *would* do.
 
@@ -203,6 +206,7 @@ rudra "refactor the parser" --verbose
 |---|---|
 | `0` | Success |
 | `1` | Something failed |
+| `2` | `mode = "ask"` was set but stdin is not a terminal — nothing ran |
 
 Be aware of one rough edge: if a model call fails partway through a run, Rudra exits `1` even if files were already written successfully. Check `.rudra/run/PLAN.md` and your working directory before assuming nothing happened.
 

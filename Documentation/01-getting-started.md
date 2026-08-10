@@ -205,7 +205,10 @@ For the rest of the setup — which config files were found and in what order, w
 rudra doctor
 ```
 
-It also states plainly that permission mode is **not enforced** yet. That's not a footnote: Rudra writes and overwrites files without asking, whatever `[permissions] mode` says.
+It also reports what your permission mode will actually do, and whether
+commands are enabled. The default is `ask`: Rudra stops and shows you a diff
+before every write, edit, delete and command. See
+[Permissions](09-permissions.md).
 
 ---
 

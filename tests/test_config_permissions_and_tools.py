@@ -152,15 +152,40 @@ def test_outside_root_cannot_be_disabled(tmp_path):
         build_config(root)
 
 
-def test_the_outside_root_error_explains_where_confinement_comes_from(tmp_path):
+def test_the_outside_root_error_explains_itself_and_names_the_alternatives(tmp_path):
+    """Rejecting a setting is only better than ignoring it if you say why.
+
+    Asserted on properties rather than wording: it must say the disabling
+    would have no effect, list what CAN be disabled, and point somewhere a
+    user can actually read — not at the internal ledger.
+    """
     root = write_config(tmp_path, '[permissions]\nfloor_disable = ["outside-root"]\n')
     try:
         build_config(root)
     except ConfigError as exc:
-        assert "backend" in str(exc)
-        assert "git-dir" in str(exc)
+        message = str(exc)
+        assert "would change nothing" in message
+        assert "git-dir" in message and "catastrophic-command" in message
+        assert "Documentation/" in message
+        assert "TODO.md" not in message, "internal ledger reference leaked to the user"
     else:
         raise AssertionError("expected ConfigError")
+
+
+def test_no_user_facing_message_cites_the_internal_ledger():
+    """TODO.md is a developer artifact; users have no access to it."""
+    import inspect
+
+    from rudra import cli
+
+    source = inspect.getsource(cli)
+    for line in source.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") or "TODO.md" not in line:
+            continue
+        assert '"' not in line and "'" not in line, (
+            f"user-facing string cites TODO.md: {stripped}"
+        )
 
 
 def test_the_other_floor_rules_are_still_disableable(tmp_path):

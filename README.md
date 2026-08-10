@@ -14,11 +14,11 @@ Point it at **any model you like** — a local Ollama model on your own machine,
 
 > ### 🚧 Early days — please read
 >
-> Rudra is **alpha software under active development**. It plans a set of files and writes them, and that part works. It does **not** yet run your tests, execute shell commands, or review its own output — those are being built.
+> Rudra is **alpha software under active development**. It plans a set of files, writes them, and can run commands. It does **not** yet review its own output or loop on failing tests — a file counts as done when it exists, not when it works. Review everything it produces.
 >
-> It also **writes and overwrites files without asking.** There is a `[permissions]` setting, but nothing enforces it yet; approval prompts arrive with shell support. Rudra says so on every run rather than letting the setting read as a guarantee.
+> **It asks before it writes.** By default every write, edit, delete and command stops for your approval and shows you a diff first. `--auto` skips the prompts for unattended runs.
 >
-> Use it on scratch projects and new folders. Don't point it at a repo you can't afford to have edited. See **[Project Status](Documentation/08-project-status.md)** for an honest, up-to-date list of what works and what doesn't.
+> See **[Project Status](Documentation/08-project-status.md)** for an honest, up-to-date list of what works and what doesn't.
 
 ---
 
@@ -145,7 +145,21 @@ rudra init
 rudra "write wordcount.py: an argparse CLI that counts lines, words and characters in a file"
 ```
 
-Rudra writes a plan to `.rudra/run/PLAN.md`, then writes each file. When it's finished:
+Rudra writes a plan to `.rudra/run/PLAN.md`, then works through it. Before each file lands, it stops and shows you what's about to change:
+
+```
+╭─ approval required ────────────────────────────────╮
+│ write_file  wordcount.py  (new file, 24 lines)     │
+╰────────────────────────────────────────────────────╯
+  import argparse
+  …
+
+[a]pprove  [r]eject  [A]lways (write_file:wordcount.py)  [d]iff (full)
+```
+
+`a` approves once, `r` rejects it, `A` stops asking about that file for the rest of the run, `d` shows the whole diff. On an existing file you get a real unified diff, not just a filename.
+
+When it's finished:
 
 ```bash
 python wordcount.py some-file.txt
@@ -153,13 +167,27 @@ python wordcount.py some-file.txt
 
 Want to chat instead of firing one-off tasks? Run `rudra` with no arguments for an interactive session.
 
+### Running it unattended
+
+```bash
+rudra --auto "add type hints to utils.py"
+```
+
+`--auto` approves everything without asking, for CI or a long run you don't want to babysit. Two things still hold:
+
+- **Commands stay off** unless you add `--allow-shell`. Writes are confined to your project; a shell command isn't, and nobody is reading it before it runs.
+- **A small deny floor always applies**, in every mode — no writing into `.git/`, no `rm -rf /`.
+
+Every gated decision lands in `.rudra/run/logs/permissions.jsonl`, so an unattended run leaves a record of what it was allowed to do.
+
 ### What Rudra leaves in your project
 
 ```
 .rudra/
-  config.toml     your settings          ← worth committing
-  AGENTS.md       project notes          ← worth committing
-  run/            plan, logs, checkpoints  (regenerated every run)
+  config.toml     your settings                ← worth committing
+  AGENTS.md       project notes                ← worth committing
+  run/            plan, permission log,
+                  checkpoints, artifacts         (regenerated every run)
 ```
 
 Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committing `.rudra/` is safe by default. It never touches your project's own `.gitignore` — whether you commit any of it is your call.
@@ -171,15 +199,16 @@ Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committ
 | Guide | What's inside |
 |---|---|
 | **[1. Getting Started](Documentation/01-getting-started.md)** | Install step by step, set up a model, run your first task |
-| **[2. Configuration](Documentation/02-configuration.md)** | `config.toml`, the five layers, per-role models, permissions |
+| **[2. Configuration](Documentation/02-configuration.md)** | `config.toml`, the five layers, per-role models |
 | **[3. Choosing a Model](Documentation/03-providers.md)** | Ollama, OpenRouter, vLLM, Anthropic, OpenAI, Google — with working examples |
 | **[4. CLI Reference](Documentation/04-cli-reference.md)** | `init`, `config`, `doctor`, `models test`, flags, interactive mode |
 | **[5. How It Works](Documentation/05-how-it-works.md)** | What happens between your prompt and the files on disk |
 | **[6. Troubleshooting](Documentation/06-troubleshooting.md)** | Error messages, what they mean, how to fix them |
 | **[7. Development](Documentation/07-development.md)** | Running tests, project layout, contributing |
 | **[8. Project Status](Documentation/08-project-status.md)** | What works today, what doesn't, what's coming |
+| **[9. Permissions](Documentation/09-permissions.md)** | Approval prompts, allow/deny rules, the deny floor, the audit log |
 
-New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**.
+New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)**.
 
 ---
 

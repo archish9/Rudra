@@ -12,12 +12,15 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 | 6 | **[Troubleshooting](06-troubleshooting.md)** | Decode an error message and fix it |
 | 7 | **[Development](07-development.md)** | Work on Rudra itself — tests, layout, conventions |
 | 8 | **[Project Status](08-project-status.md)** | Know what genuinely works and what doesn't |
+| 9 | **[Permissions](09-permissions.md)** | Approval prompts, allow/deny rules, the deny floor, the audit log |
 
 ---
 
 ## Suggested paths
 
 **Never used Rudra** → [Getting Started](01-getting-started.md) → [Choosing a Model](03-providers.md) → [Project Status](08-project-status.md)
+
+**About to run it unattended** → [Permissions](09-permissions.md)
 
 **Something's broken** → [Troubleshooting](06-troubleshooting.md), or run `rudra models test` first — it usually names the problem for you
 
@@ -43,4 +46,6 @@ It works with any model — local via Ollama, or hosted via OpenRouter, Anthropi
 
 Settings come from five layers — built-in defaults, your user config, the project config, environment variables, then CLI flags. `rudra config list` shows every effective value **and which layer set it**, so nothing has to be guessed at.
 
-**It's alpha.** It writes files well. It cannot yet run your tests, execute shell commands, or review its own work — a file counts as "done" when it exists on disk, not when it works. It also writes and overwrites files without asking: `[permissions]` exists in config but nothing enforces it yet. Review everything it produces, and see [Project Status](08-project-status.md) before pointing it at anything you care about.
+By default it asks before every write, edit, delete and command, and shows you a diff first. `--auto` skips the prompts for unattended runs — see [Permissions](09-permissions.md).
+
+**It's alpha.** It writes files well and can run commands, but it does not yet review its own work: a file counts as "done" when it exists on disk, not when it works. Review everything it produces, and see [Project Status](08-project-status.md) before pointing it at anything you care about.

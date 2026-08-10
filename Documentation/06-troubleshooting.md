@@ -180,7 +180,42 @@ Rudra refuses to run on a config it can't trust, and names the problem:
 
 ### Rudra overwrote a file without asking
 
-It will. There is no approval gate yet, and `[permissions] mode` is parsed but **not enforced** — `rudra doctor` says so in as many words. Work on a branch or a clean tree until shell support and permissions land together.
+Check your mode: `rudra config get permissions.mode`. If it is `auto` — or you passed `--auto` or `--yolo` — that is what those do. The default, `ask`, stops before every write and shows a diff.
+
+If you pressed `A` (always) earlier in the run, that grant covers the rest of the run for that file or command. It is not saved; the next run asks again.
+
+### Rudra exits 2 without doing anything
+
+```
+Error: permissions.mode = "ask" needs an interactive terminal,
+but stdin is not a TTY.
+```
+
+`ask` mode has to be able to ask. Piped, redirected, or CI input has no terminal to prompt on, so Rudra stops immediately rather than hanging — before contacting the model, and without creating anything. Use `--auto` for unattended runs, adding `--allow-shell` if it also needs to run commands.
+
+### A command was denied and the agent gave up
+
+Under `--auto`, commands are off unless you pass `--allow-shell`. The denial message says so, and the audit log records it as `source: "auto-shell"`:
+
+```bash
+cat .rudra/run/logs/permissions.jsonl
+```
+
+Rudra confines file writes to your project whatever the model asks; a shell command isn't confined, and in an unattended run nobody reads it first. See [Permissions](09-permissions.md#running-unattended).
+
+### A write was denied and I don't know which rule did it
+
+Every denial is logged with the rule that fired:
+
+```bash
+grep '"decision":"deny"' .rudra/run/logs/permissions.jsonl
+```
+
+`source` tells you where it came from — `floor` for the built-in rules, `deny` for one of yours, `auto-shell` for the unattended-command rule, `mode-default` for plan mode.
+
+### `floor_disable` won't accept `outside-root`
+
+That is deliberate. Writes are confined to your project by the file-access layer, not by that rule, so switching it off would change nothing and quietly redirect the write back inside your project. Rejecting the setting is more honest than accepting one that does nothing. `git-dir` and `catastrophic-command` can be disabled.
 
 ---
 

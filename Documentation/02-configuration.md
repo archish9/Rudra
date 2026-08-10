@@ -162,19 +162,29 @@ Sections that aren't supported yet say when they will be:
 Configuration error: [skills] is not supported yet — arrives in Step 11 (C5.1).
 ```
 
-## Permissions — read this before relying on it
+## Permissions
 
-`[permissions]` parses, validates, and is visible to `rudra config get`. **It
-is not enforced.** Rudra currently writes and overwrites files without asking,
-whatever `mode` says. `--auto`, `--yolo`, and `--plan` set the value and print
-a notice saying the same thing.
+`[permissions]` and `[tools]` control what Rudra may do without asking. The
+short version:
 
-This is stated on every run and in `rudra doctor` rather than buried here,
-because a setting reading `mode = "ask"` otherwise reads as a safety guarantee
-that does not exist. Enforcement, diff previews, and approval prompts arrive
-together with shell execution.
+```toml
+[permissions]
+mode  = "ask"                      # ask | auto | plan
+allow = ["execute:pytest*"]        # never prompt for these
+deny  = ["write_file:.env"]        # never allow these
 
-Until then: review what Rudra writes, and work on a branch or a clean tree.
+[tools]
+shell         = true               # false removes the execute tool entirely
+shell_in_auto = false              # may --auto run commands?
+```
+
+`ask` is the default: every write, edit, delete and command stops for
+approval and shows a diff first. `auto` approves everything. `plan` writes
+the plan and touches nothing else.
+
+Full treatment — rule syntax, the deny floor, session grants, the audit log,
+and what `--auto` does and doesn't protect — is in
+**[Permissions](09-permissions.md)**. Read it before an unattended run.
 
 ## Compatibility flags
 
@@ -202,7 +212,9 @@ contents in code fences write broken files.
   memory/export/  ← durable
   memory/palace/    volatile, ignored
   run/              volatile, ignored
-    PLAN.md, current_task.md, tech_stack.md, checkpoints.db, logs/
+    PLAN.md, current_task.md, tech_stack.md, checkpoints.db
+    logs/           permissions.jsonl — every gated decision
+    artifacts/      oversized tool output, offloaded out of your project
 ```
 
 Everything under `run/` is regenerated on every run. The durable files are

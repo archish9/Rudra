@@ -165,10 +165,11 @@ def validate(
             raise ConfigError(
                 "[permissions] floor_disable cannot contain 'outside-root'. "
                 "Writes, edits and deletes are confined to the project by the "
-                "backend itself, not by this rule, so disabling it would change "
-                "nothing and silently redirect the write back into the project. "
-                "Shell commands are not confined by it either — see TODO.md "
-                f"A1.49. Disableable rules: {', '.join(DISABLEABLE_FLOOR_RULES)}."
+                "file-access layer itself, not by this rule, so disabling it "
+                "would change nothing and silently redirect the write back "
+                "into the project. Shell commands are not confined by it "
+                f"either. Disableable rules: {', '.join(DISABLEABLE_FLOOR_RULES)}. "
+                "See Documentation/09-permissions.md."
             )
         if name not in FLOOR_RULE_NAMES:
             raise ConfigError(

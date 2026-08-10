@@ -1,6 +1,6 @@
 # 8. Project Status
 
-An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-10**.
+An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-10** (after Step 7 — shell and permissions).
 
 - [In one sentence](#in-one-sentence)
 - [What works](#what-works)
@@ -14,7 +14,7 @@ An honest account of what Rudra does today, what it doesn't, and what's next. La
 
 ## In one sentence
 
-Rudra can plan a set of files and write them, against any model you point it at — and that's genuinely all it does so far.
+Rudra can plan a set of files, write them with your approval, and run commands — against any model you point it at. What it can't do yet is judge whether any of it worked.
 
 ---
 
@@ -32,7 +32,13 @@ Rudra can plan a set of files and write them, against any model you point it at 
 
 **Multi-language.** Python, Rust, Node, React/Next.js, and Angular projects are detected, in both empty folders and existing repositories.
 
-**Safe by construction.** File operations are rooted at your project directory. API keys are read from named environment variables and never stored in configuration.
+**Approval before it acts.** By default every write, edit, delete and command stops and shows you a diff first. `a` approves, `A` stops asking about that file, `r` rejects. `--auto` skips the prompts for unattended runs.
+
+**Shell access.** Rudra can run commands — its agents have a real shell rooted at your project, with your toolchain on `PATH`.
+
+**Safe by construction.** File operations are confined to your project directory, whatever the model asks for. A small deny floor applies in every mode, including `--auto`: nothing writes into `.git/`, nothing runs `rm -rf /`. Every gated decision is logged to `.rudra/run/logs/permissions.jsonl`.
+
+**Keys stay out of the shell.** Anything shaped like a secret — `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `AWS_*`, plus whatever `api_key_env` names — is stripped from the environment commands run in.
 
 **Keys stay out of config.** `RUDRA_API_KEY_ENV` names a variable; the value lives in the environment. A test asserts a built model's `repr()` cannot leak it.
 
@@ -42,21 +48,19 @@ Rudra can plan a set of files and write them, against any model you point it at 
 
 Ordered roughly by how much you'll miss them.
 
-### Rudra can't run anything
-
-No shell access. It cannot run your tests, linter, build, or git. It writes files and stops.
-
-This is the single biggest limitation, and everything below follows from it.
-
 ### "Done" only means "the file exists"
 
 Rudra ticks an item off when the file is present on disk — not when it compiles, not when tests pass. It will cheerfully report `3/3 files generated` for three files that don't run.
+
+This is now the single biggest limitation, and everything below follows from it.
 
 **Always review generated code.**
 
 ### No test → review → fix loop
 
-The headline idea — write code, test it, review it, fix it, repeat — isn't built. Rudra currently does the first step only.
+The headline idea — write code, run its tests, review it, fix it, repeat — isn't built. Rudra *can* run commands now, but nothing in the loop makes it run your test suite and act on the result. That's the next milestone.
+
+There is also no dedicated test-runner tool yet: the agent has a raw shell, not a step that knows how to run pytest and parse the failures.
 
 ### No self-review
 
@@ -74,11 +78,11 @@ Each invocation starts fresh apart from what's on disk. It doesn't remember prev
 
 Designed, not implemented.
 
-### No permission prompts
+### No command sandbox
 
-There's no approval gate before Rudra writes a file. It writes within your project directory without asking. Point it at scratch directories, not repositories you can't afford to have edited.
+Approved commands run with your user's full access. Rudra confines *file* operations to your project, but a shell command is not confined — `echo x > /anywhere` does what it says.
 
-`[permissions] mode` exists in configuration and accepts `ask`, `auto`, and `plan`, but **nothing enforces it** — the setting is plumbing for the next milestone. Rudra says so on every run and in `rudra doctor` rather than letting `mode = "ask"` read as a guarantee it can't keep.
+That's why commands are disabled under `--auto` unless you pass `--allow-shell`: in an unattended run nobody reads the command first. In `ask` mode you do, which is the actual protection. Real containment would need OS-level isolation, and Rudra doesn't do that.
 
 ---
 
@@ -90,7 +94,7 @@ Things that work, but not the way you'd hope.
 |---|---|---|
 | **A failed model call ends everything** | Rate limit or dropped connection raises an error and exits `1`, even if files were already written | Check `.rudra/run/PLAN.md` — ticked items were genuinely written. Re-run to continue |
 | **Silently dropped plan items** | A `PLAN.md` line that doesn't parse as a filename is skipped, and the count reports only survivors — `2/2` can hide a missing third | Read `PLAN.md`; ask again naming the file explicitly |
-| **`--dry-run` does nothing** | Exits immediately with no plan and no preview | Use a scratch directory instead |
+| **`--dry-run` does nothing** | Exits immediately with no plan and no preview | Use `--plan`, which really does write a plan and touch nothing else |
 | **Ollama truncates silently** | Default 4096-token window, no warning, and the agent forgets its plan | Set `RUDRA_CONTEXT_TOKENS` |
 | **Free hosted models are unreliable** | `429` daily caps and transient `502`s mid-run | Retry, or use a paid or local model |
 | **Coder may write the wrong file** | Nothing enforces that the file written matches the file assigned | Review output; keep tasks small |
@@ -117,15 +121,14 @@ Built in order, because each depends on the last.
 
 | Next | What it brings |
 |---|---|
-| **Shell access + permissions** | Rudra can run commands — and asks before doing anything risky. These land together, never separately, and this is what makes `[permissions]` real |
-| **Git and test-runner tools** | Running your test suite becomes possible |
-| **The real agent loop** | Subagents, a reviewer, a tester, and a completion gate that means *tests pass* rather than *file exists* |
+| **Git and test-runner tools** | A step that knows how to run your suite and read the failures, rather than a raw shell |
+| **The real agent loop** | Subagents, a reviewer, a tester, and a completion gate that means *tests pass* rather than *file exists*. This is the one that matters |
 | **Better planning** | Clarifying questions when a request is ambiguous, and a plan mode |
 | **Skills** | A methodology layer the agent can draw on |
 | **Context management** | Checkpoints, living project notes, token budgets |
 | **MCP support** | Model Context Protocol servers |
 | **Long-term memory** | Knowledge that persists across sessions |
-| **Release polish** | Streaming, cost reporting, a LICENSE file, PyPI |
+| **Release polish** | Streaming, cost reporting, PyPI |
 
 `TODO.md` in the repository root is the live ledger — every item, its status, and the evidence behind it.
 
@@ -137,17 +140,18 @@ Built in order, because each depends on the last.
 
 - Scaffolding small projects in an empty directory
 - Generating a first draft you intend to review
+- Working in an existing repo, in `ask` mode, on a branch — you see every change before it lands
 - Trying out a local-first coding agent
 - Contributing to Rudra itself
 
 **Not yet**
 
-- Production codebases you can't afford to have edited
 - Anything where generated code might go unreviewed
 - Workflows needing tests to actually pass
+- Unattended runs with `--allow-shell` against anything you care about
 - Machines with no model available and no budget for one
 
-The honest summary: Rudra is a capable file generator with a solid provider-agnostic foundation, and it is not yet the autonomous test-and-fix agent it's aiming to be. Treat its output as a first draft from a fast junior developer who cannot run the code.
+The honest summary: Rudra is a capable file generator that now asks permission and can run commands, on a solid provider-agnostic foundation — and it is not yet the autonomous test-and-fix agent it's aiming to be. Treat its output as a first draft from a fast junior developer who doesn't check their own work.
 
 ---
 

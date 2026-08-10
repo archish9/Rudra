@@ -22,10 +22,16 @@ you ──▶ planner ──▶ PLAN.md ──▶ for each file: planner writes 
                                               a fresh coder writes it
                                                         │
                                                         ▼
+                                        ┌───── permission gate ─────┐
+                                        │ allow · deny · ask you    │
+                                        └───────────┬───────────────┘
+                                                    ▼
                                               file exists? tick it off
 ```
 
 One planner decides *what* to build. A new coder is created for *each* file and writes exactly that one file. Rudra loops until the list is done.
+
+Every write, edit, delete and command passes the permission gate first. In the default `ask` mode that means it stops and shows you a diff; in `auto` it proceeds; in either, a small built-in floor still blocks the things nobody wants. See [Permissions](09-permissions.md).
 
 ---
 
@@ -176,9 +182,9 @@ The file tools the agents use — `read_file`, `write_file`, `edit_file`, `ls`, 
 
 Things worth knowing before you rely on it:
 
-**No shell.** Rudra can't run your tests, linter, build, or git. It writes files and stops.
-
 **No review step.** Nothing checks the generated code for correctness before reporting success.
+
+**Shell exists, but the loop doesn't use it.** Rudra's agents can run commands, and do. What's missing is the step that runs *your test suite* and acts on the result — so a failing test doesn't yet cause a retry.
 
 **Existence is the only success test.** As above — a file that exists counts as done.
 

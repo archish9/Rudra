@@ -447,7 +447,8 @@ def doctor_command(
     elif cfg.tools.shell_in_auto:
         shell_state = (
             "enabled, including under --auto ([tools] shell_in_auto = true). "
-            "Unattended commands are not confined to the project — see TODO.md A1.49"
+            "Unattended commands are not confined to the project — "
+            "see Documentation/09-permissions.md"
         )
     else:
         shell_state = (

@@ -94,8 +94,18 @@ src/rudra/
 │   ├── providers.py  Per-provider kwarg policy table
 │   ├── probe.py      Live checks behind `rudra models test`
 │   └── errors.py     Configuration errors, all raised before any network call
+├── permissions/      The gate: what agents may do without asking
+│   ├── rules.py      PermissionEngine.decide() — pure, the only policy reader
+│   ├── floor.py      The three built-in deny rules
+│   ├── middleware.py Short-circuits denied calls before the backend sees them
+│   ├── interrupts.py Turns "ask" into a deepagents interrupt
+│   ├── approval.py   The terminal prompt and the resume loop
+│   ├── diff.py       What you see before approving a write
+│   ├── audit.py      run/logs/permissions.jsonl
+│   ├── grants.py     "always" grants, in memory for the run only
+│   └── env.py        The environment commands run with, minus secrets
 ├── agent/
-│   ├── main_agent.py Orchestrates planner → coder
+│   ├── main_agent.py Orchestrates planner → coder; builds the backend and gate
 │   ├── planner_agent.py
 │   └── coder_agent.py
 ├── middleware/       Behaviour patches applied to agents

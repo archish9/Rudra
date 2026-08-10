@@ -1,0 +1,257 @@
+# 9. Permissions
+
+What Rudra may do without asking, and how to change it.
+
+- [The three modes](#the-three-modes)
+- [The approval prompt](#the-approval-prompt)
+- [Allow and deny rules](#allow-and-deny-rules)
+- [The deny floor](#the-deny-floor)
+- [Running unattended](#running-unattended)
+- [The audit log](#the-audit-log)
+- [What this does and doesn't protect](#what-this-does-and-doesnt-protect)
+
+---
+
+## The three modes
+
+```toml
+[permissions]
+mode = "ask"        # ask | auto | plan
+```
+
+| Mode | Behaviour |
+|---|---|
+| `ask` *(default)* | Every write, edit, delete and command stops for approval, with a diff |
+| `auto` | Approves everything without prompting. Also `--auto` or `--yolo` |
+| `plan` | Writes the plan, then stops. No project files touched, no commands run. Also `--plan` |
+
+Reading is never gated in any mode. A single run reads dozens of files, and
+none of them can destroy anything.
+
+**`ask` needs a terminal.** Piped or redirected input exits `2` immediately
+rather than hanging on a prompt nobody can answer:
+
+```
+$ rudra "add tests" < /dev/null
+Error: permissions.mode = "ask" needs an interactive terminal,
+but stdin is not a TTY.
+
+  --auto                      approve everything (unattended)
+  permissions.mode = "auto"   same, persisted in .rudra/config.toml
+```
+
+That check runs before the model is contacted, so it costs nothing and
+leaves nothing behind.
+
+---
+
+## The approval prompt
+
+```
+╭─ approval required ────────────────────────────────╮
+│ write_file  src/app.py    +12 -3  (overwrite)      │
+╰────────────────────────────────────────────────────╯
+  @@ -8,6 +8,15 @@
+  - def run(argv):
+  -     pass
+  + def run(argv):
+  +     args = parse(argv)
+  … 8 more changed lines
+
+[a]pprove  [r]eject  [A]lways (write_file:src/app.py)  [d]iff (full)
+```
+
+| Key | Effect |
+|---|---|
+| `a` | Approve this one call |
+| `r` | Reject it. Rudra is told not to retry and picks another approach |
+| `A` | Approve, and stop asking about this tool and pattern for the rest of the run |
+| `d` | Show the whole diff, then ask again |
+
+What you see depends on the operation:
+
+- **Overwriting a file** — a unified diff, capped at 20 changed lines with a
+  `+N/-M` header. `d` shows all of it.
+- **A new file** — its size and first ten lines. There is nothing to diff
+  against.
+- **`edit_file`** — a diff of just the replaced text.
+- **`delete`** — the path and how many lines are about to go.
+- **A command** — the command string and the directory it runs in.
+
+Binary content, or anything over about 1 MB, reports its size rather than
+rendering.
+
+### `A` only lasts for the run
+
+An `A` grant lives in memory until the process exits. It is never written to
+your config. A run can widen what it may do for its own lifetime and can
+never quietly widen what you have saved.
+
+For a command, the grant covers the first word — approving `pytest -q` once
+also covers `pytest -q tests/unit`. For a file, it covers that exact path.
+
+---
+
+## Allow and deny rules
+
+```toml
+[permissions]
+allow = ["execute:pytest*", "execute:git status"]
+deny  = ["execute:rm -rf *", "write_file:.env", "write_file:**/.git/**"]
+```
+
+An entry is either a bare tool name, meaning every call to it, or
+`tool:pattern`.
+
+**Tool names are the real ones:** `read_file`, `ls`, `glob`, `grep`,
+`write_file`, `edit_file`, `delete`, `execute`, `task`.
+
+**Patterns** are globs:
+
+- Starting with `/` — matched against the absolute path.
+- Otherwise — matched against the path relative to your project. So
+  `write_file:.env` means *this project's* `.env`, not any file anywhere with
+  that name.
+- For `execute`, the pattern matches the command string. A command is not a
+  path, so `execute:pytest*` does match `pytest -q tests/x`.
+
+Paths are resolved before matching, so `src/../.env` is recognised as `.env`.
+
+### Which rule wins
+
+Evaluated top down; first match decides:
+
+```
+1. the deny floor          always, every mode
+2. permissions.deny
+3. grants from `A` this run
+4. permissions.allow
+5. the mode default
+```
+
+**Deny beats allow.** `allow` and `deny` are separate lists, so declaration
+order can't arbitrate between them — if you write `allow = ["execute:git*"]`
+and `deny = ["execute:git push*"]`, `git push` is denied.
+
+A malformed rule is rejected when Rudra starts, not when the rule is first
+hit, so a typo fails immediately rather than mid-run.
+
+---
+
+## The deny floor
+
+Three rules that apply in **every** mode, including `--auto`:
+
+| Rule | Blocks |
+|---|---|
+| `outside-root` | Writing or deleting outside your project |
+| `git-dir` | Writing or deleting inside `.git/` |
+| `catastrophic-command` | `rm -rf /`, `mkfs`, `dd of=/dev/*` |
+
+Two of them can be switched off if you have a real reason:
+
+```toml
+[permissions]
+floor_disable = ["git-dir"]
+```
+
+The run then prints a warning naming every disabled rule, and calls the rule
+*would* have blocked are still written to the audit log. Turning a rule off
+changes what Rudra blocks, not what it tells you.
+
+`outside-root` is deliberately **not** in that list, and naming it is a
+configuration error. Writes are confined to your project by the file-access
+layer itself, not by this rule — so disabling it would change nothing and
+silently redirect the write back into your project. Rejecting the setting is
+more honest than accepting one that does nothing.
+
+---
+
+## Running unattended
+
+```bash
+rudra --auto "add type hints to utils.py"
+```
+
+`--auto` approves every file operation without asking. **Commands stay
+disabled** unless you say otherwise:
+
+```bash
+rudra --auto --allow-shell "run the test suite and fix what fails"
+```
+
+```toml
+[tools]
+shell_in_auto = true    # the same thing, persisted
+```
+
+The split exists because the two are not equally contained. Writes, edits and
+deletes are confined to your project directory whatever the model asks for. A
+shell command is not — `echo x > /anywhere` does exactly what it says.
+
+This is not hypothetical. In testing, a model told to write outside the
+project was denied twice on `write_file`, and then wrote the file through the
+shell instead. It was not trying to evade anything; it was routing around an
+error, which is what these models do. Hence the separate opt-in.
+
+Naming a command explicitly also counts as opting in — with
+`allow = ["execute:pytest*"]`, `pytest` runs under `--auto` without the flag,
+because you named it.
+
+`ask` mode is unaffected by any of this. You read each command before it
+runs.
+
+---
+
+## The audit log
+
+`.rudra/run/logs/permissions.jsonl`, one line per decision, written in every
+mode:
+
+```json
+{"ts":"2026-08-10T14:22:01Z","tool":"execute","arg":"pytest -q",
+ "rule":null,"mode":"ask","decision":"approve","source":"prompt"}
+{"ts":"...","tool":"write_file","arg":"/etc/hosts",
+ "rule":"<floor:outside-root>","mode":"auto","decision":"deny","source":"floor"}
+```
+
+Recorded: everything denied, everything you approved or rejected, session
+grants, and every mutation under `--auto`. Not recorded: reads that were
+allowed by default, which would otherwise bury the signal under hundreds of
+`read_file` lines.
+
+The `source` field says *why*: `prompt`, `floor`, `deny`, `allow`,
+`session-grant`, `auto-shell`, `mode-default`, or `floor-disabled`.
+
+It lives under `run/`, which Rudra's own `.gitignore` excludes.
+
+---
+
+## What this does and doesn't protect
+
+**It does:**
+
+- Stop any file operation outside your project, in every mode
+- Show you a diff before an existing file is overwritten
+- Keep commands out of unattended runs unless you opt in
+- Keep your API keys out of the environment handed to commands — anything
+  matching `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD` or `AWS_*`, plus
+  whatever `api_key_env` names, is stripped
+- Leave a record of everything it allowed
+
+**It does not:**
+
+- Sandbox commands. With `--allow-shell` or in `ask` mode, an approved
+  command runs with your user's full access. Real containment needs OS-level
+  isolation, which Rudra does not do.
+- Stop a command reading files your account can read, including credentials
+  on disk.
+- Verify that generated code is correct. A file counts as done when it
+  exists, not when it works.
+
+The practical advice hasn't changed: work on a branch, and read what it
+writes.
+
+---
+
+**Back to:** [README](../README.md) · [Configuration](02-configuration.md) · [CLI Reference](04-cli-reference.md)
