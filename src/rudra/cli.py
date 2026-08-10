@@ -205,13 +205,21 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
 
+    # project_path is resolved FIRST, and the Config is seeded with it
+    # unconditionally, because get_config() caches for the rest of the
+    # process — no later call can correct which .env was read. Seeding
+    # inside the `if verbose is None` block below would skip it whenever
+    # --verbose or --no-verbose is passed, leaving the first downstream
+    # get_config() to fall back to the cwd. See TODO.md A5.2.
+    project_path = get_project_path(project_dir)
+    cfg = get_config(project_path)
+
     # A default of `config.agent.verbose` here would be evaluated when this
     # module is imported, which is the A1.15 defect. Three-state instead:
     # absent -> consult config, --verbose -> True, --no-verbose -> False.
     if verbose is None:
-        verbose = get_config().agent.verbose
+        verbose = cfg.agent.verbose
 
-    project_path = get_project_path(project_dir)
     project_context = load_project_context(project_path)
 
     if prompt:
@@ -221,8 +229,8 @@ def main(
             Panel(
                 f"[bold]{prompt}[/bold]\n"
                 f"[dim]Path:[/dim] {project_path}\n"
-                f"[dim]Planner:[/dim] {get_config().ollama.model_planner}  "
-                f"[dim]│  Coder:[/dim] {get_config().ollama.model_coder}",
+                f"[dim]Planner:[/dim] {get_config().model_for('planner').model}  "
+                f"[dim]│  Coder:[/dim] {get_config().model_for('coder').model}",
                 title="⚡ Task",
                 border_style="bright_cyan",
             )
@@ -305,8 +313,8 @@ def main(
                         Panel(
                             f"[bold]{user_input}[/bold]\n"
                             f"[dim]Path:[/dim] {project_path}\n"
-                            f"[dim]Planner:[/dim] {get_config().ollama.model_planner}  "
-                            f"[dim]│  Coder:[/dim] {get_config().ollama.model_coder}",
+                            f"[dim]Planner:[/dim] {get_config().model_for('planner').model}  "
+                            f"[dim]│  Coder:[/dim] {get_config().model_for('coder').model}",
                             title="⚡ Task",
                             border_style="bright_cyan",
                         )
