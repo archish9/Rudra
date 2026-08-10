@@ -59,24 +59,24 @@ Session rule 2 is explicit and the owner asked for it directly: nothing gets fix
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: ledger IDs `A1.28`–`A1.32`, referenced by every later task's commit message
+- Produces: ledger IDs `A1.34`–`A1.38`, referenced by every later task's commit message
 
 - [ ] **Step 1: Find the highest allocated A1.x ID**
 
 Run: `grep -oE '^\| A1\.[0-9]+' TODO.md | sort -t. -k2 -n | tail -3`
 
-Expected: the highest is `A1.27`. If it is not, use the next five IDs after whatever the real highest is, and substitute them everywhere below.
+Expected: the highest is `A1.33`. If it is not, use the next five IDs after whatever the real highest is, and substitute them everywhere below.
 
 - [ ] **Step 2: Append five PENDING rows to the Section A table**
 
 Insert after the `A1.27` row, matching the existing table's column layout (`| ID | Status | Description | Evidence |`):
 
 ```markdown
-| A1.28 | PENDING | **`config.py:19` defaults `OLLAMA_MODEL` to `qwen3:14b`, below the D6 32B floor.** `.env.example:9` was corrected to `qwen3:32b` by A1.23, but the coded default it shadows was not — so any user without a `.env` silently runs a 14B model against a codebase whose small-model workarounds were deleted in Step 2 under D6. Same class as A1.23, different file. Fixed in Step 5 (`docs/superpowers/plans/2026-08-10-step5-model-factory.md`, Task 2): `OllamaConfig` is deleted and the replacement `ModelConfig` default is `qwen3:32b` | `src/rudra/config.py:19` (`os.getenv("OLLAMA_MODEL", "qwen3:14b")`) vs `.env.example:9` (`OLLAMA_MODEL=qwen3:32b`) |
-| A1.29 | PENDING | **Built-in deepagents harness profiles can never match a Rudra model.** `graph.py:584` sets `_model_spec = model if isinstance(model, str) else None`, and Rudra passes `BaseChatModel` instances, so spec is `None`. The instance fallback in `_harness_profile_for_model` then fails because `_get_harness_profile` rejects any spec with `count(":") > 1`, which every Ollama tag (`qwen3:32b`) and the OpenRouter `:free` suffix produce. Measured against the dev model: `ls_provider=openai`, identifier `nvidia/nemotron-3-ultra-550b-a55b:free` → `HarnessProfile()` default, so the shipped Nemotron 3 Ultra profile never loads. **Deferred to U.10** — detecting the miss requires guessing a canonical spec from user config, which is the judgment U.10 exists to make | `.venv/.../deepagents/graph.py:584,605`; `profiles/harness/harness_profiles.py:1078,1086-1087,1283,1300`; `profiles/harness/_nvidia_nemotron_3_ultra.py:52` registers `openrouter:nvidia/nemotron-3-ultra-550b-a55b` |
-| A1.30 | PENDING | **`OllamaConfig.timeout` is dead config.** No call site passes it — `planner_agent.py:78-84` and `coder_agent.py:58-64` pass only `model`, `base_url`, `temperature`, `num_predict`, `reasoning`. Worse, `ChatOllama` has no `timeout` field and no alias, so passing it is accepted and silently discarded: `ChatOllama(model='q', base_url='http://x', timeout=42)` constructs, and `getattr(m, 'timeout', 'ABSENT')` returns `ABSENT`. Honest support means `client_kwargs={"timeout": n}`, a behavior change. **Deferred** — Step 5 omits `timeout` for the `ollama` provider rather than faking it | `src/rudra/config.py:33`; `src/rudra/agent/planner_agent.py:78-84`; `src/rudra/agent/coder_agent.py:58-64` |
-| A1.31 | PENDING | **`apply_provider_profile` is a beta-flagged deepagents API and becomes load-bearing in Step 5's model factory.** Its module docstring states `deepagents.profiles` "exposes beta APIs that may receive minor changes in future releases". It joins the U.4 `validate_path` monkeypatch and the U.13 private-module import on the upgrade-hazard list guarded by `src/rudra/compat/version_guard.py`. Fixed in Step 5 Task 3 via `require_deepagents_attr` | `.venv/.../deepagents/profiles/provider/provider_profiles.py` module docstring; `pyproject.toml:30` pins `deepagents==0.7.4` |
-| A1.32 | PENDING | **`openai_compatible` silently inherits OpenAI's Responses API.** The `count(":") > 1` rejection above applies to the *provider* registry too, not just harness profiles. `openai_compatible` maps to the `openai` LangChain prefix, so a colon-free model id picks up deepagents' built-in `ProviderProfile(init_kwargs={"use_responses_api": True})` and injects `/responses` into endpoints that serve only `/chat/completions` — vLLM, LM Studio, Groq, Together, and OpenRouter. The dev model escapes only because its identifier contains a colon. Fixed in Step 5 Task 1: `openai_compatible` sets `use_responses_api=False` | measured: `apply_provider_profile('openai:gpt-5.4')` → `{'use_responses_api': True}`; `apply_provider_profile('openai:nvidia/nemotron-3-ultra-550b-a55b:free')` → `{}`; `.venv/.../deepagents/profiles/provider/_openai.py:21-23` |
+| A1.34 | PENDING | **`config.py:19` defaults `OLLAMA_MODEL` to `qwen3:14b`, below the D6 32B floor.** `.env.example:9` was corrected to `qwen3:32b` by A1.23, but the coded default it shadows was not — so any user without a `.env` silently runs a 14B model against a codebase whose small-model workarounds were deleted in Step 2 under D6. Same class as A1.23, different file. Fixed in Step 5 (`docs/superpowers/plans/2026-08-10-step5-model-factory.md`, Task 2): `OllamaConfig` is deleted and the replacement `ModelConfig` default is `qwen3:32b` | `src/rudra/config.py:19` (`os.getenv("OLLAMA_MODEL", "qwen3:14b")`) vs `.env.example:9` (`OLLAMA_MODEL=qwen3:32b`) |
+| A1.35 | PENDING | **Built-in deepagents harness profiles can never match a Rudra model.** `graph.py:584` sets `_model_spec = model if isinstance(model, str) else None`, and Rudra passes `BaseChatModel` instances, so spec is `None`. The instance fallback in `_harness_profile_for_model` then fails because `_get_harness_profile` rejects any spec with `count(":") > 1`, which every Ollama tag (`qwen3:32b`) and the OpenRouter `:free` suffix produce. Measured against the dev model: `ls_provider=openai`, identifier `nvidia/nemotron-3-ultra-550b-a55b:free` → `HarnessProfile()` default, so the shipped Nemotron 3 Ultra profile never loads. **Deferred to U.10** — detecting the miss requires guessing a canonical spec from user config, which is the judgment U.10 exists to make | `.venv/.../deepagents/graph.py:584,605`; `profiles/harness/harness_profiles.py:1078,1086-1087,1283,1300`; `profiles/harness/_nvidia_nemotron_3_ultra.py:52` registers `openrouter:nvidia/nemotron-3-ultra-550b-a55b` |
+| A1.36 | PENDING | **`OllamaConfig.timeout` is dead config.** No call site passes it — `planner_agent.py:78-84` and `coder_agent.py:58-64` pass only `model`, `base_url`, `temperature`, `num_predict`, `reasoning`. Worse, `ChatOllama` has no `timeout` field and no alias, so passing it is accepted and silently discarded: `ChatOllama(model='q', base_url='http://x', timeout=42)` constructs, and `getattr(m, 'timeout', 'ABSENT')` returns `ABSENT`. Honest support means `client_kwargs={"timeout": n}`, a behavior change. **Deferred** — Step 5 omits `timeout` for the `ollama` provider rather than faking it | `src/rudra/config.py:33`; `src/rudra/agent/planner_agent.py:78-84`; `src/rudra/agent/coder_agent.py:58-64` |
+| A1.37 | PENDING | **`apply_provider_profile` is a beta-flagged deepagents API and becomes load-bearing in Step 5's model factory.** Its module docstring states `deepagents.profiles` "exposes beta APIs that may receive minor changes in future releases". It joins the U.4 `validate_path` monkeypatch and the U.13 private-module import on the upgrade-hazard list guarded by `src/rudra/compat/version_guard.py`. Fixed in Step 5 Task 3 via `require_deepagents_attr` | `.venv/.../deepagents/profiles/provider/provider_profiles.py` module docstring; `pyproject.toml:30` pins `deepagents==0.7.4` |
+| A1.38 | PENDING | **`openai_compatible` silently inherits OpenAI's Responses API.** The `count(":") > 1` rejection above applies to the *provider* registry too, not just harness profiles. `openai_compatible` maps to the `openai` LangChain prefix, so a colon-free model id picks up deepagents' built-in `ProviderProfile(init_kwargs={"use_responses_api": True})` and injects `/responses` into endpoints that serve only `/chat/completions` — vLLM, LM Studio, Groq, Together, and OpenRouter. The dev model escapes only because its identifier contains a colon. Fixed in Step 5 Task 1: `openai_compatible` sets `use_responses_api=False` | measured: `apply_provider_profile('openai:gpt-5.4')` → `{'use_responses_api': True}`; `apply_provider_profile('openai:nvidia/nemotron-3-ultra-550b-a55b:free')` → `{}`; `.venv/.../deepagents/profiles/provider/_openai.py:21-23` |
 ```
 
 - [ ] **Step 3: Mark Step 5 IN PROGRESS in Section E**
@@ -84,7 +84,7 @@ Insert after the `A1.27` row, matching the existing table's column layout (`| ID
 In the Section E table row for step **5**, append to the "Why here" cell:
 
 ```markdown
- — **STEP 5 IN PROGRESS** (started 2026-08-10). Spec: `docs/superpowers/specs/2026-08-10-step5-model-factory-design.md`. Plan: `docs/superpowers/plans/2026-08-10-step5-model-factory.md`. Findings logged before work began per session rule 2: `A1.28`–`A1.32`.
+ — **STEP 5 IN PROGRESS** (started 2026-08-10). Spec: `docs/superpowers/specs/2026-08-10-step5-model-factory-design.md`. Plan: `docs/superpowers/plans/2026-08-10-step5-model-factory.md`. Findings logged before work began per session rule 2: `A1.34`–`A1.38`.
 ```
 
 - [ ] **Step 4: Verify the table still renders and IDs are unique**
@@ -99,16 +99,16 @@ Expected: no output (no duplicate IDs)
 
 ```bash
 git add TODO.md
-git commit -m "docs(todo): log A1.28-A1.32 before Step 5 touches code
+git commit -m "docs(todo): log A1.34-A1.38 before Step 5 touches code
 
 Session rule 2: nothing gets fixed before it is listed as PENDING with
 file:line evidence. Five findings from the Step 5 design session.
 
-A1.28 qwen3:14b default below the D6 32B floor  -> fixed in Task 2
-A1.29 harness profiles unreachable for any model -> deferred to U.10
-A1.30 OllamaConfig.timeout is dead config        -> deferred
-A1.31 apply_provider_profile is a beta API       -> guarded in Task 3
-A1.32 openai_compatible inherits Responses API   -> fixed in Task 1"
+A1.34 qwen3:14b default below the D6 32B floor  -> fixed in Task 2
+A1.35 harness profiles unreachable for any model -> deferred to U.10
+A1.36 OllamaConfig.timeout is dead config        -> deferred
+A1.37 apply_provider_profile is a beta API       -> guarded in Task 3
+A1.38 openai_compatible inherits Responses API   -> fixed in Task 1"
 ```
 
 ---
@@ -141,7 +141,7 @@ The foundation: pure data with no Rudra imports, so it tests without any agent o
 Create `tests/test_llm_providers.py`:
 
 ```python
-"""Per-provider kwarg policy — guards A1.30 and A1.32.
+"""Per-provider kwarg policy — guards A1.36 and A1.38.
 
 Kwarg passthrough is not safe. ChatOllama accepts `timeout=` and silently
 discards it (no field, no alias), while ChatOpenAI, ChatAnthropic, and
@@ -201,7 +201,7 @@ def test_ollama_emits_its_own_kwarg_names() -> None:
 
 
 def test_ollama_omits_timeout() -> None:
-    """A1.30: ChatOllama accepts timeout= and silently discards it."""
+    """A1.36: ChatOllama accepts timeout= and silently discards it."""
     assert "timeout" not in PROVIDERS["ollama"].build_kwargs(FakeSettings())
 
 
@@ -243,7 +243,7 @@ def test_hosted_providers_accept_timeout(provider: str) -> None:
 
 
 def test_openai_compatible_disables_the_responses_api() -> None:
-    """A1.32: openai_compatible maps to the `openai` prefix, so it inherits
+    """A1.38: openai_compatible maps to the `openai` prefix, so it inherits
     deepagents' ProviderProfile(init_kwargs={"use_responses_api": True}).
     vLLM, LM Studio, Groq, Together, and OpenRouter serve /chat/completions
     and not /responses."""
@@ -394,7 +394,7 @@ Create `src/rudra/llm/providers.py`:
 ```python
 """Per-provider construction policy.
 
-Why a policy table and not kwarg passthrough (A1.30): ChatOllama has no
+Why a policy table and not kwarg passthrough (A1.36): ChatOllama has no
 `timeout` field and no alias, so `ChatOllama(model='q', timeout=42)`
 constructs without error and drops the value — `getattr(m, 'timeout',
 'ABSENT')` returns `ABSENT`. The other three providers accept `base_url`,
@@ -435,7 +435,7 @@ class ProviderEntry:
 
     needs_api_key: bool
     supports_timeout: bool
-    """False only for ollama, which silently discards `timeout` (A1.30)."""
+    """False only for ollama, which silently discards `timeout` (A1.36)."""
 
     context_kwarg: str | None = None
     """Server-side context-window kwarg. Ollama only: `num_ctx` tells the
@@ -484,7 +484,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             max_output_kwarg="max_tokens",
             needs_api_key=True,
             supports_timeout=True,
-            # A1.32: this path maps to the `openai` prefix and would otherwise
+            # A1.38: this path maps to the `openai` prefix and would otherwise
             # inherit deepagents' ProviderProfile(use_responses_api=True).
             # vLLM, LM Studio, Groq, Together, and OpenRouter serve
             # /chat/completions, not OpenAI's /responses.
@@ -537,7 +537,7 @@ while the other three providers accept it through pydantic aliases. Each
 provider now declares exactly which kwargs it takes, and the tests assert
 absence as loudly as presence.
 
-Also fixes A1.32: openai_compatible maps to the openai LangChain prefix
+Also fixes A1.38: openai_compatible maps to the openai LangChain prefix
 and would otherwise inherit deepagents' use_responses_api=True profile,
 injecting OpenAI's /responses endpoint into vLLM, LM Studio, Groq,
 Together, and OpenRouter servers that serve only /chat/completions."
@@ -547,7 +547,7 @@ Together, and OpenRouter servers that serve only /chat/completions."
 
 ## Task 2: Role-based configuration
 
-Replaces `OllamaConfig` with per-role `ModelConfig`, adds the deprecation shim, fixes `A1.28`, and lands the config half of `A5.2`.
+Replaces `OllamaConfig` with per-role `ModelConfig`, adds the deprecation shim, fixes `A1.34`, and lands the config half of `A5.2`.
 
 **Files:**
 - Modify: `src/rudra/config.py` (whole-file rewrite of the model section; `AgentConfig` and `get_checkpoint_path` unchanged)
@@ -565,7 +565,7 @@ Replaces `OllamaConfig` with per-role `ModelConfig`, adds the deprecation shim, 
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_config.py`. Also change the module docstring's first line to mention A1.28, A5.2, and C1.3, and extend `OLLAMA_ENV_VARS` handling by adding a second tuple:
+Append to `tests/test_config.py`. Also change the module docstring's first line to mention A1.34, A5.2, and C1.3, and extend `OLLAMA_ENV_VARS` handling by adding a second tuple:
 
 ```python
 RUDRA_ENV_VARS = tuple(
@@ -590,7 +590,7 @@ Add these tests:
 
 ```python
 def test_defaults_are_ollama_at_32b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A1.28: the coded default was qwen3:14b, below the D6 32B floor, while
+    """A1.34: the coded default was qwen3:14b, below the D6 32B floor, while
     .env.example:9 said qwen3:32b. A user with no .env silently ran a 14B
     model against a codebase whose 14B workarounds were deleted in Step 2.
 
@@ -756,7 +756,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 _DEFAULT_PROVIDER = "ollama"
-# A1.28: was qwen3:14b, below the D6 32B floor that .env.example:9 already used.
+# A1.34: was qwen3:14b, below the D6 32B floor that .env.example:9 already used.
 _DEFAULT_MODEL = "qwen3:32b"
 _DEFAULT_BASE_URL = "http://localhost:11434"
 _DEFAULT_TEMPERATURE = 0.3
@@ -979,7 +979,7 @@ Expected: `All checks passed!`
 git add src/rudra/config.py tests/test_config.py
 git commit -m "feat(config): role-based ModelConfig replaces OllamaConfig
 
-Closes C1.3 and the config half of A5.2. Fixes A1.28.
+Closes C1.3 and the config half of A5.2. Fixes A1.34.
 
 Roles are default, planner, and coder; an unknown role falls back to
 default, so Step 9's build_model(\"reviewer\") works the day it lands
@@ -994,7 +994,7 @@ The seven OLLAMA_* variables keep working for one release behind a
 DeprecationWarning, deduped explicitly per variable so the once-only
 property is deterministically testable.
 
-A1.28: the coded default was qwen3:14b while .env.example:9 said
+A1.34: the coded default was qwen3:14b while .env.example:9 said
 qwen3:32b, so a user with no .env silently ran a model below the D6 floor.
 
 Agent call sites are knowingly broken by this commit and repaired in the
@@ -1111,7 +1111,7 @@ def test_openai_compatible_builds_a_chat_openai_with_the_base_url(
 def test_openai_compatible_never_enables_the_responses_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A1.32. The colon-free model id matters: with a colon, deepagents'
+    """A1.38. The colon-free model id matters: with a colon, deepagents'
     provider-profile lookup rejects the spec and the OpenAI profile never
     applies, so the bug hides. A colon-free id is where it bites."""
     monkeypatch.setenv("TEST_KEY_VAR", "sk-test-not-a-real-key")
@@ -1265,7 +1265,7 @@ def test_unknown_roles_resolve_through_default() -> None:
 
 
 def test_apply_provider_profile_is_still_available() -> None:
-    """A1.31: beta deepagents API, same hazard class as the U.4 monkeypatch."""
+    """A1.37: beta deepagents API, same hazard class as the U.4 monkeypatch."""
     from rudra.llm.factory import _apply_provider_profile
 
     assert callable(_apply_provider_profile())
@@ -1318,7 +1318,7 @@ logger = logging.getLogger(__name__)
 def _apply_provider_profile():
     """Resolve deepagents' beta provider-profile helper.
 
-    A1.31: `deepagents.profiles` is beta-flagged, so this joins the U.4
+    A1.37: `deepagents.profiles` is beta-flagged, so this joins the U.4
     monkeypatch and the U.13 private import behind the version guard. A
     deepagents bump that moves or renames it fails here, legibly, instead of
     silently dropping the provider kwargs it injects.
@@ -1326,7 +1326,7 @@ def _apply_provider_profile():
     return require_deepagents_attr(
         "deepagents.profiles.provider.provider_profiles",
         "apply_provider_profile",
-        "A1.31",
+        "A1.37",
     )
 
 
@@ -1381,7 +1381,7 @@ def build_model(role: str, cfg: Config | None = None) -> BaseChatModel:
 
     # U.9: deepagents' built-in provider profiles supply their kwargs first
     # and our role kwargs win on collision — which is how openai_compatible
-    # suppresses use_responses_api (A1.32).
+    # suppresses use_responses_api (A1.38).
     kwargs = _apply_provider_profile()(spec, role_kwargs)
 
     model = init_chat_model(spec, **kwargs)
@@ -1405,7 +1405,7 @@ def build_model(role: str, cfg: Config | None = None) -> BaseChatModel:
     if (model.profile or {}).get("tool_calling") is False:
         raise ModelCapabilityError(role, settings.model)
 
-    # A1.29 data: harness profiles cannot match an instance whose identifier
+    # A1.35 data: harness profiles cannot match an instance whose identifier
     # carries a colon. Recording what we actually resolved gives U.10 real
     # data instead of a re-derivation.
     logger.debug(
@@ -1463,7 +1463,7 @@ Expected: `All checks passed!`
 git add src/rudra/llm/ tests/test_llm_factory.py pyproject.toml
 git commit -m "feat(llm): add build_model, the provider-agnostic factory
 
-Closes C1.1, C1.2, C1.4a, C1.5, C1.7, U.9, and C7.6. Guards A1.31.
+Closes C1.1, C1.2, C1.4a, C1.5, C1.7, U.9, and C7.6. Guards A1.37.
 
 Construction is init_chat_model composed with deepagents'
 apply_provider_profile, caller kwargs winning. resolve_model takes no
@@ -2265,13 +2265,13 @@ If OpenRouter rate-limits the free tier, retry once; if it still fails, record t
 
 In `TODO.md`:
 
-Mark `DONE` with 2026-08-10 and verification output: `C1.1`, `C1.2`, `C1.3`, `C1.4`, `C1.4a`, `C1.5`, `C1.6`, `C1.7`, `C1.8`, `U.9`, `A5.2`, `A1.28`, `A1.31`, `A1.32`.
+Mark `DONE` with 2026-08-10 and verification output: `C1.1`, `C1.2`, `C1.3`, `C1.4`, `C1.4a`, `C1.5`, `C1.6`, `C1.7`, `C1.8`, `U.9`, `A5.2`, `A1.34`, `A1.37`, `A1.38`.
 
 `C1.8` note: the `[compat]` section for the two surviving middlewares has **no TOML file to live in until Step 6**. Close it as *deferred-to-C2.x with the decision recorded*, or leave it `PENDING` and say so explicitly in the Section E row — do not mark it `DONE` without a config surface. Pick one and state which.
 
 Mark `C7.6` `DONE` as an alias of `C1.4a`, citing spec §5.4.
 
-Leave `PENDING` with a one-line reason: `A1.29` (deferred to U.10), `A1.30` (deferred — behavior change).
+Leave `PENDING` with a one-line reason: `A1.35` (deferred to U.10), `A1.36` (deferred — behavior change).
 
 Append to `A5.1` and `A2.16` the evidence from Step 3, if the acceptance run happened.
 
@@ -2280,7 +2280,7 @@ Update the Section E step 5 row: replace `STEP 5 IN PROGRESS` with `STEP 5 COMPL
 - [ ] **Step 5: Verify the ledger has no contradictions**
 
 Run: `grep -n "C1\.\|A1\.2[89]\|A1\.3[012]\|A5\.2\|C7\.6" TODO.md | grep -c PENDING`
-Expected: exactly the count of rows you deliberately left pending (`A1.29`, `A1.30`, and `C1.8` if you left it open). Any other number means a row was missed.
+Expected: exactly the count of rows you deliberately left pending (`A1.35`, `A1.36`, and `C1.8` if you left it open). Any other number means a row was missed.
 
 - [ ] **Step 6: Commit**
 
@@ -2293,7 +2293,7 @@ outside rudra.llm imports a provider package, which is the whole of the
 provider-agnostic claim and is enforced by a test.
 
 Closes C1.1-C1.8, C1.4a, U.9, A5.2, and C7.6 as an alias of C1.4a. Fixes
-A1.28 and A1.32; guards A1.31. A1.29 defers to U.10 and A1.30 defers on
+A1.34 and A1.38; guards A1.37. A1.35 defers to U.10 and A1.36 defers on
 its own, both with reasons recorded.
 
 .env.example documents the RUDRA_* schema, the per-role override rule, and
