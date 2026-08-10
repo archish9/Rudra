@@ -110,7 +110,7 @@ oversight.
 | S7.2 | **Rules are flat `tool:pattern` strings using real tool names** | Keeps Step 6's shipped `allow`/`deny` schema unchanged — no migration. Requires correcting `CLAUDE.md` §6's `["Read","Grep","Glob"]` example |
 | S7.3 | **Approval offers approve / reject / always** | `always` is `C3.3`'s "per-session grant", in memory only, never written to config — no TOML writer, consistent with S6.1 |
 | S7.4 | **`mode = "ask"` without a TTY exits 2 before any model call** | Fails at second zero rather than after a planner pass. Avoids `A1.40`'s failure mode of exiting 0 on a run that did nothing |
-| S7.5 | **A deny floor applies in every mode, including `--yolo`** | `--yolo` means "approve my agent's work", not "let it reformat my disk" |
+| S7.5 | **A deny floor applies in every mode including `--yolo`, but is overridable per named rule via `permissions.floor_disable`** | `--yolo` means "approve my agent's work", not "let it reformat my disk" — but the user, not Rudra, has final say. See §4.5 |
 | S7.6 | **`C3.2` becomes configuration, not code** | deepagents already offloads oversized tool results; the work is routing the artifacts root and tuning the threshold. See §5.2 |
 | S7.7 | **Shell inherits the environment minus secrets** | `C1.5` keeps API keys out of TOML so they live in the environment. Handing that environment to a model-driven shell would undo it |
 
@@ -183,7 +183,8 @@ arbitrate between them. deepagents' own first-match-wins model does not apply.
 The ladder is explicit and evaluated top down:
 
 ```
-1. deny floor          -> deny     every mode, including --yolo; not overridable
+1. deny floor          -> deny     every mode, including --yolo, unless the
+                                   rule is named in permissions.floor_disable
 2. permissions.deny    -> deny
 3. session grant       -> allow    this process only, never persisted
 4. permissions.allow   -> allow
@@ -221,7 +222,11 @@ mode  = "ask"
 allow = ["read_file", "ls", "glob", "grep",
          "execute:pytest*", "execute:git status"]
 deny  = ["execute:rm -rf *", "write_file:.env", "write_file:**/.git/**"]
+floor_disable = []                  # §4.5
 ```
+
+`floor_disable` is the one key new to `PermissionsConfig`; `mode`, `allow`,
+and `deny` all shipped in Step 6 and their schema is unchanged.
 
 - A bare tool name matches every call to that tool.
 - `tool:pattern` where the pattern starts with `/` is matched against the
@@ -268,20 +273,46 @@ section" test.
 
 ### 4.5 The deny floor
 
-Applies in every mode. Not overridable by config, deliberately: a user who
-wants `--yolo` wants their agent unblocked, not their machine damaged.
+Three named rules, applied in every mode including `--yolo`, and on by
+default.
 
-| Rule | Rationale |
-|---|---|
-| write/delete resolving outside the project root | the agent's remit is the project |
-| write/delete under `.git/` | corrupting the repo destroys the undo path |
-| `execute` matching `rm -rf /`, `mkfs*`, `dd of=/dev/*` | unrecoverable |
+| Name | Rule | Rationale |
+|---|---|---|
+| `outside-root` | write/delete resolving outside the project root | the agent's remit is the project |
+| `git-dir` | write/delete under `.git/` | corrupting the repo destroys the undo path |
+| `catastrophic-command` | `execute` matching `rm -rf /`, `mkfs*`, `dd of=/dev/*` | unrecoverable |
 
 The floor is a small, explicit, reviewable list in `floor.py`. It is not a
 general-purpose command sandbox and does not pretend to be one: a determined
 model can still write a destructive script and run it. What it buys is that
 the obvious catastrophes cannot happen by accident, which is the realistic
 failure mode for a 32B model.
+
+**The user has final say, per rule.**
+
+```toml
+[permissions]
+floor_disable = ["outside-root"]     # default: []
+```
+
+Names come from the fixed set above; an unrecognised name is a config error
+with `C2.4`'s `difflib` suggestion, so a typo cannot silently leave a rule
+enabled that the user believed they had turned off. Listing all three disables
+the floor entirely.
+
+Per-rule rather than a single `floor = false` boolean, and this is the whole
+point of the choice: a user with one legitimate need — a monorepo build that
+writes to a sibling directory — should pay one name, not surrender the other
+two rules as collateral. A blunt switch makes the safe configuration and the
+convenient one the same lever, which is how a `--yolo` user ends up with no
+floor at all.
+
+Two consequences are deliberate. Rudra prints one line at run start naming
+every disabled rule, so a config edited months ago cannot quietly stay off.
+And a call that a disabled rule *would* have denied is still written to the
+audit log with `source: "floor-disabled"` and the rule name, so the record
+shows what the floor would have caught. Turning a rule off changes what Rudra
+blocks; it does not change what Rudra tells you.
 
 ### 4.6 Rudra's own tools are control plane
 
@@ -536,7 +567,8 @@ mode including `auto`.
  "rule":"<floor:outside-root>","mode":"auto","decision":"deny","source":"floor"}
 ```
 
-Recorded: deny, ask→approve, ask→reject, session grants, floor denials.
+Recorded: deny, ask→approve, ask→reject, session grants, floor denials, and
+calls a disabled floor rule would have denied (`source: "floor-disabled"`).
 **Not** recorded: silent default-allow reads, which would bury the signal
 under hundreds of `read_file` lines and stop the log being something a human
 skims after a surprising run.
@@ -573,6 +605,7 @@ model or network — the `ScriptedToolModel` pattern in
 | Deny short-circuit | Scripted model emits a denied write; assert an error `ToolMessage` **and** that the file was not created |
 | Interrupt round trip | Scripted model + `InMemorySaver`; approve runs the call, reject returns its message, resume payload shape is `{"decisions": [...]}` |
 | Floor under `--yolo` | `mode="auto"` still denies a write outside the root and an `rm -rf /` |
+| Floor override | `floor_disable = ["outside-root"]` permits the outside-root write, still denies `.git/` and `rm -rf /`, and audits the permitted call with `source: "floor-disabled"`. An unknown name is a config error |
 | Secret scrub | A `FOO_API_KEY` present in `os.environ` is absent from the constructed backend env |
 | Artifacts routing | `_large_tool_results_prefix` resolves under `.rudra/run/artifacts/`, not the project root |
 | Control-plane exemption | `update_plan` is never gated in `ask` mode |
@@ -632,8 +665,10 @@ only by `.rudra/config.toml`, run from a `mktemp -d` outside the repo.
    in the transcript.
 2. **Unattended.** The same task under `--auto`. No prompts, exits 0, and
    `permissions.jsonl` records the auto-allowed decisions.
-3. **Floor holds under `--auto`.** A task instructed to write outside the
-   project root is denied, and the denial is in the audit log.
+3. **Floor holds under `--auto`, and yields when told to.** A task instructed
+   to write outside the project root is denied and the denial is in the audit
+   log; the same task with `floor_disable = ["outside-root"]` succeeds, prints
+   the run-start warning, and audits the call as `floor-disabled`.
 4. **Non-TTY.** The same command with `< /dev/null` under `mode = "ask"` exits
    2 having made no model call.
 
