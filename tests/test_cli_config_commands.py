@@ -1,0 +1,178 @@
+"""CLI surface for configuration: init, config list, config get, doctor."""
+
+import os
+import tomllib
+from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
+
+from rudra.cli import app
+from rudra.config import reset_config
+
+runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _clean(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    for name in list(os.environ):
+        if name.startswith(("RUDRA_", "OLLAMA_")) or name == "VERBOSE":
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    reset_config()
+    yield
+    reset_config()
+
+
+# --------------------------------------------------------------------------
+# rudra init
+# --------------------------------------------------------------------------
+
+
+def test_init_writes_a_config_that_parses_back(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["init", "-d", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    written = tmp_path / ".rudra" / "config.toml"
+    assert written.exists()
+    with written.open("rb") as handle:
+        tomllib.load(handle)
+
+
+def test_init_output_round_trips_through_the_loader(tmp_path: Path) -> None:
+    """A scaffold the loader rejects would be worse than no scaffold."""
+    from rudra.config import build_config
+
+    runner.invoke(app, ["init", "-d", str(tmp_path)])
+    cfg = build_config(tmp_path)
+    assert cfg.model_for("coder").model == "qwen3-coder:32b"
+    assert cfg.provenance["model.coder.model"] == "project"
+
+
+def test_init_creates_the_d15_layout(tmp_path: Path) -> None:
+    runner.invoke(app, ["init", "-d", str(tmp_path)])
+    assert (tmp_path / ".rudra" / "run").is_dir()
+    assert (tmp_path / ".rudra" / ".gitignore").exists()
+
+
+def test_init_refuses_to_overwrite_without_force(tmp_path: Path) -> None:
+    runner.invoke(app, ["init", "-d", str(tmp_path)])
+    (tmp_path / ".rudra" / "config.toml").write_text("# mine\n", encoding="utf-8")
+    result = runner.invoke(app, ["init", "-d", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "--force" in result.output
+    assert (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8") == "# mine\n"
+
+
+def test_init_force_overwrites(tmp_path: Path) -> None:
+    runner.invoke(app, ["init", "-d", str(tmp_path)])
+    (tmp_path / ".rudra" / "config.toml").write_text("# mine\n", encoding="utf-8")
+    result = runner.invoke(app, ["init", "-d", str(tmp_path), "--force"])
+    assert result.exit_code == 0
+    assert "# mine" not in (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8")
+
+
+def test_init_global_writes_to_the_user_location(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["init", "--global"])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "xdg" / "rudra" / "config.toml").exists()
+
+
+def test_the_template_contains_no_api_key_value(tmp_path: Path) -> None:
+    """C1.5: the scaffold names an env var, never a key."""
+    runner.invoke(app, ["init", "-d", str(tmp_path)])
+    body = (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8")
+    assert "api_key_env" in body
+    assert "sk-" not in body
+
+
+def test_the_template_states_that_permissions_are_not_enforced(tmp_path: Path) -> None:
+    runner.invoke(app, ["init", "-d", str(tmp_path)])
+    body = (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8")
+    assert "NOT ENFORCED" in body
+
+
+# --------------------------------------------------------------------------
+# rudra config list / get
+# --------------------------------------------------------------------------
+
+
+def _write_project_toml(root: Path, body: str) -> None:
+    (root / ".rudra").mkdir(parents=True, exist_ok=True)
+    (root / ".rudra" / "config.toml").write_text(body, encoding="utf-8")
+
+
+def test_config_list_shows_values_and_their_source(tmp_path: Path) -> None:
+    _write_project_toml(tmp_path, '[model.default]\nmodel = "from-project"\n')
+    result = runner.invoke(app, ["config", "list", "-d", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "from-project" in result.output
+    assert "project" in result.output
+
+
+def test_config_list_marks_builtin_values(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["config", "list", "-d", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "builtin" in result.output
+
+
+def test_config_get_returns_one_value(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["config", "get", "model.default.provider", "-d", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "ollama" in result.output
+
+
+def test_config_get_rejects_an_unknown_key(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["config", "get", "model.default.nonsense", "-d", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "nonsense" in result.output
+
+
+def test_config_get_never_prints_an_api_key_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C1.5."""
+    monkeypatch.setenv("MY_SECRET", "sk-do-not-leak-me")
+    _write_project_toml(tmp_path, '[model.default]\napi_key_env = "MY_SECRET"\n')
+    result = runner.invoke(app, ["config", "get", "model.default.api_key_env", "-d", str(tmp_path)])
+    assert "MY_SECRET" in result.output
+    assert "sk-do-not-leak-me" not in result.output
+
+
+def test_a_bad_config_file_reports_the_path_not_a_traceback(tmp_path: Path) -> None:
+    _write_project_toml(tmp_path, "[model\n")
+    result = runner.invoke(app, ["config", "list", "-d", str(tmp_path)])
+    assert result.exit_code != 0
+    assert "config.toml" in result.output
+    assert "Traceback" not in result.output
+
+
+# --------------------------------------------------------------------------
+# rudra doctor
+# --------------------------------------------------------------------------
+
+
+def test_doctor_reports_config_sources(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"])
+    assert result.exit_code == 0, result.output
+    assert "config" in result.output.lower()
+
+
+def test_doctor_states_that_permissions_are_not_enforced(tmp_path: Path) -> None:
+    """The core honesty requirement of Step 6 (spec §6)."""
+    result = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"])
+    assert "NOT ENFORCED" in result.output
+
+
+def test_doctor_flags_a_stale_top_level_checkpoint_db(tmp_path: Path) -> None:
+    rudra = tmp_path / ".rudra"
+    rudra.mkdir()
+    (rudra / "checkpoints.db").write_bytes(b"stale")
+    result = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"])
+    assert "checkpoints.db" in result.output
+
+
+def test_doctor_reports_a_broken_config_cleanly(tmp_path: Path) -> None:
+    _write_project_toml(tmp_path, "[model\n")
+    result = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"])
+    assert result.exit_code != 0
+    assert "Traceback" not in result.output

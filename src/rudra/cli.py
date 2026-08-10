@@ -255,6 +255,36 @@ def models_test(
         raise typer.Exit(code=1)
 
 
+@app.command("init")
+def init_command(
+    project_dir: Optional[Path] = typer.Option(
+        None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
+    ),
+    global_: bool = typer.Option(
+        False, "--global", help="Write ~/.config/rudra/config.toml instead of the project file"
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing config file"),
+) -> None:
+    """Scaffold a commented config.toml and create the .rudra/ layout."""
+    from rudra.config import user_toml_path
+    from rudra.config.template import CONFIG_TEMPLATE
+    from rudra.state.paths import ensure_layout
+
+    if global_:
+        target = user_toml_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        target = ensure_layout(get_project_path(project_dir)).config_toml
+
+    if target.exists() and not force:
+        console.print(f"[red]{target} already exists.[/red] Pass --force to overwrite it.")
+        raise typer.Exit(code=1)
+
+    target.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+    console.print(f"[green]Wrote[/green] {target}")
+    console.print("[dim]Edit it, then run `rudra models test` to check your model.[/dim]")
+
+
 @app.callback(
     invoke_without_command=True,
     # The task prompt arrives through ctx.args rather than as a declared
