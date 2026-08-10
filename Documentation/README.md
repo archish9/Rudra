@@ -5,7 +5,7 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 | | Guide | Read this if you want to… |
 |---|---|---|
 | 1 | **[Getting Started](01-getting-started.md)** | Install Rudra, connect a model, run your first task |
-| 2 | **[Configuration](02-configuration.md)** | Understand every setting, use different models per role, control which `.env` is read |
+| 2 | **[Configuration](02-configuration.md)** | Write a `config.toml`, understand the five layers, use different models per role |
 | 3 | **[Choosing a Model](03-providers.md)** | Set up Ollama, OpenRouter, vLLM, Anthropic, OpenAI, or Google |
 | 4 | **[CLI Reference](04-cli-reference.md)** | Look up a command, flag, or interactive shortcut |
 | 5 | **[How It Works](05-how-it-works.md)** | See what happens between your prompt and the files on disk |
@@ -34,11 +34,13 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 Rudra is a local-first autonomous coding agent for the terminal. You describe what you want; it plans the files and writes them.
 
 ```bash
-cp .env.example .env      # point it at a model
+rudra init                # scaffold .rudra/config.toml
 rudra models test         # confirm the model works
 rudra "write a Python CLI that reverses a string"
 ```
 
 It works with any model — local via Ollama, or hosted via OpenRouter, Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint. Switching takes one line of config.
 
-**It's alpha.** It writes files well. It cannot yet run your tests, execute shell commands, or review its own work — a file counts as "done" when it exists on disk, not when it works. Review everything it produces, and see [Project Status](08-project-status.md) before pointing it at anything you care about.
+Settings come from five layers — built-in defaults, your user config, the project config, environment variables, then CLI flags. `rudra config list` shows every effective value **and which layer set it**, so nothing has to be guessed at.
+
+**It's alpha.** It writes files well. It cannot yet run your tests, execute shell commands, or review its own work — a file counts as "done" when it exists on disk, not when it works. It also writes and overwrites files without asking: `[permissions]` exists in config but nothing enforces it yet. Review everything it produces, and see [Project Status](08-project-status.md) before pointing it at anything you care about.

@@ -55,13 +55,14 @@ ollama pull qwen3:32b
 ollama list
 ```
 
-**`.env`**
+**`.rudra/config.toml`**
 
-```bash
-RUDRA_PROVIDER=ollama
-RUDRA_BASE_URL=http://localhost:11434
-RUDRA_MODEL=qwen3:32b
-RUDRA_CONTEXT_TOKENS=32768
+```toml
+[model.default]
+provider = "ollama"
+base_url = "http://localhost:11434"
+model = "qwen3:32b"
+context_tokens = 32768
 ```
 
 **Two things people get wrong here**
@@ -79,17 +80,22 @@ RUDRA_CONTEXT_TOKENS=32768
 
 A nice combination — reason with one, write with the other:
 
-```bash
-RUDRA_PLANNER_MODEL=qwen3:32b
-RUDRA_CODER_MODEL=qwen3-coder:32b
+```toml
+
+[model.planner]
+model = "qwen3:32b"
+
+[model.coder]
+model = "qwen3-coder:32b"
 ```
 
 **Remote Ollama**
 
 Running Ollama on another machine? Just change the URL:
 
-```bash
-RUDRA_BASE_URL=http://192.168.1.50:11434
+```toml
+[model.default]
+base_url = "http://192.168.1.50:11434"
 ```
 
 ---
@@ -102,13 +108,18 @@ One provider covers every service speaking the OpenAI chat API. Only `base_url` 
 
 Hundreds of models behind one key, including free ones. Get a key at [openrouter.ai](https://openrouter.ai).
 
-```bash
-RUDRA_PROVIDER=openai_compatible
-RUDRA_BASE_URL=https://openrouter.ai/api/v1
-RUDRA_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
-RUDRA_API_KEY_ENV=OPENROUTER_API_KEY
-RUDRA_CONTEXT_TOKENS=131072
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "openai_compatible"
+base_url = "https://openrouter.ai/api/v1"
+model = "nvidia/nemotron-3-ultra-550b-a55b:free"
+api_key_env = "OPENROUTER_API_KEY"
+context_tokens = 131072
+```
 
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
 OPENROUTER_API_KEY=sk-or-v1-your-key-here
 ```
 
@@ -116,13 +127,18 @@ OPENROUTER_API_KEY=sk-or-v1-your-key-here
 
 ### vLLM (self-hosted)
 
-```bash
-RUDRA_PROVIDER=openai_compatible
-RUDRA_BASE_URL=http://localhost:8000/v1
-RUDRA_MODEL=Qwen/Qwen3-32B
-RUDRA_API_KEY_ENV=VLLM_API_KEY
-RUDRA_CONTEXT_TOKENS=32768
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "openai_compatible"
+base_url = "http://localhost:8000/v1"
+model = "Qwen/Qwen3-32B"
+api_key_env = "VLLM_API_KEY"
+context_tokens = 32768
+```
 
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
 VLLM_API_KEY=not-used-but-required
 ```
 
@@ -132,34 +148,49 @@ Most vLLM deployments ignore the key but still expect the header, so give it any
 
 Start the local server from LM Studio's Developer tab:
 
-```bash
-RUDRA_PROVIDER=openai_compatible
-RUDRA_BASE_URL=http://localhost:1234/v1
-RUDRA_MODEL=qwen3-32b
-RUDRA_API_KEY_ENV=LMSTUDIO_API_KEY
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "openai_compatible"
+base_url = "http://localhost:1234/v1"
+model = "qwen3-32b"
+api_key_env = "LMSTUDIO_API_KEY"
+```
 
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
 LMSTUDIO_API_KEY=lm-studio
 ```
 
 ### Groq
 
-```bash
-RUDRA_PROVIDER=openai_compatible
-RUDRA_BASE_URL=https://api.groq.com/openai/v1
-RUDRA_MODEL=llama-3.3-70b-versatile
-RUDRA_API_KEY_ENV=GROQ_API_KEY
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "openai_compatible"
+base_url = "https://api.groq.com/openai/v1"
+model = "llama-3.3-70b-versatile"
+api_key_env = "GROQ_API_KEY"
+```
 
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
 GROQ_API_KEY=gsk_...
 ```
 
 ### Together
 
-```bash
-RUDRA_PROVIDER=openai_compatible
-RUDRA_BASE_URL=https://api.together.xyz/v1
-RUDRA_MODEL=Qwen/Qwen3-32B-Instruct
-RUDRA_API_KEY_ENV=TOGETHER_API_KEY
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "openai_compatible"
+base_url = "https://api.together.xyz/v1"
+model = "Qwen/Qwen3-32B-Instruct"
+api_key_env = "TOGETHER_API_KEY"
+```
 
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
 TOGETHER_API_KEY=...
 ```
 
@@ -169,11 +200,16 @@ TOGETHER_API_KEY=...
 
 ## Anthropic
 
-```bash
-RUDRA_PROVIDER=anthropic
-RUDRA_MODEL=claude-sonnet-4-5-20250929
-RUDRA_API_KEY_ENV=ANTHROPIC_API_KEY
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "anthropic"
+model = "claude-sonnet-4-5-20250929"
+api_key_env = "ANTHROPIC_API_KEY"
+```
 
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
 ANTHROPIC_API_KEY=sk-ant-...
 ```
 
@@ -183,11 +219,16 @@ No `base_url` needed. Anthropic reports its own context window, so `RUDRA_CONTEX
 
 ## OpenAI
 
-```bash
-RUDRA_PROVIDER=openai
-RUDRA_MODEL=gpt-5.4
-RUDRA_API_KEY_ENV=OPENAI_API_KEY
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "openai"
+model = "gpt-5.4"
+api_key_env = "OPENAI_API_KEY"
+```
 
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
 OPENAI_API_KEY=sk-...
 ```
 
@@ -197,11 +238,16 @@ Use this only for OpenAI's own API. Anything else that merely speaks the same pr
 
 ## Google
 
-```bash
-RUDRA_PROVIDER=google
-RUDRA_MODEL=gemini-2.5-pro
-RUDRA_API_KEY_ENV=GOOGLE_API_KEY
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "google"
+model = "gemini-2.5-pro"
+api_key_env = "GOOGLE_API_KEY"
+```
 
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
 GOOGLE_API_KEY=...
 ```
 
@@ -209,13 +255,19 @@ GOOGLE_API_KEY=...
 
 ## Switching between them
 
-Editing `.env` is the usual way. For a one-off, override on the command line:
+Editing `.rudra/config.toml` is the usual way. For a one-off, override on the command line:
 
 ```bash
 RUDRA_PROVIDER=ollama RUDRA_MODEL=qwen3:32b rudra "write a parser"
 ```
 
-Real environment variables beat `.env`, so this works without touching any file.
+Environment variables beat both config files, so this works without touching either.
+
+To see which layer a setting actually came from:
+
+```bash
+rudra config list
+```
 
 After any change:
 

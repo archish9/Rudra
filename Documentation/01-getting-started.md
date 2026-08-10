@@ -124,37 +124,47 @@ ollama list                 # confirm it's there
 Create your config:
 
 ```bash
-cp .env.example .env
+cd ~/your-project
+rudra init
 ```
 
-Edit `.env`:
+That writes a commented `.rudra/config.toml`. Edit the model block:
 
-```bash
-RUDRA_PROVIDER=ollama
-RUDRA_BASE_URL=http://localhost:11434
-RUDRA_MODEL=qwen3:32b
+```toml
+[model.default]
+provider = "ollama"
+base_url = "http://localhost:11434"
+model    = "qwen3:32b"
 ```
 
 ### Hosted, with OpenRouter
 
-[OpenRouter](https://openrouter.ai) fronts many providers behind one API, including some free models. Sign up, create a key, then edit `.env`:
+[OpenRouter](https://openrouter.ai) fronts many providers behind one API, including some free models. Sign up, create a key, then edit `.rudra/config.toml`:
 
-```bash
-RUDRA_PROVIDER=openai_compatible
-RUDRA_BASE_URL=https://openrouter.ai/api/v1
-RUDRA_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
-RUDRA_API_KEY_ENV=OPENROUTER_API_KEY
-OPENROUTER_API_KEY=sk-or-v1-your-key-here
+```toml
+[model.default]
+provider    = "openai_compatible"
+base_url    = "https://openrouter.ai/api/v1"
+model       = "nvidia/nemotron-3-ultra-550b-a55b:free"
+api_key_env = "OPENROUTER_API_KEY"
 ```
 
-Two lines, easy to mix up:
+And put the key itself in `.env`:
 
-- `RUDRA_API_KEY_ENV` is the **name** of the variable holding your key
-- `OPENROUTER_API_KEY` is the **key itself**
+```bash
+echo 'OPENROUTER_API_KEY=sk-or-v1-your-key-here' >> .env
+```
 
-Rudra never stores a key in configuration — it stores the variable's name and reads the value from your environment. `.env` is gitignored, so it won't be committed.
+Two things, easy to mix up:
+
+- `api_key_env` is the **name** of the variable holding your key — it goes in the config file
+- `OPENROUTER_API_KEY` is the **key itself** — it goes in the environment, never in the config file
+
+Rudra reads the value at run time and never stores, logs, or prints it. `.env` is gitignored; `config.toml` is safe to commit precisely because the key isn't in it.
 
 Anthropic, OpenAI, Google, vLLM, LM Studio, Groq, and Together all work too — see **[Choosing a Model](03-providers.md)**.
+
+> **Prefer environment variables?** They still work, and they override both config files: `RUDRA_PROVIDER`, `RUDRA_MODEL`, `RUDRA_BASE_URL`, `RUDRA_API_KEY_ENV`. Handy for trying something without editing a file. Full precedence rules in **[Configuration](02-configuration.md)**.
 
 ---
 
@@ -188,6 +198,14 @@ Four separate checks, because they break for different reasons:
 **Tools is the one that matters most.** Rudra needs tool calling for everything it does, and a model can answer a question perfectly while never emitting a single tool call. Reach passing tells you nothing about Tools.
 
 Exit code is `0` if everything passed, `1` otherwise — handy in scripts.
+
+For the rest of the setup — which config files were found and in what order, which `.env` was read, whether the `.rudra/` layout is intact — run:
+
+```bash
+rudra doctor
+```
+
+It also states plainly that permission mode is **not enforced** yet. That's not a footnote: Rudra writes and overwrites files without asking, whatever `[permissions] mode` says.
 
 ---
 

@@ -131,26 +131,56 @@ OPENROUTER_API_KEY=sk-or-v1-abc123
 
 With the wrong form, Rudra looks up an environment variable literally named `sk-or-v1-abc123`, finds nothing, and reports it missing.
 
-### My `.env` is being ignored
+### A setting isn't taking effect
 
-Rudra reads `.env` from the **project directory** — the folder you're in, or whatever `--project-dir` names. Not your home directory, not the Rudra source folder.
+Stop guessing — ask:
 
 ```bash
-ls .env                 # is it here?
-rudra models test       # does the table show what you expect?
+rudra config list
 ```
 
-If the table shows different values, a real environment variable is overriding the file. That's by design — real variables win. Find the culprit:
+The `Source` column names the layer that set each value: `builtin`, `user`, `project`, `env`, or `cli`. If it says `env` and you expected your config file, an environment variable is winning. That's by design; later layers override earlier ones.
+
+```
+built-in  →  ~/.config/rudra/config.toml  →  .rudra/config.toml  →  RUDRA_* env  →  CLI flags
+```
+
+Find a stray variable with:
 
 ```bash
 env | grep RUDRA_
 ```
 
+### My `.env` or `config.toml` is being ignored
+
+Both are read from the **project directory** — the folder you're in, or whatever `--project-dir` names. Not your home directory, not the Rudra source folder.
+
+```bash
+rudra doctor --offline
+```
+
+It prints which config files it found and which `.env` it read. If a path there isn't the one you edited, that's the answer.
+
+### `Configuration error: ...` on startup
+
+Rudra refuses to run on a config it can't trust, and names the problem:
+
+| Message | Cause |
+|---|---|
+| `invalid TOML — Expected ']' (at line 2...)` | Syntax error; the line number is real |
+| `Unknown key 'tempreature' ... Did you mean 'temperature'?` | Typo. Unknown keys are fatal on purpose — silently ignoring one means your setting never applies and nothing says so |
+| `Unknown provider 'banana'` | Check the spelling against the five valid names it lists |
+| `[skills] is not supported yet — arrives in Step 11` | A section that's designed but not built. Remove it for now |
+
 ### Settings from an old guide do nothing
 
 `MAX_AGENTS`, `MAX_ITERATIONS`, `CHECKPOINT_INTERVAL`, `TAVILY_API_KEY`, `USE_DUCKDUCKGO` were removed and are ignored. See [Configuration](02-configuration.md).
 
-`OLLAMA_*` variables still work but print a deprecation warning naming their `RUDRA_*` replacement.
+`OLLAMA_*` variables still work but print a deprecation warning naming their `RUDRA_*` replacement. Same for a bare `VERBOSE`, which is now `RUDRA_VERBOSE` — unprefixed, it collided with CI systems and build tools that set it for unrelated reasons.
+
+### Rudra overwrote a file without asking
+
+It will. There is no approval gate yet, and `[permissions] mode` is parsed but **not enforced** — `rudra doctor` says so in as many words. Work on a branch or a clean tree until shell support and permissions land together.
 
 ---
 
