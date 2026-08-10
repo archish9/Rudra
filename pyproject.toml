@@ -42,6 +42,9 @@ dependencies = [
     # intentionally rather than inherited silently. See TODO.md U.2.
     "langchain-anthropic>=1.5.3",
     "langchain-google-genai>=4.3.1",
+    # Every OpenAI-compatible endpoint — vLLM, OpenRouter, LM Studio, Groq,
+    # Together — goes through ChatOpenAI with a base_url. See TODO.md C1.2.
+    "langchain-openai>=1.4.1",
     "langsmith>=0.10.9",
     "wcmatch>=11.0",
     "packaging>=23.2",
