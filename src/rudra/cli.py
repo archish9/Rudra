@@ -27,6 +27,9 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 
+models_app = typer.Typer(help="Inspect and test configured models.")
+app.add_typer(models_app, name="models")
+
 console = Console()
 
 
@@ -178,12 +181,59 @@ def load_project_context(project_path: Path) -> ProjectContext:
 # ---------------------------------------------------------------------------
 
 
-@app.callback(invoke_without_command=True)
+@models_app.command("test")
+def models_test(
+    role: Optional[str] = typer.Option(
+        None, "--role", help="Probe one role only (default: planner and coder)"
+    ),
+) -> None:
+    """Verify every configured model is reachable and can call tools.
+
+    deepagents requires tool calling for every agent, and reachability does
+    not imply it — hence the separate Tools stage. See TODO.md C1.6.
+    """
+    from rudra.llm.probe import ROLES_TO_PROBE, probe_role
+
+    roles = (role,) if role else ROLES_TO_PROBE
+
+    table = Table(title="Model check", header_style="bold")
+    for column in ("Role", "Provider", "Model", "Construct", "Reach", "Tools", "Ctx"):
+        table.add_column(column, overflow="fold")
+
+    failed = False
+    for name in roles:
+        result = probe_role(name)
+        failed = failed or not result.ok
+        style = "green" if result.ok else "red"
+        table.add_row(
+            result.role,
+            result.provider,
+            result.model,
+            result.construct,
+            result.reach,
+            result.tools,
+            str(result.context_tokens) if result.context_tokens else "-",
+            style=style,
+        )
+
+    console.print(table)
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.callback(
+    invoke_without_command=True,
+    # The task prompt arrives through ctx.args rather than as a declared
+    # Argument. A positional parameter on an invoke_without_command callback
+    # is consumed by the callback before click ever tries to resolve a
+    # command name, which made every subcommand unreachable: `rudra models`
+    # bound "models" to the prompt and launched an agent run for a task
+    # called "models". Collecting extras instead lets click match real
+    # command names first and leaves everything else as the prompt.
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
 def main(
     ctx: typer.Context,
-    prompt: Optional[str] = typer.Argument(
-        None, help="Task or question (e.g., 'Create a hello world script')"
-    ),
     project_dir: Optional[Path] = typer.Option(
         None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
     ),
@@ -200,10 +250,20 @@ def main(
         help="Show version and exit",
     ),
 ) -> None:
-    """Rudra - Autonomous Coding Agent CLI."""
+    """Rudra - Autonomous Coding Agent CLI.
+
+    Run a single task:   rudra "create a hello world script"
+    Start the REPL:      rudra
+    Check your models:   rudra models test
+    """
     # A subcommand was explicitly given — let it handle everything
     if ctx.invoked_subcommand is not None:
         return
+
+    # Everything click did not consume as an option or a command name is the
+    # task. Joined rather than indexed so an unquoted `rudra build a flask
+    # app` behaves the same as the quoted form.
+    prompt: Optional[str] = " ".join(ctx.args).strip() or None
 
     # project_path is resolved FIRST, and the Config is seeded with it
     # unconditionally, because get_config() caches for the rest of the

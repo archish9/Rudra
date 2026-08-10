@@ -87,3 +87,6 @@ docstring-code-format = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "live: needs a reachable model backend and RUDRA_LIVE_TESTS=1; never runs in CI",
+]

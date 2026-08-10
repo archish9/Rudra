@@ -73,3 +73,47 @@ def test_the_first_get_config_call_passes_the_project_path() -> None:
     from rudra import cli
 
     assert "get_config(project_path)" in inspect.getsource(cli.main)
+
+
+def test_models_test_is_a_registered_subcommand() -> None:
+    """C1.6. Runs the CLI with no backend, so it must not make a network
+    call just to render help."""
+    from typer.testing import CliRunner
+
+    from rudra.cli import app
+
+    result = CliRunner().invoke(app, ["models", "test", "--help"])
+
+    assert result.exit_code == 0
+    assert "--role" in result.output
+
+
+def test_a_subcommand_name_is_not_swallowed_as_a_task_prompt() -> None:
+    """Regression guard for the callback's argument shape.
+
+    With a declared positional `prompt` Argument, click bound "models" to it
+    before ever trying to resolve a command name — so `rudra models` started
+    an agent run for a task literally called "models", and `rudra models
+    test` died with "No such command 'test'". Every subcommand added from
+    here on depends on this staying fixed.
+    """
+    from typer.testing import CliRunner
+
+    from rudra.cli import app
+
+    result = CliRunner().invoke(app, ["models", "test", "--role", "planner", "--help"])
+
+    assert result.exit_code == 0
+    assert "Probe one role only" in result.output
+
+
+def test_a_quoted_task_still_reaches_the_prompt() -> None:
+    """The other half of the same contract: fixing subcommand dispatch must
+    not break `rudra "<task>"`, which is the primary documented interface."""
+    import inspect
+
+    from rudra import cli
+
+    source = inspect.getsource(cli.main)
+
+    assert 'prompt: Optional[str] = " ".join(ctx.args).strip() or None' in source
