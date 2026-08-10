@@ -9,6 +9,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from rudra.config import get_config
+from rudra.permissions import run_with_approvals
 from rudra.state import ProjectContext, ensure_layout
 from rudra.tools.planning_tools import looks_like_path
 
@@ -77,6 +78,7 @@ class RudraAgent:
         db_conn,
         coder_config: dict,
         plan_path: Path,
+        gate=None,
     ):
         self.context = context
         self.planner_agent = planner_agent
@@ -85,6 +87,9 @@ class RudraAgent:
         self._db_conn = db_conn
         self._coder_config = coder_config
         self.plan_path = plan_path
+        # The permission gate. None streams ungated, which only a caller
+        # constructing RudraAgent by hand can produce.
+        self.gate = gate
         self.iterations = 0
 
     async def close(self) -> None:
@@ -156,11 +161,17 @@ class RudraAgent:
         MAX_PLANNING_CALLS = 4
         _halt = False
 
-        async for chunk in self.planner_agent.astream(
+        # run_with_approvals yields exactly what astream yields, so the parse
+        # loop below is unchanged. It reads interrupts from get_state after
+        # the stream drains, because __interrupt__ never appears in "values"
+        # chunks and changing stream_mode would change the chunk shape this
+        # loop depends on -- the loop that still carries A1.20's hole.
+        async for chunk in run_with_approvals(
+            self.planner_agent,
             {"messages": messages},
             lg_config,
-            stream_mode="values",
-            subgraphs=True,
+            self.gate,
+            self.console,
         ):
             if _halt:
                 break
@@ -231,11 +242,12 @@ class RudraAgent:
         MAX_REPEATED_CALLS = 3
         _halt = False
 
-        async for chunk in coder_agent.astream(
+        async for chunk in run_with_approvals(
+            coder_agent,
             {"messages": messages},
             lg_config,
-            stream_mode="values",
-            subgraphs=True,
+            self.gate,
+            self.console,
         ):
             if _halt:
                 break
@@ -521,6 +533,54 @@ def _write_tech_stack_file(
     return content
 
 
+def build_backend(cfg, project_path: Path):
+    """The backend for one run: shell on the default, artifacts on a route.
+
+    A composite from the start per D13 — Step 11 adds a "/skills/" route to
+    `routes` and changes nothing else. Retrofitting the composite later
+    would rewire every agent constructor.
+
+    `artifacts_root` matters more than it looks. It defaults to "/", i.e.
+    the backend root, i.e. the user's project — so deepagents' oversized
+    tool-result eviction and its summarization middleware would both write
+    into the repo Rudra is working on (TODO.md A1.45). Routing it into
+    .rudra/run/artifacts/ puts both in D15's volatile subtree.
+
+    `execute` only works on a SandboxBackendProtocol. A plain
+    FilesystemBackend registers the tool and errors when it is called, which
+    U.17 measured — so `[tools] shell = false` genuinely removes the
+    capability rather than merely discouraging it.
+    """
+    from deepagents.backends.composite import CompositeBackend
+    from deepagents.backends.filesystem import FilesystemBackend
+    from deepagents.backends.local_shell import LocalShellBackend
+
+    from rudra.permissions.env import scrubbed_env
+    from rudra.state.paths import rudra_paths
+
+    paths = rudra_paths(project_path)
+
+    if cfg.tools.shell:
+        # env= rather than inherit_env=True: the latter hands the model's
+        # shell every API key the user exported, and anything the agent
+        # prints goes to the provider. See TODO.md A1.44 and C1.5.
+        default = LocalShellBackend(
+            root_dir=str(project_path),
+            virtual_mode=True,
+            env=scrubbed_env(cfg),
+        )
+    else:
+        default = FilesystemBackend(root_dir=str(project_path), virtual_mode=True)
+
+    return CompositeBackend(
+        default=default,
+        routes={
+            "/artifacts/": FilesystemBackend(root_dir=str(paths.artifacts), virtual_mode=True),
+        },
+        artifacts_root="/artifacts",
+    )
+
+
 async def create_main_agent(
     project_path: Path,
     task: str,
@@ -534,6 +594,7 @@ async def create_main_agent(
     """Factory function — creates the planner + stores coder config for orchestration."""
     console = console or Console()
     project_path = project_path.resolve()
+    cfg = get_config()
 
     context = AgentContext(
         project_path=project_path,
@@ -543,31 +604,29 @@ async def create_main_agent(
         dry_run=dry_run,
         verbose=verbose,
         command=command,
-        planner_model=get_config().model_for("planner").model,
-        coder_model=get_config().model_for("coder").model,
+        planner_model=cfg.model_for("planner").model,
+        coder_model=cfg.model_for("coder").model,
         **kwargs,
     )
 
     import uuid
 
     import aiosqlite
-    from deepagents.backends.filesystem import FilesystemBackend
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
     from rudra.compat.deepagents_path import install_path_normalizer
+    from rudra.permissions import build_gate
 
     paths = ensure_layout(project_path)
 
     install_path_normalizer(project_path, plan_path=paths.plan_md)
 
-    # 0.7.4's FilesystemBackend.write() creates or overwrites (O_TRUNC +
-    # O_NOFOLLOW), which is the only reason OverwriteFilesystemBackend
-    # existed. Markdown-fence stripping now lives solely in
-    # FixWriteParamsMiddleware, wired into both agents. See TODO.md U.3.
-    filesystem_backend = FilesystemBackend(
-        root_dir=str(project_path),
-        virtual_mode=True,
-    )
+    filesystem_backend = build_backend(cfg, project_path)
+
+    # Shell and the permission layer are constructed together, and neither
+    # is optional. Section E hard gate 2: LocalShellBackend must never ship
+    # without the gate in the same step.
+    gate = build_gate(cfg, project_path)
 
     # AGENTS.md is durable and stays at the .rudra/ root; tech_stack.md is
     # rewritten every run and lives under run/. See TODO.md D15 / §0.7.
@@ -590,12 +649,14 @@ async def create_main_agent(
         filesystem_backend=filesystem_backend,
         checkpointer=checkpointer,
         console=console,
+        gate=gate,
     )
 
     coder_config = {
         "tech_stack_content": tech_stack_content,
         "filesystem_backend": filesystem_backend,
         "checkpointer": checkpointer,
+        "gate": gate,
     }
 
     plan_path = paths.plan_md
@@ -607,4 +668,5 @@ async def create_main_agent(
         db_conn=db_conn,
         coder_config=coder_config,
         plan_path=plan_path,
+        gate=gate,
     )

@@ -252,8 +252,17 @@ def test_legacy_ollama_vars_still_work(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_legacy_vars_warn_once_each(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """chdir first, or the repo's own gitignored .env re-populates the other
     six OLLAMA_* variables during Config.load and each one warns too, making
-    the count assertion below fail on a developer's machine and pass in CI."""
+    the count assertion below fail on a developer's machine and pass in CI.
+
+    VERBOSE is deleted for the same reason, one variable further out: it is
+    also a deprecated name, so a developer with it exported gets a second
+    warning here. That went unnoticed while some earlier test in the suite
+    happened to consume VERBOSE's warn-once first — an ordering dependency,
+    not a property, and it broke the moment a new test reset the dedupe set
+    in its teardown.
+    """
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("VERBOSE", raising=False)
     monkeypatch.setenv("OLLAMA_MODEL", "legacy-model")
     reset_config()
 
