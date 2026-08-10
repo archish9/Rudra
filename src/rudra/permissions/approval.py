@@ -154,7 +154,11 @@ async def run_with_approvals(
         async for chunk in agent.astream(payload, config, stream_mode="values", subgraphs=True):
             yield chunk
 
-        state = agent.get_state(config)
+        # aget_state, not get_state: Rudra's checkpointer is AsyncSqliteSaver,
+        # which refuses synchronous calls from the loop's own thread. An
+        # InMemorySaver tolerates either, so unit tests alone never catch
+        # this — the acceptance run did.
+        state = await agent.aget_state(config)
         interrupts = getattr(state, "interrupts", ()) or ()
         if not interrupts:
             return

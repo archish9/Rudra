@@ -85,19 +85,56 @@ def test_a_disabled_floor_rule_is_recorded(tmp_path):
     assert read_lines(log_path)[0]["source"] == "floor-disabled"
 
 
-def test_silent_allows_are_not_recorded(tmp_path):
+def test_allowed_reads_are_not_recorded(tmp_path):
     """Hundreds of read_file lines would bury the signal (spec §6.7)."""
     log_path = tmp_path / "permissions.jsonl"
     log = AuditLog(log_path)
-    for source in ("mode-default", "allow", "control-plane"):
+    for tool in ("read_file", "ls", "glob", "grep", "update_plan"):
         log.record(
-            "read_file",
+            tool,
             "src/app.py",
-            Decision("allow", None, source),
+            Decision("allow", None, "mode-default"),
             mode="ask",
             outcome="allow",
         )
     assert read_lines(log_path) == []
+
+
+def test_a_denied_read_is_still_recorded(tmp_path):
+    """Silence is for routine reads, not for reads someone blocked."""
+    log_path = tmp_path / "permissions.jsonl"
+    AuditLog(log_path).record(
+        "read_file",
+        "/etc/shadow",
+        Decision("deny", "read_file:/etc/**", "deny"),
+        mode="ask",
+        outcome="deny",
+    )
+    assert len(read_lines(log_path)) == 1
+
+
+def test_auto_mode_records_every_mutation(tmp_path):
+    """The unattended run is the one whose record matters most.
+
+    An earlier version silenced by SOURCE, so in auto mode — where every
+    write is an allow from the mode default — the log came out completely
+    empty. Found by the Step 7 acceptance run.
+    """
+    log_path = tmp_path / "permissions.jsonl"
+    log = AuditLog(log_path)
+    for tool, arg in (
+        ("write_file", "src/app.py"),
+        ("edit_file", "src/app.py"),
+        ("delete", "old.py"),
+        ("execute", "pytest -q"),
+    ):
+        log.record(tool, arg, Decision("allow", None, "mode-default"), mode="auto", outcome="allow")
+    assert [entry["tool"] for entry in read_lines(log_path)] == [
+        "write_file",
+        "edit_file",
+        "delete",
+        "execute",
+    ]
 
 
 def test_entries_append_rather_than_overwrite(tmp_path):

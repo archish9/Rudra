@@ -77,3 +77,16 @@ def test_catastrophic_commands_are_denied(tmp_path, command):
 )
 def test_ordinary_commands_are_not_denied(tmp_path, command):
     assert floor_hit("execute", None, command, tmp_path) is None
+
+
+def test_the_floor_does_not_gate_shell_writes(tmp_path):
+    """A1.49, pinned so nobody assumes otherwise.
+
+    The path rules apply to write_file/edit_file/delete. A shell command
+    that writes outside the project is NOT a floor violation — measured in
+    the Step 7 acceptance run, where a denied model wrote the file with
+    `echo > /abs/path` instead. Asserting the real behaviour beats implying
+    a protection that is not there.
+    """
+    assert floor_hit("execute", None, "echo hi > /etc/passwd", tmp_path) is None
+    assert floor_hit("execute", None, "cp secrets.txt /tmp/", tmp_path) is None

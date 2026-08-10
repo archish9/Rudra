@@ -6,10 +6,19 @@ On by default, including under `--yolo`, and disabled per rule via
 to do with it, so a disabled rule can still be audited as
 `source: "floor-disabled"` rather than vanishing.
 
-Not a sandbox, and does not pretend to be one: a model can still write a
-destructive script and run it. What the floor buys is that the obvious
-catastrophes cannot happen by accident, which is the realistic failure mode
-for a 32B model (D6).
+Not a sandbox, and does not pretend to be one. What the floor buys is that
+the obvious catastrophes cannot happen by accident, which is the realistic
+failure mode for a 32B model (D6).
+
+**The path rules cover write_file / edit_file / delete, NOT execute.** A
+shell command can write anywhere the user can, and the Step 7 acceptance
+run measured a model doing exactly that: denied twice on write_file, it ran
+`echo "hello" > /abs/path` and succeeded. That is TODO.md A1.49. It is not
+fixable here — redirections, tee, cp, mv, `python -c`, and any script the
+agent writes then runs are all equivalent, which is why real isolation is
+an OS-level concern rather than a regex. `ask` mode is unaffected: the user
+sees the command before it runs. The exposure is `--auto` plus shell, and
+every execute is recorded in the audit log even there.
 """
 
 from __future__ import annotations

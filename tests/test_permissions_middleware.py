@@ -134,3 +134,26 @@ def test_plan_mode_denies_a_write_through_the_real_graph(tmp_path):
     )
     assert message.status == "error"
     assert not (tmp_path / "ok.txt").exists()
+
+
+def test_an_allowed_mutation_is_audited(tmp_path):
+    """Auto mode never denies and never prompts.
+
+    A deny-only middleware therefore left the unattended run with an empty
+    audit log — the run whose record matters most. Found by the Step 7
+    acceptance run, which produced a file and no audit lines at all.
+    """
+    import json
+
+    build(tmp_path, tool="write_file", args={"file_path": "ok.txt", "content": "hello"})
+    lines = (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    entries = [json.loads(line) for line in lines if line]
+    assert [e["tool"] for e in entries] == ["write_file"]
+    assert entries[0]["decision"] == "allow"
+    assert entries[0]["mode"] == "auto"
+
+
+def test_allowed_reads_stay_out_of_the_audit_log(tmp_path):
+    """The filter lives in AuditLog; the middleware must not duplicate it."""
+    build(tmp_path, tool="read_file", args={"file_path": "ok.txt"})
+    assert not (tmp_path / "audit.jsonl").exists()

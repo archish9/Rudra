@@ -38,7 +38,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ---
 
-## 3. Current Architecture (as of 2026-08-05, commit `3bac6ad`)
+## 3. Current Architecture (as of 2026-08-10, Step 7)
 
 ```
 src/rudra/
@@ -46,16 +46,30 @@ src/rudra/
 ├── config/                 Layered TOML config (Step 6). schema / layers / loader / template
 ├── llm/                    Provider-agnostic model factory (Step 5)
 ├── stacks/                 Multi-language stack detection (Step 4)
+├── permissions/            The gate (Step 7). One pure engine, two mechanisms:
+│                           rules/floor/grants decide; middleware denies;
+│                           interrupts+approval ask; diff/audit/env support it
 ├── agent/
-│   ├── main_agent.py (601) RudraAgent — hand-rolled planner→coder orchestration loop
-│   ├── planner_agent.py (96) deep agent, ChatOllama hardcoded
-│   └── coder_agent.py   (84) deep agent, ChatOllama hardcoded, tools=[]
-├── middleware/       (376) 6 middlewares, all workarounds for qwen3:14b misbehavior
+│   ├── main_agent.py       RudraAgent — hand-rolled planner→coder orchestration loop,
+│   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
+│   ├── planner_agent.py    deep agent; gate.middleware first, gate.interrupt_on wired
+│   └── coder_agent.py      deep agent, tools=[]; same gate wiring
+├── middleware/             2 survivors of D4, both opt-in behind [compat]
 ├── tools/                  planning_tools, interaction_tools
 ├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
 ├── state/                  paths.py (D15 layout), ProjectConfigManager, session id (unused)
 └── compat/                 monkeypatches + version guard into deepagents internals
 ```
+
+**Permission flow (Step 7).** `build_gate(cfg, project_path)` returns a `Gate`
+bundling the engine, the deny middleware, the `interrupt_on` map, session
+grants, and the audit log — constructed together because they must share
+objects. `PermissionEngine.decide(tool, args)` is pure and is the only thing
+that interprets policy. Precedence, top down: **deny floor** (every mode,
+`floor_disable` per rule) → `permissions.deny` → session grants →
+`permissions.allow` → mode default. Deny beats allow; reads are never gated;
+Rudra's own `update_plan`/`write_task_assignment`/`ask_user` are control plane
+and never gated.
 
 ### Control flow (`main_agent.py:345-437`)
 1. Planner runs once → must produce `.rudra/PLAN.md`, a checklist of **bare filenames** (`- [ ] main.py`).
@@ -83,6 +97,8 @@ only function that creates anything.
 | `run/current_task.md` | volatile | `write_task_assignment` | coder | Planner→coder handoff |
 | `run/tech_stack.md` | volatile | `_write_tech_stack_file` | both | Rewritten every run |
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
+| `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
+| `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
 | `memory/export/` | durable | — | — | Step 14 |
 | `memory/palace/` | volatile | — | — | Step 14 |
 
@@ -98,16 +114,21 @@ Table below is verified against **installed 0.4.12** (`.venv/.../deepagents/grap
 
 | Param | What it gives | Rudra uses it? |
 |---|---|---|
-| `model: str \| BaseChatModel` | `provider:model` resolved via `init_chat_model` (`_models.py:11`) | ❌ passes `ChatOllama` instance |
-| `skills: list[str]` | `SkillsMiddleware` — Anthropic Agent Skills spec, `<dir>/SKILL.md` + YAML frontmatter | ❌ **never used** |
-| `subagents: list[SubAgent]` | `SubAgentMiddleware` + the `task` tool | ❌ Rudra **blocks** `task` (`block_task_tool.py`) |
+| `model: str \| BaseChatModel` | `provider:model` resolved via `init_chat_model` (`_models.py:11`) | ⚠️ passes a `BaseChatModel` instance from `llm/factory.py` (Step 5) |
+| `skills: list[str]` | `SkillsMiddleware` — Anthropic Agent Skills spec, `<dir>/SKILL.md` + YAML frontmatter | ❌ **never used** — Step 11 |
+| `subagents: list[SubAgent]` | `SubAgentMiddleware` + the `task` tool | ⚠️ `task` is reachable but undesigned (D4 accepted risk); real subagents are C6.2 |
 | `memory: list[str]` | `MemoryMiddleware`, AGENTS.md into system prompt | ⚠️ planner only |
-| `interrupt_on: dict` | `HumanInTheLoopMiddleware` — approval gates | ❌ never used |
-| `backend` | `FilesystemBackend` / `LocalShellBackend` / `CompositeBackend` | ⚠️ plain `FilesystemBackend` |
+| `permissions: list[FilesystemPermission]` | `allow` / `deny` / `interrupt` path rules | ❌ **cannot be used** — raises on any execute-capable backend (U.7) |
+| `interrupt_on: dict` | `HumanInTheLoopMiddleware` — approval gates | ✅ Step 7: one entry per mutating tool, `when` calling Rudra's `PermissionEngine` |
+| `backend` | `FilesystemBackend` / `LocalShellBackend` / `CompositeBackend` | ✅ Step 7: `CompositeBackend(default=LocalShellBackend)` |
 | (automatic) | `create_summarization_middleware` — offloads history to `/conversation_history/{thread_id}.md` | ✅ inherited, not designed |
 | (automatic) | `TodoListMiddleware`, `PatchToolCallsMiddleware` | ✅ inherited |
 
-**Critical:** `execute` (shell) only works on a backend implementing `SandboxBackendProtocol`. `LocalShellBackend` does (`backends/local_shell.py:27`). Rudra's `OverwriteFilesystemBackend` extends plain `FilesystemBackend` → **the `execute` tool returns an error → Rudra's agents cannot run tests, linters, builds, or git.** (Contradicted by probe under 0.7.4; `execute` **is** registered on a plain `FilesystemBackend` — nobody has invoked it to confirm it's functional, not just registered. See `TODO.md` U.17.)
+**Critical (settled in Step 7):** `execute` only works on a backend implementing `SandboxBackendProtocol`. `LocalShellBackend` does; plain `FilesystemBackend` does not — the tool is still *registered* in the default stack, and returns `"Error: Execution not available. This agent's backend does not support command execution (SandboxBackendProtocol)."` when called. Measured through a real graph run, closing **U.17**: registered ≠ functional, and `CLAUDE.md`'s original claim was right.
+
+**Since Step 7 Rudra ships `CompositeBackend(default=LocalShellBackend(...))`, so `execute` works** and agents can run tests, linters, builds, and git. The composite also carries an `/artifacts/` route with `artifacts_root="/artifacts"`, because that root otherwise defaults to the backend root and deepagents would write `large_tool_results/` and `conversation_history/` into the user's project (**A1.45**).
+
+**`permissions=` is deliberately never passed.** It raises `NotImplementedError` on any execute-capable backend, and its `FilesystemOperation` is `('read','write')` only, so it never covered `execute` regardless. Rudra's own gate in `src/rudra/permissions/` does the whole job. See `TODO.md` **U.7** and **A1.46**; `tests/test_deepagents_contract.py::test_permissions_still_rejected_with_execute_backend` is the trigger that reopens U.7 if upstream lifts the restriction.
 
 **Skills compatibility:** superpowers skills (`skills/<name>/SKILL.md` with `name:` + `description:` frontmatter — verified in the local plugin cache) match the format `SkillsMiddleware` parses. Superpowers can be dropped in as a skills source with no format conversion.
 
@@ -137,11 +158,15 @@ Owner decisions are recorded in `TODO.md` §0. Summary: TOML config, vendored su
 4. Environment variables (`RUDRA_*`)
 5. CLI flags
 
-**Live as of Step 6:** `[model.*]`, `[agent]`, `[permissions]`, `[compat]`.
-`[skills]`, `[memory]`, and `[tools]` are **reserved** — writing one is a hard
-error naming the step that implements it (11, 14, and 7 respectively). MCP
-stays in `.mcp.json` (Step 13). Unknown keys are fatal and suggest the nearest
-valid name, because the common case is a typo.
+**Live as of Step 7:** `[model.*]`, `[agent]`, `[permissions]`, `[compat]`,
+`[tools]`. `[skills]` and `[memory]` are **reserved** — writing one is a hard
+error naming the step that implements it (11 and 14). MCP stays in `.mcp.json`
+(Step 13). Unknown keys are fatal and suggest the nearest valid name, because
+the common case is a typo.
+
+`[tools]` carries `shell` and nothing else. The oversized-tool-result
+threshold that would naturally sit beside it is unreachable through
+`create_deep_agent` (**A1.47**), and an inert config key is worse than no key.
 
 `rudra init` scaffolds the file; `rudra config list` shows every effective
 value and the layer that set it. There is no `rudra config set` — see
@@ -161,22 +186,27 @@ provider = "ollama"
 base_url = "http://localhost:11434"
 model    = "qwen3-coder:30b"
 
-[skills]
-sources = ["builtin", "~/.rudra/skills", ".rudra/skills"]
-superpowers = true                      # ship-with-Rudra default
-
-[memory]
-backend = "mempalace"
-store   = "chroma"
-
 [tools]
-shell = true
-git   = true
+shell = true                            # false removes the execute tool
 
 [permissions]
 mode  = "ask"                           # ask | auto | plan
-allow = ["Read", "Grep", "Glob"]
-deny  = ["execute:rm -rf *"]
+
+# Rules are "tool" or "tool:pattern", using REAL tool names:
+#   read_file  ls  glob  grep  write_file  edit_file  delete  execute  task
+# A pattern starting with / matches the resolved absolute path; otherwise
+# the project-relative path. For execute it matches the command string.
+# deny beats allow.
+allow = ["execute:pytest*", "execute:git status"]
+deny  = ["execute:rm -rf *", "write_file:.env"]
+
+# Built-in rules denied in EVERY mode, including --auto. Name one to switch
+# it off; the run says so, and calls it would have blocked are still audited.
+#   outside-root · git-dir · catastrophic-command
+floor_disable = []
+
+# Reserved, not yet accepted — listed to show where they will go:
+#   [skills] Step 11    [memory] Step 14
 ```
 
 **MCP servers in a separate `.mcp.json`, Claude-Code-compatible schema**, so users reuse existing configs verbatim:
@@ -205,16 +235,32 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-.venv/bin/pytest -q                  # 286 passed, 2 skipped at Step 6; must never go down
+.venv/bin/pytest -q                  # 489 passed, 2 skipped at Step 7; must never go down
 .venv/bin/rudra --version            # Rudra v0.2.0
 
 .venv/bin/rudra init                 # scaffold .rudra/config.toml + the D15 layout
 .venv/bin/rudra config list          # every effective value + which layer set it
 .venv/bin/rudra doctor --offline     # diagnose config, layout, deps; --offline skips network
 .venv/bin/rudra models test          # verify each role is reachable and can call tools
-.venv/bin/rudra "build a flask app"  # single-shot
+.venv/bin/rudra "build a flask app"  # single-shot; prompts before each write and command
+.venv/bin/rudra --auto "..."         # unattended: approve everything (the deny floor still holds)
+.venv/bin/rudra --plan "..."         # plan only: no project writes, no commands
 .venv/bin/rudra                      # REPL
 ```
+
+**`mode = "ask"` needs a TTY.** Piped or redirected stdin exits 2 before any
+model call rather than hanging on a prompt nobody can answer. Use `--auto` for
+unattended runs.
+
+**`--auto` plus shell is not contained (A1.49).** The deny floor's path rules
+cover `write_file`/`edit_file`/`delete`; `execute` is checked only against
+`rm -rf /`-shaped commands. A shell command can write anywhere the user can,
+and the Step 7 acceptance run measured a model finding that route on its own —
+denied twice on `write_file`, it ran `echo "hello" > /abs/path` and succeeded.
+`ask` mode is unaffected, because the user reads the command first. Every
+`execute` is recorded in `run/logs/permissions.jsonl` even under `--auto`, and
+that audit trail is currently the only compensating control. Real containment
+needs OS-level isolation, not more pattern matching.
 
 ## 9. Repo Hygiene Facts
 

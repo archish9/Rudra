@@ -255,3 +255,59 @@ def test_default_stack_has_no_write_todos_tool(tmp_path):
         backend=_backend(tmp_path),
     )
     assert "write_todos" not in _tool_names(agent)
+
+
+def test_permissions_still_rejected_with_execute_backend(tmp_path):
+    """U.7's revisit trigger.
+
+    deepagents 0.7.4 refuses `permissions=` on any backend implementing
+    SandboxBackendProtocol, which is why Rudra owns its permission layer
+    instead of adopting the upstream one (TODO.md U.7). When this test
+    starts FAILING, upstream has lifted the restriction and U.7 can reopen.
+    """
+    import pytest
+    from deepagents import create_deep_agent
+    from deepagents.backends.composite import CompositeBackend
+    from deepagents.backends.local_shell import LocalShellBackend
+    from deepagents.middleware.filesystem import FilesystemPermission
+
+    backend = CompositeBackend(
+        default=LocalShellBackend(root_dir=str(tmp_path), virtual_mode=True), routes={}
+    )
+    with pytest.raises(NotImplementedError, match="does not yet support permissions"):
+        create_deep_agent(
+            model=ScriptedToolModel(),
+            backend=backend,
+            permissions=[FilesystemPermission(operations=["write"], paths=["/x/**"], mode="deny")],
+        )
+
+
+def test_filesystem_operations_still_exclude_execute():
+    """A1.46: `permissions=` never covered execute, only read and write.
+
+    This is the measured basis for §0.8's open MCP question: execute and
+    MCP tools sit in the same uncovered category, so Step 13 needs the same
+    mechanism Step 7 built, not a second one.
+    """
+    import typing
+
+    from deepagents.middleware.filesystem import FilesystemOperation
+
+    assert typing.get_args(FilesystemOperation) == ("read", "write")
+
+
+def test_execute_is_registered_but_non_functional_without_a_sandbox(tmp_path):
+    """U.17, permanently pinned.
+
+    `execute` appears in the default tool stack on a plain FilesystemBackend
+    and errors when called. Both halves matter: the presence is why U.17 was
+    opened, the error is why C3.1 was still needed.
+    """
+    from deepagents import create_deep_agent
+    from deepagents.backends.filesystem import FilesystemBackend
+
+    agent = create_deep_agent(
+        model=ScriptedToolModel(),
+        backend=FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True),
+    )
+    assert "execute" in _tool_names(agent)

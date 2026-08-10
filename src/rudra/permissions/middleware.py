@@ -55,9 +55,20 @@ class RudraPermissionMiddleware(AgentMiddleware):
         tool = call["name"]
         args = call.get("args") or {}
         decision = self.engine.decide(tool, args)
-        if decision.effect != "deny":
-            return None
         arg = gated_arg(tool, args)
+
+        if decision.effect == "allow":
+            # Allows are recorded here too, not only denials. In auto mode
+            # nothing is ever denied and nothing ever prompts, so a
+            # deny-only middleware left the unattended run — the one whose
+            # record matters most — with an empty audit log. AuditLog drops
+            # the routine reads; this layer does not second-guess it.
+            self.audit.record(tool, arg, decision, mode=self.mode, outcome="allow")
+            return None
+        if decision.effect != "deny":
+            # "ask" is interrupt_on's; the prompt records what the user chose.
+            return None
+
         self.audit.record(tool, arg, decision, mode=self.mode, outcome="deny")
         return ToolMessage(
             content=_denial_text(tool, arg, decision.rule),

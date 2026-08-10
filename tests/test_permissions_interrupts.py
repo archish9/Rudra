@@ -214,3 +214,50 @@ def test_run_with_approvals_without_a_gate_just_streams(tmp_path):
             Console(file=handle, width=100),
         )
     assert chunks
+
+
+def test_run_with_approvals_works_with_the_real_async_checkpointer(tmp_path):
+    """Production uses AsyncSqliteSaver, which forbids sync get_state.
+
+    Found by the Step 7 acceptance run: every test above uses InMemorySaver,
+    which tolerates both interfaces, so a synchronous get_state() passed the
+    whole suite and then raised InvalidStateError on the first real run.
+    """
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+    from rich.console import Console
+
+    from rudra.config.loader import build_config, reset_config
+    from rudra.permissions import build_gate
+    from rudra.permissions.approval import run_with_approvals
+
+    async def go():
+        conn = await aiosqlite.connect(str(tmp_path / "cp.db"))
+        checkpointer = AsyncSqliteSaver(conn=conn)
+        await checkpointer.setup()
+        engine = make_engine(tmp_path)
+        agent = create_deep_agent(
+            model=OneExecuteModel(),
+            backend=LocalShellBackend(root_dir=str(tmp_path), virtual_mode=True),
+            interrupt_on=build_interrupt_on(engine),
+            checkpointer=checkpointer,
+        )
+        reset_config()
+        gate = build_gate(build_config(tmp_path), tmp_path)
+        gate.engine = engine
+        gate.reader = lambda: "a"
+
+        config = {"configurable": {"thread_id": "async-1"}}
+        with (tmp_path / "out.txt").open("w", encoding="utf-8") as handle:
+            console = Console(file=handle, width=100)
+            async for _ in run_with_approvals(
+                agent, {"messages": [{"role": "user", "content": "go"}]}, config, gate, console
+            ):
+                pass
+        state = await agent.aget_state(config)
+        await conn.close()
+        return state
+
+    state = asyncio.run(go())
+    tool_messages = [m for m in state.values["messages"] if type(m).__name__ == "ToolMessage"]
+    assert "gated" in tool_messages[0].content
