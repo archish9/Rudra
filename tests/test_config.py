@@ -50,11 +50,20 @@ ALL_ENV_VARS = (*OLLAMA_ENV_VARS, *RUDRA_ENV_VARS)
 
 
 @pytest.fixture(autouse=True)
-def clean_config_state(monkeypatch: pytest.MonkeyPatch):
+def clean_config_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Every test starts with no cached Config and no inherited OLLAMA_* vars.
 
     Without the delenv loop these tests pass or fail based on the developer's
     own shell, which is exactly the class of bug A5.1 describes.
+
+    The chdir closes the other half of that gap, and it is not optional.
+    Deleting the variables is not enough: Config.load() calls load_dotenv()
+    against the *cwd*, so running from the repo root re-populates every
+    RUDRA_* and OLLAMA_* name straight back out of the developer's own
+    gitignored .env, after this fixture has just removed them. Starting each
+    test in an empty directory means "unset" actually means unset. Tests that
+    want a .env write one into their own tmp_path and chdir to it, which
+    overrides this.
 
     The post-yield restore below is direct os.environ manipulation, not
     monkeypatch.delenv/setenv. Config.load() calls the real load_dotenv(),
@@ -70,6 +79,7 @@ def clean_config_state(monkeypatch: pytest.MonkeyPatch):
     original = {name: os.environ.get(name) for name in ALL_ENV_VARS}
     for name in ALL_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
     reset_config()
     yield
     reset_config()

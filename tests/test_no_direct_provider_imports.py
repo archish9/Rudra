@@ -31,6 +31,24 @@ PROVIDER_PACKAGES = (
 SRC = Path(rudra.__file__).parent
 
 
+@pytest.fixture
+def coded_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Build agents against the shipped defaults, not the developer's .env.
+
+    Config.load() reads `<cwd>/.env`, so running from the repo root builds
+    these agents against whatever backend the developer happens to have
+    configured — which, for anyone using a hosted provider, means the test
+    fails on a missing API key while passing in CI. Starting in an empty
+    directory pins the coded defaults: ollama, no key required, no network.
+    """
+    from rudra.config import reset_config
+
+    monkeypatch.chdir(tmp_path)
+    reset_config()
+    yield
+    reset_config()
+
+
 def python_files() -> list[Path]:
     return sorted(p for p in SRC.rglob("*.py") if "__pycache__" not in p.parts)
 
@@ -79,7 +97,7 @@ def test_the_factory_is_the_only_caller_of_init_chat_model() -> None:
     assert offenders == ["llm/factory.py"]
 
 
-def test_the_planner_agent_can_be_constructed(tmp_path: Path) -> None:
+def test_the_planner_agent_can_be_constructed(tmp_path: Path, coded_defaults) -> None:
     """Regression guard: config.py's rewrite broke this at runtime while the
     suite stayed green, because no test had ever called it."""
     from rich.console import Console
@@ -98,7 +116,7 @@ def test_the_planner_agent_can_be_constructed(tmp_path: Path) -> None:
     assert agent is not None
 
 
-def test_the_coder_agent_can_be_constructed() -> None:
+def test_the_coder_agent_can_be_constructed(coded_defaults) -> None:
     """Same guard for the coder half."""
     from rudra.agent.coder_agent import create_coder_agent
 
