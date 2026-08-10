@@ -167,10 +167,18 @@ def test_doctor_reports_config_sources(tmp_path: Path) -> None:
     assert "config" in result.output.lower()
 
 
-def test_doctor_states_that_permissions_are_not_enforced(tmp_path: Path) -> None:
-    """The core honesty requirement of Step 6 (spec §6)."""
+def test_doctor_states_what_the_permission_mode_does(tmp_path: Path) -> None:
+    """Step 6's honesty requirement, updated for Step 7 enforcing the mode.
+
+    The requirement is that `doctor` never leaves the user guessing what
+    permissions will do. Step 6 satisfied it by saying NOT ENFORCED; Step 7
+    satisfies it by describing the behaviour, and saying NOT ENFORCED now
+    would be the dishonest answer.
+    """
     result = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"])
-    assert "NOT ENFORCED" in result.output
+    assert "NOT ENFORCED" not in result.output
+    assert "mode = ask" in result.output
+    assert "prompting" in result.output
 
 
 def test_doctor_flags_a_stale_top_level_checkpoint_db(tmp_path: Path) -> None:

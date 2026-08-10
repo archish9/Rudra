@@ -259,19 +259,27 @@ def models_test(
         raise typer.Exit(code=1)
 
 
+EXIT_NO_TTY = 2
+
+_MODE_DESCRIPTIONS = {
+    "ask": "prompting before each write, edit, delete, or command",
+    "auto": "approving everything without prompting",
+    "plan": "making no project changes and running no commands",
+}
+
+
 def _permission_notice(cfg) -> str:
     """One line, shown on every run — not only when a flag is passed.
 
-    A user reading `mode = "ask"` reasonably concludes Rudra will prompt
-    before touching files. It will not: enforcement is Step 7 and today
-    files are overwritten silently (TODO.md A1.16). Saying so on the
-    default path is the point; an inert --yolo is harmless by comparison,
-    because it claims less safety rather than more.
+    Step 6 shipped this saying NOT ENFORCED, deliberately: an inert default
+    of `ask` claims more safety than you get. Step 7 enforces it, so the
+    line now describes what the mode actually does.
     """
-    return (
-        f"permissions: {cfg.permissions.mode} — NOT ENFORCED (Step 7); "
-        f"files are written and overwritten without prompting"
-    )
+    described = _MODE_DESCRIPTIONS.get(cfg.permissions.mode, cfg.permissions.mode)
+    line = f"permissions: {cfg.permissions.mode} — {described}"
+    if cfg.permissions.floor_disable:
+        line += f" · floor disabled: {', '.join(cfg.permissions.floor_disable)}"
+    return line
 
 
 def _load_config_or_exit(project_dir: Optional[Path]):
@@ -421,13 +429,21 @@ def doctor_command(
         f"{installed} (pinned {EXPECTED_DEEPAGENTS_VERSION})",
     )
 
+    floor_off = cfg.permissions.floor_disable
     table.add_row(
         "permissions",
-        "warn",
-        f"mode = {cfg.permissions.mode} — NOT ENFORCED. Enforcement arrives in Step 7; "
-        f"Rudra currently writes and overwrites files without prompting. "
-        f"allow/deny are parsed but unused ({len(cfg.permissions.allow)} allow, "
-        f"{len(cfg.permissions.deny)} deny).",
+        "warn" if floor_off else "ok",
+        f"mode = {cfg.permissions.mode} — {_MODE_DESCRIPTIONS.get(cfg.permissions.mode, '')}. "
+        f"{len(cfg.permissions.allow)} allow, {len(cfg.permissions.deny)} deny. "
+        f"Deny floor: {'disabled ' + ', '.join(floor_off) if floor_off else 'all rules active'}.",
+    )
+
+    table.add_row(
+        "shell",
+        "ok" if cfg.tools.shell else "warn",
+        "enabled — agents can run tests, linters, and git"
+        if cfg.tools.shell
+        else "disabled by [tools] shell = false — the execute tool is absent",
     )
 
     if not offline:
@@ -496,10 +512,10 @@ def main(
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
     auto: bool = typer.Option(
-        False, "--auto", "--yolo", help="Permission mode: auto (not enforced until Step 7)"
+        False, "--auto", "--yolo", help="Approve every action without prompting"
     ),
     plan: bool = typer.Option(
-        False, "--plan", help="Permission mode: plan (not enforced until Step 7)"
+        False, "--plan", help="Plan only: make no project changes, run no commands"
     ),
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
@@ -537,8 +553,26 @@ def main(
     project_path = get_project_path(project_dir)
     permission_mode = "auto" if auto else "plan" if plan else None
     cfg = get_config(project_path, verbose=verbose, permission_mode=permission_mode)
-    if permission_mode is not None:
-        console.print(f"[yellow]Note:[/yellow] {_permission_notice(cfg)}")
+
+    from rudra.permissions import disabled_floor_notice, stdin_is_interactive
+
+    # Before load_project_context, before ensure_layout, before any model.
+    # In ask mode every write is gated and writing files is Rudra's whole
+    # job, so a non-TTY ask run hits a prompt within seconds — failing at
+    # second zero is the honest version of failing at second thirty, and it
+    # leaves nothing behind on disk. See the Step 7 design spec §6.5.
+    if cfg.permissions.mode == "ask" and not stdin_is_interactive():
+        console.print(
+            '[red]Error:[/red] permissions.mode = "ask" needs an interactive '
+            "terminal, but stdin is not a TTY.\n\n"
+            "  --auto                      approve everything (unattended)\n"
+            '  permissions.mode = "auto"   same, persisted in .rudra/config.toml'
+        )
+        raise typer.Exit(EXIT_NO_TTY)
+
+    floor_notice = disabled_floor_notice(cfg)
+    if floor_notice:
+        console.print(f"[yellow]Warning:[/yellow] {floor_notice}")
 
     # A default of `config.agent.verbose` here would be evaluated when this
     # module is imported, which is the A1.15 defect. Three-state instead:

@@ -38,18 +38,28 @@ def test_auto_flag_sets_the_mode(tmp_path: Path) -> None:
 
 
 def test_notice_fires_for_the_default_not_only_for_flags(tmp_path: Path) -> None:
-    """The dangerous misreading is "ask means it will ask me"."""
+    """Step 6 asserted this said NOT ENFORCED, because it wasn't.
+
+    Step 7 enforces it, so the notice now has to describe what the mode
+    actually does. The property under test is unchanged and is the reason
+    the notice exists at all: it appears on the DEFAULT path, not only when
+    a flag is passed, because "ask means it will ask me" is the dangerous
+    misreading either way.
+    """
     from rudra.cli import _permission_notice
 
     notice = _permission_notice(build_config(tmp_path))
-    assert "NOT ENFORCED" in notice
     assert "ask" in notice
+    assert "prompting" in notice
+    assert "NOT ENFORCED" not in notice
 
 
 def test_notice_fires_for_auto_too(tmp_path: Path) -> None:
     from rudra.cli import _permission_notice
 
-    assert "NOT ENFORCED" in _permission_notice(build_config(tmp_path, permission_mode="auto"))
+    notice = _permission_notice(build_config(tmp_path, permission_mode="auto"))
+    assert "auto" in notice
+    assert "without prompting" in notice
 
 
 def test_compat_flags_default_off(tmp_path: Path) -> None:
