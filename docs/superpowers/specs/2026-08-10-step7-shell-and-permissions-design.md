@@ -253,9 +253,12 @@ error is removed and the section becomes real:
 
 ```toml
 [tools]
-shell                     = true    # false removes execute from the tool stack
-tool_output_limit_tokens  = 4000    # §5.2
+shell = true    # false removes execute from the tool stack
 ```
+
+One key, not two: the oversized-output threshold `§5.2` originally planned to
+expose is not reachable through `create_deep_agent`, so it is not shipped as
+config rather than shipped inert.
 
 `shell = false` is a genuine setting, not decoration: it yields the
 pre-Step-7 capability set on a backend that still routes artifacts correctly,
@@ -383,14 +386,24 @@ is working on. Routing it to `.rudra/run/artifacts/` puts both in `D15`'s
 volatile, gitignored subtree. Verified: the prefixes then resolve to
 `/artifacts/large_tool_results` and `/artifacts/conversation_history`.
 
-**Lower the threshold.** 20 000 tokens is roughly a third of a 32B context
-window for one `pytest` transcript. Rudra passes
-`tool_token_limit_before_evict=4000` — about 16 KB, comfortably more than a
-passing test run and far less than a failing one — and exposes it as
-`[tools] tool_output_limit_tokens` so a user on a larger model can raise it.
-4 000 is a considered default, not a measured optimum; implementation confirms
-it against a real failing-`pytest` transcript and adjusts once, in this step,
-rather than leaving it open.
+**The threshold cannot be lowered, and this design does not pretend it can.**
+An earlier revision of this section committed to passing
+`tool_token_limit_before_evict=4000`. That is not reachable.
+`create_deep_agent` has no such parameter, and it appends its own
+`FilesystemMiddleware` unconditionally (`.venv/.../deepagents/graph.py:820-826`)
+— so supplying a configured one produces **two** filesystem middlewares, not a
+replacement. The only remaining route is assigning the private
+`_tool_token_limit_before_evict` on an upstream object after construction,
+which is the `U.13` hazard class and not worth taking for a threshold.
+
+So Rudra inherits the 20 000-token default, and **no `[tools]
+tool_output_limit_tokens` key ships**. A config key that silently does
+nothing is the defect Step 6 spent effort avoiding when it refused to let
+`[permissions]` read as enforced, and the same defect `A1.40` records for
+`--dry-run`. The gap is logged as a ledger row instead, and revisited when
+`C7.x` budgets context for real — the phase that owns this number.
+
+`[tools]` still un-reserves in this step, carrying `shell` alone.
 
 No hand-rolled offload middleware is written.
 
@@ -647,6 +660,7 @@ any code is written**.
 | new | `LocalShellBackend` defaults to an empty environment; shipping the default breaks every real toolchain (§5.3) |
 | new | `artifacts_root` defaults to the backend root, so a shell-enabled agent writes `large_tool_results/` and `conversation_history/` into the user's project (§5.2) |
 | new | `FilesystemOperation` is `('read','write')` only — `permissions=` never covered `execute`, which `§0.8`'s open MCP question assumed it might |
+| new | `tool_token_limit_before_evict` is unreachable: `create_deep_agent` takes no such parameter and appends its own `FilesystemMiddleware` unconditionally, so every tool result over 20 000 tokens survives in context on a 32B model. Belongs to `C7.x` |
 | `CLAUDE.md` §4 | `execute` row corrected — registered but non-functional, with the measured error text |
 | `CLAUDE.md` §6 | `[permissions]` example corrected from `["Read","Grep","Glob"]` to real tool names |
 | `CLAUDE.md` §3 | Architecture table gains `permissions/`; backend line updated to the composite |
