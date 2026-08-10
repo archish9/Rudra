@@ -1,27 +1,35 @@
 """Layered configuration (TODO.md C2.1, D1).
 
-Transitional state: the public surface is still served by `_legacy`, the
-pre-Step-6 environment-only resolver. `schema` is in place and `layers` /
-`loader` land next; Task 4 of the Step 6 plan deletes `_legacy` and moves
-this module's exports onto the layered loader.
+Load order, later overriding earlier:
 
-Keeping `_legacy` as the live implementation until then is deliberate — it
-keeps every commit's test suite green rather than leaving the package
-half-wired across three commits.
+1. built-in defaults          (schema.DEFAULTS)
+2. ~/.config/rudra/config.toml
+3. <project>/.rudra/config.toml
+4. RUDRA_* environment variables (including .env)
+5. CLI flags
+
+Every resolved value records which layer set it — see `Config.provenance`
+and `rudra config list`.
 """
 
-from rudra.config._legacy import (
+from rudra.config.layers import ConfigError, user_toml_path
+from rudra.config.loader import Config, build_config, get_config, reset_config
+from rudra.config.schema import (
     AgentConfig,
-    Config,
+    CompatConfig,
     ModelConfig,
-    get_config,
-    reset_config,
+    PermissionsConfig,
 )
 
 __all__ = [
     "AgentConfig",
+    "CompatConfig",
     "Config",
+    "ConfigError",
     "ModelConfig",
+    "PermissionsConfig",
+    "build_config",
     "get_config",
     "reset_config",
+    "user_toml_path",
 ]

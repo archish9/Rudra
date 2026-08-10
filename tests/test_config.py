@@ -132,7 +132,7 @@ def test_dotenv_is_looked_up_at_the_cwd_only(
     # Patched where the name is actually bound, which moves as the package is
     # built out: `rudra.config` re-exports the surface, but load_dotenv is
     # called inside the module that owns loading.
-    import rudra.config._legacy as loading_module
+    import rudra.config.loader as loading_module
 
     monkeypatch.setattr(loading_module, "load_dotenv", spy)
     monkeypatch.chdir(tmp_path)

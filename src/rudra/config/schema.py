@@ -9,11 +9,14 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Any
 
-from rudra.llm.providers import PROVIDERS
-
 BUILTIN_ROLES = ("default", "planner", "coder")
 
-VALID_PROVIDERS = frozenset(PROVIDERS)
+# Declared literally rather than derived from `rudra.llm.providers.PROVIDERS`,
+# because importing it here would be circular: rudra.llm's __init__ imports
+# factory, which imports rudra.config. The two are kept in agreement by
+# tests/test_config_schema.py::test_every_provider_the_factory_supports_is_valid_here,
+# which fails the moment a provider is added to one and not the other.
+VALID_PROVIDERS = frozenset({"ollama", "openai_compatible", "openai", "anthropic", "google"})
 VALID_MODES = ("ask", "auto", "plan")
 
 RESERVED_SECTIONS = {
