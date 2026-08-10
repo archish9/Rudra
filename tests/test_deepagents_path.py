@@ -38,7 +38,7 @@ def normalizer(tmp_path: Path):
     def _install(plan_lines: str | None = None):
         plan_path = None
         if plan_lines is not None:
-            plan_path = tmp_path / ".rudra" / "PLAN.md"
+            plan_path = tmp_path / ".rudra" / "run" / "PLAN.md"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(plan_lines, encoding="utf-8")
         install_path_normalizer(tmp_path.resolve(), plan_path=plan_path)

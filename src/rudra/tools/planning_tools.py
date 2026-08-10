@@ -1,7 +1,8 @@
 """Planning tools for filesystem-based context management.
 
 Replaces deepagents' built-in write_todos tool with a filesystem-backed
-alternative. The plan is stored in `.rudra/PLAN.md`.
+alternative. The plan is stored in `.rudra/run/PLAN.md` — the volatile
+subtree of the D15 layout, since it is rewritten on every run.
 
 IMPORTANT — filesystem design:
   update_plan / read_plan both operate on the REAL disk file directly, the
@@ -11,7 +12,7 @@ IMPORTANT — filesystem design:
 Usage pattern for the agent:
   1. update_plan("- [ ] src/main.rs\\n- [ ] Cargo.toml")
   2. write_file(file_path="src/main.rs", content="...")
-  3. edit_file('.rudra/PLAN.md', '- [ ] src/main.rs', '- [x] src/main.rs')
+  3. edit_file('.rudra/run/PLAN.md', '- [ ] src/main.rs', '- [x] src/main.rs')
   4. Repeat steps 2-3 for each remaining item.
 """
 
@@ -20,6 +21,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from langchain_core.tools import tool
+
+from rudra.state.paths import ensure_layout
 
 
 def looks_like_path(item: str) -> bool:
@@ -40,7 +43,7 @@ def looks_like_path(item: str) -> bool:
 
 
 def create_planning_tools(project_path: Path, task: str = "") -> list:
-    """Create planning tools that read/write .rudra/PLAN.md directly on disk.
+    """Create planning tools that read/write .rudra/run/PLAN.md directly on disk.
 
     Args:
         project_path: Project root directory.
@@ -50,11 +53,12 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
     Returns:
         List of LangChain tools: [update_plan, read_plan, write_task_assignment]
     """
-    plan_path: Path = project_path / ".rudra" / "PLAN.md"
+    paths = ensure_layout(project_path)
+    plan_path: Path = paths.plan_md
 
     @tool
     def update_plan(plan_markdown: str) -> str:
-        """Write or overwrite the agent's task plan to .rudra/PLAN.md.
+        """Write or overwrite the agent's task plan to .rudra/run/PLAN.md.
 
         Each checklist item MUST be an actual filename — NOT a task description.
           CORRECT: - [ ] src/main.rs
@@ -144,7 +148,7 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
 
     @tool
     def read_plan() -> str:
-        """Read the current task plan from .rudra/PLAN.md.
+        """Read the current task plan from .rudra/run/PLAN.md.
 
         Always reads from disk so it reflects changes made by edit_file.
 
@@ -161,11 +165,11 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
             f"List ONLY filenames. Do NOT ask the user — decide the files yourself based on the task above."
         )
 
-    task_path: Path = project_path / ".rudra" / "current_task.md"
+    task_path: Path = paths.current_task_md
 
     @tool
     def write_task_assignment(file_path: str, instructions: str, context_files: str = "") -> str:
-        """Write a coding task assignment to .rudra/current_task.md for the coder agent.
+        """Write a coding task assignment to .rudra/run/current_task.md for the coder agent.
 
         Call this BEFORE the coder generates each file. The coder reads this file
         to know exactly what to build.
@@ -190,7 +194,7 @@ def create_planning_tools(project_path: Path, task: str = "") -> list:
         task_path.write_text(content, encoding="utf-8")
         return (
             f"Task assignment written for `{file_path}`. "
-            "The coder will read .rudra/current_task.md and write this file. STOP now."
+            "The coder will read .rudra/run/current_task.md and write this file. STOP now."
         )
 
     return [update_plan, read_plan, write_task_assignment]

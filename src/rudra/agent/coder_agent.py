@@ -8,17 +8,17 @@ from rudra.llm import build_model
 from rudra.middleware import FixWriteParamsMiddleware, TaskAnchorMiddleware
 
 _CODER_ANCHOR = (
-    "Read .rudra/current_task.md, then write the file specified there using write_file(). "
+    "Read .rudra/run/current_task.md, then write the file specified there using write_file(). "
     "Write ONE complete file with raw source code. Stop after write_file() succeeds."
 )
 
 _CODER_SYSTEM_PROMPT = """You are an expert code generator for Rudra.
 
-Your ONLY job: Read .rudra/current_task.md and write the file specified there.
+Your ONLY job: Read .rudra/run/current_task.md and write the file specified there.
 
 ## WORKFLOW
-1. Call read_file(".rudra/current_task.md") to get your assignment
-2. Call read_file(".rudra/tech_stack.md") for technology constraints
+1. Call read_file(".rudra/run/current_task.md") to get your assignment
+2. Call read_file(".rudra/run/tech_stack.md") for technology constraints
 3. Read any context files listed in the task assignment (use read_file for each)
 4. Write ONE complete file: write_file(file_path="<exact path>", content="<complete source>")
 5. STOP — do not write any additional files
@@ -47,7 +47,7 @@ def create_coder_agent(
 ):
     """Create a fresh coder deep agent. Call once per file.
 
-    The coder is steered to a single file by .rudra/current_task.md, by
+    The coder is steered to a single file by .rudra/run/current_task.md, by
     _CODER_ANCHOR, and by the per-file user message the orchestrator sends
     (main_agent.py). EnforceTargetFileMiddleware used to enforce this as
     well, but it matched on basename — target `src/models.py` permitted a

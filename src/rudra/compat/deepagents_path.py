@@ -73,7 +73,7 @@ def install_path_normalizer(
 
     Args:
         project_root: Absolute path to the project root directory.
-        plan_path: Optional path to .rudra/PLAN.md for plan-aware suffix matching.
+        plan_path: Optional path to .rudra/run/PLAN.md for plan-aware suffix matching.
                    When provided, planned filenames are used to resolve unknown paths.
 
     Safe to call multiple times (always wraps the original, never re-wraps).
