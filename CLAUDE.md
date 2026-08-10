@@ -13,7 +13,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 - **CLI:** Typer + Rich + prompt_toolkit
 - **Package:** `rudra`, entry point `rudra.cli:app` (`pyproject.toml:62`)
 - **License:** Apache-2.0 declared in `pyproject.toml:10`; full text on disk at `LICENSE` (added 2026-08-10, A4.2). A NOTICE file is still absent and is only needed once superpowers/MemPalace are vendored (A4.7)
-- **Repo:** remote is `git@github.com:archish9/RudraAnvil.git`; `pyproject.toml:65-66` wrongly says `github.com/archish/Rudra`
+- **Repo:** remote is `git@github.com:archish9/Rudra.git`, and `[project.urls]` in `pyproject.toml` matches it. Corrected 2026-08-10 (A1.41) — this line previously claimed the remote was `RudraAnvil` and that `pyproject.toml` was wrong; both halves were stale. `RudraAnvil` is the project's former name and survives only in dated `docs/superpowers/` records and the untracked-noise files A4.3 removes
 - **Ships as:** open-source GitHub project
 
 ### Product goals (owner's stated requirements)
