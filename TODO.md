@@ -31,6 +31,7 @@ Status: `PENDING` · `IN PROGRESS` · `DONE` · `WONTFIX`
 | D16 | **Stay pure Python. Do not write Rust components.** | Measured 2026-08-05. Inference dominates non-inference work by 3–4 orders of magnitude (10–60 s vs single-digit ms). The CPU-bound paths are **already Rust** via `pydantic_core`, `jiter`, `orjson`, `regex`, `watchfiles`, and `tokenizers` (with mempalace). The only user-perceptible non-inference cost is **0.59 s startup**, which is the langchain/deepagents import itself — unfixable in Rust without abandoning deepagents. Real wins are Python-side: C9.8 (lazy import) and C9.9 (shell out to `ripgrep`). Revisit only if a single self-contained binary with no Python runtime becomes a goal |
 | D17 | **Delete the `watch` command and `tools/code_tools.py`.** | Decided 2026-08-06. `watch` (`cli.py:351-414`) is a separate command, not part of a `rudra "<task>"` run, and its only actionable branch dispatches to a tool named `check_syntax` (`cli.py:396`) that exists solely in the dead `execution_tools.py:230` — never in `code_tools.py`, whose tools are `run_command` and `grep_in_file`. The branch has never executed. What remains is a printer of `Modified: <path>` lines. Deleting `watch` removes `code_tools.py`'s only consumer. Command execution returns in **C3.2** (step 7) on backend `execute`, with the log-offload behavior (big output → `.rudra/logs/`, short preview returned) ported as C3.2 already specifies. Run-visibility during a task run is served by `RudraAgent._log_single_message` (`main_agent.py`, method `_log_single_message`), improved later by C9.1/C9.7 |
 | D18 | **Multi-language targets are first-class: Python, Rust, Node, React/Next.js, Angular** | Rudra's *own* toolchain stays Python (`pytest`, `ruff`, 3.12/3.13) regardless of what the user's project is written in — the two must never be conflated. Greenfield and brownfield are both supported and the choice is the user's; Rudra never requires a scaffold step, a config file, or a particular layout before it will work. Frontend completion gate is **unit tests only** — no build step, no e2e, no browser automation. Design: `docs/superpowers/specs/2026-08-07-multi-language-targets-design.md` |
+| D19 | **Phase 4 is accepted against a real external MCP server — `archish9/VersionControlHelperMCP` — never a simulated one. It is documentation-only: not shipped, not vendored, not a dependency** | Owner decision 2026-08-10. A real stdio subprocess, a real model, real tool invocations. Ships as a worked example users clone themselves. See [Section 0.8](#08--real-mcp-acceptance-target-d19) |
 
 ### 0.1 — Middleware disposition (D4)
 
@@ -312,6 +313,62 @@ Whether `.rudra/` is committed is the **user's decision**, and Rudra must not ma
 
 Committing `.rudra/` becomes safe by default; ignoring it becomes a deliberate, informed loss. Rudra writes only `.rudra/.gitignore`, which affects nothing outside its own directory.
 
+### 0.8 — Real MCP acceptance target (D19)
+
+**Owner requirement, recorded 2026-08-10.** Phase 4 (`C4.1`–`C4.6`, Step 13) must be proven against a **real, external MCP server**, not a fixture and not a scripted model. The named server is **`https://github.com/archish9/VersionControlHelperMCP`**.
+
+This section exists so Step 13's implementation plan inherits the requirement instead of rediscovering it. **Nothing here is to be built before Step 13** — the owner explicitly declined to pull MCP work forward into Step 6.
+
+#### The three constraints, in the owner's framing
+
+| Constraint | Meaning |
+|---|---|
+| **Real test, not a simulation** | An actual `uv run version-control-helper-mcp` subprocess over stdio, connected to by Rudra, driven by a real model, actually invoking the server's git tools. The `ScriptedToolModel` pattern (`tests/test_deepagents_contract.py`, U.19) is **not** acceptable as the acceptance evidence — it may still be used for the cheap always-on CI tests, but it does not close this item |
+| **Never ships** | Zero entries in `pyproject.toml`. Not vendored into `src/rudra/`. Not a default MCP server (this constrains **C4.6**'s shipped bundle — this server is not a candidate for it). Rudra must work identically with it absent |
+| **Documentation only** | A worked example in `Documentation/`: what MCP is in Rudra, how to clone and launch this server, the exact `.mcp.json`, and what a real run looks like. Presented as a **suggestion and demo**, clearly marked as a separate project the user installs themselves |
+
+#### What the server is — verified 2026-08-10
+
+Read from the GitHub README on 2026-08-10. **Nobody has cloned, installed, or executed it yet** — every line below is a documentation claim, not a measured one, and Step 13's first task should be to verify it locally before designing against it.
+
+| Property | Claim |
+|---|---|
+| Runtime | Python 3.11+, `uv` |
+| Install | `git clone …` then `uv sync` |
+| Launch | `uv run version-control-helper-mcp`; repo target via `REPO_PATH=/path/to/project uv run version-control-helper-mcp` |
+| Transport | **stdio** — matches `C4.1`'s stdio path, so the HTTP/SSE path stays unproven by this test and needs its own evidence |
+| Tools (10) | `initialize_repo`, `get_repo_status`, `commit_all_changes`, `list_commits`, `rollback_to_commit`, `compare_commits`, `create_branch`, `switch_branch`, `list_branches`, `generate_commit_message` |
+| License | **Unverified.** Does not gate anything (nothing is vendored), but the doc page must state it correctly — check before writing `C4.8` |
+
+Same author as Rudra (`archish9`), so "third-party" is the wrong word in user-facing text; it is a **separate project by the same author**, and the documentation should say so plainly rather than implying a bundled or supported component.
+
+#### Safety constraint — binding, not advisory
+
+Two of the ten tools destroy work: `rollback_to_commit` (git reset) and `commit_all_changes` (stages and commits everything, including files the user did not intend to commit). Handing these to an LLM-driven agent means the agent can discard uncommitted changes.
+
+**The acceptance run must target a throwaway repository created by `mktemp -d`** — never the Rudra checkout, never any repo the owner cares about. `REPO_PATH` must be set explicitly to that tempdir; relying on the server's default (whatever it turns out to be) is not acceptable. This also has to be stated prominently on the documentation page, since a user following the guide will point it at a real project.
+
+This is a concrete instance of what Step 7's permission layer (`C3.3`, `U.7`) exists for, and a good forcing function for it: MCP tools are *not* covered by `permissions=`, which governs filesystem tools only. **Open design question for Step 13: does an MCP tool call pass through Rudra's permission gate at all, or does it bypass it entirely?** Today the honest answer is that no gate exists. Whatever `C4.x` builds must answer this, and `rollback_to_commit` is the test case that makes the answer matter.
+
+#### Test design the Step 13 plan should adopt
+
+Two runs, in this order — the isolation run first so a failure in the combined run is attributable:
+
+1. **MCP-only run.** Task is purely git: initialize a repo, create a branch, commit, list commits, compare two commits. No file-writing by Rudra's own loop. A failure here is unambiguously an MCP failure — connection, schema translation, or invocation
+2. **Combined run.** Rudra writes a small program using its existing capability, then commits it through the MCP server. This is the realistic integration proof, and the one the documentation page walks through
+
+Evidence to capture for both, in the ledger row itself rather than in an ephemeral scratch file (the U.12 lesson — its `/tmp` smoke logs no longer resolve): the exact command, the `.mcp.json` used, which tools the model actually called, the resulting `git log` from the tempdir, and the exit code.
+
+Additional assertions worth building into the same run rather than deferring:
+
+- **`C4.4` lazy loading actually holds.** Ten tools from one server is a real payload; assert the schemas are not all in the prompt before invocation. A 32B context is the constraint this is protecting
+- **`C4.5` namespacing.** This server's `create_branch` / `list_branches` are exactly the kind of names that will collide with Rudra's own git tools from `C3.5` (Step 8). Verify `server__tool` disambiguation with both present
+- **Absence is graceful.** With the server not running, or `.mcp.json` naming a command that does not exist, Rudra must degrade with a clear message and still complete a normal non-MCP task — not crash. This mirrors `C8.6`'s rule for MemPalace
+
+#### Known risk this test will hit
+
+**A1.39** — a transient provider error anywhere in a run kills the whole run and reports failure even when the work succeeded. The acceptance run needs a live hosted model, which is exactly the condition under which A1.39 was observed (twice, on OpenRouter's free tier). If A1.39 is still open when Step 13 runs, expect retries and do not misread a provider 502 as an MCP failure.
+
 ---
 
 ## SECTION A — Bugs & Defects Found During Audit
@@ -536,7 +593,9 @@ Findings that drive this phase are in [Section F](#section-f--deepagents-074-upg
 | C4.3 | PENDING | `rudra mcp add/list/remove/test` |
 | C4.4 | PENDING | Lazy tool-schema loading + per-server allow/deny — a dozen servers will still blow a 32B context if loaded eagerly |
 | C4.5 | PENDING | Tool namespacing (`server__tool`) to avoid collisions |
-| C4.6 | PENDING | Decide the shipped default bundle. Candidates: filesystem, git, fetch |
+| C4.6 | PENDING | Decide the shipped default bundle. Candidates: filesystem, git, fetch. **`VersionControlHelperMCP` is explicitly NOT a candidate** — D19 makes it documentation-only |
+| C4.7 | PENDING | **Real-server acceptance test (D19).** Prove Phase 4 against `archish9/VersionControlHelperMCP` running as an actual stdio subprocess, driven by a real model — not a fixture server and not `ScriptedToolModel`. Two runs: MCP-only (isolation), then write-then-commit (integration). Throwaway `mktemp -d` repo only, `REPO_PATH` set explicitly — `rollback_to_commit` and `commit_all_changes` destroy work. Also assert C4.4 lazy loading, C4.5 namespacing against C3.5's git tools, and graceful degradation when the server is absent. Full design, verified server facts, and the open permission-gate question in [§0.8](#08--real-mcp-acceptance-target-d19). Cheap always-on CI tests may still use a scripted model; they do **not** close this row |
+| C4.8 | PENDING | **`Documentation/09-mcp.md` (D19).** User-facing MCP guide built around the C4.7 walkthrough: what MCP is in Rudra, the `.mcp.json` schema, cloning and launching `VersionControlHelperMCP` (`uv sync` → `REPO_PATH=… uv run version-control-helper-mcp`), and a real transcript. Must state it is a **separate project by the same author**, not bundled or supported, and must carry the destructive-tool warning prominently. Verify its license before writing. Add the row to `Documentation/README.md`'s index table and suggested paths |
 
 ### Phase 5 — Skills + Superpowers (vendored, D2)
 
@@ -679,7 +738,7 @@ Each numbered step is one fresh session with its own self-contained plan under `
 |---|---|---|---|
 | **11** | **C5.1 – C5.9** — skills + vendored superpowers; add the `/skills/` route to the step-7 composite | 10 | Superpowers skills assume subagents and a todo system — both exist only after step 9/10. Vendoring earlier means auditing against an architecture that is about to change |
 | **12** | **C7.1 – C7.8** — context management: checkpoints, living AGENTS.md, compaction, budgets, indexing | 11 | Needs the final agent shape and skill/tool payload sizes to budget against |
-| **13** | **C4.1 – C4.6** — MCP | 12 | Needs config (6), the permission system (7), and context budgeting (12) — a dozen MCP servers will blow a 32B window without lazy loading |
+| **13** | **C4.1 – C4.8** — MCP | 12 | Needs config (6), the permission system (7), and context budgeting (12) — a dozen MCP servers will blow a 32B window without lazy loading. **C4.7 + C4.8 added 2026-08-10 per D19:** this step is not done until it has been proven against the real `archish9/VersionControlHelperMCP` server and documented as a worked example. Read [§0.8](#08--real-mcp-acceptance-target-d19) **before writing this step's plan** — it carries the owner's constraints (real test, never shipped, docs-only), the verified server facts, the two-run test design, the binding throwaway-repo safety rule, and one open design question the plan must answer: whether MCP tool calls pass through Rudra's permission gate at all, given `permissions=` covers filesystem tools only |
 | **14** | **C8.1 – C8.9** — MemPalace long-term memory | 13 | Largest new subsystem. Needs a stable definition of "what a completed task looks like" (step 9) to know what is worth storing |
 
 ### Stage V — Ship
