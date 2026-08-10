@@ -12,7 +12,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 - **Agent framework:** [LangChain `deepagents`](https://github.com/langchain-ai/deepagents) — installed `0.4.12`, **target `0.7.4`** (upgrade is TODO Phase U, step 1). Anything you read in `.venv` is the *old* version; check `TODO.md` §F for what changed.
 - **CLI:** Typer + Rich + prompt_toolkit
 - **Package:** `rudra`, entry point `rudra.cli:app` (`pyproject.toml:62`)
-- **License:** Apache-2.0 declared in `pyproject.toml:10` — **no LICENSE file exists on disk yet**
+- **License:** Apache-2.0 declared in `pyproject.toml:10`; full text on disk at `LICENSE` (added 2026-08-10, A4.2). A NOTICE file is still absent and is only needed once superpowers/MemPalace are vendored (A4.7)
 - **Repo:** remote is `git@github.com:archish9/RudraAnvil.git`; `pyproject.toml:65-66` wrongly says `github.com/archish/Rudra`
 - **Ships as:** open-source GitHub project
 

@@ -144,7 +144,9 @@ New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then 
 
 ## License
 
-Apache 2.0 — declared in `pyproject.toml`. A `LICENSE` file has not been added to the repository yet; that lands before the first public release.
+Apache License 2.0 — see [LICENSE](LICENSE).
+
+Copyright 2026 Archish Patel.
 
 <p align="center">
   <i>Built with fire by the storm that purifies code</i>
