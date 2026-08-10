@@ -64,6 +64,9 @@ app = typer.Typer(
 models_app = typer.Typer(help="Inspect and test configured models.")
 app.add_typer(models_app, name="models")
 
+config_app = typer.Typer(help="Inspect effective configuration (read-only).")
+app.add_typer(config_app, name="config")
+
 console = Console()
 
 
@@ -253,6 +256,91 @@ def models_test(
     console.print(table)
     if failed:
         raise typer.Exit(code=1)
+
+
+def _load_config_or_exit(project_dir: Optional[Path]):
+    """Build a Config, turning ConfigError into a clean message.
+
+    A malformed config file is a user error, not a crash — never show a
+    traceback for one.
+    """
+    from rudra.config import ConfigError, build_config
+
+    try:
+        return build_config(get_project_path(project_dir))
+    except ConfigError as exc:
+        console.print(f"[red]Configuration error:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+
+
+def _flatten(cfg) -> list[tuple[str, object]]:
+    """Every effective leaf as a dotted key, in a stable order."""
+    from dataclasses import asdict
+
+    rows: list[tuple[str, object]] = []
+    for role in sorted(cfg.models):
+        for key, value in asdict(cfg.models[role]).items():
+            rows.append((f"model.{role}.{key}", value))
+    rows.append(("agent.verbose", cfg.agent.verbose))
+    rows.append(("permissions.mode", cfg.permissions.mode))
+    rows.append(("permissions.allow", list(cfg.permissions.allow)))
+    rows.append(("permissions.deny", list(cfg.permissions.deny)))
+    rows.append(("compat.task_anchor", cfg.compat.task_anchor))
+    rows.append(("compat.sandbox_paths", cfg.compat.sandbox_paths))
+    return rows
+
+
+def _source_of(cfg, key: str) -> str:
+    """Which layer set this key.
+
+    A role that inherits a value has no provenance entry of its own, so the
+    lookup falls back to the default role's — otherwise every inherited key
+    would misreport as 'builtin'.
+    """
+    source = cfg.provenance.get(key)
+    if source is None and key.startswith("model."):
+        _, _, leaf = key.split(".", 2)
+        source = cfg.provenance.get(f"model.default.{leaf}")
+    return source or "builtin"
+
+
+@config_app.command("list")
+def config_list(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+    role: Optional[str] = typer.Option(None, "--role", help="Show one model role only"),
+) -> None:
+    """Show every effective value and the layer that set it."""
+    cfg = _load_config_or_exit(project_dir)
+
+    table = Table(title="Effective configuration", header_style="bold")
+    for column in ("Key", "Value", "Source"):
+        table.add_column(column, overflow="fold")
+
+    for key, value in _flatten(cfg):
+        if role and key.startswith("model.") and not key.startswith(f"model.{role}."):
+            continue
+        table.add_row(key, "-" if value is None else str(value), _source_of(cfg, key))
+
+    console.print(table)
+    for layer in ("user", "project"):
+        path = cfg.sources.get(layer)
+        console.print(f"[dim]{layer:>8}:[/dim] {path or '(none)'}")
+
+
+@config_app.command("get")
+def config_get(
+    key: str = typer.Argument(..., help="Dotted key, e.g. model.planner.model"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Print one value and where it came from."""
+    cfg = _load_config_or_exit(project_dir)
+    for candidate, value in _flatten(cfg):
+        if candidate == key:
+            shown = "-" if value is None else value
+            console.print(f"{shown}  [dim](from {_source_of(cfg, key)})[/dim]")
+            return
+    console.print(f"[red]Unknown key '{key}'.[/red] Run `rudra config list` to see valid keys.")
+    raise typer.Exit(code=1)
 
 
 @app.command("init")
