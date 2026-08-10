@@ -115,7 +115,7 @@ mkdir ~/rudra-playground && cd ~/rudra-playground
 rudra "write wordcount.py: an argparse CLI that counts lines, words and characters in a file"
 ```
 
-Rudra writes a plan to `.rudra/PLAN.md`, then writes each file. When it's finished:
+Rudra writes a plan to `.rudra/run/PLAN.md`, then writes each file. When it's finished:
 
 ```bash
 python wordcount.py some-file.txt

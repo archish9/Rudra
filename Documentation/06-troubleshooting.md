@@ -259,7 +259,7 @@ A model call failed partway through — rate limit, dropped connection, upstream
 Check before assuming nothing happened:
 
 ```bash
-cat .rudra/PLAN.md      # ticked items were genuinely written
+cat .rudra/run/PLAN.md      # ticked items were genuinely written
 ls
 ```
 

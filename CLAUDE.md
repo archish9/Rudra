@@ -42,17 +42,19 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ```
 src/rudra/
-├── cli.py            (419) Typer app. ONLY 2 entry paths: main callback + `watch`
-├── config.py         ( 68) OllamaConfig / AgentConfig / SearchConfig; module-level `config`
+├── cli.py                  Typer app: main callback + `models`, `config`, `init`, `doctor`
+├── config/                 Layered TOML config (Step 6). schema / layers / loader / template
+├── llm/                    Provider-agnostic model factory (Step 5)
+├── stacks/                 Multi-language stack detection (Step 4)
 ├── agent/
 │   ├── main_agent.py (601) RudraAgent — hand-rolled planner→coder orchestration loop
 │   ├── planner_agent.py (96) deep agent, ChatOllama hardcoded
 │   └── coder_agent.py   (84) deep agent, ChatOllama hardcoded, tools=[]
 ├── middleware/       (376) 6 middlewares, all workarounds for qwen3:14b misbehavior
-├── tools/            (383) planning_tools, interaction_tools, code_tools
-├── filesystem/       (686) VirtualFileSystem + FileSyncManager
-├── state/            (113) session id (unused), ProjectConfigManager
-└── compat/           (182) monkeypatches into deepagents internals
+├── tools/                  planning_tools, interaction_tools
+├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
+├── state/                  paths.py (D15 layout), ProjectConfigManager, session id (unused)
+└── compat/                 monkeypatches + version guard into deepagents internals
 ```
 
 ### Control flow (`main_agent.py:345-437`)
@@ -65,15 +67,28 @@ src/rudra/
 This is a hardcoded Python loop, not an agentic loop. There is no test/review/fix stage.
 
 ### `.rudra/` state directory
-| File | Written by | Read by | Notes |
-|---|---|---|---|
-| `PLAN.md` | `update_plan` (`planning_tools.py:41`) | orchestrator + `read_plan` | Filenames only |
-| `current_task.md` | `write_task_assignment` (`planning_tools.py:133`) | coder | Planner→coder handoff |
-| `tech_stack.md` | `_write_tech_stack_file` (`main_agent.py:477`) | both | Rewritten every run |
-| `AGENTS.md` | `_ensure_agents_md` (`main_agent.py:446`) | planner via `memory=` | **Created once, never updated** |
-| `project.json` | `save_project_context` | `ProjectConfigManager` | Working |
-| `checkpoints.db` | `AsyncSqliteSaver` | nothing | **thread_id is a fresh uuid4 each run — never resumed** |
-| `logs/cmd_output.txt` | `run_command` | — | Tool is not wired to any agent |
+
+Split into durable and volatile subtrees by D15 (implemented Step 6, C0.9).
+`src/rudra/state/paths.py` is the single source of truth — never build a
+`.rudra/...` path by hand. `rudra_paths()` is pure; `ensure_layout()` is the
+only function that creates anything.
+
+| File | Durable? | Written by | Read by | Notes |
+|---|---|---|---|---|
+| `config.toml` | durable | `rudra init` | config loader | Layer 3 of five |
+| `AGENTS.md` | durable | `_ensure_agents_md` | planner via `memory=` | **Created once, never updated** (A1.9) |
+| `project.json` | durable | `save_project_context` | `ProjectConfigManager` | Becomes `facts.json` at C6.8a |
+| `.gitignore` | durable | `ensure_layout` | git | Written by Rudra, scopes **only** `.rudra/` |
+| `run/PLAN.md` | volatile | `update_plan` | orchestrator + `read_plan` | Filenames only |
+| `run/current_task.md` | volatile | `write_task_assignment` | coder | Planner→coder handoff |
+| `run/tech_stack.md` | volatile | `_write_tech_stack_file` | both | Rewritten every run |
+| `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
+| `memory/export/` | durable | — | — | Step 14 |
+| `memory/palace/` | volatile | — | — | Step 14 |
+
+Agent-facing prompts name these paths as literal strings. If a path moves,
+the prompt text must move in the same commit or the coder writes where
+nothing reads — `tests/test_rudra_dir_migration.py` guards this.
 
 ---
 
@@ -122,6 +137,16 @@ Owner decisions are recorded in `TODO.md` §0. Summary: TOML config, vendored su
 4. Environment variables (`RUDRA_*`)
 5. CLI flags
 
+**Live as of Step 6:** `[model.*]`, `[agent]`, `[permissions]`, `[compat]`.
+`[skills]`, `[memory]`, and `[tools]` are **reserved** — writing one is a hard
+error naming the step that implements it (11, 14, and 7 respectively). MCP
+stays in `.mcp.json` (Step 13). Unknown keys are fatal and suggest the nearest
+valid name, because the common case is a typo.
+
+`rudra init` scaffolds the file; `rudra config list` shows every effective
+value and the layer that set it. There is no `rudra config set` — see
+TODO.md S6.1.
+
 ```toml
 # .rudra/config.toml
 [model.planner]
@@ -168,7 +193,9 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 
 - `install_path_normalizer` (`compat/deepagents_path.py`) monkeypatches `deepagents.backends.utils.validate_path` **and** `deepagents.middleware.filesystem.validate_path` because the middleware does `from ... import validate_path` — patching one is not enough. This will break on any deepagents upgrade; `pyproject.toml:27` uses `>=`, not `==`.
 - `OverwriteFilesystemBackend` (`compat/overwrite_backend.py`) exists because **0.4.12's** `FilesystemBackend.write()` refuses to overwrite, sending small local models into a `write → error → edit no-op → write` infinite loop. **In 0.7.4 `write()` overwrites by default** (`backends/filesystem.py:489`) → the subclass is obsolete; only its markdown-fence stripping still matters.
-- The 6 middlewares are all patches for qwen3:14b failure modes documented in their own docstrings. Minimum target model is now **32B** → 4 of the 6 get deleted, 2 survive behind a `[compat]` flag. Disposition table: `TODO.md` §0.1.
+- The 6 middlewares are all patches for qwen3:14b failure modes documented in their own docstrings. Minimum target model is now **32B** → 4 of the 6 were deleted in Step 2, and the 2 survivors are **opt-in behind `[compat]`, default off, as of Step 6** (C1.8). Disposition table: `TODO.md` §0.1. `FixWriteParamsMiddleware` is split rather than gated wholesale: fence-stripping and `filename`/`path` → `file_path` aliasing are **always on** (required since U.3 — 0.7.4's `write()` no longer strips), while sandbox-prefix stripping sits behind `[compat] sandbox_paths` because `/src/` and `/tmp/` are sandbox prefixes *and* ordinary absolute directories.
+- **Configuration precedence lives in exactly one function**, `config/loader.py::deep_merge`, and every value records the layer that set it. This shape was chosen because A5.1 and A5.2 were both "which source won?" defects that a per-field `x or y or default` chain structurally cannot answer. Do not reintroduce per-field resolution.
+- **Role inheritance runs after the cross-layer merge**, not inside a layer. Inside a layer, a project-level `[model.planner]` would fail to inherit a user-level `[model.default]`.
 - `road-map.md` argues against trajectory fine-tuning and for planning-data fine-tuning; `improvements.txt` and `context_management_implementation_plan.md` are prior planning docs, partially implemented.
 
 ---
@@ -176,9 +203,15 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ## 8. Commands
 
 ```bash
-.venv/bin/ruff check src/            # 164 errors at merge-base b322978; standard is NO INCREASE vs that baseline, not an absolute ceiling
-.venv/bin/pytest                     # tests/ is empty — 0 tests
-.venv/bin/rudra --version            # prints 0.1.0; pyproject says 0.2.0
+.venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
+.venv/bin/ruff format --check src/ tests/
+.venv/bin/pytest -q                  # 286 passed, 2 skipped at Step 6; must never go down
+.venv/bin/rudra --version            # Rudra v0.2.0
+
+.venv/bin/rudra init                 # scaffold .rudra/config.toml + the D15 layout
+.venv/bin/rudra config list          # every effective value + which layer set it
+.venv/bin/rudra doctor --offline     # diagnose config, layout, deps; --offline skips network
+.venv/bin/rudra models test          # verify each role is reachable and can call tools
 .venv/bin/rudra "build a flask app"  # single-shot
 .venv/bin/rudra                      # REPL
 ```

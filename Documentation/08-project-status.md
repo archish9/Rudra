@@ -24,7 +24,9 @@ Rudra can plan a set of files and write them, against any model you point it at 
 
 **Different models per role.** The planner and coder can use different models, different providers, different settings.
 
-**Configuration checking.** `rudra models test` verifies each role constructs, connects, and can call tools — before you commit to a task.
+**Configuration checking.** `rudra models test` verifies each role constructs, connects, and can call tools — before you commit to a task. `rudra doctor` checks the rest of the setup.
+
+**Layered TOML configuration.** `.rudra/config.toml` for the project, `~/.config/rudra/config.toml` for you, environment variables and CLI flags on top. `rudra config list` shows every effective value **and which layer set it**, so a surprising setting is traceable rather than mysterious.
 
 **Planning and writing.** Rudra produces a file checklist, then writes each file with a fresh agent, retrying up to three times per file.
 
@@ -72,13 +74,11 @@ Each invocation starts fresh apart from what's on disk. It doesn't remember prev
 
 Designed, not implemented.
 
-### No TOML configuration
-
-`.rudra/config.toml` and `~/.config/rudra/config.toml` are designed but not implemented. Environment variables are the only configuration surface today.
-
 ### No permission prompts
 
 There's no approval gate before Rudra writes a file. It writes within your project directory without asking. Point it at scratch directories, not repositories you can't afford to have edited.
+
+`[permissions] mode` exists in configuration and accepts `ask`, `auto`, and `plan`, but **nothing enforces it** — the setting is plumbing for the next milestone. Rudra says so on every run and in `rudra doctor` rather than letting `mode = "ask"` read as a guarantee it can't keep.
 
 ---
 
@@ -88,7 +88,7 @@ Things that work, but not the way you'd hope.
 
 | Issue | What happens | Workaround |
 |---|---|---|
-| **A failed model call ends everything** | Rate limit or dropped connection raises an error and exits `1`, even if files were already written | Check `.rudra/PLAN.md` — ticked items were genuinely written. Re-run to continue |
+| **A failed model call ends everything** | Rate limit or dropped connection raises an error and exits `1`, even if files were already written | Check `.rudra/run/PLAN.md` — ticked items were genuinely written. Re-run to continue |
 | **Silently dropped plan items** | A `PLAN.md` line that doesn't parse as a filename is skipped, and the count reports only survivors — `2/2` can hide a missing third | Read `PLAN.md`; ask again naming the file explicitly |
 | **`--dry-run` does nothing** | Exits immediately with no plan and no preview | Use a scratch directory instead |
 | **Ollama truncates silently** | Default 4096-token window, no warning, and the agent forgets its plan | Set `RUDRA_CONTEXT_TOKENS` |
@@ -117,8 +117,7 @@ Built in order, because each depends on the last.
 
 | Next | What it brings |
 |---|---|
-| **TOML configuration** | Config files with layering, permission modes |
-| **Shell access + permissions** | Rudra can run commands — and asks before doing anything risky. These land together, never separately |
+| **Shell access + permissions** | Rudra can run commands — and asks before doing anything risky. These land together, never separately, and this is what makes `[permissions]` real |
 | **Git and test-runner tools** | Running your test suite becomes possible |
 | **The real agent loop** | Subagents, a reviewer, a tester, and a completion gate that means *tests pass* rather than *file exists* |
 | **Better planning** | Clarifying questions when a request is ambiguous, and a plan mode |

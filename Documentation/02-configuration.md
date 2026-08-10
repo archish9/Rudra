@@ -1,210 +1,211 @@
-# 2. Configuration
+# Configuration
 
-Rudra is configured entirely through environment variables, usually written into a `.env` file in your project.
+Rudra reads configuration from five places. Later ones override earlier ones:
 
-- [The short version](#the-short-version)
-- [Where settings come from](#where-settings-come-from)
-- [Every setting](#every-setting)
-- [Different models for different jobs](#different-models-for-different-jobs)
-- [API keys](#api-keys)
-- [Context window](#context-window)
-- [Which `.env` gets read](#which-env-gets-read)
-- [Older `OLLAMA_*` variables](#older-ollama-variables)
-- [Checking what Rudra sees](#checking-what-rudra-sees)
-
----
-
-## The short version
-
-```bash
-cp .env.example .env
-```
-
-Edit three lines and you're done:
-
-```bash
-RUDRA_PROVIDER=ollama
-RUDRA_BASE_URL=http://localhost:11434
-RUDRA_MODEL=qwen3:32b
-```
-
-Confirm with `rudra models test`.
-
-> TOML configuration files (`.rudra/config.toml`, `~/.config/rudra/config.toml`) are designed but **not implemented yet**. Environment variables are the only configuration surface today. See [Project Status](08-project-status.md).
-
----
-
-## Where settings come from
-
-Later wins:
-
-1. **Built-in defaults** — Ollama on `localhost:11434` with `qwen3:32b`
-2. **`.env`** in your project directory
-3. **Real environment variables** — `export RUDRA_MODEL=...` beats anything in `.env`
-
-That last rule is deliberate. A `.env` is a convenience, and you can always override it for one run without editing anything:
-
-```bash
-RUDRA_MODEL=qwen3-coder:32b rudra "refactor the parser"
-```
-
----
-
-## Every setting
-
-| Variable | Default | What it does |
+| # | Layer | Where |
 |---|---|---|
-| `RUDRA_PROVIDER` | `ollama` | Which kind of backend: `ollama`, `openai_compatible`, `openai`, `anthropic`, `google` |
-| `RUDRA_MODEL` | `qwen3:32b` | The model name, exactly as your provider spells it |
-| `RUDRA_BASE_URL` | `http://localhost:11434` | Where the server lives. Leave unset for hosted providers with a fixed endpoint |
-| `RUDRA_API_KEY_ENV` | *(unset)* | **Name** of the environment variable holding your key — never the key itself |
-| `RUDRA_TEMPERATURE` | `0.3` | Creativity. Low is better for code |
-| `RUDRA_MAX_OUTPUT_TOKENS` | `131072` | Cap on how much the model may write in one reply |
-| `RUDRA_CONTEXT_TOKENS` | *(unset)* | Size of the context window — see [below](#context-window) |
-| `RUDRA_TIMEOUT` | `300` | Seconds to wait for a reply. Ignored on Ollama, which has no timeout setting |
-| `VERBOSE` | `true` | Show detailed agent output. `false` to quieten it |
+| 1 | Built-in defaults | shipped in the package |
+| 2 | User config | `~/.config/rudra/config.toml` (or `$XDG_CONFIG_HOME/rudra/config.toml`) |
+| 3 | Project config | `<project>/.rudra/config.toml` |
+| 4 | Environment | `RUDRA_*` variables, including anything in the project's `.env` |
+| 5 | Command-line flags | `--verbose`, `--auto`, … |
 
-Each of the model settings can also be set **per role** — read on.
-
----
-
-## Different models for different jobs
-
-Rudra uses two roles:
-
-- **planner** — reads your request, decides which files are needed, writes the instructions
-- **coder** — takes one instruction and writes one file
-
-By default both use the same model. Prefix any setting with `PLANNER_` or `CODER_` to split them:
+You never have to remember that table, because Rudra will tell you:
 
 ```bash
-# shared defaults
-RUDRA_PROVIDER=ollama
-RUDRA_BASE_URL=http://localhost:11434
-RUDRA_TEMPERATURE=0.3
-
-# a reasoning model to plan with
-RUDRA_PLANNER_MODEL=qwen3:32b
-
-# a code-specialised model to write with
-RUDRA_CODER_MODEL=qwen3-coder:32b
-RUDRA_CODER_TEMPERATURE=0.1
+rudra config list
 ```
 
-Roles can even use different providers — plan on a hosted model, write locally:
+Every value comes back with the layer that set it. When a setting isn't doing
+what you expect, that column is the answer.
+
+## Getting started
 
 ```bash
-RUDRA_PLANNER_PROVIDER=openai_compatible
-RUDRA_PLANNER_BASE_URL=https://openrouter.ai/api/v1
-RUDRA_PLANNER_MODEL=anthropic/claude-sonnet-4-5
-RUDRA_PLANNER_API_KEY_ENV=OPENROUTER_API_KEY
-
-RUDRA_CODER_PROVIDER=ollama
-RUDRA_CODER_BASE_URL=http://localhost:11434
-RUDRA_CODER_MODEL=qwen3-coder:32b
-
-OPENROUTER_API_KEY=sk-or-v1-...
+rudra init          # writes a commented .rudra/config.toml
 ```
 
-The full per-role set: `RUDRA_PLANNER_PROVIDER`, `_MODEL`, `_BASE_URL`, `_API_KEY_ENV`, `_TEMPERATURE`, `_CONTEXT_TOKENS`, `_MAX_OUTPUT_TOKENS`, `_TIMEOUT` — and the same with `CODER_`.
-
-A role with nothing set falls back to the bare `RUDRA_*` value. Role names Rudra doesn't know yet also fall back, so future roles work without configuration changes.
-
----
-
-## API keys
-
-**Rudra never stores an API key in configuration.** Config names a variable; the value is read from your environment at the moment it's needed.
+Edit the file, then check it:
 
 ```bash
-RUDRA_API_KEY_ENV=OPENROUTER_API_KEY     # the name
-OPENROUTER_API_KEY=sk-or-v1-abc123...    # the value
+rudra models test   # is the model reachable, and can it call tools?
+rudra doctor        # everything else
 ```
 
-Why bother? Because config files get committed, pasted into issues, and shared in screenshots. A variable name is harmless in all three.
+`rudra init --global` writes the user-level file instead. `--force` overwrites
+an existing one.
 
-The name is yours to choose. Several providers at once is fine:
+## The file
 
-```bash
-RUDRA_PLANNER_API_KEY_ENV=ANTHROPIC_API_KEY
-RUDRA_CODER_API_KEY_ENV=OPENROUTER_API_KEY
+```toml
+[model.default]
+# ollama | openai_compatible | anthropic | openai | google
+provider    = "ollama"
+base_url    = "http://localhost:11434"
+model       = "qwen3:32b"
+temperature = 0.3
 
-ANTHROPIC_API_KEY=sk-ant-...
-OPENROUTER_API_KEY=sk-or-v1-...
+# The NAME of an environment variable holding your key — never the key itself.
+# api_key_env = "OPENROUTER_API_KEY"
+
+# Your model's real context window. Without it, history compaction never
+# triggers on local models, and Ollama silently truncates at 4096.
+# context_tokens = 32768
+
+[model.planner]
+model = "qwen3:32b"
+
+[model.coder]
+model = "qwen3-coder:32b"
+
+[agent]
+verbose = true
+
+[permissions]
+mode  = "ask"    # ask | auto | plan
+allow = []
+deny  = []
+
+[compat]
+task_anchor   = false
+sandbox_paths = false
 ```
 
-You can also keep keys out of `.env` entirely and export them from your shell profile or a secret manager — Rudra reads the environment either way.
+### Roles inherit
 
-`.env` is listed in `.gitignore`, so it is not committed. If you're using Ollama locally, you need no key at all.
+Anything a role omits comes from `[model.default]`. So this:
 
----
+```toml
+[model.default]
+provider = "openai_compatible"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+temperature = 0.3
 
-## Context window
-
-`RUDRA_CONTEXT_TOKENS` tells Rudra how much context your model can hold. It does **two** things, which is why it's worth setting:
-
-1. **Tells Rudra when to compact.** As a conversation grows, Rudra summarises older parts to stay within budget. Without this setting it assumes a large default and may never compact at all — so a long session can overflow.
-2. **On Ollama, sizes the server's window too.** Ollama allocates **4096 tokens by default** and silently truncates anything beyond that, no error, no warning. Setting this raises the allocation to match.
-
-```bash
-RUDRA_CONTEXT_TOKENS=131072
+[model.coder]
+model = "qwen/qwen3-coder-32b"
 ```
 
-Use the real number for your model. Hosted providers usually report their own, so you can leave it unset; local models generally don't, so setting it is worthwhile.
+gives the coder its own model and the shared provider, URL, key, and
+temperature — no repetition.
 
-Check what took effect with the `Ctx` column of `rudra models test`.
+Role names are not a fixed list. You can write `[model.reviewer]` today; it
+will be picked up when the reviewer role ships. Unknown roles fall back to
+`[model.default]`, so nothing breaks in the meantime.
 
----
+### API keys are never in the file
 
-## Which `.env` gets read
+`api_key_env` names an environment variable. Rudra reads that variable at run
+time and never stores, logs, or prints its value. Put the key in your
+environment or in `.env` (which is gitignored), not in `config.toml`.
 
-Rudra reads `.env` from the **project directory** — the folder you're in, or whatever `--project-dir` points at.
+## Environment variables
 
-```bash
-cd ~/projects/api && rudra "add tests"       # reads ~/projects/api/.env
-rudra "add tests" -d ~/projects/api          # also reads ~/projects/api/.env
-```
+Every setting has an environment equivalent, and environment beats both config
+files:
 
-That second case matters: run from your home directory with `-d`, and Rudra still reads the *project's* `.env`, not your home folder's.
-
-Different projects can therefore use different models with no global state.
-
----
-
-## Older `OLLAMA_*` variables
-
-Earlier versions used `OLLAMA_*` names. They still work for one more release and print a deprecation warning naming the replacement.
-
-| Old | New |
+| Variable | Sets |
 |---|---|
-| `OLLAMA_BASE_URL` | `RUDRA_BASE_URL` |
-| `OLLAMA_MODEL` | `RUDRA_MODEL` |
-| `OLLAMA_MODEL_PLANNER` | `RUDRA_PLANNER_MODEL` |
-| `OLLAMA_MODEL_CODER` | `RUDRA_CODER_MODEL` |
-| `OLLAMA_TEMPERATURE` | `RUDRA_TEMPERATURE` |
-| `OLLAMA_TIMEOUT` | `RUDRA_TIMEOUT` |
-| `OLLAMA_NUM_PREDICT` | `RUDRA_MAX_OUTPUT_TOKENS` |
+| `RUDRA_MODEL` | `model.default.model` |
+| `RUDRA_PROVIDER` | `model.default.provider` |
+| `RUDRA_BASE_URL` | `model.default.base_url` |
+| `RUDRA_API_KEY_ENV` | `model.default.api_key_env` |
+| `RUDRA_TEMPERATURE` | `model.default.temperature` |
+| `RUDRA_CONTEXT_TOKENS` | `model.default.context_tokens` |
+| `RUDRA_MAX_OUTPUT_TOKENS` | `model.default.max_output_tokens` |
+| `RUDRA_TIMEOUT` | `model.default.timeout` |
+| `RUDRA_VERBOSE` | `agent.verbose` |
+| `RUDRA_PERMISSIONS_MODE` | `permissions.mode` |
 
-If both are set, the `RUDRA_*` one wins. Migrate when convenient; they'll be removed.
+Prefix with a role for a per-role override: `RUDRA_PLANNER_MODEL`,
+`RUDRA_CODER_BASE_URL`. A role you declared in TOML works too —
+`[model.reviewer]` makes `RUDRA_REVIEWER_MODEL` live.
 
-Settings from even older versions — `MAX_AGENTS`, `MAX_ITERATIONS`, `CHECKPOINT_INTERVAL`, `TAVILY_API_KEY`, `USE_DUCKDUCKGO` — no longer exist and are ignored.
+### Which `.env` gets read
 
----
+The one in the project directory. If you pass `--project-dir /path/to/proj`,
+Rudra reads `/path/to/proj/.env` and `/path/to/proj/.rudra/config.toml` — not
+whatever happens to sit in the directory you ran the command from.
 
-## Checking what Rudra sees
+A real environment variable always beats `.env`.
 
-Fastest answer:
+## Reading configuration back
 
 ```bash
-rudra models test
+rudra config list                        # everything, with sources
+rudra config list --role planner         # just one role
+rudra config get model.planner.model     # one value and where it came from
 ```
 
-The table shows the provider, model, and context window actually in effect for each role. If it doesn't match what you expected, something is overriding it — most often a real environment variable beating your `.env`:
+There is **no `rudra config set`**. The standard library can read TOML but not
+write it, and every available writer either destroys the comments `rudra init`
+puts in the file or adds a dependency for something your editor already does
+well. Edit the file directly.
 
-```bash
-env | grep RUDRA_
+## Errors
+
+A broken config fails immediately and tells you where:
+
+```
+Configuration error: /path/.rudra/config.toml: invalid TOML — Expected ']' (at line 2, column 1)
+Configuration error: Unknown key 'tempreature' in [model.default] (/path/.rudra/config.toml). Did you mean 'temperature'?
+Configuration error: Unknown provider 'banana' in [model.default]. Valid providers: anthropic, google, ollama, openai, openai_compatible.
 ```
 
----
+Unknown keys are errors rather than warnings on purpose: the usual cause is a
+typo, and quietly ignoring one means your setting never applies and nothing
+says so.
 
-**Next:** [Choosing a Model](03-providers.md) for provider-specific setup, or [Troubleshooting](06-troubleshooting.md) if something isn't connecting.
+Sections that aren't supported yet say when they will be:
+
+```
+Configuration error: [skills] is not supported yet — arrives in Step 11 (C5.1).
+```
+
+## Permissions — read this before relying on it
+
+`[permissions]` parses, validates, and is visible to `rudra config get`. **It
+is not enforced.** Rudra currently writes and overwrites files without asking,
+whatever `mode` says. `--auto`, `--yolo`, and `--plan` set the value and print
+a notice saying the same thing.
+
+This is stated on every run and in `rudra doctor` rather than buried here,
+because a setting reading `mode = "ask"` otherwise reads as a safety guarantee
+that does not exist. Enforcement, diff previews, and approval prompts arrive
+together with shell execution.
+
+Until then: review what Rudra writes, and work on a branch or a clean tree.
+
+## Compatibility flags
+
+`[compat]` holds two workarounds built for small models, both **off** by
+default. The supported minimum is a 32B model, which does not need them.
+
+- `task_anchor` — re-injects the task into the system prompt on every model
+  call. Can help on very long runs; costs tokens on every call.
+- `sandbox_paths` — strips prefixes like `/workspace/` and `/tmp/` from paths
+  the model emits. Off by default because those are also perfectly ordinary
+  directories, and stripping them rewrites paths you meant.
+
+Markdown-fence stripping and `filename` → `file_path` correction are always
+on. They are not compatibility shims — without them, models that wrap file
+contents in code fences write broken files.
+
+## The `.rudra/` directory
+
+```
+.rudra/
+  .gitignore      written by Rudra, covers only this directory
+  config.toml     ← durable, safe to commit
+  AGENTS.md       ← durable
+  project.json    ← durable
+  memory/export/  ← durable
+  memory/palace/    volatile, ignored
+  run/              volatile, ignored
+    PLAN.md, current_task.md, tech_stack.md, checkpoints.db, logs/
+```
+
+Everything under `run/` is regenerated on every run. The durable files are
+worth keeping, so committing `.rudra/` is safe by default — Rudra writes
+`.rudra/.gitignore` to make it so, and never touches your project's own
+`.gitignore`. Whether you commit it is your call.
