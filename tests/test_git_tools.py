@@ -8,7 +8,7 @@ import pytest
 from rich.console import Console
 
 from rudra.config.loader import build_config
-from rudra.git.tools import create_git_tools
+from rudra.tools.git_tools import create_git_tools
 from tests.conftest_git import AutoGate, RecordingAskGate, StrictAskGate, make_repo
 
 
@@ -89,7 +89,7 @@ def test_a_dotdot_path_that_stays_inside_does_not_prompt(repo: Path, tmp_path: P
 
 
 def test_the_diff_is_capped(repo: Path, tmp_path: Path):
-    from rudra.git.tools import MAX_DIFF_LINES
+    from rudra.tools.git_tools import MAX_DIFF_LINES
 
     (repo / "a.txt").write_text(
         "\n".join(str(n) for n in range(MAX_DIFF_LINES * 3)) + "\n", encoding="utf-8"

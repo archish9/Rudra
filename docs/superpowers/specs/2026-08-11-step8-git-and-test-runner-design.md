@@ -127,8 +127,28 @@ src/rudra/stacks/            pure detection — unchanged except registry.py (§
 src/rudra/shell/runner.py    run_gated()  ← the ONLY subprocess call site in Rudra
         │                            │
 src/rudra/git/core.py        src/rudra/testing/runner.py
-src/rudra/git/tools.py       src/rudra/testing/tools.py
+src/rudra/tools/git_tools.py src/rudra/tools/testing_tools.py
 ```
+
+> **Amended 2026-08-11, after implementation.** As designed, the two tool
+> files sat inside their own packages (`git/tools.py`, `testing/tools.py`).
+> The owner pointed out that `src/rudra/tools/` already existed and is where
+> a reader looks to answer "what can the model actually do?" — and that
+> splitting tool definitions across three directories makes that question
+> harder than it should be.
+>
+> The three approaches offered during design all assumed new top-level
+> packages, so that alternative was never on the menu. The justification
+> given at the time — that `tools/` holds tool definitions while these are
+> subsystems — was also weaker than stated: `tools/planning_tools.py`
+> already exported `looks_like_path`, a pure helper `main_agent` imports
+> directly. The difference was proportion, not category.
+>
+> Resolved by moving only the tool surface: `tools/` now holds every tool
+> and nothing else, while `git/core.py` and `testing/{runner,parse}.py`
+> keep the subsystem logic the orchestrator calls with no model in the loop.
+> The cohesion argument the original layout rested on is preserved for the
+> code that actually carries it. Everything else in this spec stands.
 
 Three modules rather than two. Both `C3.5` and `C3.6` need the same primitive —
 *run a command, through the gate, capture output* — and that primitive is the
@@ -247,7 +267,7 @@ in a 32B window (D6).
 | `log(path, n)` | `--format=%H%x00%an%x00%s`, NUL-separated so subjects containing colons parse |
 | `auto_branch(path, task, …)` | the orchestrator entry point — §5.3 |
 
-**`git/tools.py`** — `git_diff` and nothing else. A capped, parsed working-tree
+**`tools/git_tools.py`** — `git_diff` and nothing else. A capped, parsed working-tree
 diff is precisely what raw `execute` does badly: unbounded diff output blows a
 32B context. Cap ~400 lines / 8 KB with an explicit truncation notice.
 

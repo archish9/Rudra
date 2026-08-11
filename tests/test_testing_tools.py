@@ -9,7 +9,7 @@ from rich.console import Console
 
 from rudra.config.loader import build_config
 from rudra.testing.runner import TestResult
-from rudra.testing.tools import create_testing_tools, summarise
+from rudra.tools.testing_tools import create_testing_tools, summarise
 from tests.conftest_git import AutoGate, DenyShellGate
 
 
