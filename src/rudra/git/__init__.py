@@ -1,4 +1,9 @@
-"""Git tools and the Python git API (Step 8, C3.5)."""
+"""The Python git API (Step 8, C3.5).
+
+The orchestrator calls these directly -- `auto_branch` before a run, `diff`
+for Step 9's reviewer -- with no model involved. The one model-facing tool
+built on top lives in `rudra.tools.git_tools`, with every other tool.
+"""
 
 from __future__ import annotations
 

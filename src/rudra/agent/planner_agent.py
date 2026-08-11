@@ -9,15 +9,15 @@ from rich.console import Console
 
 from rudra.config import get_config
 from rudra.filesystem import project_tree
-from rudra.git.tools import create_git_tools
 from rudra.llm import build_model
 from rudra.middleware import (
     FixWriteParamsMiddleware,
     TaskAnchorMiddleware,
 )
-from rudra.testing.tools import create_testing_tools
+from rudra.tools.git_tools import create_git_tools
 from rudra.tools.interaction_tools import create_interaction_tools
 from rudra.tools.planning_tools import create_planning_tools
+from rudra.tools.testing_tools import create_testing_tools
 
 
 def build_planner_prompt(

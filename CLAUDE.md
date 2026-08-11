@@ -51,16 +51,19 @@ src/rudra/
 │                           interrupts+approval ask; diff/audit/env support it
 ├── shell/                  runner.py — the ONLY subprocess call site (Step 8).
 │                           Renders argv, asks the engine as execute:<command>
-├── git/                    core.py Python API + one tool, git_diff (C3.5)
-├── testing/                runner.py → TestResult, parse.py counts, one tool
-│                           run_tests (C3.6). Step 9's fix loop consumes this
+├── git/                    core.py — Python git API (C3.5). Orchestrator-facing
+├── testing/                runner.py → TestResult, parse.py counts (C3.6).
+│                           Step 9's fix loop consumes this directly
 ├── agent/
 │   ├── main_agent.py       RudraAgent — hand-rolled planner→coder orchestration loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
 │   ├── planner_agent.py    deep agent; gate.middleware first, gate.interrupt_on wired
 │   └── coder_agent.py      deep agent, tools=[]; same gate wiring
 ├── middleware/             2 survivors of D4, both opt-in behind [compat]
-├── tools/                  planning_tools, interaction_tools
+├── tools/                  EVERY tool the model can call, and nothing else:
+│                           planning · interaction · git_tools · testing_tools.
+│                           The last two are thin wrappers over git/ and
+│                           testing/, whose APIs the orchestrator calls directly
 ├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
 ├── state/                  paths.py (D15 layout), ProjectConfigManager, session id (unused)
 └── compat/                 monkeypatches + version guard into deepagents internals

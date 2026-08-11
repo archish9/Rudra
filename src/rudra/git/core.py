@@ -2,7 +2,7 @@
 
 The orchestrator calls these directly (no model in the loop) and Step 9's
 reviewer will too. Exactly one of them is exposed to the model, as a tool --
-see git/tools.py -- because the model already has gated `execute`, and a new
+see tools/git_tools.py -- because the model already has gated `execute`, and a new
 tool only earns its place by parsing output or bounding it (Step 8 spec §5.1).
 
 Read-only subcommands run with `read_only=True`. `auto_branch` alone fires
