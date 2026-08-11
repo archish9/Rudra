@@ -43,6 +43,10 @@ class TestResult:
     broken environment as a project that simply has no tests.
     """
 
+    # pytest collects any class named Test*; without this it warns on every
+    # module that imports this one, which is noise that hides real warnings.
+    __test__ = False
+
     available: bool
     command: tuple[str, ...] | None = None
     stack: str | None = None

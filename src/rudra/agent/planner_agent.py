@@ -9,11 +9,13 @@ from rich.console import Console
 
 from rudra.config import get_config
 from rudra.filesystem import project_tree
+from rudra.git.tools import create_git_tools
 from rudra.llm import build_model
 from rudra.middleware import (
     FixWriteParamsMiddleware,
     TaskAnchorMiddleware,
 )
+from rudra.testing.tools import create_testing_tools
 from rudra.tools.interaction_tools import create_interaction_tools
 from rudra.tools.planning_tools import create_planning_tools
 
@@ -61,6 +63,11 @@ Your ONLY job: ANALYZE tasks and CREATE plans. You NEVER write project code file
 - Use relative paths only (e.g. "src/main.rs", not absolute paths)
 - Be specific in task assignments: name every import, class, method, endpoint
 - Do NOT call ask_user() if the task already specifies a framework or language
+
+## CHECKING YOUR WORK
+- Once the files are written, call run_tests() to find out whether they work
+- Use git_diff() to review what has changed before deciding what to do next
+- Do NOT run `git commit` or `git push` unless the task explicitly asks for it
 """
     return base
 
@@ -99,8 +106,15 @@ def create_planner_agent(
     model = build_model("planner")
     cfg = get_config()
 
-    custom_tools = create_planning_tools(project_path, task=task) + create_interaction_tools(
-        console, project_path
+    # git and testing land on the planner, not the coder: the coder's prompt
+    # tells it to STOP after one write_file, and a test runner in the same
+    # context window would contradict that. Step 9 revisits this when
+    # subagents become a designed feature (C6.2).
+    custom_tools = (
+        create_planning_tools(project_path, task=task)
+        + create_interaction_tools(console, project_path)
+        + create_git_tools(project_path, gate=gate, console=console, cfg=cfg)
+        + create_testing_tools(project_path, gate=gate, console=console, cfg=cfg)
     )
 
     middleware = build_planner_middleware(
