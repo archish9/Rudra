@@ -88,7 +88,7 @@ def audit_path(tmp_path: Path) -> Path:
 
     A gate writing `audit.jsonl` into the repo root makes `git status`
     dirty, which silently defeats every clean-tree assertion -- the failure
-    that surfaced A1.53.
+    that surfaced A1.55.
     """
     outside = tmp_path.parent / f"{tmp_path.name}-audit"
     outside.mkdir(exist_ok=True)

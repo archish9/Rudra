@@ -96,7 +96,7 @@ def build_gate(cfg: Config, project_path: Path) -> Gate:
     )
     audit = AuditLog(rudra_paths(project_path).logs / "permissions.jsonl")
     # Built before the middleware, which needs to know which names actually
-    # reach a prompt -- an `ask` for a name that does not is denied (A1.51).
+    # reach a prompt -- an `ask` for a name that does not is denied (A1.53).
     interrupt_on = build_interrupt_on(engine)
     return Gate(
         engine=engine,

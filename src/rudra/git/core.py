@@ -152,7 +152,7 @@ def is_clean(project_path: Path, *, gate: Any, console: Console, cfg: Any) -> bo
     `project.json` untracked -- Rudra never edits the project's own
     .gitignore. So git reports `?? .rudra/` in a repository the user has not
     touched, and without this filter `auto_branch` would refuse to branch on
-    essentially every real repository (TODO.md A1.53).
+    essentially every real repository (TODO.md A1.55).
 
     Everything else still counts. Untracked build output is the user's
     problem to resolve before branching, exactly as before.
@@ -170,7 +170,7 @@ def status(project_path: Path, *, gate: Any, console: Console, cfg: Any) -> list
 
     Unfiltered on purpose: this reports what git reports. `is_clean` is the
     one that asks the narrower question, "does the user have uncommitted
-    work", and filters accordingly (A1.53).
+    work", and filters accordingly (A1.55).
     """
     result = _run(project_path, ["status", "--porcelain"], gate=gate, console=console, cfg=cfg)
     return _parse_status(result.stdout) if result.ok else []

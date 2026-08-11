@@ -1,7 +1,7 @@
 # Step 8 — Git Tools and the Test Runner: Design
 
 **Date:** 2026-08-11
-**Ledger rows:** `C3.5`, `C3.6`, closes `A1.33(b)` and `A1.51`
+**Ledger rows:** `C3.5`, `C3.6`, closes `A1.33(b)` and `A1.53`
 **Depends on:** Step 7 (`C3.1`–`C3.4`, `U.7` — shell execution and the permission layer) — DONE
 **Unblocks:** Step 9 (`C6.1`–`C6.6` — the agentic loop rewrite). `C6.6`'s deterministic
 completion gate consumes this step's `TestResult`; `C6.5`'s fix loop has nothing to
@@ -53,7 +53,7 @@ because `C3.6` consumes exactly this field. Shipping the runner against it would
 produce a "no tests" answer for a project that has tests — a false negative fed
 straight into Step 9's gate.
 
-### 2.3 The gate fails open on unrecognised tool names — `A1.51`
+### 2.3 The gate fails open on unrecognised tool names — `A1.53`
 
 Logged to the ledger before this spec was written, per session rule 2.
 
@@ -99,7 +99,7 @@ runs want `--auto --allow-shell`. `A1.49`'s own row already anticipated this:
 
 ## 3. Scope
 
-**In:** `C3.5`, `C3.6`, `A1.33(b)`, `A1.51`.
+**In:** `C3.5`, `C3.6`, `A1.33(b)`, `A1.53`.
 
 **Out, and deliberately so:**
 
@@ -111,7 +111,7 @@ runs want `--auto --allow-shell`. `A1.49`'s own row already anticipated this:
 | A git commit tool | See §5.4 — Rudra never commits, and no tool is built for it |
 
 The owner's instruction on 2026-08-11 was to follow Step 8's two rows as written,
-neither narrowed nor widened. `A1.33(b)` and `A1.51` are inside that boundary
+neither narrowed nor widened. `A1.33(b)` and `A1.53` are inside that boundary
 because this step's code cannot be correct without them, and both were already
 in the ledger — neither is new work.
 
@@ -425,7 +425,7 @@ only agent with a tool list and it persists across the whole run.
 
 Step 9 re-decides this when subagents become a designed feature (`C6.2`).
 
-### 6.6 The `A1.51` fix
+### 6.6 The `A1.53` fix
 
 Two changes, both minimal:
 
@@ -495,7 +495,7 @@ All of the following run offline, with no model:
 | `test_git_auto_branch.py` | clean, dirty, detached, not-a-repo, name collision |
 | `test_testing_runner.py` | command resolution per stack in temp dirs |
 | `test_testing_parse.py` | **captured real** pytest / jest / cargo output as fixtures, never invented strings |
-| `test_permissions_unknown_tool.py` | `A1.51` — `ask` with no interrupt entry denies; `read_plan` is allowed silently |
+| `test_permissions_unknown_tool.py` | `A1.53` — `ask` with no interrupt entry denies; `read_plan` is allowed silently |
 | `test_registry_python_command.py` | `A1.33(b)` — venv, `python -m`, Django, unittest resolution |
 
 Fixtures must be captured from real runs. A regex written against invented output
@@ -503,7 +503,7 @@ tests the regex against itself.
 
 Existing suites needing updates: `test_config_schema.py` and
 `test_config_permissions_and_tools.py` for the two new `[tools]` keys;
-`test_permissions_middleware.py` for the `A1.51` signature change.
+`test_permissions_middleware.py` for the `A1.53` signature change.
 
 The gate remains `.venv/bin/ruff check src/ tests/` → `All checks passed!` and
 `.venv/bin/pytest -q` at or above the measured baseline.
@@ -545,6 +545,6 @@ whose `/tmp` smoke logs no longer resolve.
 | `C3.5` | PENDING → DONE |
 | `C3.6` | PENDING → DONE |
 | `A1.33` | (b) closed; (a) and (c) stay PENDING — out of scope |
-| `A1.51` | PENDING → DONE |
+| `A1.53` | PENDING → DONE |
 | `C4.6` | No change. Recorded here only as a note for Step 13: `C3.5` now covers git natively, so a git MCP server in the default bundle would duplicate it. That decision belongs to Step 13, not this step |
 | D19 | Unchanged. Confirmed 2026-08-11: `VersionControlHelperMCP` stays documentation-only and is not integrated here |

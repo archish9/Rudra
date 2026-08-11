@@ -51,7 +51,7 @@
 | `src/rudra/config/layers.py:171-176` | `RUDRA_AUTO_BRANCH`, `RUDRA_TEST_TIMEOUT` |
 | `src/rudra/config/template.py:71-79` | Two new keys, plus the commented git deny lines |
 | `src/rudra/permissions/rules.py:29-38,189-191` | `read_plan` → `READ_ONLY_TOOLS`; new `WRAPPED_EXECUTE_TOOLS` |
-| `src/rudra/permissions/middleware.py:52-86` | `interrupt_tools`; unregistered `ask` → deny (`A1.51`) |
+| `src/rudra/permissions/middleware.py:52-86` | `interrupt_tools`; unregistered `ask` → deny (`A1.53`) |
 | `src/rudra/permissions/__init__.py:98-106` | Pass `interrupt_on` keys into the middleware |
 | `src/rudra/stacks/registry.py:11-29` | `PYTHON.test_command = None` (`A1.33(b)`) |
 | `src/rudra/stacks/detect.py:68-85` | Python branch in `resolve_test_command` |
@@ -285,7 +285,7 @@ and create a phantom [model.test] section."
 
 ---
 
-## Task 2: `A1.51` — the gate stops failing open on unknown tools
+## Task 2: `A1.53` — the gate stops failing open on unknown tools
 
 **Files:**
 - Modify: `src/rudra/permissions/rules.py:29-38,189-191`
@@ -298,14 +298,14 @@ and create a phantom [model.test] section."
 - Consumes: nothing from earlier tasks.
 - Produces: `WRAPPED_EXECUTE_TOOLS: frozenset[str]` in `rules.py`, and `RudraPermissionMiddleware(engine, audit, mode, interrupt_tools)`. Task 10 relies on `git_diff` and `run_tests` being in `WRAPPED_EXECUTE_TOOLS`.
 
-**Why before the tools exist:** Task 10 registers two tool names. On today's code an unregistered name decided `ask` executes silently and unaudited — the defect `A1.51` records. Fixing it after registering the tools would mean shipping the hole, however briefly.
+**Why before the tools exist:** Task 10 registers two tool names. On today's code an unregistered name decided `ask` executes silently and unaudited — the defect `A1.53` records. Fixing it after registering the tools would mean shipping the hole, however briefly.
 
 - [ ] **Step 1: Write the failing tests**
 
 Create `tests/test_permissions_unknown_tool.py`:
 
 ```python
-"""A1.51 — a tool decided `ask` with no interrupt entry must not run silently."""
+"""A1.53 — a tool decided `ask` with no interrupt entry must not run silently."""
 
 from __future__ import annotations
 
@@ -406,7 +406,7 @@ CONTROL_PLANE_TOOLS = frozenset({"update_plan", "write_task_assignment", "ask_us
 
 # `read_plan` belongs here, not in the control plane: it only reads
 # .rudra/run/PLAN.md. It was in neither set until Step 8, which made it the
-# one reachable instance of A1.51 -- decided "ask", no interrupt registered,
+# one reachable instance of A1.53 -- decided "ask", no interrupt registered,
 # so it ran unprompted and unaudited.
 READ_ONLY_TOOLS = frozenset({"read_file", "ls", "glob", "grep", "read_plan"})
 MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete", "execute"})
@@ -470,7 +470,7 @@ Change `__init__` and `_check`:
         if decision.effect != "deny":
             # "ask" belongs to interrupt_on -- but only where an entry exists.
             # Without one there is no prompt and no denial, so the call would
-            # run unaudited: A1.51. Fail closed instead of enumerating every
+            # run unaudited: A1.53. Fail closed instead of enumerating every
             # tool deepagents might register.
             if tool in self.interrupt_tools:
                 return None
@@ -515,7 +515,7 @@ Expected: PASS. If `test_permissions_middleware.py` constructs the middleware po
 Run: `.venv/bin/pytest -q && .venv/bin/ruff check src/ tests/`
 Expected: at or above `516 passed, 2 skipped`, `All checks passed!`.
 
-- [ ] **Step 8: Mark `A1.51` DONE in `TODO.md`**
+- [ ] **Step 8: Mark `A1.53` DONE in `TODO.md`**
 
 Change its Status cell from `PENDING` to `**DONE** 2026-08-11` and append the verifying evidence to the Item cell: the two behaviours now asserted (`unregistered ask → deny + audited`, `read_plan → allow`) and the test file name.
 
@@ -525,7 +525,7 @@ Change its Status cell from `PENDING` to `**DONE** 2026-08-11` and append the ve
 git add src/rudra/permissions/ tests/test_permissions_unknown_tool.py tests/test_permissions_middleware.py TODO.md
 git commit -m "fix(permissions): the gate no longer fails open on unknown tools
 
-A1.51. decide() fell through to the mode default for any name outside its
+A1.53. decide() fell through to the mode default for any name outside its
 four sets, returning 'ask'. build_interrupt_on registers only MUTATING_TOOLS,
 and the middleware fell through to the handler for any effect that was not
 'deny'. So 'ask' with no interrupt entry was neither a prompt nor a denial:
@@ -3086,7 +3086,7 @@ git commit -m "docs: close out Step 8 — git tools and the test runner"
 | §6.3 parse depth | 8 |
 | §6.4 output offload | 9 |
 | §6.5 planner-only registration | 10 |
-| §6.6 `A1.51` | 2 |
+| §6.6 `A1.53` | 2 |
 | §7 error handling | 3, 4, 5, 9 |
 | §7 `test_timeout` key | 1 |
 | §9 testing | every task |
@@ -3097,4 +3097,4 @@ No gaps.
 
 **Type consistency checked:** `CommandResult` (Task 3) is consumed as `.ok`/`.stdout`/`.stderr`/`.denied`/`.denial_reason`/`.timed_out`/`.exit_code`/`.argv` in Tasks 4, 5, 6, 9 — all defined. `Counts` (Task 8) is consumed as `.total`/`.failed`/`.skipped` in Task 9 — defined. `BranchOutcome` (Task 5) is consumed as `.branch`/`.skipped_reason` in Task 11 — defined. `core.GIT_TIMEOUT_SECONDS` is referenced in Task 6 and defined in Task 4. `WRAPPED_EXECUTE_TOOLS` is defined in Task 2 and asserted in Task 10.
 
-**One ordering constraint that must not be reordered:** Task 2 before Task 10. Task 10 registers `git_diff` and `run_tests`; on pre-Task-2 code those names are decided `ask`, have no `interrupt_on` entry, and would therefore execute silently and unaudited — the `A1.51` hole, shipped.
+**One ordering constraint that must not be reordered:** Task 2 before Task 10. Task 10 registers `git_diff` and `run_tests`; on pre-Task-2 code those names are decided `ask`, have no `interrupt_on` entry, and would therefore execute silently and unaudited — the `A1.53` hole, shipped.

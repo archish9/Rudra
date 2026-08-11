@@ -35,13 +35,13 @@ def normalizer(tmp_path: Path):
     saved_utils = utils.validate_path
     saved_fs_mw = fs_mw.validate_path
 
-    def _install(plan_lines: str | None = None):
+    def _install(plan_lines: str | None = None, root: Path | None = None):
         plan_path = None
         if plan_lines is not None:
             plan_path = tmp_path / ".rudra" / "run" / "PLAN.md"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(plan_lines, encoding="utf-8")
-        install_path_normalizer(tmp_path.resolve(), plan_path=plan_path)
+        install_path_normalizer((root or tmp_path).resolve(), plan_path=plan_path)
         return utils.validate_path
 
     yield _install
@@ -71,6 +71,19 @@ def test_project_root_prefix_is_stripped(normalizer, tmp_path: Path):
     validate = normalizer()
     absolute = str(tmp_path.resolve() / "src" / "models.py")
     assert validate(absolute) == "/src/models.py"
+
+
+@pytest.mark.parametrize("root", ["/app", "/tmp/work", "/code/proj", "/home/user/proj"])
+def test_real_project_root_beats_a_sandbox_prefix(normalizer, root: str):
+    """A project genuinely rooted under a sandbox prefix must strip the ROOT.
+
+    SANDBOX_PREFIXES lists "/tmp/", "/app/", "/code/", "/src/", "/root/" and
+    "/home/user/" -- all of which are ordinary directories someone may really
+    work in. Stripping the prefix first truncates at the wrong place and the
+    write lands somewhere nobody reads (TODO.md A1.51).
+    """
+    validate = normalizer(root=Path(root))
+    assert validate(f"{root}/src/models.py") == "/src/models.py"
 
 
 def test_windows_absolute_path_is_stripped(normalizer):

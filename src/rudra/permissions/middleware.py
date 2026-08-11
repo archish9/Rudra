@@ -64,7 +64,7 @@ class RudraPermissionMiddleware(AgentMiddleware):
     `interrupt_tools` is the set of names `interrupt_on` actually registers.
     Without it this class could not tell an `ask` that will reach a prompt
     from one that will reach nothing, and the second kind ran unchecked --
-    A1.51.
+    A1.53.
     """
 
     def __init__(
@@ -100,7 +100,7 @@ class RudraPermissionMiddleware(AgentMiddleware):
             if tool in self.interrupt_tools:
                 return None
             # ...but only where an entry exists. Without one there is no
-            # prompt and no denial, so the call would run unaudited (A1.51).
+            # prompt and no denial, so the call would run unaudited (A1.53).
             # Fail closed rather than enumerate every tool deepagents might
             # register.
             self.audit.record(tool, arg, decision, mode=self.mode, outcome="deny")

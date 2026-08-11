@@ -63,7 +63,7 @@ class TestResult:
 
 
 # pytest's exit code for "collected nothing". Distinct from 1, which means
-# tests ran and failed -- and the difference is the whole point (A1.55).
+# tests ran and failed -- and the difference is the whole point (A1.57).
 _PYTEST_NO_TESTS_EXIT = 5
 
 

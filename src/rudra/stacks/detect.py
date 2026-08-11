@@ -105,7 +105,7 @@ def _system_interpreter() -> str:
     `python` is not a safe name to emit. macOS has shipped no bare `python`
     since it dropped system Python 2, and on Linux it is a distribution
     choice rather than a guarantee -- measured under a clean PATH,
-    `command -v python` finds nothing while `python3` resolves (A1.54).
+    `command -v python` finds nothing while `python3` resolves (A1.56).
     Emitting it anyway would repeat A1.33(b) one level down: naming an
     executable and assuming PATH resolves it.
 

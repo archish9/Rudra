@@ -197,7 +197,7 @@ def test_doctor_reports_a_broken_config_cleanly(tmp_path: Path) -> None:
 
 
 def test_config_list_shows_every_field_of_every_section(tmp_path: Path) -> None:
-    """A1.52: _flatten claimed completeness it did not have.
+    """A1.54: _flatten claimed completeness it did not have.
 
     Derived from the dataclasses rather than hand-listed, so a key added
     later cannot go missing again.

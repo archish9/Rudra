@@ -48,7 +48,7 @@ def summarise(result: TestResult) -> str:
 
     if result.no_tests_collected:
         # Not a failure. Saying "Tests failed" here sends the model, and
-        # Step 9's fix loop, to repair code that is fine (A1.55).
+        # Step 9's fix loop, to repair code that is fine (A1.57).
         return (
             "No tests were collected — the suite ran but found nothing to execute. "
             "The code was not exercised, so this is neither a pass nor a failure. "

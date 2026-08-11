@@ -1,8 +1,14 @@
 name: CI
 
+# Pull requests only. Direct commits to main are gated locally by
+# .githooks/pre-push, which runs these same three commands (A3.9). CI's
+# remaining job is to be an environment that is not the committer's: it
+# installs from uv.lock on a clean machine and has no .env, which is where
+# every defect found on 2026-08-11 actually lived (A3.8, A3.5, A1.51).
+#
+# The trade is explicit: a direct push to main with --no-verify, or from a
+# clone where core.hooksPath was never set, is now checked by nothing.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 concurrency:
@@ -37,18 +43,13 @@ jobs:
       # requires: it compares __version__ against installed distribution
       # metadata, and an uninstalled source tree yields 0.0.0+unknown.
       - run: uv sync --python ${{ matrix.python-version }}
-      - run: uv run --python ${{ matrix.python-version }} pytest -q
-
-  coverage:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-      - run: uv sync
-      # Reported, never gated. At 47% a gate at today's number is meaningless
-      # and one set higher pressures low-value tests against code Steps 5, 6
-      # and 9 replace. Revisit after Step 9. No --fail-under.
-      - run: uv run --with coverage coverage run -m pytest -q
-      - run: uv run --with coverage coverage report --include="src/*"
+      # The suite runs under coverage rather than beside it. A standalone
+      # coverage job re-ran the whole suite a second time to print a number
+      # with no --fail-under -- a quarter of CI's wall time and a fourth
+      # status check for something that can never fail the build (A3.6).
+      - run: uv run --python ${{ matrix.python-version }} --with coverage coverage run -m pytest -q
+      # Reported, never gated. A gate at today's number (79% as of Step 7 --
+      # the 47% this comment used to cite predates Steps 5-7) is meaningless,
+      # and one set higher pressures low-value tests against code Step 9
+      # replaces. Revisit after Step 9. No --fail-under.
+      - run: uv run --python ${{ matrix.python-version }} --with coverage coverage report --include="src/*"

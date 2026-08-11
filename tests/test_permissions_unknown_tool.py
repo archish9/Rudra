@@ -1,4 +1,4 @@
-"""A1.51 — a tool decided `ask` with no interrupt entry must not run silently.
+"""A1.53 — a tool decided `ask` with no interrupt entry must not run silently.
 
 `decide` falls through to the mode default for any name outside its four
 sets, `build_interrupt_on` registers only MUTATING_TOOLS, and the middleware
@@ -83,7 +83,7 @@ def test_read_plan_is_a_read_and_never_prompts(tmp_path: Path):
 
 
 def test_read_plan_runs_without_an_interrupt_entry(tmp_path: Path):
-    """The instance A1.51 was reachable through today."""
+    """The instance A1.53 was reachable through today."""
     middleware = _middleware(tmp_path, frozenset({"write_file"}))
     result = middleware.wrap_tool_call(_Request("read_plan", {}), lambda request: "the plan")
     assert result == "the plan"

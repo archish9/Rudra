@@ -273,7 +273,7 @@ def test_python_recognises_a_django_project(tmp_path: Path):
     (tmp_path / "manage.py").write_text("# django\n", encoding="utf-8")
     command = resolve_test_command(tmp_path, _python())
     assert command[1:] == ["manage.py", "test"]
-    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.56)"
 
 
 def test_python_uses_pytest_when_the_project_declares_it(tmp_path: Path):
@@ -282,20 +282,20 @@ def test_python_uses_pytest_when_the_project_declares_it(tmp_path: Path):
     )
     command = resolve_test_command(tmp_path, _python())
     assert command[1:] == ["-m", "pytest"]
-    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.56)"
 
 
 def test_python_reads_pytest_from_requirements_txt(tmp_path: Path):
     (tmp_path / "requirements.txt").write_text("pytest>=8\n", encoding="utf-8")
     command = resolve_test_command(tmp_path, _python())
     assert command[1:] == ["-m", "pytest"]
-    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.56)"
 
 
 def test_python_falls_back_to_unittest_with_no_venv_and_no_pytest(tmp_path: Path):
     command = resolve_test_command(_python_project(tmp_path), _python())
     assert command[1:] == ["-m", "unittest", "discover"]
-    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.56)"
 
 
 def test_venv_resolution_never_reads_rudras_own_venv(tmp_path: Path):
@@ -317,7 +317,7 @@ def test_resolution_still_executes_nothing(tmp_path: Path, monkeypatch):
 
 
 def test_no_fallback_names_a_bare_python(tmp_path: Path):
-    """A1.54: macOS ships no bare `python`, so emitting it repeats A1.33(b)."""
+    """A1.56: macOS ships no bare `python`, so emitting it repeats A1.33(b)."""
     for setup in (
         lambda: None,
         lambda: (tmp_path / "manage.py").write_text("# django\n", encoding="utf-8"),

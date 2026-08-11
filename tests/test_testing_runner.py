@@ -161,7 +161,7 @@ def test_rust_is_detected_even_when_cargo_is_not_run(tmp_path: Path, env: dict):
 
 
 def test_an_empty_suite_is_not_reported_as_a_failure(tmp_path: Path, env: dict):
-    """A1.55: pytest exits 5 when it collects nothing, not 1."""
+    """A1.57: pytest exits 5 when it collects nothing, not 1."""
     _python_project(tmp_path)  # no test files at all
     result = run_tests(tmp_path, **env)
     assert result.exit_code == 5

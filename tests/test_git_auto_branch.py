@@ -109,7 +109,7 @@ def test_a_skipped_outcome_never_reports_a_branch(repo: Path, env: dict):
 
 
 def test_rudras_own_directory_does_not_count_as_a_dirty_tree(repo: Path, env: dict):
-    """A1.53: ensure_layout runs before auto_branch, so .rudra/ is always there."""
+    """A1.55: ensure_layout runs before auto_branch, so .rudra/ is always there."""
     rudra_dir = repo / ".rudra"
     rudra_dir.mkdir()
     (rudra_dir / "config.toml").write_text("[agent]\nverbose = true\n", encoding="utf-8")

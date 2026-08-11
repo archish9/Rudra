@@ -47,7 +47,7 @@ def build(tmp_path, *, mode="auto", allow=(), deny=(), tool, args, interrupt_too
     """One gated tool call through a real graph.
 
     `interrupt_tools` mirrors what `build_gate` registers in production --
-    one entry per mutating tool. It matters since A1.51: the middleware now
+    one entry per mutating tool. It matters since A1.53: the middleware now
     denies an `ask` for a name that has no prompt behind it, so a harness
     passing an empty set would deny calls a real run allows.
     """
@@ -105,7 +105,7 @@ def test_the_floor_denies_even_in_auto_mode(tmp_path):
 def test_an_ask_decision_is_not_handled_here(tmp_path):
     """ask is interrupt_on's job for a REGISTERED tool.
 
-    Registration is the load-bearing word since A1.51 -- an ask for a name
+    Registration is the load-bearing word since A1.53 -- an ask for a name
     with no interrupt entry is denied here instead, which the test below
     covers.
     """
@@ -116,7 +116,7 @@ def test_an_ask_decision_is_not_handled_here(tmp_path):
 
 
 def test_an_ask_for_an_unregistered_tool_is_denied_through_a_real_graph(tmp_path):
-    """A1.51, end to end rather than against the middleware in isolation."""
+    """A1.53, end to end rather than against the middleware in isolation."""
     (message,) = build(
         tmp_path,
         mode="ask",

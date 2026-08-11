@@ -307,7 +307,7 @@ def _flatten(cfg) -> list[tuple[str, object]]:
     Derived from each dataclass's own fields rather than listed by hand.
     The hand-written version claimed this same completeness and did not
     have it: `[tools] auto_branch` and `test_timeout` were accepted by the
-    loader, honoured at run time, and never printed (TODO.md A1.52). Since
+    loader, honoured at run time, and never printed (TODO.md A1.54). Since
     `config list` is the only way to see which layer set a value — there is
     no `config set` by design (S6.1) — under-reporting is worse than it
     looks. Adding the two missing lines would have closed the instance and
