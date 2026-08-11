@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -270,28 +271,31 @@ def test_python_uses_the_venv_interpreter_when_pytest_is_not_installed(tmp_path:
 def test_python_recognises_a_django_project(tmp_path: Path):
     _python_project(tmp_path)
     (tmp_path / "manage.py").write_text("# django\n", encoding="utf-8")
-    assert resolve_test_command(tmp_path, _python()) == ["python", "manage.py", "test"]
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["manage.py", "test"]
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
 
 
 def test_python_uses_pytest_when_the_project_declares_it(tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname='x'\ndependencies=['pytest']\n", encoding="utf-8"
     )
-    assert resolve_test_command(tmp_path, _python()) == ["python", "-m", "pytest"]
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
 
 
 def test_python_reads_pytest_from_requirements_txt(tmp_path: Path):
     (tmp_path / "requirements.txt").write_text("pytest>=8\n", encoding="utf-8")
-    assert resolve_test_command(tmp_path, _python()) == ["python", "-m", "pytest"]
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
 
 
 def test_python_falls_back_to_unittest_with_no_venv_and_no_pytest(tmp_path: Path):
-    assert resolve_test_command(_python_project(tmp_path), _python()) == [
-        "python",
-        "-m",
-        "unittest",
-        "discover",
-    ]
+    command = resolve_test_command(_python_project(tmp_path), _python())
+    assert command[1:] == ["-m", "unittest", "discover"]
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
 
 
 def test_venv_resolution_never_reads_rudras_own_venv(tmp_path: Path):
@@ -310,3 +314,16 @@ def test_resolution_still_executes_nothing(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _boom)
     monkeypatch.setattr(subprocess, "Popen", _boom)
     resolve_test_command(_python_project(tmp_path), _python())
+
+
+def test_no_fallback_names_a_bare_python(tmp_path: Path):
+    """A1.54: macOS ships no bare `python`, so emitting it repeats A1.33(b)."""
+    for setup in (
+        lambda: None,
+        lambda: (tmp_path / "manage.py").write_text("# django\n", encoding="utf-8"),
+    ):
+        _python_project(tmp_path)
+        setup()
+        command = resolve_test_command(tmp_path, _python())
+        assert command[0] != "python", command
+        assert shutil.which(command[0]) is not None, command

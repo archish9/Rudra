@@ -8,6 +8,7 @@ anything (that is C3.6's job, Step 8).
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from rudra.stacks.profile import StackProfile
@@ -98,6 +99,28 @@ def _declares_pytest(project_path: Path) -> bool:
     return False
 
 
+def _system_interpreter() -> str:
+    """A python that actually exists on PATH.
+
+    `python` is not a safe name to emit. macOS has shipped no bare `python`
+    since it dropped system Python 2, and on Linux it is a distribution
+    choice rather than a guarantee -- measured under a clean PATH,
+    `command -v python` finds nothing while `python3` resolves (A1.54).
+    Emitting it anyway would repeat A1.33(b) one level down: naming an
+    executable and assuming PATH resolves it.
+
+    Deliberately NOT `sys.executable`. D18 forbids conflating Rudra's own
+    interpreter with the target project's, and the venv branches above
+    already handle a project that brought its own. Falls back to "python3"
+    so the argv is still reportable when neither is found -- `run_tests`
+    then surfaces a launch_error, which is the honest answer.
+    """
+    for name in ("python3", "python"):
+        if shutil.which(name):
+            return name
+    return "python3"
+
+
 def _python_test_command(project_path: Path) -> list[str]:
     """The launchable argv for a Python project's tests.
 
@@ -118,11 +141,12 @@ def _python_test_command(project_path: Path) -> list[str]:
     if python_bin is not None:
         return [str(python_bin), "-m", "pytest"]
 
+    interpreter = _system_interpreter()
     if (project_path / "manage.py").is_file():
-        return ["python", "manage.py", "test"]
+        return [interpreter, "manage.py", "test"]
     if _declares_pytest(project_path):
-        return ["python", "-m", "pytest"]
-    return ["python", "-m", "unittest", "discover"]
+        return [interpreter, "-m", "pytest"]
+    return [interpreter, "-m", "unittest", "discover"]
 
 
 def resolve_test_command(project_path: Path, profile: StackProfile) -> list[str] | None:

@@ -185,6 +185,23 @@ rudra --auto --allow-shell "run the test suite and fix what fails"
 shell_in_auto = true    # the same thing, persisted
 ```
 
+**This is why `--auto` alone runs no tests.** Rudra's `run_tests` tool is a
+shell command underneath and is gated the same way — which is right, because
+`pytest` executes the test files the model itself just wrote. So an
+unattended run without `--allow-shell` writes code it cannot verify. If you
+want Rudra to check its own work, opt in; if you would rather it never ran
+anything unsupervised, leave it off and read the diff yourself.
+
+Git works the same way. Rudra resolves the real command and asks about
+*that*, so the audit log records `git checkout -b rudra/add-auth` rather
+than an opaque tool name, and your existing rules apply to it unchanged:
+
+```toml
+[permissions]
+allow = ["execute:pytest*"]                    # tests need no approval
+deny  = ["execute:git push*"]                  # but never push
+```
+
 The split exists because the two are not equally contained. Writes, edits and
 deletes are confined to your project directory whatever the model asks for. A
 shell command is not — `echo x > /anywhere` does exactly what it says.

@@ -158,3 +158,28 @@ def test_rust_is_detected_even_when_cargo_is_not_run(tmp_path: Path, env: dict):
     (tmp_path / "Cargo.toml").write_text("[package]\nname='x'\n", encoding="utf-8")
     result = run_tests(tmp_path, _command_override=["not-a-real-binary-xyz"], **env)
     assert result.stack == "rust"
+
+
+def test_an_empty_suite_is_not_reported_as_a_failure(tmp_path: Path, env: dict):
+    """A1.55: pytest exits 5 when it collects nothing, not 1."""
+    _python_project(tmp_path)  # no test files at all
+    result = run_tests(tmp_path, **env)
+    assert result.exit_code == 5
+    assert result.no_tests_collected is True
+    assert result.passed is False, "nothing ran, so nothing is verified either"
+
+
+def test_a_real_failure_is_not_mistaken_for_an_empty_suite(tmp_path: Path, env: dict):
+    _python_project(tmp_path)
+    (tmp_path / "test_bad.py").write_text("def test_bad():\n    assert False\n", encoding="utf-8")
+    result = run_tests(tmp_path, **env)
+    assert result.no_tests_collected is False
+    assert result.failed == 1
+
+
+def test_a_passing_suite_is_not_mistaken_for_an_empty_suite(tmp_path: Path, env: dict):
+    _python_project(tmp_path)
+    (tmp_path / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    result = run_tests(tmp_path, **env)
+    assert result.no_tests_collected is False
+    assert result.passed is True

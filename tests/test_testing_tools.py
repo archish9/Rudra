@@ -102,3 +102,10 @@ def test_a_passing_summary_does_not_dump_output():
         )
     )
     assert "aaaa" not in text
+
+
+def test_an_empty_suite_summary_is_neither_pass_nor_failure():
+    """A1.55: 'Tests failed' would send the fix loop after working code."""
+    text = summarise(TestResult(available=True, exit_code=5, passed=False, no_tests_collected=True))
+    assert "no tests were collected" in text.lower()
+    assert "failed" not in text.lower()

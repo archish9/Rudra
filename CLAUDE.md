@@ -49,6 +49,11 @@ src/rudra/
 ├── permissions/            The gate (Step 7). One pure engine, two mechanisms:
 │                           rules/floor/grants decide; middleware denies;
 │                           interrupts+approval ask; diff/audit/env support it
+├── shell/                  runner.py — the ONLY subprocess call site (Step 8).
+│                           Renders argv, asks the engine as execute:<command>
+├── git/                    core.py Python API + one tool, git_diff (C3.5)
+├── testing/                runner.py → TestResult, parse.py counts, one tool
+│                           run_tests (C3.6). Step 9's fix loop consumes this
 ├── agent/
 │   ├── main_agent.py       RudraAgent — hand-rolled planner→coder orchestration loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -189,6 +194,8 @@ model    = "qwen3-coder:30b"
 [tools]
 shell = true                            # false removes the execute tool
 shell_in_auto = false                   # may --auto run commands? (A1.49)
+auto_branch = false                     # branch before a run? (Step 8, S8.3)
+test_timeout = 600                      # seconds before a test run is killed
 
 [permissions]
 mode  = "ask"                           # ask | auto | plan
@@ -238,7 +245,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-.venv/bin/pytest -q                  # 489 passed, 2 skipped at Step 7; must never go down
+.venv/bin/pytest -q                  # 656 passed, 2 skipped at Step 8; must never go down
 .venv/bin/rudra --version            # Rudra v0.2.0
 
 .venv/bin/rudra init                 # scaffold .rudra/config.toml + the D15 layout
@@ -269,6 +276,13 @@ can. Before this gate existed, the Step 7 acceptance run watched the model
 find that route by itself — denied twice on `write_file`, it ran
 `echo "hello" > /abs/path` and succeeded. Re-running the same task now denies
 the shell attempt (`source: "auto-shell"`) and nothing leaves the project.
+
+**Since Step 8 this has a consequence worth stating plainly: `--auto` alone
+runs no tests.** `run_tests` is gated as `execute` — correctly, since
+`pytest` executes the test files the model itself wrote — so an unattended
+run cannot verify its own output unless shell is opted in. A
+loop-engineering run wants `--auto --allow-shell`. Step 9's fix loop
+inherits this rather than working around it.
 
 `ask` mode is unaffected and keeps full shell, because there the user reads
 each command before it runs. An explicit `allow = ["execute:pytest*"]` also

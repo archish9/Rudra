@@ -59,6 +59,31 @@ class TestResult:
     launch_error: str | None = None
     denied: bool = False
     timed_out: bool = False
+    no_tests_collected: bool = False
+
+
+# pytest's exit code for "collected nothing". Distinct from 1, which means
+# tests ran and failed -- and the difference is the whole point (A1.55).
+_PYTEST_NO_TESTS_EXIT = 5
+
+
+def _collected_nothing(stack: str | None, exit_code: int | None, total: int | None) -> bool:
+    """Did the runner find no tests at all, as opposed to failing them?
+
+    Step 9's gate consumes `passed`, so without this distinction a project
+    whose tests have not been written yet -- or whose collection is
+    misconfigured -- looks exactly like one whose tests genuinely fail, and
+    the fix loop iterates on correct code guided by output naming no failing
+    test. That is an environment problem reported as a code problem, the
+    same class as A1.33(b).
+
+    Two signals, because neither covers both cases: pytest's exit 5 is
+    definitive but stack-specific, and a parsed total of zero catches the
+    runners that exit non-zero with a summary line instead.
+    """
+    if stack == "python" and exit_code == _PYTEST_NO_TESTS_EXIT:
+        return True
+    return exit_code != 0 and total == 0
 
 
 def _tail(text: str, limit: int = MAX_TAIL_CHARS) -> str:
@@ -147,12 +172,14 @@ def run_tests(
         )
 
     counts = parse_counts(stack, result.stdout, result.stderr)
+    nothing_ran = _collected_nothing(stack, result.exit_code, counts.total)
     return TestResult(
         available=True,
         command=result.argv,
         stack=stack,
         exit_code=result.exit_code,
         passed=result.exit_code == 0,
+        no_tests_collected=nothing_ran,
         total=counts.total,
         failed=counts.failed,
         skipped=counts.skipped,

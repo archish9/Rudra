@@ -176,7 +176,21 @@ deny  = ["write_file:.env"]        # never allow these
 [tools]
 shell         = true               # false removes the execute tool entirely
 shell_in_auto = false              # may --auto run commands?
+auto_branch   = false              # create a rudra/<slug> branch before a run?
+test_timeout  = 600                # seconds before a test run is killed
 ```
+
+`auto_branch` puts the agent's work on its own branch. It is off by default
+because it changes your repository before the model has done anything, and
+it only fires when that is safe: inside a git repository, with a branch
+checked out, from a clean working tree. Otherwise it prints why and carries
+on where you are — it never fails a run. Rudra's own `.rudra/` directory
+does not count as uncommitted work.
+
+`test_timeout` bounds a test run. The number is a real setting rather than a
+constant because suites differ by orders of magnitude, and because a runner
+that hangs — Angular's Karma with no browser installed, for instance —
+would otherwise stall a run indefinitely rather than failing it.
 
 `ask` is the default: every write, edit, delete and command stops for
 approval and shows a diff first. `auto` approves everything. `plan` writes
