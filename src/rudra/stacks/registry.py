@@ -11,7 +11,11 @@ from rudra.stacks.profile import StackProfile
 PYTHON = StackProfile(
     name="python",
     markers=("pyproject.toml", "setup.py", "requirements.txt"),
-    test_command=("pytest",),
+    # None, not ("pytest",): a bare executable name is not on PATH in a
+    # project virtualenv Rudra did not activate, and is wrong outright for a
+    # Django or stdlib-unittest project. resolve_test_command works it out
+    # from the project's own layout. TODO.md A1.33(b).
+    test_command=None,
     skip_dirs=frozenset(
         {
             "__pycache__",
