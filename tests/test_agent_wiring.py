@@ -40,7 +40,6 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
-import os
 
 import pytest
 
@@ -79,17 +78,22 @@ def test_planner_wires_fix_write_params_middleware_first():
 
 
 @pytest.fixture(autouse=True)
-def _clean_config(monkeypatch):
+def _clean_config(monkeypatch, tmp_path):
     """Isolate every test here from the developer's own environment.
 
-    Without this, build_config() picks up a real VERBOSE or OLLAMA_* var,
-    fires its deprecation warning, and populates the process-global
-    warn-once set — which made test_config's own warn-once assertion fail
-    in the full suite while passing alone.
+    Stripping the variables is `tests/conftest.py`'s job now, and is no longer
+    repeated here. What remains is specific to this file: the agent factories
+    call the process-global `get_config()` (`coder_agent.py:76`,
+    `planner_agent.py`), which resolves its root to `Path.cwd()` and so reads
+    the *repo's* `.env` no matter which `project_path` the factory was handed
+    (A1.52). Running from a tmp cwd is what makes these tests hermetic; the
+    variable-stripping alone is not enough, because `load_dotenv` re-imports
+    them mid-test.
+
+    Scoped to this file rather than conftest deliberately — several other
+    tests read repo files through relative paths and need the real cwd.
     """
-    for name in list(os.environ):
-        if name.startswith(("RUDRA_", "OLLAMA_")) or name == "VERBOSE":
-            monkeypatch.delenv(name, raising=False)
+    monkeypatch.chdir(tmp_path)
     reset_config()
     yield
     reset_config()
