@@ -28,14 +28,26 @@ if TYPE_CHECKING:  # pragma: no cover - broken at runtime to avoid a cycle
 # Rudra's own bookkeeping (spec §4.6).
 CONTROL_PLANE_TOOLS = frozenset({"update_plan", "write_task_assignment", "ask_user"})
 
-READ_ONLY_TOOLS = frozenset({"read_file", "ls", "glob", "grep"})
+# `read_plan` belongs here, not in the control plane: it only reads
+# .rudra/run/PLAN.md. It was in neither set until Step 8, which made it the
+# one instance of A1.51 reachable today -- decided "ask", no interrupt
+# registered, so it ran unprompted and unaudited.
+READ_ONLY_TOOLS = frozenset({"read_file", "ls", "glob", "grep", "read_plan"})
 MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete", "execute"})
+
+# Tools that are a shell command wearing a different name. Their own
+# implementation calls decide("execute", ...) with the real command string,
+# so deciding them a second time here would prompt twice for one command
+# (Step 8 spec S8.2, §6.6).
+WRAPPED_EXECUTE_TOOLS = frozenset({"git_diff", "run_tests"})
 
 # `task` is allowed: it spawns a subagent whose own tool calls are gated by
 # this same engine, so gating the spawn would double-prompt (spec §4.3).
 _OTHER_TOOLS = frozenset({"task"})
 
-ALL_GATED_TOOLS = READ_ONLY_TOOLS | MUTATING_TOOLS | _OTHER_TOOLS | CONTROL_PLANE_TOOLS
+ALL_GATED_TOOLS = (
+    READ_ONLY_TOOLS | MUTATING_TOOLS | _OTHER_TOOLS | CONTROL_PLANE_TOOLS | WRAPPED_EXECUTE_TOOLS
+)
 
 # Which argument carries the thing a pattern matches against.
 _ARG_KEYS = {
@@ -190,6 +202,11 @@ class PermissionEngine:
         if tool in CONTROL_PLANE_TOOLS:
             return Decision("allow", None, "control-plane")
 
+        # The real decision happens inside the tool, against the command it
+        # is about to run. Deciding it here as well would prompt twice.
+        if tool in WRAPPED_EXECUTE_TOOLS:
+            return Decision("allow", None, "wrapped-execute")
+
         arg = gated_arg(tool, args)
         resolved, absolute, relative = self._resolve(tool, arg)
         if tool == "execute" and arg is not None:
@@ -249,6 +266,7 @@ __all__ = [
     "CONTROL_PLANE_TOOLS",
     "MUTATING_TOOLS",
     "READ_ONLY_TOOLS",
+    "WRAPPED_EXECUTE_TOOLS",
     "Decision",
     "PermissionEngine",
     "Rule",

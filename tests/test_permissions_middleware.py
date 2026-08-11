@@ -14,7 +14,7 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 
 from rudra.permissions.audit import AuditLog
 from rudra.permissions.middleware import RudraPermissionMiddleware
-from rudra.permissions.rules import PermissionEngine
+from rudra.permissions.rules import MUTATING_TOOLS, PermissionEngine
 
 
 class OneCallModel(BaseChatModel):
@@ -43,15 +43,23 @@ class OneCallModel(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=message)])
 
 
-def build(tmp_path, *, mode="auto", allow=(), deny=(), tool, args):
+def build(tmp_path, *, mode="auto", allow=(), deny=(), tool, args, interrupt_tools=None):
+    """One gated tool call through a real graph.
+
+    `interrupt_tools` mirrors what `build_gate` registers in production --
+    one entry per mutating tool. It matters since A1.51: the middleware now
+    denies an `ask` for a name that has no prompt behind it, so a harness
+    passing an empty set would deny calls a real run allows.
+    """
     engine = PermissionEngine(
         mode=mode, allow=allow, deny=deny, floor_disable=(), project_root=tmp_path
     )
     audit = AuditLog(tmp_path / "audit.jsonl")
+    registered = MUTATING_TOOLS if interrupt_tools is None else interrupt_tools
     agent = create_deep_agent(
         model=OneCallModel(tool_name=tool, tool_args=args),
         backend=FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True),
-        middleware=[RudraPermissionMiddleware(engine, audit, mode)],
+        middleware=[RudraPermissionMiddleware(engine, audit, mode, interrupt_tools=registered)],
     )
     result = agent.invoke({"messages": [{"role": "user", "content": "go"}]})
     return [m for m in result["messages"] if type(m).__name__ == "ToolMessage"]
@@ -95,11 +103,29 @@ def test_the_floor_denies_even_in_auto_mode(tmp_path):
 
 
 def test_an_ask_decision_is_not_handled_here(tmp_path):
-    """ask is interrupt_on's job. Without it wired, the call proceeds."""
+    """ask is interrupt_on's job for a REGISTERED tool.
+
+    Registration is the load-bearing word since A1.51 -- an ask for a name
+    with no interrupt entry is denied here instead, which the test below
+    covers.
+    """
     (message,) = build(
         tmp_path, mode="ask", tool="write_file", args={"file_path": "ok.txt", "content": "y"}
     )
     assert message.status != "error"
+
+
+def test_an_ask_for_an_unregistered_tool_is_denied_through_a_real_graph(tmp_path):
+    """A1.51, end to end rather than against the middleware in isolation."""
+    (message,) = build(
+        tmp_path,
+        mode="ask",
+        tool="write_file",
+        args={"file_path": "ok.txt", "content": "y"},
+        interrupt_tools=frozenset(),
+    )
+    assert message.status == "error"
+    assert not (tmp_path / "ok.txt").exists()
 
 
 def test_a_denial_is_written_to_the_audit_log(tmp_path):
