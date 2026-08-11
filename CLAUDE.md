@@ -239,6 +239,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
 .venv/bin/pytest -q                  # 520 passed, 2 skipped at Step 7; must never go down
+git config core.hooksPath .githooks  # once per clone: run all three gates on push (A3.7)
 .venv/bin/rudra --version            # Rudra v0.2.0
 
 .venv/bin/rudra init                 # scaffold .rudra/config.toml + the D15 layout
@@ -280,4 +281,5 @@ only control, and real containment would need OS-level isolation.
 
 - 41 files tracked. Includes `q-dev-chat-2026-03-20.md` (199 KB chat log), `filesystem-context.txt`, `improvements.txt`, `execution_tools.py` (255 lines, zero imports) — all noise for an OSS launch.
 - `.env` and `.rudra/` are gitignored (verified via `git check-ignore`).
-- No LICENSE file, no CI, no CONTRIBUTING, no tests.
+- ~~No LICENSE file, no CI, no CONTRIBUTING, no tests.~~ Stale as written. `LICENSE` landed with A4.2, CI with A3.3 (`.github/workflows/ci.yml` — lint + a 3.12/3.13 test matrix running under coverage), and the suite is at 520 passed / 2 skipped. **CONTRIBUTING is still absent** (A4.7).
+- **A local `.venv` drifts from `uv.lock` and will lie to you.** Measured 2026-08-11 on unmodified `main`: `.venv/bin/pytest -q` → `14 failed, 502 passed`, against `520 passed, 2 skipped` on a clean `uv sync` clone; the venv was missing `langchain_openai`, which `pyproject.toml:47` requires. Two defects reached `main` under that noise (A3.5, A1.51). Run `uv sync` before believing a local failure, and prefer `uv run` — which reconciles first — when the answer matters.

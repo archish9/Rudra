@@ -77,6 +77,24 @@ Coverage is reported but not enforced. The orchestration loop in `agent/main_age
 
 Both must be clean before anything merges. CI enforces it.
 
+### Run the gates before you push
+
+The repo ships a `pre-push` hook that runs exactly what CI runs. Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+It runs `ruff check`, `ruff format --check`, and `pytest`, and aborts the push if any of them fails. `git push --no-verify` skips it for one push.
+
+The hook prefers `uv run` over `.venv/bin` deliberately: `uv run` reconciles the environment with `uv.lock` first. A `.venv` built up incrementally over time drifts from the lockfile, and a drifted `.venv` reports failures that have nothing to do with the code you changed — which is exactly how two real defects reached `main` while the local suite was red for unrelated reasons.
+
+If your local suite fails in ways CI doesn't, resync before debugging:
+
+```bash
+uv sync
+```
+
 ---
 
 ## Project layout
@@ -210,8 +228,11 @@ Add the package to `pyproject.toml` dependencies if LangChain needs one.
 `.github/workflows/ci.yml` runs on every push and pull request:
 
 - `ruff check` and `ruff format --check`
-- `pytest` on Python 3.12 and 3.13
-- a coverage report (not gated)
+- `pytest` on Python 3.12 and 3.13, run under `coverage`, which prints a report afterwards
+
+Coverage is reported, never gated — there is no `--fail-under`. It runs inside the test job rather than in one of its own, because a separate job re-ran the entire suite a second time to produce a number that cannot fail the build.
+
+`.githooks/pre-push` runs the same gates locally; see [Run the gates before you push](#run-the-gates-before-you-push).
 
 CI installs the package before running tests — `tests/test_package_version.py` compares against installed distribution metadata, and an uninstalled source tree reports `0.0.0+unknown` and fails.
 

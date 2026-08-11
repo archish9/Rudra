@@ -1,0 +1,46 @@
+#!/bin/sh
+#
+# Rudra pre-push gate. Runs exactly what .github/workflows/ci.yml runs, so a
+# broken push is caught in seconds locally instead of minutes later on GitHub.
+#
+# Enable once per clone:
+#     git config core.hooksPath .githooks
+#
+# Skip for a single push:
+#     git push --no-verify
+#
+# `uv run` is preferred over .venv/bin because it reconciles the environment
+# with uv.lock first. An incrementally-built .venv drifts from the lockfile,
+# and a drifted .venv reports failures that have nothing to do with the code
+# under test -- which is how two real defects reached main unnoticed (A3.5,
+# A1.51): the signal was there, buried in unrelated noise.
+
+set -eu
+
+if command -v uv >/dev/null 2>&1; then
+    RUFF="uv run ruff"
+    PYTEST="uv run pytest"
+elif [ -x .venv/bin/ruff ] && [ -x .venv/bin/pytest ]; then
+    echo "pre-push: uv not found, falling back to .venv (may be stale -- run: uv sync)" >&2
+    RUFF=".venv/bin/ruff"
+    PYTEST=".venv/bin/pytest"
+else
+    echo "pre-push: found neither uv nor .venv/bin/{ruff,pytest}." >&2
+    echo "          install uv, or run 'uv sync', or push with --no-verify." >&2
+    exit 1
+fi
+
+echo "pre-push: ruff check"
+# Word splitting on $RUFF/$PYTEST is intended -- they carry an argv prefix.
+# shellcheck disable=SC2086
+$RUFF check src/ tests/
+
+echo "pre-push: ruff format --check"
+# shellcheck disable=SC2086
+$RUFF format --check src/ tests/
+
+echo "pre-push: pytest"
+# shellcheck disable=SC2086
+$PYTEST -q
+
+echo "pre-push: all gates passed"
