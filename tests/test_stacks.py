@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -46,9 +47,17 @@ def test_node_stacks_defer_their_test_command_to_the_project():
         assert profile.test_command is None, f"{name} must read scripts.test, not hardcode"
 
 
-def test_non_node_stacks_declare_their_test_command():
+def test_only_rust_declares_a_fixed_test_command():
+    """Python joined Node in deferring, for a different reason.
+
+    Node defers because the project declares its own in scripts.test.
+    Python defers because no single argv is launchable everywhere: a bare
+    "pytest" is not on PATH in a virtualenv Rudra did not activate, and is
+    wrong outright for Django or stdlib unittest (TODO.md A1.33(b)).
+    Rust's `cargo test` genuinely is fixed.
+    """
     commands = {p.name: p.test_command for p in PROFILES if p.test_command is not None}
-    assert commands == {"python": ("pytest",), "rust": ("cargo", "test")}
+    assert commands == {"rust": ("cargo", "test")}
 
 
 def test_more_specific_stacks_outrank_generic_node():
@@ -207,3 +216,114 @@ def test_resolve_test_command_is_none_when_package_json_is_scalar_shaped(tmp_pat
     _write(tmp_path, "package.json", '"just a string"')
     node = detect(tmp_path)[0]
     assert resolve_test_command(tmp_path, node) is None
+
+
+# --- A1.33(b): a Python test command that can actually launch ---
+
+
+def _python_project(tmp_path: Path) -> Path:
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    return tmp_path
+
+
+def _venv_with(tmp_path: Path, *executables: str, directory: str = ".venv") -> None:
+    binaries = tmp_path / directory / "bin"
+    binaries.mkdir(parents=True)
+    for name in executables:
+        path = binaries / name
+        path.write_text("#!/bin/sh\n", encoding="utf-8")
+        path.chmod(0o755)
+
+
+def _python() -> object:
+    return next(p for p in PROFILES if p.name == "python")
+
+
+def test_python_test_command_is_never_a_bare_executable_name(tmp_path: Path):
+    """A1.33(b): 'pytest' alone is not on PATH in a venv Rudra did not activate."""
+    command = resolve_test_command(_python_project(tmp_path), _python())
+    assert command is not None
+    assert command[0] != "pytest"
+
+
+def test_python_prefers_the_project_venv_pytest(tmp_path: Path):
+    _python_project(tmp_path)
+    _venv_with(tmp_path, "pytest", "python")
+    assert resolve_test_command(tmp_path, _python()) == [str(tmp_path / ".venv" / "bin" / "pytest")]
+
+
+def test_python_accepts_a_venv_named_venv(tmp_path: Path):
+    _python_project(tmp_path)
+    _venv_with(tmp_path, "pytest", directory="venv")
+    assert resolve_test_command(tmp_path, _python()) == [str(tmp_path / "venv" / "bin" / "pytest")]
+
+
+def test_python_uses_the_venv_interpreter_when_pytest_is_not_installed(tmp_path: Path):
+    _python_project(tmp_path)
+    _venv_with(tmp_path, "python")
+    assert resolve_test_command(tmp_path, _python()) == [
+        str(tmp_path / ".venv" / "bin" / "python"),
+        "-m",
+        "pytest",
+    ]
+
+
+def test_python_recognises_a_django_project(tmp_path: Path):
+    _python_project(tmp_path)
+    (tmp_path / "manage.py").write_text("# django\n", encoding="utf-8")
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["manage.py", "test"]
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
+
+
+def test_python_uses_pytest_when_the_project_declares_it(tmp_path: Path):
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='x'\ndependencies=['pytest']\n", encoding="utf-8"
+    )
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
+
+
+def test_python_reads_pytest_from_requirements_txt(tmp_path: Path):
+    (tmp_path / "requirements.txt").write_text("pytest>=8\n", encoding="utf-8")
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
+
+
+def test_python_falls_back_to_unittest_with_no_venv_and_no_pytest(tmp_path: Path):
+    command = resolve_test_command(_python_project(tmp_path), _python())
+    assert command[1:] == ["-m", "unittest", "discover"]
+    assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.54)"
+
+
+def test_venv_resolution_never_reads_rudras_own_venv(tmp_path: Path):
+    """D18: Rudra being a Python project and the target being one must not be conflated."""
+    command = resolve_test_command(_python_project(tmp_path), _python())
+    assert "Rudra" not in " ".join(command)
+
+
+def test_resolution_still_executes_nothing(tmp_path: Path, monkeypatch):
+    """stacks/ observes; running the command it reports belongs to C3.6."""
+    import subprocess
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("stacks must not start a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    monkeypatch.setattr(subprocess, "Popen", _boom)
+    resolve_test_command(_python_project(tmp_path), _python())
+
+
+def test_no_fallback_names_a_bare_python(tmp_path: Path):
+    """A1.54: macOS ships no bare `python`, so emitting it repeats A1.33(b)."""
+    for setup in (
+        lambda: None,
+        lambda: (tmp_path / "manage.py").write_text("# django\n", encoding="utf-8"),
+    ):
+        _python_project(tmp_path)
+        setup()
+        command = resolve_test_command(tmp_path, _python())
+        assert command[0] != "python", command
+        assert shutil.which(command[0]) is not None, command

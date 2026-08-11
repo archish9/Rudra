@@ -95,10 +95,15 @@ def build_gate(cfg: Config, project_path: Path) -> Gate:
         shell_in_auto=cfg.tools.shell_in_auto,
     )
     audit = AuditLog(rudra_paths(project_path).logs / "permissions.jsonl")
+    # Built before the middleware, which needs to know which names actually
+    # reach a prompt -- an `ask` for a name that does not is denied (A1.51).
+    interrupt_on = build_interrupt_on(engine)
     return Gate(
         engine=engine,
-        middleware=RudraPermissionMiddleware(engine, audit, cfg.permissions.mode),
-        interrupt_on=build_interrupt_on(engine),
+        middleware=RudraPermissionMiddleware(
+            engine, audit, cfg.permissions.mode, interrupt_tools=frozenset(interrupt_on)
+        ),
+        interrupt_on=interrupt_on,
         grants=grants,
         audit=audit,
         mode=cfg.permissions.mode,

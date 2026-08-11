@@ -183,9 +183,7 @@ def test_no_user_facing_message_cites_the_internal_ledger():
         stripped = line.strip()
         if stripped.startswith("#") or "TODO.md" not in line:
             continue
-        assert '"' not in line and "'" not in line, (
-            f"user-facing string cites TODO.md: {stripped}"
-        )
+        assert '"' not in line and "'" not in line, f"user-facing string cites TODO.md: {stripped}"
 
 
 def test_the_other_floor_rules_are_still_disableable(tmp_path):
@@ -207,3 +205,74 @@ def test_shell_in_auto_is_read_from_toml(tmp_path):
 def test_env_layer_sets_shell_in_auto(tmp_path, monkeypatch):
     monkeypatch.setenv("RUDRA_SHELL_IN_AUTO", "true")
     assert build_config(tmp_path).tools.shell_in_auto is True
+
+
+# --- Step 8: auto_branch and test_timeout ---
+
+
+def test_tools_defaults_include_auto_branch_and_test_timeout(tmp_path):
+    cfg = build_config(tmp_path)
+    assert cfg.tools.auto_branch is False
+    assert cfg.tools.test_timeout == 600
+
+
+def test_auto_branch_is_read_from_toml(tmp_path):
+    root = write_config(tmp_path, "[tools]\nauto_branch = true\n")
+    assert build_config(root).tools.auto_branch is True
+
+
+def test_test_timeout_accepts_an_integer(tmp_path):
+    root = write_config(tmp_path, "[tools]\ntest_timeout = 90\n")
+    assert build_config(root).tools.test_timeout == 90
+
+
+def test_test_timeout_rejects_a_bool(tmp_path):
+    # isinstance(True, int) is True in Python, so bool must be excluded
+    # explicitly or `test_timeout = true` silently becomes a 1-second timeout.
+    root = write_config(tmp_path, "[tools]\ntest_timeout = true\n")
+    with pytest.raises(ConfigError, match="whole number of seconds"):
+        build_config(root)
+
+
+def test_test_timeout_rejects_zero(tmp_path):
+    root = write_config(tmp_path, "[tools]\ntest_timeout = 0\n")
+    with pytest.raises(ConfigError, match="greater than 0"):
+        build_config(root)
+
+
+def test_test_timeout_rejects_a_negative_value(tmp_path):
+    root = write_config(tmp_path, "[tools]\ntest_timeout = -5\n")
+    with pytest.raises(ConfigError, match="greater than 0"):
+        build_config(root)
+
+
+def test_test_timeout_rejects_a_string(tmp_path):
+    root = write_config(tmp_path, '[tools]\ntest_timeout = "600"\n')
+    with pytest.raises(ConfigError, match="whole number of seconds"):
+        build_config(root)
+
+
+def test_auto_branch_rejects_a_string(tmp_path):
+    root = write_config(tmp_path, '[tools]\nauto_branch = "yes"\n')
+    with pytest.raises(ConfigError, match="true or false"):
+        build_config(root)
+
+
+def test_unknown_tools_key_still_suggests_the_nearest_name(tmp_path):
+    root = write_config(tmp_path, "[tools]\nauto_brnch = true\n")
+    with pytest.raises(ConfigError, match="auto_branch"):
+        build_config(root)
+
+
+def test_env_layer_sets_auto_branch(tmp_path, monkeypatch):
+    monkeypatch.setenv("RUDRA_AUTO_BRANCH", "true")
+    assert build_config(tmp_path).tools.auto_branch is True
+
+
+def test_test_timeout_env_var_does_not_become_a_model_role(tmp_path, monkeypatch):
+    # _split_role_and_suffix would read TEST_TIMEOUT as role "test" plus
+    # suffix "timeout" -- a real MODEL_KEY -- and invent a [model.test].
+    monkeypatch.setenv("RUDRA_TEST_TIMEOUT", "45")
+    cfg = build_config(tmp_path)
+    assert cfg.tools.test_timeout == 45
+    assert "test" not in cfg.models

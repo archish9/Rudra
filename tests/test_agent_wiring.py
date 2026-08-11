@@ -232,3 +232,65 @@ def test_main_agent_constructs_filesystem_backend_with_virtual_mode():
     assert (
         isinstance(virtual_mode_kw.value, ast.Constant) and virtual_mode_kw.value.value is True
     ), "main_agent.py's FilesystemBackend is not constructed with virtual_mode=True"
+
+
+# --- Step 8: the git and test-runner tools ---
+
+
+def _planner_tool_names(monkeypatch, tmp_path) -> list[str]:
+    from rich.console import Console
+
+    from rudra.agent.planner_agent import create_planner_agent
+
+    captured = _record_create_deep_agent(monkeypatch, "rudra.agent.planner_agent")
+    create_planner_agent(
+        task="t",
+        project_path=tmp_path,
+        tech_stack_content="",
+        filesystem_backend=object(),
+        checkpointer=None,
+        console=Console(quiet=True),
+    )
+    return [tool.name for tool in captured["tools"]]
+
+
+def test_planner_registers_the_step_8_tools(monkeypatch, tmp_path):
+    names = _planner_tool_names(monkeypatch, tmp_path)
+    assert "git_diff" in names
+    assert "run_tests" in names
+
+
+def test_every_wrapped_execute_name_is_actually_registered(monkeypatch, tmp_path):
+    """Otherwise the engine allows a name that reaches no tool (A1.51's shape)."""
+    from rudra.permissions.rules import WRAPPED_EXECUTE_TOOLS
+
+    names = set(_planner_tool_names(monkeypatch, tmp_path))
+    assert WRAPPED_EXECUTE_TOOLS <= names
+
+
+def test_the_planning_tools_are_still_registered(monkeypatch, tmp_path):
+    """Step 8 adds; it must not displace."""
+    names = set(_planner_tool_names(monkeypatch, tmp_path))
+    assert {"update_plan", "read_plan", "write_task_assignment"} <= names
+
+
+def test_coder_still_has_no_tools(monkeypatch, tmp_path):
+    """coder_agent.py tells it to STOP after one write_file.
+
+    A test runner in the same context window would contradict its own
+    instructions. Step 9 revisits this when subagents land (C6.2).
+    """
+    from rudra.agent.coder_agent import create_coder_agent
+
+    captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
+    create_coder_agent(tech_stack_content="", filesystem_backend=object(), checkpointer=None)
+    assert captured["tools"] == []
+
+
+def test_the_planner_prompt_tells_the_model_not_to_commit(tmp_path):
+    """S8.5's prompt half. The config template carries the other half."""
+    from rudra.agent.planner_agent import build_planner_prompt
+
+    prompt = build_planner_prompt("t", tmp_path)
+    assert "git commit" in prompt
+    assert "run_tests" in prompt

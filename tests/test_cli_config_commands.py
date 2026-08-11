@@ -194,3 +194,30 @@ def test_doctor_reports_a_broken_config_cleanly(tmp_path: Path) -> None:
     result = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"])
     assert result.exit_code != 0
     assert "Traceback" not in result.output
+
+
+def test_config_list_shows_every_field_of_every_section(tmp_path: Path) -> None:
+    """A1.52: _flatten claimed completeness it did not have.
+
+    Derived from the dataclasses rather than hand-listed, so a key added
+    later cannot go missing again.
+    """
+    from dataclasses import fields
+
+    from rudra.cli import _flatten
+    from rudra.config.loader import build_config
+
+    cfg = build_config(tmp_path)
+    shown = {key for key, _ in _flatten(cfg)}
+
+    for section in ("agent", "permissions", "tools", "compat"):
+        for field in fields(getattr(cfg, section)):
+            assert f"{section}.{field.name}" in shown, (
+                f"{section}.{field.name} is honoured at run time but never printed"
+            )
+
+
+def test_config_list_prints_the_step_8_tools_keys(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["config", "list", "-d", str(tmp_path)])
+    assert "auto_branch" in result.stdout
+    assert "test_timeout" in result.stdout

@@ -9,6 +9,7 @@ from typing import Any, Optional
 from rich.console import Console
 
 from rudra.config import get_config
+from rudra.git.core import auto_branch
 from rudra.permissions import run_with_approvals
 from rudra.state import ProjectContext, ensure_layout
 from rudra.tools.planning_tools import looks_like_path
@@ -370,6 +371,17 @@ class RudraAgent:
                     files_modified=[],
                 )
 
+            # After the dry-run return, so --dry-run creates nothing; before
+            # the planner, so the plan and every file it produces land on the
+            # new branch rather than straddling two.
+            _maybe_auto_branch(
+                self.context.project_path,
+                self.context.task,
+                cfg=get_config(),
+                gate=self.gate,
+                console=self.context.console,
+            )
+
             self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
 
             # Phase 1: Planning
@@ -458,6 +470,32 @@ class RudraAgent:
             self._log_always("[bold red]\n!! Agent crashed — full traceback:[/bold red]")
             self._log_always(traceback.format_exc())
             raise
+
+
+def _maybe_auto_branch(project_path: Path, task: str, *, cfg, gate, console: Console) -> None:
+    """Branch before the run, when the user asked for it and it is safe.
+
+    Off by default (Step 8 spec S8.3). Both outcomes are printed: silence
+    would leave the user unable to tell whether it ran, which is the
+    complaint A1.50 recorded against a setting that accepted a name and then
+    quietly did nothing.
+
+    Nothing here can end a run. A branch is a convenience, and a user who
+    cannot get one still wants their task done on the branch they are on.
+    """
+    if not cfg.tools.auto_branch:
+        return
+
+    try:
+        outcome = auto_branch(project_path, task, gate=gate, console=console, cfg=cfg)
+    except Exception as exc:  # noqa: BLE001 - a convenience must not end a run
+        console.print(f"[yellow]No branch created: {exc}.[/yellow]")
+        return
+
+    if outcome.branch is not None:
+        console.print(f"[dim]Working on branch {outcome.branch}[/dim]")
+    else:
+        console.print(f"[yellow]No branch created: {outcome.skipped_reason}.[/yellow]")
 
 
 def _ensure_agents_md(rudra_dir: Path, project_context: Optional[ProjectContext]) -> None:

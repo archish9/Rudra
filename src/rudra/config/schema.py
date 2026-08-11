@@ -106,10 +106,20 @@ class ToolsConfig:
     can — measured, not theorised (A1.49). Unattended runs therefore get
     the filesystem tools, which the backend genuinely confines, unless the
     user opts in once. `ask` mode is unaffected.
+
+    `auto_branch` is off by default for the same reason in a different
+    shape: it mutates the user's repository before the model has done
+    anything, and nobody asked for it (Step 8 spec S8.3).
+
+    `test_timeout` is a real key rather than a constant because Angular's
+    Karma builder hangs indefinitely without a browser (C11.3), and no one
+    number fits both a three-second unit suite and an integration run.
     """
 
     shell: bool
     shell_in_auto: bool
+    auto_branch: bool
+    test_timeout: int
 
 
 MODEL_KEYS = frozenset(f.name for f in fields(ModelConfig))
@@ -130,7 +140,12 @@ DEFAULTS: dict[str, Any] = {
     "agent": {"verbose": True},
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},
-    "tools": {"shell": True, "shell_in_auto": False},
+    "tools": {
+        "shell": True,
+        "shell_in_auto": False,
+        "auto_branch": False,
+        "test_timeout": 600,
+    },
 }
 
 __all__ = [

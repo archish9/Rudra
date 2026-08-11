@@ -49,14 +49,36 @@ def _denial_text(tool: str, arg: str | None, rule: str | None) -> str:
     )
 
 
-class RudraPermissionMiddleware(AgentMiddleware):
-    """Short-circuits denied tool calls before they reach the backend."""
+def _unregistered_text(tool: str) -> str:
+    return (
+        f"Permission denied: {tool!r} has no permission rule and no approval "
+        f"prompt, so Rudra cannot ask the user about it and will not run it "
+        f"unchecked. Do not retry this call. This is a gap in Rudra's "
+        f"configuration, not a mistake you made — use a different tool."
+    )
 
-    def __init__(self, engine: PermissionEngine, audit: AuditLog, mode: str) -> None:
+
+class RudraPermissionMiddleware(AgentMiddleware):
+    """Short-circuits denied tool calls before they reach the backend.
+
+    `interrupt_tools` is the set of names `interrupt_on` actually registers.
+    Without it this class could not tell an `ask` that will reach a prompt
+    from one that will reach nothing, and the second kind ran unchecked --
+    A1.51.
+    """
+
+    def __init__(
+        self,
+        engine: PermissionEngine,
+        audit: AuditLog,
+        mode: str,
+        interrupt_tools: frozenset[str] = frozenset(),
+    ) -> None:
         super().__init__()
         self.engine = engine
         self.audit = audit
         self.mode = mode
+        self.interrupt_tools = interrupt_tools
 
     def _check(self, request: Any) -> ToolMessage | None:
         call = request.tool_call
@@ -75,7 +97,19 @@ class RudraPermissionMiddleware(AgentMiddleware):
             return None
         if decision.effect != "deny":
             # "ask" is interrupt_on's; the prompt records what the user chose.
-            return None
+            if tool in self.interrupt_tools:
+                return None
+            # ...but only where an entry exists. Without one there is no
+            # prompt and no denial, so the call would run unaudited (A1.51).
+            # Fail closed rather than enumerate every tool deepagents might
+            # register.
+            self.audit.record(tool, arg, decision, mode=self.mode, outcome="deny")
+            return ToolMessage(
+                content=_unregistered_text(tool),
+                tool_call_id=call.get("id", ""),
+                name=tool,
+                status="error",
+            )
 
         self.audit.record(tool, arg, decision, mode=self.mode, outcome="deny")
         return ToolMessage(
