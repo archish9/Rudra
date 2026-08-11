@@ -45,7 +45,9 @@ _TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools")
 _AGENT_KEYS = frozenset({"verbose"})
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
-_TOOLS_KEYS = frozenset({"shell", "shell_in_auto"})
+_TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch"})
+_TOOLS_INT_KEYS = frozenset({"test_timeout"})
+_TOOLS_KEYS = _TOOLS_BOOL_KEYS | _TOOLS_INT_KEYS
 _POSITIVE_INT_KEYS = ("context_tokens", "max_output_tokens", "timeout")
 
 
@@ -187,8 +189,16 @@ def validate(
     for key, value in merged.get("tools", {}).items():
         if key not in _TOOLS_KEYS:
             raise ConfigError(f"Unknown key '{key}' in [tools].{_suggest(key, _TOOLS_KEYS)}")
-        if not isinstance(value, bool):
-            raise ConfigError(f"[tools] {key} must be true or false, got {value!r}.")
+        if key in _TOOLS_BOOL_KEYS:
+            if not isinstance(value, bool):
+                raise ConfigError(f"[tools] {key} must be true or false, got {value!r}.")
+            continue
+        # bool is a subclass of int, so `test_timeout = true` would otherwise
+        # pass isinstance and quietly become a one-second timeout.
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ConfigError(f"[tools] {key} must be a whole number of seconds, got {value!r}.")
+        if value <= 0:
+            raise ConfigError(f"[tools] {key} must be greater than 0, got {value!r}.")
 
 
 @dataclass(frozen=True)

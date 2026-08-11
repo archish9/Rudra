@@ -174,6 +174,15 @@ def env_layer(known_roles: Iterable[str]) -> dict[str, Any]:
         if tail == "SHELL_IN_AUTO":
             put("tools", "shell_in_auto", value=_as_bool(raw))
             continue
+        if tail == "AUTO_BRANCH":
+            put("tools", "auto_branch", value=_as_bool(raw))
+            continue
+        # Also before _split_role_and_suffix: it would read TEST_TIMEOUT as
+        # role "test" plus suffix "timeout", which IS a MODEL_KEY, and invent
+        # a [model.test] section out of a [tools] setting.
+        if tail == "TEST_TIMEOUT":
+            put("tools", "test_timeout", value=_as_number(raw))
+            continue
         role, suffix = _split_role_and_suffix(tail, roles)
         if suffix in MODEL_KEYS:
             value: Any = _as_number(raw) if suffix in _NUMERIC_MODEL_KEYS else raw

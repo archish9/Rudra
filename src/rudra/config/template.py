@@ -58,6 +58,10 @@ mode  = "ask"
 allow = []
 deny  = []
 
+# Rudra itself never commits. The agent can still reach git through the shell,
+# so uncomment this if you would rather it could not:
+# deny = ["execute:git commit*", "execute:git push*", "execute:git reset --hard*"]
+
 # Built-in rules denied in every mode, including --auto. Name one here to
 # switch it off; the run prints which are disabled, and calls they would
 # have blocked are still written to the audit log.
@@ -77,6 +81,17 @@ shell = true
 # you can — Rudra's confinement covers the file-writing tools, not the shell.
 # Turn it on if you want unattended test runs, knowing that.
 shell_in_auto = false
+
+# Create a `rudra/<slug>` branch before a run, named after your task, so the
+# agent's work is not on your branch. Only fires inside a git repository, from
+# a clean tree, with a branch checked out — otherwise it says why and carries
+# on where you are. It never fails a run.
+auto_branch = false
+
+# How long a test command may run before Rudra kills it, in seconds. Angular's
+# Karma builder hangs forever when no browser is installed, and inside a fix
+# loop a hang stalls the loop instead of failing a round.
+test_timeout = 600
 
 [compat]
 # Workarounds kept for small models. Both off by default — see TODO.md D4.

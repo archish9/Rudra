@@ -302,22 +302,34 @@ def _load_config_or_exit(project_dir: Optional[Path]):
 
 
 def _flatten(cfg) -> list[tuple[str, object]]:
-    """Every effective leaf as a dotted key, in a stable order."""
-    from dataclasses import asdict
+    """Every effective leaf as a dotted key, in a stable order.
+
+    Derived from each dataclass's own fields rather than listed by hand.
+    The hand-written version claimed this same completeness and did not
+    have it: `[tools] auto_branch` and `test_timeout` were accepted by the
+    loader, honoured at run time, and never printed (TODO.md A1.52). Since
+    `config list` is the only way to see which layer set a value — there is
+    no `config set` by design (S6.1) — under-reporting is worse than it
+    looks. Adding the two missing lines would have closed the instance and
+    left the defect, so the enumeration is now structural.
+    """
+    from dataclasses import fields
 
     rows: list[tuple[str, object]] = []
     for role in sorted(cfg.models):
-        for key, value in asdict(cfg.models[role]).items():
-            rows.append((f"model.{role}.{key}", value))
-    rows.append(("agent.verbose", cfg.agent.verbose))
-    rows.append(("permissions.mode", cfg.permissions.mode))
-    rows.append(("permissions.allow", list(cfg.permissions.allow)))
-    rows.append(("permissions.deny", list(cfg.permissions.deny)))
-    rows.append(("permissions.floor_disable", list(cfg.permissions.floor_disable)))
-    rows.append(("tools.shell", cfg.tools.shell))
-    rows.append(("tools.shell_in_auto", cfg.tools.shell_in_auto))
-    rows.append(("compat.task_anchor", cfg.compat.task_anchor))
-    rows.append(("compat.sandbox_paths", cfg.compat.sandbox_paths))
+        model = cfg.models[role]
+        for field in fields(model):
+            rows.append((f"model.{role}.{field.name}", getattr(model, field.name)))
+
+    for section in ("agent", "permissions", "tools", "compat"):
+        block = getattr(cfg, section)
+        for field in fields(block):
+            value = getattr(block, field.name)
+            # Tuples are an implementation detail of the frozen dataclasses;
+            # the user wrote a TOML array and should see one back.
+            rows.append(
+                (f"{section}.{field.name}", list(value) if isinstance(value, tuple) else value)
+            )
     return rows
 
 
