@@ -27,10 +27,12 @@ NORMALIZATION LAYERS
 --------------------
 1. Windows absolute path (C:\\...) → strip drive + project root → relative
 2. POSIX absolute path:
-   a. Strip known sandbox prefix (/testbed/, /workspace/, etc.)
-   b. Strip actual project root prefix (matches real machine path)
+   a. Strip actual project root prefix (matches real machine path)
+   b. Strip known sandbox prefix (/testbed/, /workspace/, etc.)
    c. Plan-aware suffix matching against PLAN.md filenames
    d. Last resort: bogus-dir-aware basename stripping
+
+   (a) precedes (b) deliberately — see the ordering note in ``_normalize``.
 """
 
 from __future__ import annotations
@@ -125,10 +127,26 @@ def install_path_normalizer(
 
         pp = PurePosixPath(path)
 
-        # Step 2a: Strip known sandbox prefixes, then continue to plan matching.
-        # Don't return early — the stripped path may still have a project-name
-        # component (e.g. "/home/user/repos/myproject/requirements.txt" strips to
-        # "myproject/requirements.txt" which still needs suffix resolution).
+        # Step 2a: Strip the actual project root prefix.
+        #
+        # This runs BEFORE the sandbox list, and the order is load-bearing: the
+        # root is a verified-true match for this machine, while SANDBOX_PREFIXES
+        # is a guess. Several of those guesses ("/tmp/", "/app/", "/code/",
+        # "/src/", "/root/", "/home/user/") are also ordinary directories people
+        # really work in, so stripping them first truncates a correct absolute
+        # path at the wrong component and the write lands where nothing reads
+        # (TODO.md A1.51).
+        try:
+            path = pp.relative_to(_posix_root).as_posix()
+            return original(path, allowed_prefixes=allowed_prefixes)
+        except ValueError:
+            pass
+
+        # Step 2b: Not under the real root — now try the known sandbox prefixes,
+        # then continue to plan matching. Don't return early on the strip alone:
+        # the stripped path may still have a project-name component (e.g.
+        # "/home/user/repos/myproject/requirements.txt" strips to
+        # "myproject/requirements.txt", which still needs suffix resolution).
         sandbox_stripped: str | None = None
         for prefix in SANDBOX_PREFIXES:
             if path.startswith(prefix):
@@ -142,13 +160,6 @@ def install_path_normalizer(
                 if match is not None:
                     return original(match, allowed_prefixes=allowed_prefixes)
             return original(sandbox_stripped, allowed_prefixes=allowed_prefixes)
-
-        # Step 2b: Strip actual project root prefix
-        try:
-            path = pp.relative_to(_posix_root).as_posix()
-            return original(path, allowed_prefixes=allowed_prefixes)
-        except ValueError:
-            pass
 
         # Step 2c: Plan-aware suffix matching on the full absolute path.
         # e.g., "/unknown/prefix/app/database.py" → tries "app/database.py" → match.

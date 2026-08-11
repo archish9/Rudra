@@ -183,9 +183,7 @@ def test_no_user_facing_message_cites_the_internal_ledger():
         stripped = line.strip()
         if stripped.startswith("#") or "TODO.md" not in line:
             continue
-        assert '"' not in line and "'" not in line, (
-            f"user-facing string cites TODO.md: {stripped}"
-        )
+        assert '"' not in line and "'" not in line, f"user-facing string cites TODO.md: {stripped}"
 
 
 def test_the_other_floor_rules_are_still_disableable(tmp_path):

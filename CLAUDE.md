@@ -238,7 +238,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-.venv/bin/pytest -q                  # 489 passed, 2 skipped at Step 7; must never go down
+.venv/bin/pytest -q                  # 520 passed, 2 skipped at Step 7; must never go down
 .venv/bin/rudra --version            # Rudra v0.2.0
 
 .venv/bin/rudra init                 # scaffold .rudra/config.toml + the D15 layout
