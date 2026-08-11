@@ -40,7 +40,7 @@ Install is editable, so source edits take effect immediately. Reinstall only aft
 ```
 
 ```
-286 passed, 2 skipped
+656 passed, 2 skipped
 ```
 
 The two skips are live tests, which need a real model — see [below](#testing-against-a-real-model).
@@ -109,18 +109,31 @@ src/rudra/
 │   ├── planner_agent.py
 │   └── coder_agent.py
 ├── middleware/       Behaviour patches applied to agents
-├── tools/            Custom tools (planning, interaction)
+├── shell/
+│   └── runner.py     run_gated() — the ONLY subprocess call site in Rudra
+├── git/
+│   └── core.py       Python git API: status, diff, log, branches, auto-branch
+├── testing/
+│   ├── runner.py     run_tests() → TestResult, the fix loop's input
+│   └── parse.py      Per-runner count parsing from real summary lines
+├── tools/            EVERY tool the model can call, and nothing else
+│   ├── planning_tools.py     update_plan, read_plan, write_task_assignment
+│   ├── interaction_tools.py  ask_user
+│   ├── git_tools.py          git_diff — thin wrapper over git/core.py
+│   └── testing_tools.py      run_tests — thin wrapper over testing/runner.py
 ├── stacks/           Language/framework detection
 ├── filesystem/       Project tree walking
 ├── compat/           deepagents version guards and monkeypatches
 └── state/            paths.py (the .rudra/ layout), project config persistence
 ```
 
-**Three architectural rules worth knowing:**
+**Four architectural rules worth knowing:**
 
 *No module outside `rudra/llm/` may import a provider package.* `tests/test_no_direct_provider_imports.py` parses every module with `ast` and fails if one does. Ask for a model with `build_model(role)` instead.
 
 *Configuration precedence lives in exactly one function*, `config/loader.py::deep_merge`, and every value records which layer set it. This shape exists because the two worst config bugs this project shipped were both "which source won?" questions that a per-field `x or y or default` chain structurally cannot answer. Don't reintroduce per-field resolution.
+
+*One place starts a subprocess*, `shell/runner.py::run_gated`. Git and the test runner both go through it, and it asks the permission engine as `execute` with the real command string — which is why `deny = ["execute:git push*"]` covers the git layer without naming it, and why the audit log records `pytest -q` rather than an opaque tool name. A second call site would be a second gate check, and the half that drifts is the security-relevant one.
 
 *Never build a `.rudra/...` path by hand.* Ask `state/paths.py`. `rudra_paths()` is pure; `ensure_layout()` is the only function that creates anything. Agent-facing prompts name these paths as literal strings, so if a path moves the prompt text must move in the same commit — `tests/test_rudra_dir_migration.py` fails if they ever disagree.
 

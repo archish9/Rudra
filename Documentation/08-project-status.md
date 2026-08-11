@@ -1,6 +1,6 @@
 # 8. Project Status
 
-An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-10** (after Step 7 — shell and permissions).
+An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-11** (after Step 8 — git tools and the test runner).
 
 - [In one sentence](#in-one-sentence)
 - [What works](#what-works)
@@ -14,7 +14,7 @@ An honest account of what Rudra does today, what it doesn't, and what's next. La
 
 ## In one sentence
 
-Rudra can plan a set of files, write them with your approval, and run commands — against any model you point it at. What it can't do yet is judge whether any of it worked.
+Rudra can plan a set of files, write them with your approval, run your test suite and read the result — against any model you point it at. What it can't do yet is act on that result by itself.
 
 ---
 
@@ -35,6 +35,12 @@ Rudra can plan a set of files, write them with your approval, and run commands �
 **Approval before it acts.** By default every write, edit, delete and command stops and shows you a diff first. `a` approves, `A` stops asking about that file, `r` rejects. `--auto` skips the prompts for unattended runs.
 
 **Shell access.** Rudra can run commands — its agents have a real shell rooted at your project, with your toolchain on `PATH`.
+
+**Running your tests.** `run_tests` works out the right command from your project's own layout — your virtualenv's `pytest`, `cargo test`, or whatever `package.json` declares — runs it, and reports the exit code, pass/fail/skip counts, and the tail of the output. Full output goes to `.rudra/run/logs/tests.log`. It distinguishes four outcomes that look alike from a distance and are not: no test command declared, a command that wouldn't start, a suite that collected nothing, and tests that genuinely failed.
+
+**Reading your diff.** `git_diff` shows the working-tree diff, capped so a large one can't swallow the context window.
+
+**Working on its own branch.** `[tools] auto_branch = true` puts a run on `rudra/<slug>` instead of your branch. Off by default, and it only fires from a clean tree with a branch checked out — otherwise it says why and carries on where you are, without failing the run.
 
 **Safe by construction.** File operations are confined to your project directory, whatever the model asks for. A small deny floor applies in every mode, including `--auto`: nothing writes into `.git/`, nothing runs `rm -rf /`. Every gated decision is logged to `.rudra/run/logs/permissions.jsonl`.
 
@@ -58,9 +64,13 @@ This is now the single biggest limitation, and everything below follows from it.
 
 ### No test → review → fix loop
 
-The headline idea — write code, run its tests, review it, fix it, repeat — isn't built. Rudra *can* run commands now, but nothing in the loop makes it run your test suite and act on the result. That's the next milestone.
+The headline idea — write code, run its tests, review it, fix it, repeat — isn't built.
 
-There is also no dedicated test-runner tool yet: the agent has a raw shell, not a step that knows how to run pytest and parse the failures.
+The *inputs* now exist. Rudra can run your suite and read the result as structured data rather than a wall of text. What's missing is the loop that consumes it: nothing re-plans when tests fail, nothing gates completion on them, and the orchestrator still ticks a file off because it exists. The agent may call `run_tests` and be told the suite failed, and then finish the run reporting success anyway.
+
+That's the next milestone, and it's the one that changes what "done" means.
+
+**One consequence to know now:** `run_tests` is a shell command underneath and is gated like one, so **`--auto` on its own runs no tests**. An unattended run without `--allow-shell` writes code it cannot check. See [Permissions](09-permissions.md).
 
 ### No self-review
 
@@ -121,8 +131,7 @@ Built in order, because each depends on the last.
 
 | Next | What it brings |
 |---|---|
-| **Git and test-runner tools** | A step that knows how to run your suite and read the failures, rather than a raw shell |
-| **The real agent loop** | Subagents, a reviewer, a tester, and a completion gate that means *tests pass* rather than *file exists*. This is the one that matters |
+| **The real agent loop** | Subagents, a reviewer, a tester, and a completion gate that means *tests pass* rather than *file exists*. This is the one that matters, and the test runner it consumes is now in place |
 | **Better planning** | Clarifying questions when a request is ambiguous, and a plan mode |
 | **Skills** | A methodology layer the agent can draw on |
 | **Context management** | Checkpoints, living project notes, token budgets |
@@ -151,7 +160,7 @@ Built in order, because each depends on the last.
 - Unattended runs with `--allow-shell` against anything you care about
 - Machines with no model available and no budget for one
 
-The honest summary: Rudra is a capable file generator that now asks permission and can run commands, on a solid provider-agnostic foundation — and it is not yet the autonomous test-and-fix agent it's aiming to be. Treat its output as a first draft from a fast junior developer who doesn't check their own work.
+The honest summary: Rudra is a capable file generator that asks permission, runs commands, and can now run your tests and tell you what happened — on a solid provider-agnostic foundation. It is not yet the autonomous test-and-fix agent it's aiming to be, because nothing makes it *act* on a failing suite. Treat its output as a first draft from a fast junior developer who will run the tests if you ask, and will still hand you the branch when they fail.
 
 ---
 
