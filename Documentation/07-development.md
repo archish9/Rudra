@@ -225,14 +225,16 @@ Add the package to `pyproject.toml` dependencies if LangChain needs one.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` runs on every push and pull request:
+`.github/workflows/ci.yml` runs on **pull requests only**:
 
 - `ruff check` and `ruff format --check`
 - `pytest` on Python 3.12 and 3.13, run under `coverage`, which prints a report afterwards
 
 Coverage is reported, never gated — there is no `--fail-under`. It runs inside the test job rather than in one of its own, because a separate job re-ran the entire suite a second time to produce a number that cannot fail the build.
 
-`.githooks/pre-push` runs the same gates locally; see [Run the gates before you push](#run-the-gates-before-you-push).
+Direct commits to `main` are not covered by CI. `.githooks/pre-push` runs the same three commands locally and is what gates them — enable it, or your commits are checked by nothing. See [Run the gates before you push](#run-the-gates-before-you-push).
+
+What CI still adds over the hook is a *different environment*: it installs from `uv.lock` on a clean machine and has no `.env`. Local runs inherit whatever your working tree has accumulated, and that difference has already hidden real defects.
 
 CI installs the package before running tests — `tests/test_package_version.py` compares against installed distribution metadata, and an uninstalled source tree reports `0.0.0+unknown` and fails.
 

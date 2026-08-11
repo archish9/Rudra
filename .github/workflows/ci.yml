@@ -1,8 +1,14 @@
 name: CI
 
+# Pull requests only. Direct commits to main are gated locally by
+# .githooks/pre-push, which runs these same three commands (A3.9). CI's
+# remaining job is to be an environment that is not the committer's: it
+# installs from uv.lock on a clean machine and has no .env, which is where
+# every defect found on 2026-08-11 actually lived (A3.8, A3.5, A1.51).
+#
+# The trade is explicit: a direct push to main with --no-verify, or from a
+# clone where core.hooksPath was never set, is now checked by nothing.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 concurrency:
