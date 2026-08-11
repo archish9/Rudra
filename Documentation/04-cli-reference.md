@@ -193,6 +193,8 @@ rudra "refactor the parser" --verbose
 `--project-dir` decides which `.env` **and** which `.rudra/config.toml` are read, so a project's configuration follows the project rather than your shell's location.
 
 > **`--auto` skips the approval prompts; `--allow-shell` is separate on purpose.** File operations are confined to your project whatever the model asks; a shell command is not. In an unattended run nobody reads the command first, so commands stay off until you say otherwise. See [Permissions](09-permissions.md#running-unattended).
+>
+> **This also means `--auto` alone runs no tests.** Rudra's `run_tests` is a shell command underneath and is gated the same way, so an unattended run without `--allow-shell` writes code it cannot check. Pair the flags when you want it to verify its own work.
 
 > **The default mode needs a terminal.** `mode = "ask"` prompts before each write, so piped or redirected stdin exits `2` immediately rather than hanging. Use `--auto` for scripts.
 

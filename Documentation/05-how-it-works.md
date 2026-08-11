@@ -142,7 +142,9 @@ Not when it compiles. Not when tests pass. Not when it's correct. Just present.
 
 So Rudra will happily report `3/3 files generated` for three files that don't run. Always review what it produces.
 
-This is a known gap and the next major piece of work — a real completion gate that runs your tests and only ticks an item off when they pass. See [Project Status](08-project-status.md).
+**Running the tests doesn't change this yet.** Rudra can now run your suite — the agent may call `run_tests`, be told it failed, and still finish the run reporting success, because nothing connects that answer back to the checklist. The measurement exists; the gate that acts on it does not.
+
+That gate is the next major piece of work. See [Project Status](08-project-status.md).
 
 ---
 
@@ -174,7 +176,19 @@ Rudra also refuses, before making any network call, to run a model whose provide
 | [LangChain](https://python.langchain.com) / LangGraph | Model interfaces and checkpointing |
 | [Typer](https://typer.tiangolo.com) + [Rich](https://rich.readthedocs.io) | Command line and terminal output |
 
-The file tools the agents use — `read_file`, `write_file`, `edit_file`, `ls`, `glob`, `grep` — come from deepagents, rooted at your project directory so nothing outside it can be touched.
+The file tools the agents use — `read_file`, `write_file`, `edit_file`, `ls`, `glob`, `grep` — come from deepagents, rooted at your project directory so nothing outside it can be touched. `execute` runs commands there too.
+
+Rudra adds a few of its own:
+
+| Tool | What it does |
+|---|---|
+| `update_plan` / `read_plan` | The file checklist in `.rudra/run/PLAN.md` |
+| `write_task_assignment` | The planner's brief for the coder |
+| `ask_user` | Asks you a question mid-run |
+| `run_tests` | Works out your project's test command, runs it, reports counts and the failure tail |
+| `git_diff` | The working-tree diff, capped so a big one can't fill the context window |
+
+`run_tests` and `git_diff` are thin wrappers: underneath, both resolve a real command and hand it to the same permission gate as any other shell call. That's why a rule like `deny = ["execute:git push*"]` covers them without naming them, and why the audit log records `pytest -q` rather than a tool name.
 
 ---
 

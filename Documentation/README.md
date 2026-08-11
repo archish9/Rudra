@@ -48,4 +48,4 @@ Settings come from five layers — built-in defaults, your user config, the proj
 
 By default it asks before every write, edit, delete and command, and shows you a diff first. `--auto` skips the prompts for unattended runs — see [Permissions](09-permissions.md).
 
-**It's alpha.** It writes files well and can run commands, but it does not yet review its own work: a file counts as "done" when it exists on disk, not when it works. Review everything it produces, and see [Project Status](08-project-status.md) before pointing it at anything you care about.
+**It's alpha.** It writes files well, runs commands, and can run your test suite and report what failed — but it does not yet act on the answer: a file counts as "done" when it exists on disk, not when it works. Review everything it produces, and see [Project Status](08-project-status.md) before pointing it at anything you care about.

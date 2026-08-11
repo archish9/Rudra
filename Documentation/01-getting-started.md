@@ -294,18 +294,31 @@ rudra> /exit
 
 ## What Rudra leaves behind
 
-Rudra keeps its working state in a `.rudra/` folder inside your project:
+Rudra keeps its working state in a `.rudra/` folder inside your project, split by how long it lasts.
+
+**Durable — text, safe to commit:**
 
 | File | What it is |
 |---|---|
-| `PLAN.md` | The checklist of files, ticked off as they're written |
-| `current_task.md` | The instructions the planner handed the coder for the current file |
-| `tech_stack.md` | The detected or configured stack for this project |
+| `config.toml` | Your project settings, written by `rudra init` |
 | `AGENTS.md` | Long-lived project notes fed back into the planner's prompt |
 | `project.json` | Saved project context |
-| `checkpoints.db` | Conversation checkpoints |
 
-Safe to delete — Rudra recreates what it needs. Add `.rudra/` to your `.gitignore` if you'd rather not commit it. Rudra never edits your `.gitignore` itself.
+**Volatile — regenerated every run, and gitignored for you:**
+
+| File | What it is |
+|---|---|
+| `run/PLAN.md` | The checklist of files, ticked off as they're written |
+| `run/current_task.md` | The instructions the planner handed the coder for the current file |
+| `run/tech_stack.md` | The detected or configured stack for this project |
+| `run/checkpoints.db` | Conversation checkpoints |
+| `run/logs/permissions.jsonl` | One line per gated decision — what was allowed, denied, or approved |
+| `run/logs/tests.log` | The full output of the last test run, in case the summary cut something you need |
+| `run/artifacts/` | Oversized tool results and offloaded conversation history |
+
+Rudra writes a `.rudra/.gitignore` covering only the volatile half, so committing `.rudra/` is safe by default. It never edits your project's own `.gitignore` — whether you commit any of it is your call.
+
+The whole folder is safe to delete; Rudra recreates what it needs.
 
 ---
 

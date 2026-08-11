@@ -342,9 +342,53 @@ rudra "also write tests/test_parser.py covering the CSV edge cases"
 
 ### The generated code doesn't run
 
-Expected, unfortunately. Rudra currently counts a file as done **when it exists**, not when it works — there's no test or review step yet. Always review the output.
+Expected, unfortunately. Rudra counts a file as done **when it exists**, not when it works. Ask it to run the tests (`run_tests`) and it will tell you honestly that they failed — but nothing loops back and fixes them yet, so the run still ends reporting success. Always review the output.
 
-This is the next major piece of work. See [Project Status](08-project-status.md).
+That loop is the next major piece of work. See [Project Status](08-project-status.md).
+
+### `run_tests` says "Running tests was not permitted"
+
+You're in `--auto` without `--allow-shell`. Tests are a shell command underneath, and unattended shell is opt-in — nobody is reading the command before it runs.
+
+```bash
+rudra --auto --allow-shell "add a parser and make its tests pass"
+```
+
+Or allow just the test command, which is narrower:
+
+```toml
+[permissions]
+allow = ["execute:pytest*"]
+```
+
+### `run_tests` says "This project declares no test command"
+
+Rudra looks for a test command in your project's own layout: a virtualenv's `pytest`, `cargo test`, or `scripts.test` in `package.json`. An empty directory with no project file has none of those, which is a real answer rather than a failure.
+
+Add the project file the stack expects — `pyproject.toml`, `Cargo.toml`, `package.json` — and it will resolve.
+
+### `run_tests` says "No tests were collected"
+
+The suite ran and found nothing to execute. Usually the test files aren't written yet, or they don't match your runner's discovery pattern (`test_*.py` for pytest by default).
+
+This is deliberately **not** reported as a failure: nothing ran, so nothing is verified either way, and calling it a failure would send the agent off to fix code that may be fine.
+
+### `run_tests` says "The test command timed out"
+
+The suite exceeded `[tools] test_timeout` (default 600 seconds) and was killed, along with any workers it spawned.
+
+Either the suite is genuinely slow — raise the limit — or something hangs. Angular's default test builder runs Karma against Chrome and waits forever when no browser is installed, which is the usual culprit.
+
+```toml
+[tools]
+test_timeout = 1800
+```
+
+### `No branch created: the working tree has uncommitted changes`
+
+`auto_branch` only branches from a clean tree, because `git checkout -b` carries uncommitted work onto the new branch and fails outright where it would clobber. Commit or stash first.
+
+Rudra's own `.rudra/` directory doesn't count — only your changes do. The run continues on your current branch either way; this is never fatal.
 
 ### `--dry-run` did nothing
 

@@ -14,7 +14,7 @@ Point it at **any model you like** — a local Ollama model on your own machine,
 
 > ### 🚧 Early days — please read
 >
-> Rudra is **alpha software under active development**. It plans a set of files, writes them, and can run commands. It does **not** yet review its own output or loop on failing tests — a file counts as done when it exists, not when it works. Review everything it produces.
+> Rudra is **alpha software under active development**. It plans a set of files, writes them, runs commands, and can run your test suite and tell you what failed. What it does **not** do yet is act on that: nothing loops back to fix a failing test, and a file still counts as done when it exists, not when it works. Review everything it produces.
 >
 > **It asks before it writes.** By default every write, edit, delete and command stops for your approval and shows you a diff first. `--auto` skips the prompts for unattended runs.
 >
@@ -175,10 +175,39 @@ rudra --auto "add type hints to utils.py"
 
 `--auto` approves everything without asking, for CI or a long run you don't want to babysit. Two things still hold:
 
-- **Commands stay off** unless you add `--allow-shell`. Writes are confined to your project; a shell command isn't, and nobody is reading it before it runs.
+- **Commands stay off** unless you add `--allow-shell`. Writes are confined to your project; a shell command isn't, and nobody is reading it before it runs. Since running your tests *is* a command, `--auto` on its own writes code it cannot check — pair the flags if you want it verified.
 - **A small deny floor always applies**, in every mode — no writing into `.git/`, no `rm -rf /`.
 
 Every gated decision lands in `.rudra/run/logs/permissions.jsonl`, so an unattended run leaves a record of what it was allowed to do.
+
+### Letting it check its own work
+
+```bash
+rudra --auto --allow-shell "add a CSV parser and make its tests pass"
+```
+
+Rudra works out your project's test command from the files present — your virtualenv's `pytest`, `cargo test`, whatever `package.json` declares — runs it, and reports what happened:
+
+```
+Tests failed. 12 run, 1 failed, 0 skipped.
+
+Output:
+…
+FAILED tests/test_parser.py::test_quoted_commas - AssertionError
+```
+
+Full output goes to `.rudra/run/logs/tests.log`; only the tail comes back to the model.
+
+**It reports, it doesn't yet repair.** The agent can be told the suite failed and still finish the run reporting success — nothing connects that answer back to the checklist. Closing that loop is the next milestone.
+
+Prefer it worked on its own branch?
+
+```toml
+[tools]
+auto_branch = true      # each run gets rudra/<slug>
+```
+
+Only fires from a clean tree with a branch checked out; otherwise it says why and carries on where you are, without failing the run.
 
 ### What Rudra leaves in your project
 
@@ -186,8 +215,9 @@ Every gated decision lands in `.rudra/run/logs/permissions.jsonl`, so an unatten
 .rudra/
   config.toml     your settings                ← worth committing
   AGENTS.md       project notes                ← worth committing
-  run/            plan, permission log,
-                  checkpoints, artifacts         (regenerated every run)
+  run/            plan, checkpoints, artifacts,
+                  logs/permissions.jsonl,
+                  logs/tests.log                 (regenerated every run)
 ```
 
 Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committing `.rudra/` is safe by default. It never touches your project's own `.gitignore` — whether you commit any of it is your call.
