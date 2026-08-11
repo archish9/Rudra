@@ -131,3 +131,34 @@ def test_install_is_idempotent(normalizer, tmp_path: Path):
     normalizer()
     assert getattr(utils, _ORIGINAL_KEY) is first_original
     assert utils.validate_path("main.py") == "/main.py"
+
+
+def test_a_symlinked_root_matches_the_path_the_user_typed(normalizer, tmp_path: Path):
+    """A1.58: the root is recorded resolved; the model writes what it was shown.
+
+    Platform-independent restatement of the macOS case. There `/tmp` is a
+    symlink to `/private/tmp` and `/home` is autofs, so a project at
+    `/tmp/work` is recorded as `/private/tmp/work`, every absolute path the
+    model writes misses the root strip, and it falls through to the sandbox
+    list -- the exact truncation A1.51 exists to prevent.
+
+    Built with a real symlink so it fails on Linux too, rather than leaning
+    on a platform quirk to expose it.
+
+    The path is deliberately three levels deep. Step 2d's last-resort
+    heuristic keeps the final two components, so a shallower path would
+    yield the right answer by accident and the test would pass without the
+    root strip ever running.
+    """
+    real = tmp_path / "real_root"
+    real.mkdir()
+    link = tmp_path / "linked_root"
+    link.symlink_to(real, target_is_directory=True)
+
+    # Installed resolved, exactly as create_main_agent does.
+    validate = normalizer(root=link)
+
+    # Written through the link, as the user typed it.
+    assert validate(f"{link}/src/deep/models.py") == "/src/deep/models.py"
+    # And the resolved spelling keeps working.
+    assert validate(f"{real}/src/deep/models.py") == "/src/deep/models.py"

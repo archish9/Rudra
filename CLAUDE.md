@@ -248,8 +248,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-uv run pytest -q                     # 658 passed, 2 skipped at Step 8; must never go down
-                                     # +2 pre-existing macOS-only failures — see A1.58
+uv run pytest -q                     # 661 passed, 2 skipped at Step 8; must never go down
 git config core.hooksPath .githooks  # once per clone: run all three gates on push (A3.7)
 .venv/bin/rudra --version            # Rudra v0.2.0
 

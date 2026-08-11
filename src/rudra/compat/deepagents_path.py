@@ -100,7 +100,28 @@ def install_path_normalizer(
         setattr(_utils, _ORIGINAL_KEY, original)
 
     _win_root = PureWindowsPath(project_root)
-    _posix_root = project_root.as_posix()
+
+    # Both spellings of the root, de-duplicated and ordered so the one the
+    # caller actually passed is tried first. They differ whenever the root
+    # sits behind a symlink -- /tmp and /home on macOS being the cases that
+    # matter, since people really do work there (A1.58).
+    _posix_roots: tuple[str, ...] = tuple(
+        dict.fromkeys((project_root.as_posix(), project_root.resolve().as_posix()))
+    )
+
+    def _root_candidates(pp: PurePosixPath) -> tuple[PurePosixPath, ...]:
+        """The incoming path as written, and as it resolves on disk.
+
+        `resolve()` touches the filesystem, so it is attempted second and
+        only for the root test -- never to rewrite what gets returned. A
+        path that cannot be resolved (a permission error, a dangling
+        symlink) simply contributes no second candidate.
+        """
+        try:
+            resolved = PurePosixPath(Path(pp).resolve().as_posix())
+        except (OSError, RuntimeError):
+            return (pp,)
+        return (pp,) if resolved == pp else (pp, resolved)
 
     def _plan_suffix_match(rel_path: str, planned: set[str]) -> str | None:
         """Try progressively shorter suffixes of rel_path against planned files."""
@@ -136,11 +157,26 @@ def install_path_normalizer(
         # really work in, so stripping them first truncates a correct absolute
         # path at the wrong component and the write lands where nothing reads
         # (TODO.md A1.51).
-        try:
-            path = pp.relative_to(_posix_root).as_posix()
-            return original(path, allowed_prefixes=allowed_prefixes)
-        except ValueError:
-            pass
+        # Both spellings of the root and of the incoming path are tried, and
+        # a match on any pair counts. The root arrives resolved, but the
+        # model writes the path it was shown -- and on macOS /tmp is a
+        # symlink to /private/tmp while /home is autofs, so a project the
+        # user opened at /tmp/work is recorded as /private/tmp/work and the
+        # obvious spelling misses. It then falls through to the sandbox
+        # list, which is A1.51's failure on the one platform A1.51's own
+        # test could not see (TODO.md A1.58).
+        #
+        # Strictly additive: it can only add matches, never remove one, so a
+        # path genuinely outside the project still falls through untouched.
+        # Same reasoning, and the same /etc -> /private/etc case, as
+        # PermissionEngine.rule_matches offering both spellings.
+        for candidate in _root_candidates(pp):
+            for root in _posix_roots:
+                try:
+                    stripped = candidate.relative_to(root).as_posix()
+                except ValueError:
+                    continue
+                return original(stripped, allowed_prefixes=allowed_prefixes)
 
         # Step 2b: Not under the real root — now try the known sandbox prefixes,
         # then continue to plan matching. Don't return early on the strip alone:
