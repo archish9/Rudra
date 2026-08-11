@@ -96,3 +96,95 @@ def test_write_tech_stack_file_handles_no_project_context(tmp_path: Path):
     content = _write_tech_stack_file(tmp_path, None)
     assert isinstance(content, str)
     assert (tmp_path / "tech_stack.md").is_file()
+
+
+# --- Step 8: the auto_branch hook ---
+
+
+def _cfg_with_auto_branch(tmp_path: Path, *, enabled: bool):
+    from rudra.config.loader import build_config
+
+    rudra = tmp_path / ".rudra"
+    rudra.mkdir(parents=True, exist_ok=True)
+    (rudra / "config.toml").write_text(
+        f"[tools]\nauto_branch = {'true' if enabled else 'false'}\n", encoding="utf-8"
+    )
+    return build_config(tmp_path)
+
+
+def test_maybe_auto_branch_is_a_no_op_when_disabled(tmp_path: Path, monkeypatch):
+    from rich.console import Console
+
+    from rudra.agent import main_agent
+
+    def _spy(*args, **kwargs):
+        raise AssertionError("auto_branch must not be called when the key is off")
+
+    monkeypatch.setattr(main_agent, "auto_branch", _spy)
+    main_agent._maybe_auto_branch(
+        tmp_path,
+        "task",
+        cfg=_cfg_with_auto_branch(tmp_path, enabled=False),
+        gate=None,
+        console=Console(),
+    )
+
+
+def test_maybe_auto_branch_reports_the_branch_it_made(tmp_path: Path, monkeypatch, capsys):
+    from rich.console import Console
+
+    from rudra.agent import main_agent
+    from rudra.git.core import BranchOutcome
+
+    monkeypatch.setattr(
+        main_agent, "auto_branch", lambda *a, **k: BranchOutcome("rudra/task", None)
+    )
+    main_agent._maybe_auto_branch(
+        tmp_path,
+        "task",
+        cfg=_cfg_with_auto_branch(tmp_path, enabled=True),
+        gate=None,
+        console=Console(),
+    )
+    assert "rudra/task" in capsys.readouterr().out
+
+
+def test_maybe_auto_branch_prints_the_skip_reason(tmp_path: Path, monkeypatch, capsys):
+    """Silence would leave the user unable to tell whether it ran (A1.50)."""
+    from rich.console import Console
+
+    from rudra.agent import main_agent
+    from rudra.git.core import BranchOutcome
+
+    monkeypatch.setattr(
+        main_agent,
+        "auto_branch",
+        lambda *a, **k: BranchOutcome(None, "the working tree has uncommitted changes"),
+    )
+    main_agent._maybe_auto_branch(
+        tmp_path,
+        "task",
+        cfg=_cfg_with_auto_branch(tmp_path, enabled=True),
+        gate=None,
+        console=Console(),
+    )
+    assert "uncommitted" in capsys.readouterr().out
+
+
+def test_maybe_auto_branch_never_raises_when_git_explodes(tmp_path: Path, monkeypatch):
+    """A branch nobody could create must not end the run."""
+    from rich.console import Console
+
+    from rudra.agent import main_agent
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("git went wrong")
+
+    monkeypatch.setattr(main_agent, "auto_branch", _boom)
+    main_agent._maybe_auto_branch(
+        tmp_path,
+        "task",
+        cfg=_cfg_with_auto_branch(tmp_path, enabled=True),
+        gate=None,
+        console=Console(),
+    )
