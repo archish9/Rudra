@@ -258,24 +258,35 @@ def _planner_tool_names(monkeypatch, tmp_path) -> list[str]:
     return [tool.name for tool in captured["tools"]]
 
 
-def test_planner_registers_the_step_8_tools(monkeypatch, tmp_path):
-    names = _planner_tool_names(monkeypatch, tmp_path)
-    assert "git_diff" in names
-    assert "run_tests" in names
+def test_the_planner_registers_the_ledger_tools(monkeypatch, tmp_path):
+    """Step 9c: the planner declares work and nothing else.
+
+    git_diff and run_tests moved to the reviewer and tester subagents --
+    the loop runs the gate itself, so the planner has no reason to.
+    """
+    names = set(_planner_tool_names(monkeypatch, tmp_path))
+    assert {"add_tasks", "drop_task", "read_ledger"} <= names
+    assert "git_diff" not in names
+    assert "run_tests" not in names
 
 
-def test_every_wrapped_execute_name_is_actually_registered(monkeypatch, tmp_path):
-    """Otherwise the engine allows a name that reaches no tool (A1.53's shape)."""
+def test_every_wrapped_execute_name_is_actually_registered():
+    """Otherwise the engine allows a name that reaches no tool (A1.53's shape).
+
+    Step 9c moved these off the planner onto the subagents that use them,
+    so the invariant is checked against the registry now. A1.64.
+    """
     from rudra.permissions.rules import WRAPPED_EXECUTE_TOOLS
+    from rudra.subagents.registry import REGISTRY
 
+    registered = {name for spec in REGISTRY.values() for name in spec.rudra_tools}
+    assert WRAPPED_EXECUTE_TOOLS <= registered
+
+
+def test_the_interaction_tools_survive_the_ledger_switch(monkeypatch, tmp_path):
+    """Step 9c replaces the planning tools; it must not displace ask_user."""
     names = set(_planner_tool_names(monkeypatch, tmp_path))
-    assert WRAPPED_EXECUTE_TOOLS <= names
-
-
-def test_the_planning_tools_are_still_registered(monkeypatch, tmp_path):
-    """Step 8 adds; it must not displace."""
-    names = set(_planner_tool_names(monkeypatch, tmp_path))
-    assert {"update_plan", "read_plan", "write_task_assignment"} <= names
+    assert "ask_user" in names
 
 
 def test_coder_still_has_no_tools(monkeypatch, tmp_path):
@@ -291,10 +302,14 @@ def test_coder_still_has_no_tools(monkeypatch, tmp_path):
     assert captured["tools"] == []
 
 
-def test_the_planner_prompt_tells_the_model_not_to_commit(tmp_path):
-    """S8.5's prompt half. The config template carries the other half."""
-    from rudra.agent.planner_agent import build_planner_prompt
+def test_the_tester_prompt_tells_the_model_not_to_commit():
+    """S8.5's prompt half, re-pointed by Step 9c (A1.63).
 
-    prompt = build_planner_prompt("t", tmp_path)
-    assert "git commit" in prompt
-    assert "run_tests" in prompt
+    It lived on the planner because that is where the execute-capable
+    tools were. The tester carries execute now, so the instruction has to
+    live where the capability does.
+    """
+    from rudra.subagents.registry import TESTER
+
+    assert "git commit" in TESTER.system_prompt
+    assert "run_tests" in TESTER.system_prompt

@@ -1,8 +1,15 @@
-"""Planner agent — analyzes tasks, creates PLAN.md, writes task assignments."""
+"""Planner agent — decides what work the request needs.
+
+Step 9c replaced PLAN.md and current_task.md with the task ledger
+(C6.10). The planner declares work through add_tasks and retracts it
+through drop_task; it cannot mark anything done, because no tool can --
+only loop/engine.py writes that, and only when the gate passes.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from deepagents import create_deep_agent
 from rich.console import Console
@@ -10,14 +17,13 @@ from rich.console import Console
 from rudra.config import get_config
 from rudra.filesystem import project_tree
 from rudra.llm import build_model
+from rudra.loop.tools import create_ledger_tools
 from rudra.middleware import (
     FixWriteParamsMiddleware,
     TaskAnchorMiddleware,
 )
-from rudra.tools.git_tools import create_git_tools
+from rudra.permissions import run_with_approvals
 from rudra.tools.interaction_tools import create_interaction_tools
-from rudra.tools.planning_tools import create_planning_tools
-from rudra.tools.testing_tools import create_testing_tools
 
 
 def build_planner_prompt(
@@ -27,7 +33,7 @@ def build_planner_prompt(
 ) -> str:
     base = f"""You are a senior software architect and planning agent for Rudra.
 
-Your ONLY job: ANALYZE tasks and CREATE plans. You NEVER write project code files directly.
+Your ONLY job: decide WHAT WORK the request needs. You never write project code.
 
 ## PROJECT STRUCTURE
 {project_tree(project_path)}
@@ -36,38 +42,40 @@ Your ONLY job: ANALYZE tasks and CREATE plans. You NEVER write project code file
         base += f"\n## Tech Stack\n{tech_stack_content}\n"
 
     base += f"""
-## TASK
+## REQUEST
 {task}
+
+## WHAT A TASK IS
+
+A task is a unit of WORK, described in plain language. Not a filename.
+
+  GOOD: "write a CSV parser that handles quoted commas"
+  GOOD: "write tests for the parser"
+  GOOD: "add a --format flag to the CLI"
+  BAD:  "parser.py"
+  BAD:  "create the project structure"
+
+One task may touch several files. Work that needs tests gets its own task.
 
 ## WORKFLOW
 
-### On first invocation (new task):
-1. Read relevant files with read_file() to understand existing context if needed
-2. Decide ALL files that need to be created for this task
-3. Call update_plan() ONCE with a markdown checklist of EXACT filenames:
-   CORRECT: '- [ ] main.rs'    WRONG: '- [ ] Create main.rs'
-4. Call write_task_assignment() for the FIRST pending file with complete, detailed instructions
-5. STOP — the orchestrator runs the coder, then asks you for the next file's assignment
+1. Call read_file() on anything you need to understand the project
+2. Call add_tasks() ONCE with every task you can foresee
+3. STOP
 
-### When asked to write a task assignment for a specific file:
-1. Think about what that file needs to contain given the overall architecture
-2. Call write_task_assignment() with:
-   - file_path: exact relative path (e.g. "src/models.ts")
-   - instructions: detailed spec — imports, classes, functions, endpoints, fields, logic
-   - context_files: comma-separated files the coder should read first for context
-3. STOP immediately after write_task_assignment() returns
+You will be consulted again if a task fails or if the work runs out. When
+that happens, add a task taking a DIFFERENT approach, or drop_task() one
+that turned out to be unnecessary.
 
-## RULES
+## WHAT YOU CANNOT DO
+
+You cannot mark anything done. A deterministic verification gate decides
+that — it parses the code, type checks it, runs the tests, and scans for
+placeholders. Do not claim a task is complete, and do not add a task whose
+description is "verify" or "check": that already happens on its own.
+
 - NEVER call write_file() on project source files — the coder handles that
-- NEVER write code yourself — describe what code to write in task assignments
-- Use relative paths only (e.g. "src/main.rs", not absolute paths)
-- Be specific in task assignments: name every import, class, method, endpoint
-- Do NOT call ask_user() if the task already specifies a framework or language
-
-## CHECKING YOUR WORK
-- Once the files are written, call run_tests() to find out whether they work
-- Use git_diff() to review what has changed before deciding what to do next
-- Do NOT run `git commit` or `git push` unless the task explicitly asks for it
+- Do NOT call ask_user() if the request already specifies a framework or language
 """
     return base
 
@@ -101,20 +109,27 @@ def create_planner_agent(
     checkpointer,
     console: Console,
     gate=None,
+    ledger=None,
+    paths=None,
 ):
-    """Create the planner deep agent."""
+    """Create the planner deep agent.
+
+    `ledger` must be the SAME object the loop reads: the planner's tools
+    mutate it in place, and a copy would leave the engine with no tasks.
+    """
+    from rudra.loop.ledger import Ledger
+    from rudra.state.paths import rudra_paths
+
     model = build_model("planner")
     cfg = get_config()
+    ledger = ledger if ledger is not None else Ledger()
+    paths = paths if paths is not None else rudra_paths(project_path)
 
-    # git and testing land on the planner, not the coder: the coder's prompt
-    # tells it to STOP after one write_file, and a test runner in the same
-    # context window would contradict that. Step 9 revisits this when
-    # subagents become a designed feature (C6.2).
-    custom_tools = (
-        create_planning_tools(project_path, task=task)
-        + create_interaction_tools(console, project_path)
-        + create_git_tools(project_path, gate=gate, console=console, cfg=cfg)
-        + create_testing_tools(project_path, gate=gate, console=console, cfg=cfg)
+    # The ledger replaced PLAN.md and current_task.md (C6.10). git and
+    # testing tools are gone from the planner: the loop runs the gate
+    # itself, and the tester subagent writes tests (S9c.5).
+    custom_tools = create_ledger_tools(ledger, paths.ledger_json) + create_interaction_tools(
+        console, project_path
     )
 
     middleware = build_planner_middleware(
@@ -139,4 +154,182 @@ def create_planner_agent(
         memory=[".rudra/AGENTS.md"],
         middleware=middleware,
         interrupt_on=gate.interrupt_on if gate is not None else None,
+    )
+
+
+def _log_message(console: Console, msg: Any, index: int, prefix: str = "planner") -> None:
+    msg_type = type(msg).__name__
+    tag = f"[{prefix}] " if prefix else ""
+
+    if msg_type == "AIMessage":
+        tool_calls = getattr(msg, "tool_calls", [])
+        if tool_calls:
+            for tc in tool_calls:
+                name = tc.get("name", "?")
+                args = str(tc.get("args", {}))[:400]
+                console.print(
+                    f"[bold cyan]{tag}→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args}"
+                )
+        else:
+            content = str(getattr(msg, "content", ""))[:300].replace("\n", " ")
+            console.print(f"[bold cyan]{tag}← [{index}] AI[/bold cyan]  {content}")
+
+    elif msg_type == "ToolMessage":
+        content = str(getattr(msg, "content", ""))
+        tool_name = getattr(msg, "name", "?")
+        first_line = content.split("\n")[0] if content else ""
+        is_error = (
+            first_line.startswith("Error:")
+            or first_line.startswith("Cannot write to")
+            or "Error:" in first_line
+            or "Traceback" in first_line
+            or "Errno" in first_line
+            or "not a valid tool" in content
+            or "Input should be a valid string" in content
+            or "BLOCKED:" in first_line
+        )
+        if is_error:
+            console.print(
+                f"[bold red]{tag}✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
+            )
+        else:
+            console.print(f"[green]{tag}✓ [{index}] {tool_name}:[/green] {content}")
+
+    elif msg_type == "HumanMessage":
+        content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
+        console.print(f"[dim]{tag}[{index}] USER: {content}[/dim]")
+
+    else:
+        content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
+        console.print(f"[dim]{tag}[{index}] {msg_type}: {content}[/dim]")
+
+
+async def _stream_planner_turn(
+    agent: Any,
+    message: str,
+    *,
+    thread_id: str,
+    gate: Any,
+    console: Console,
+) -> bool:
+    """Stream one planner turn. Returns False if a guard halted it.
+
+    Lifted from RudraAgent._stream_planner in Step 9c: the class's loop
+    is deleted and this is its only remaining caller. The guard logic is
+    unchanged. It still carries A1.20's remaining half -- one `processed`
+    counter across namespaces -- which is re-pointed to C9.1.
+    """
+    lg_config = {"configurable": {"thread_id": thread_id}}
+    processed = 0
+    consecutive_failures = 0
+    planning_tool_calls: dict[str, int] = {}
+    MAX_PLANNING_CALLS = 4
+    _halt = False
+
+    # run_with_approvals yields exactly what astream yields, so the parse
+    # loop below is unchanged. It reads interrupts from get_state after
+    # the stream drains, because __interrupt__ never appears in "values"
+    # chunks and changing stream_mode would change the chunk shape this
+    # loop depends on -- the loop that still carries A1.20's hole.
+    async for chunk in run_with_approvals(
+        agent,
+        {"messages": [{"role": "user", "content": message}]},
+        lg_config,
+        gate,
+        console,
+    ):
+        if _halt:
+            break
+
+        namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+        msgs = event.get("messages", [])
+
+        while processed < len(msgs):
+            msg = msgs[processed]
+            msg_type = type(msg).__name__
+
+            if namespace:
+                console.print(f"[dim](planner subagent {':'.join(namespace)})[/dim]")
+
+            _log_message(console, msg, processed + 1)
+
+            if msg_type == "AIMessage":
+                for tc in getattr(msg, "tool_calls", []):
+                    name = tc.get("name", "")
+                    if name in ("write_file",):
+                        planning_tool_calls.clear()
+                    elif name in ("add_tasks", "read_ledger"):
+                        planning_tool_calls[name] = planning_tool_calls.get(name, 0) + 1
+                        if planning_tool_calls[name] >= MAX_PLANNING_CALLS:
+                            console.print(
+                                f"[bold yellow]!! Planner loop guard: '{name}' called "
+                                f"{planning_tool_calls[name]}x — stopping.[/bold yellow]"
+                            )
+                            _halt = True
+                            break
+                if _halt:
+                    break
+
+            elif msg_type == "ToolMessage":
+                content = str(getattr(msg, "content", ""))
+                first_line = content.split("\n")[0] if content else ""
+                is_error = (
+                    first_line.startswith("Error:")
+                    or first_line.startswith("Cannot write to")
+                    or "Error:" in first_line
+                    or "Traceback" in first_line
+                    or "Errno" in first_line
+                )
+                if is_error:
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        console.print(
+                            "[bold yellow]!! 3 consecutive planner failures — stopping.[/bold yellow]"
+                        )
+                        _halt = True
+                else:
+                    consecutive_failures = 0
+
+            if _halt:
+                break
+            processed += 1
+
+    return not _halt
+
+
+async def consult_planner(
+    agent: Any,
+    ledger: Any,
+    request: str,
+    *,
+    reason: str,
+    task: Any = None,
+    gate: Any,
+    console: Console,
+    session_id: str,
+) -> None:
+    """Ask the planner to add or drop tasks. It mutates the ledger via tools.
+
+    Three reasons, three messages. There is deliberately no consult after
+    an ordinary success -- that is what bounds the loop's model-call cost.
+    """
+    if reason == "initial":
+        message = f"Break this request into tasks: {request}"
+    elif reason == "ledger_empty":
+        message = (
+            "Every task is finished. Is anything missing before we stop? "
+            "Call add_tasks if so; otherwise reply DONE and stop."
+        )
+    elif reason == "blocked" and task is not None:
+        message = (
+            f"Task {task.id} ({task.description}) failed and was given up on:\n\n"
+            f"{task.note}\n\n"
+            "Add a task taking a DIFFERENT approach, or drop_task it if it is "
+            "not worth doing. If neither, reply DONE and stop."
+        )
+    else:  # pragma: no cover - guarded by the caller
+        raise ValueError(f"unknown consult reason {reason!r}")
+
+    await _stream_planner_turn(
+        agent, message, thread_id=f"{session_id}-planner", gate=gate, console=console
     )
