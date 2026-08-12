@@ -89,9 +89,38 @@ model = "qwen/qwen3-coder-32b"
 gives the coder its own model and the shared provider, URL, key, and
 temperature — no repetition.
 
-Role names are not a fixed list. You can write `[model.reviewer]` today; it
-will be picked up when the reviewer role ships. Unknown roles fall back to
-`[model.default]`, so nothing breaks in the meantime.
+### The five roles
+
+| Role | Used by |
+|---|---|
+| `default` | Anything without its own section — and the `general-purpose` subagent |
+| `planner` | Analyses the task and decides which files to write |
+| `coder` | Writes one complete source file at a time |
+| `tester` | Writes tests, runs the suite, reports failures |
+| `reviewer` | Reads the diff and reports problems. Never edits |
+
+`tester` and `reviewer` arrived with the subagents of the same names — see
+[How It Works](05-how-it-works.md). Every one of them inherits
+`[model.default]`, so a single-model setup configures `[model.default]` and
+nothing else.
+
+Giving the reviewer a stronger model is the common split:
+
+```toml
+[model.default]
+provider = "ollama"
+base_url = "http://localhost:11434"
+model    = "qwen3:32b"
+
+[model.reviewer]
+model = "qwen3:72b"      # inherits provider and base_url from default
+```
+
+Role names are still not a closed list — an unknown one falls back to
+`[model.default]` rather than erroring.
+
+`rudra models test` probes **distinct endpoints**, not roles. Five roles
+pointing at one model is one row, listing all five; the split above is two.
 
 ### API keys are never in the file
 
