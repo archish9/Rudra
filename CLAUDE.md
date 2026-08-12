@@ -38,7 +38,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ---
 
-## 3. Current Architecture (as of 2026-08-12, Step 9a)
+## 3. Current Architecture (as of 2026-08-12, Step 9b)
 
 ```
 src/rudra/
@@ -60,6 +60,13 @@ src/rudra/
 │                           VerifyReport.escalate splits fix-loop input
 │                           (iterate) from user action (stop). Calls
 │                           run_gated and run_tests; starts no subprocess
+├── subagents/              The four subagents (Step 9b): coder · tester ·
+│                           reviewer · general-purpose. spec/registry/build/
+│                           runner. build.py is the ONLY assembly path, so
+│                           every subagent carries the gate — deepagents
+│                           inherits interrupt_on but NOT middleware.
+│                           The reviewer cannot write because the tools are
+│                           never registered, not because a prompt says so
 ├── agent/
 │   ├── main_agent.py       RudraAgent — hand-rolled planner→coder orchestration loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -130,7 +137,7 @@ Table below is verified against **installed 0.4.12** (`.venv/.../deepagents/grap
 |---|---|---|
 | `model: str \| BaseChatModel` | `provider:model` resolved via `init_chat_model` (`_models.py:11`) | ⚠️ passes a `BaseChatModel` instance from `llm/factory.py` (Step 5) |
 | `skills: list[str]` | `SkillsMiddleware` — Anthropic Agent Skills spec, `<dir>/SKILL.md` + YAML frontmatter | ❌ **never used** — Step 11 |
-| `subagents: list[SubAgent]` | `SubAgentMiddleware` + the `task` tool | ⚠️ `task` is reachable but undesigned (D4 accepted risk); real subagents are C6.2 |
+| `subagents: list[SubAgent]` | `SubAgentMiddleware` + the `task` tool | ✅ Step 9b: four specs in `subagents/registry.py`. **Rudra ships its own `general-purpose` to suppress the ungated one deepagents auto-adds** (`graph.py:751`). Nothing passes `subagents=` to a live agent yet — 9c owns the parent that delegates |
 | `memory: list[str]` | `MemoryMiddleware`, AGENTS.md into system prompt | ⚠️ planner only |
 | `permissions: list[FilesystemPermission]` | `allow` / `deny` / `interrupt` path rules | ❌ **cannot be used** — raises on any execute-capable backend (U.7) |
 | `interrupt_on: dict` | `HumanInTheLoopMiddleware` — approval gates | ✅ Step 7: one entry per mutating tool, `when` calling Rudra's `PermissionEngine` |
@@ -254,7 +261,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-uv run pytest -q                     # 742 passed, 2 skipped at Step 9a; must never go down
+uv run pytest -q                     # 827 passed, 2 skipped at Step 9b; must never go down
 git config core.hooksPath .githooks  # once per clone: run all three gates on push (A3.7)
 .venv/bin/rudra --version            # Rudra v0.2.0
 
