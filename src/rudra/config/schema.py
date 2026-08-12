@@ -9,7 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 from typing import Any
 
-BUILTIN_ROLES = ("default", "planner", "coder")
+# tester and reviewer joined in Step 9b (C6.2-C6.4). Unset roles inherit
+# [model.default] through the post-merge inheritance in config/loader.py --
+# no per-role exceptions, because precedence lives in exactly one function
+# (CLAUDE.md §7) and "roles inherit default, except two" is the per-field
+# resolution A5.1 and A5.2 were about.
+BUILTIN_ROLES = ("default", "planner", "coder", "tester", "reviewer")
 
 # Declared literally rather than derived from `rudra.llm.providers.PROVIDERS`,
 # because importing it here would be circular: rudra.llm's __init__ imports
