@@ -116,15 +116,26 @@ def build_agent(spec: RudraSubagent, context: Any) -> Any:
     `permissions=` is deliberately absent: it raises NotImplementedError on
     any execute-capable backend, which is every backend Rudra builds
     (TODO.md U.7).
+
+    A checkpointer is always supplied, falling back to an in-memory one.
+    `interrupt_on` becomes a HumanInTheLoopMiddleware, which requires one
+    (subagents.py:70) -- without it every invocation ends in
+    `No checkpointer set` and discards work the subagent already did
+    (A1.62). Dropping `interrupt_on` instead would be a security
+    downgrade: approvals would vanish from inside subagents under `ask`.
+    In-memory is the right default rather than a compromise, because a
+    subagent's thread is per-invocation and never resumed (A1.2); a caller
+    that wants persistence passes its own.
     """
     from deepagents import create_deep_agent
+    from langgraph.checkpoint.memory import InMemorySaver
 
     return create_deep_agent(
         model=_model_for(spec, context.cfg),
         tools=_tools_for(spec, context),
         system_prompt=spec.system_prompt,
         backend=context.backend,
-        checkpointer=context.checkpointer,
+        checkpointer=context.checkpointer or InMemorySaver(),
         middleware=_middleware_for(spec, context),
         interrupt_on=context.gate.interrupt_on if context.gate is not None else None,
     )

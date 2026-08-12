@@ -210,3 +210,77 @@ def test_the_reviewers_compiled_graph_has_no_write_tools(tmp_path, monkeypatch):
     assert not (forbidden & registered), f"reviewer must not have {forbidden & registered}"
     assert "read_file" in registered
     assert "git_diff" in registered
+
+
+def test_build_agent_always_supplies_a_checkpointer(tmp_path, monkeypatch):
+    # A1.62: interrupt_on becomes a HumanInTheLoopMiddleware, which needs a
+    # checkpointer (subagents.py:70). Without one every invocation ended in
+    # "No checkpointer set" AFTER the subagent had done its work. The unit
+    # tests missed it because they patch build_agent away; only the live
+    # acceptance run caught it.
+    from deepagents.backends.filesystem import FilesystemBackend
+
+    import rudra.subagents.build as build
+    from rudra.config import build_config
+    from rudra.llm import build_model
+    from rudra.permissions import build_gate
+    from rudra.subagents.build import build_agent
+
+    monkeypatch.setattr(build, "build_model", build_model)
+    monkeypatch.delenv("RUDRA_MODEL", raising=False)
+    rudra = tmp_path / ".rudra"
+    rudra.mkdir(parents=True)
+    (rudra / "config.toml").write_text(
+        '[model.default]\nprovider = "ollama"\n'
+        'base_url = "http://localhost:11434"\nmodel = "qwen3:32b"\n',
+        encoding="utf-8",
+    )
+    cfg = build_config(tmp_path)
+
+    context = FakeContext(
+        project_path=tmp_path,
+        backend=FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True),
+        gate=build_gate(cfg, tmp_path),
+        console=Console(quiet=True),
+        cfg=cfg,
+        checkpointer=None,
+    )
+
+    agent = build_agent(REGISTRY["reviewer"], context)
+    assert agent.checkpointer is not None, (
+        "interrupt_on without a checkpointer fails at the end of every run (A1.62)"
+    )
+
+
+def test_an_explicit_checkpointer_wins(tmp_path, monkeypatch):
+    from deepagents.backends.filesystem import FilesystemBackend
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    import rudra.subagents.build as build
+    from rudra.config import build_config
+    from rudra.llm import build_model
+    from rudra.permissions import build_gate
+    from rudra.subagents.build import build_agent
+
+    monkeypatch.setattr(build, "build_model", build_model)
+    monkeypatch.delenv("RUDRA_MODEL", raising=False)
+    rudra = tmp_path / ".rudra"
+    rudra.mkdir(parents=True)
+    (rudra / "config.toml").write_text(
+        '[model.default]\nprovider = "ollama"\n'
+        'base_url = "http://localhost:11434"\nmodel = "qwen3:32b"\n',
+        encoding="utf-8",
+    )
+    cfg = build_config(tmp_path)
+    mine = InMemorySaver()
+
+    context = FakeContext(
+        project_path=tmp_path,
+        backend=FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True),
+        gate=build_gate(cfg, tmp_path),
+        console=Console(quiet=True),
+        cfg=cfg,
+        checkpointer=mine,
+    )
+
+    assert build_agent(REGISTRY["reviewer"], context).checkpointer is mine
