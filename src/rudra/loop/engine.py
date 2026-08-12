@@ -207,4 +207,138 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     return Outcome.BLOCKED
 
 
-__all__ = ["LoopContext", "Outcome", "changed_since", "git_snapshot", "run_task"]
+_STATUS_MARK = {
+    TaskStatus.DONE: "[green]✓[/green]",
+    TaskStatus.BLOCKED: "[red]✗[/red]",
+    TaskStatus.DROPPED: "[yellow]–[/yellow]",
+    TaskStatus.PENDING: "[dim]·[/dim]",
+    TaskStatus.IN_PROGRESS: "[dim]·[/dim]",
+}
+
+_NOT_ATTEMPTED = "never attempted — the run stopped"
+
+
+async def review_once(context: LoopContext) -> None:
+    """One advisory pass over everything that changed. Printed, never acted on.
+
+    D9's split: the deterministic gate decides done-or-not; the reviewer
+    comments on quality and gates nothing.
+    """
+    result = await run_subagent(
+        "reviewer",
+        "Review the working-tree changes from this run and report any problems.",
+        context=context.subagents,
+        thread_id=f"{context.subagents.session_id}-review",
+    )
+    if result.text.strip():
+        context.console.print("\n[bold]Review[/bold] [dim](advisory)[/dim]")
+        context.console.print(result.text)
+
+
+def summarise(ledger: Ledger, console: Console) -> Any:
+    """Print every task and return the run's result.
+
+    A1.25 died here: there is no filter between what was declared and what
+    is reported, and a task that was never attempted says so rather than
+    vanishing.
+    """
+    # Local import: main_agent imports run_loop from this module, so a
+    # module-level import would be a cycle. Same pattern build_backend
+    # already uses for its backends.
+    from rudra.agent.main_agent import AgentResult
+
+    counts = ledger.counts()
+    headline = (
+        f"Tasks: {counts['requested']} requested · {counts['done']} done · "
+        f"{counts['blocked']} blocked · {counts['dropped']} dropped"
+    )
+    if counts["pending"]:
+        headline += f" · {counts['pending']} never attempted"
+    console.print(f"\n[bold]{headline}[/bold]\n")
+
+    for task in ledger.tasks:
+        note = task.note
+        if task.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
+            note = _NOT_ATTEMPTED
+        console.print(f"  {_STATUS_MARK[task.status]} {task.id}  {task.description}")
+        if note:
+            console.print(f"      [dim]{note}[/dim]")
+
+    files: list[str] = []
+    for task in ledger.tasks:
+        files.extend(task.files_touched)
+
+    success = (
+        counts["requested"] > 0
+        and counts["done"] > 0
+        and not (counts["blocked"] or counts["pending"])
+    )
+    return AgentResult(
+        success=success,
+        message=headline,
+        files_created=sorted(set(files)),
+        files_modified=[],
+        iterations=sum(1 for task in ledger.tasks if task.attempts > 0),
+    )
+
+
+async def run_loop(
+    request: str,
+    *,
+    context: LoopContext,
+    planner: Any,
+    ledger: Ledger | None = None,
+) -> Any:
+    """Plan, work, verify, and stop. The whole run.
+
+    `planner` is an awaitable called as
+    `planner(ledger, request, reason=..., task=...)`; it adds or drops
+    tasks through the ledger tools and returns nothing. Injected rather
+    than constructed here so the loop is testable without a model.
+
+    `ledger` must be the SAME object the planner's tools were bound to --
+    otherwise the tasks it adds are invisible here. Defaults to a fresh one
+    only so tests can drive the loop without wiring an agent.
+    """
+    ledger = ledger if ledger is not None else Ledger()
+    ledger.save(context.paths.ledger_json)
+    await planner(ledger, request, reason="initial")
+    consulted_on_empty = False
+
+    while True:
+        task = ledger.next_pending()
+        if task is None:
+            if consulted_on_empty:
+                break
+            consulted_on_empty = True
+            await planner(ledger, request, reason="ledger_empty")
+            continue
+
+        outcome = await run_task(task, ledger, context=context)
+        ledger.save(context.paths.ledger_json)
+
+        if outcome is Outcome.STOP_RUN:
+            context.console.print(
+                f"\n[bold red]Run stopped early.[/bold red] [dim]{task.note}[/dim]"
+            )
+            break
+        if outcome is Outcome.BLOCKED:
+            # Only a stall consults the planner -- never an ordinary success.
+            consulted_on_empty = False
+            await planner(ledger, request, reason="blocked", task=task)
+
+    if any(task.status is TaskStatus.DONE for task in ledger.tasks):
+        await review_once(context)
+    return summarise(ledger, context.console)
+
+
+__all__ = [
+    "LoopContext",
+    "Outcome",
+    "changed_since",
+    "git_snapshot",
+    "review_once",
+    "run_loop",
+    "run_task",
+    "summarise",
+]
