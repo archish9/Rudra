@@ -14,20 +14,54 @@ real failure (D6).
 from __future__ import annotations
 
 import ast
+import re
+import shutil
 import traceback
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from rudra.stacks.profile import StackProfile
+from rudra.permissions.env import scrubbed_env
+from rudra.shell.runner import run_gated
+from rudra.stacks.detect import (
+    _load_package_json,
+    resolve_lint_command,
+    resolve_typecheck_command,
+)
+from rudra.stacks.profile import MISSING_TOOL as RESOLUTION_MISSING_TOOL
+from rudra.stacks.profile import NOT_APPLICABLE as RESOLUTION_NOT_APPLICABLE
+from rudra.stacks.profile import CommandResolution, StackProfile
+from rudra.testing.runner import MAX_TAIL_CHARS
 from rudra.verify.result import (
     COVERED_BY,
+    DENIED,
     FAILED,
+    MISSING_TOOL,
+    NOT_APPLICABLE,
     PASSED,
     Finding,
     StageResult,
 )
 from rudra.verify.stubs import scan_stubs
+
+# Every missing_tool message ends here, so the error and its fix are one
+# hop apart. Composed once rather than at each resolution site.
+_DOCS = "Documentation/10-verification.md"
+_ANCHORS = {
+    "tsc": f"{_DOCS}#typescript",
+    "eslint": f"{_DOCS}#eslint",
+    "cargo": f"{_DOCS}#rust",
+    "node": f"{_DOCS}#node",
+    "mypy": f"{_DOCS}#python",
+    "ruff": f"{_DOCS}#python",
+}
+
+# `file:line: message` -- mypy, ruff, eslint, cargo.
+_FINDING = re.compile(r"^(?P<file>[^\s:][^:]*):(?P<line>\d+)(?::\d+)?:\s*(?P<message>.+)$")
+# `file(line,col): message` -- tsc.
+_TSC_FINDING = re.compile(r"^(?P<file>[^\s(]+)\((?P<line>\d+),\d+\):\s*(?P<message>.+)$")
+
+_MAX_FINDINGS = 50
 
 # Stacks whose parse step is subsumed by their type checker. Rust and
 # TypeScript have no cheap native parser, and `cargo check` / `tsc --noEmit`
@@ -204,24 +238,277 @@ def run_pipeline(
     return tuple(stages)
 
 
+def _tail(text: str, limit: int = MAX_TAIL_CHARS) -> str:
+    if len(text) <= limit:
+        return text
+    return f"[... {len(text) - limit} earlier characters omitted ...]\n{text[-limit:]}"
+
+
+def _parse_findings(text: str) -> tuple[Finding, ...]:
+    """Located problems from tool output, capped.
+
+    Deliberately shallow, for the same reason the test parser is
+    (testing/parse.py): a per-tool structured format needs a plugin or a
+    JSON mode Rudra cannot assume is installed. The full output is on disk
+    either way.
+    """
+    findings: list[Finding] = []
+    for line in text.splitlines():
+        match = _FINDING.match(line) or _TSC_FINDING.match(line)
+        if match is None:
+            continue
+        findings.append(
+            Finding(match.group("file"), int(match.group("line")), match.group("message").strip())
+        )
+        if len(findings) >= _MAX_FINDINGS:
+            break
+    return tuple(findings)
+
+
+def _run_command_stage(
+    name: str,
+    resolution: CommandResolution,
+    *,
+    blocking: bool,
+    project_path: Path,
+    gate: Any,
+    console: Any,
+    cfg: Any,
+    stack: str | None,
+    override: list[str] | None = None,
+) -> StageResult:
+    """One command stage, from resolution to StageResult.
+
+    Every branch that cannot succeed on a retry says so, and every one that
+    needs a human rather than a model sets escalate.
+    """
+    if override is None:
+        if resolution.status == RESOLUTION_NOT_APPLICABLE:
+            return StageResult(
+                name=name,
+                outcome=NOT_APPLICABLE,
+                blocking=blocking,
+                stack=stack,
+                detail=resolution.detail,
+            )
+        if resolution.status == RESOLUTION_MISSING_TOOL:
+            return StageResult(
+                name=name,
+                outcome=MISSING_TOOL,
+                blocking=blocking,
+                escalate=True,
+                stack=stack,
+                detail=resolution.detail,
+                docs_anchor=_ANCHORS.get(resolution.tool, _DOCS),
+            )
+        argv = list(resolution.argv or ())
+    else:
+        argv = list(override)
+
+    result = run_gated(
+        argv,
+        cwd=project_path,
+        gate=gate,
+        console=console,
+        timeout=cfg.tools.test_timeout,
+        env=scrubbed_env(cfg),
+    )
+    combined = f"{result.stdout}\n{result.stderr}".strip()
+
+    if result.denied:
+        return StageResult(
+            name=name,
+            outcome=DENIED,
+            blocking=blocking,
+            escalate=True,
+            command=result.argv,
+            stack=stack,
+            detail=result.denial_reason or "denied by the permission gate",
+        )
+    if result.timed_out:
+        return StageResult(
+            name=name,
+            outcome=FAILED,
+            blocking=blocking,
+            command=result.argv,
+            stack=stack,
+            detail=f"timed out after {cfg.tools.test_timeout}s -- raise [tools] test_timeout "
+            "if this stage is genuinely slow",
+            output_tail=_tail(combined),
+        )
+    if result.exit_code is None:
+        return StageResult(
+            name=name,
+            outcome=MISSING_TOOL,
+            blocking=blocking,
+            escalate=True,
+            command=result.argv,
+            stack=stack,
+            detail=result.stderr.strip() or "the command could not be started",
+            docs_anchor=_ANCHORS.get(resolution.tool, _DOCS),
+        )
+    if result.exit_code == 0:
+        return StageResult(
+            name=name, outcome=PASSED, blocking=blocking, command=result.argv, stack=stack
+        )
+    return StageResult(
+        name=name,
+        outcome=FAILED,
+        blocking=blocking,
+        command=result.argv,
+        stack=stack,
+        findings=_parse_findings(combined),
+        output_tail=_tail(combined),
+        detail=resolution.detail,
+    )
+
+
 def _is_typescript(project_path: Path, profile: StackProfile | None) -> bool:
-    """Replaced in Task 5 by the tsconfig / devDependency check."""
-    return False
+    """Does this project typecheck through tsc?
+
+    Used by the syntax stage: where tsc runs, `tsc --noEmit` is already the
+    parse step and a separate syntax pass buys nothing.
+    """
+    if profile is None or profile.name not in {"node", "react", "angular"}:
+        return False
+    package_json = _load_package_json(Path(project_path))
+    declared = any(
+        "typescript" in (package_json.get(section) or {})
+        for section in ("dependencies", "devDependencies", "peerDependencies")
+    )
+    return declared or (Path(project_path) / "tsconfig.json").is_file()
 
 
-def _node_syntax_stage(project_path, changed_files, gate, console, cfg, stack) -> StageResult:
-    """Replaced in Task 5 by `node --check` per changed file."""
-    return StageResult(name="syntax", outcome=PASSED, blocking=True, stack=stack)
+def _node_syntax_stage(
+    project_path: Path,
+    changed_files: Sequence[str],
+    gate: Any,
+    console: Any,
+    cfg: Any,
+    stack: str | None,
+) -> StageResult:
+    """`node --check` per changed JavaScript file.
+
+    Plain JavaScript has no type checker to subsume the parse step, so this
+    is the only place the check can happen.
+    """
+    javascript = [
+        relative
+        for relative in changed_files
+        if Path(relative).suffix.lower() in {".js", ".jsx", ".mjs", ".cjs"}
+    ]
+    if not javascript:
+        return StageResult(
+            name="syntax",
+            outcome=NOT_APPLICABLE,
+            blocking=True,
+            stack=stack,
+            detail="no JavaScript files changed",
+        )
+    if shutil.which("node") is None:
+        return StageResult(
+            name="syntax",
+            outcome=MISSING_TOOL,
+            blocking=True,
+            escalate=True,
+            stack=stack,
+            detail="node is not on PATH, so JavaScript cannot be parse-checked",
+            docs_anchor=_ANCHORS["node"],
+        )
+
+    findings: list[Finding] = []
+    for relative in javascript:
+        result = run_gated(
+            ["node", "--check", relative],
+            cwd=Path(project_path),
+            gate=gate,
+            console=console,
+            timeout=cfg.tools.test_timeout,
+            env=scrubbed_env(cfg),
+        )
+        if result.denied:
+            return StageResult(
+                name="syntax",
+                outcome=DENIED,
+                blocking=True,
+                escalate=True,
+                stack=stack,
+                detail=result.denial_reason or "denied by the permission gate",
+            )
+        if result.exit_code not in (0, None):
+            complaint = result.stderr.strip().splitlines()
+            findings.append(Finding(relative, None, complaint[0] if complaint else "parse error"))
+
+    if findings:
+        return StageResult(
+            name="syntax",
+            outcome=FAILED,
+            blocking=True,
+            stack=stack,
+            findings=tuple(findings),
+            detail=f"{len(findings)} file(s) do not parse",
+        )
+    return StageResult(
+        name="syntax",
+        outcome=PASSED,
+        blocking=True,
+        stack=stack,
+        detail=f"{len(javascript)} file(s) parsed",
+    )
 
 
-def lint_stage(project_path, profile, *, gate, console, cfg, _override=None) -> StageResult:
-    """Replaced in Task 5."""
-    return StageResult(name="lint", outcome=PASSED, blocking=False)
+def lint_stage(
+    project_path: Path,
+    profile: StackProfile | None,
+    *,
+    gate: Any,
+    console: Any,
+    cfg: Any,
+    _override: list[str] | None = None,
+) -> StageResult:
+    """Advisory. It reports fully and never fails a task (spec S9a.2)."""
+    if profile is None:
+        return StageResult(
+            name="lint", outcome=NOT_APPLICABLE, blocking=False, detail="no stack detected"
+        )
+    return _run_command_stage(
+        "lint",
+        resolve_lint_command(project_path, profile),
+        blocking=False,
+        project_path=Path(project_path),
+        gate=gate,
+        console=console,
+        cfg=cfg,
+        stack=profile.name,
+        override=_override,
+    )
 
 
-def typecheck_stage(project_path, profile, *, gate, console, cfg, _override=None) -> StageResult:
-    """Replaced in Task 5."""
-    return StageResult(name="typecheck", outcome=PASSED, blocking=True)
+def typecheck_stage(
+    project_path: Path,
+    profile: StackProfile | None,
+    *,
+    gate: Any,
+    console: Any,
+    cfg: Any,
+    _override: list[str] | None = None,
+) -> StageResult:
+    """Blocking. A type error is a genuine defect (spec S9a.2)."""
+    if profile is None:
+        return StageResult(
+            name="typecheck", outcome=NOT_APPLICABLE, blocking=True, detail="no stack detected"
+        )
+    return _run_command_stage(
+        "typecheck",
+        resolve_typecheck_command(project_path, profile),
+        blocking=True,
+        project_path=Path(project_path),
+        gate=gate,
+        console=console,
+        cfg=cfg,
+        stack=profile.name,
+        override=_override,
+    )
 
 
 def test_stage(project_path, *, gate, console, cfg, _override=None) -> StageResult:
