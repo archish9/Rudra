@@ -9,13 +9,46 @@ tool call, and deepagents requires tool calls for every agent.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from langchain_core.tools import tool
 
 from rudra.config import get_config
+from rudra.config.schema import BUILTIN_ROLES
 from rudra.llm.factory import build_model
 
+# Kept for callers that want the historical pair. Prefer roles_to_probe,
+# which covers every role without probing one endpoint five times.
 ROLES_TO_PROBE: tuple[str, ...] = ("planner", "coder")
+
+
+def roles_to_probe(cfg: Any) -> list[tuple[tuple[str, ...], Any]]:
+    """Distinct model endpoints, each with the roles that share it.
+
+    Step 9b took BUILTIN_ROLES from three to five (C6.2-C6.4). Probing each
+    one would fire five network calls where a single-model setup has a
+    single endpoint. Deduping on the resolved identity keeps
+    `rudra models test` honest for a user who configures `[model.reviewer]`
+    separately, and cheap for everyone else.
+
+    Ordered by first appearance in BUILTIN_ROLES so the table is stable
+    between runs.
+
+    Returns:
+        A list of (roles sharing the endpoint, that endpoint's ModelConfig).
+    """
+    grouped: dict[tuple[str, str, str], list[str]] = {}
+    configs: dict[tuple[str, str, str], Any] = {}
+
+    for role in BUILTIN_ROLES:
+        model = cfg.models[role]
+        identity = (model.provider, model.base_url or "", model.model)
+        if identity not in grouped:
+            grouped[identity] = []
+            configs[identity] = model
+        grouped[identity].append(role)
+
+    return [(tuple(roles), configs[identity]) for identity, roles in grouped.items()]
 
 
 @dataclass(frozen=True)

@@ -222,29 +222,36 @@ def load_project_context(project_path: Path) -> ProjectContext:
 @models_app.command("test")
 def models_test(
     role: Optional[str] = typer.Option(
-        None, "--role", help="Probe one role only (default: planner and coder)"
+        None, "--role", help="Probe one role only (default: every distinct endpoint)"
     ),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
 ) -> None:
     """Verify every configured model is reachable and can call tools.
 
     deepagents requires tool calling for every agent, and reachability does
     not imply it — hence the separate Tools stage. See TODO.md C1.6.
-    """
-    from rudra.llm.probe import ROLES_TO_PROBE, probe_role
 
-    roles = (role,) if role else ROLES_TO_PROBE
+    Probes distinct endpoints rather than roles: Step 9b took BUILTIN_ROLES
+    to five, and a single-model setup would otherwise fire five identical
+    network calls.
+    """
+    from rudra.llm.probe import probe_role, roles_to_probe
+
+    cfg = _load_config_or_exit(project_dir)
+    entries = [((role,), cfg.models[role])] if role else roles_to_probe(cfg)
 
     table = Table(title="Model check", header_style="bold")
-    for column in ("Role", "Provider", "Model", "Construct", "Reach", "Tools", "Ctx"):
+    for column in ("Roles", "Provider", "Model", "Construct", "Reach", "Tools", "Ctx"):
         table.add_column(column, overflow="fold")
 
     failed = False
-    for name in roles:
-        result = probe_role(name)
+    for roles, _model in entries:
+        # One probe per distinct endpoint; the Roles column says who shares it.
+        result = probe_role(roles[0])
         failed = failed or not result.ok
         style = "green" if result.ok else "red"
         table.add_row(
-            result.role,
+            ", ".join(roles),
             result.provider,
             result.model,
             result.construct,
@@ -470,12 +477,13 @@ def doctor_command(
     table.add_row("shell", "warn" if cfg.tools.shell_in_auto else "ok", escape(shell_state))
 
     if not offline:
-        from rudra.llm.probe import ROLES_TO_PROBE, probe_role
+        from rudra.llm.probe import probe_role, roles_to_probe
 
-        for name in ROLES_TO_PROBE:
-            result = probe_role(name)
+        # Distinct endpoints, not roles — same reason as `models test`.
+        for roles, _model in roles_to_probe(cfg):
+            result = probe_role(roles[0])
             table.add_row(
-                f"model ({name})",
+                f"model ({', '.join(roles)})",
                 "ok" if result.ok else "fail",
                 f"{result.provider} {result.model} — {result.reach}, tools: {result.tools}",
             )
