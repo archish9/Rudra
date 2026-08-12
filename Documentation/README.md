@@ -43,7 +43,7 @@ Rudra is a local-first autonomous coding agent for the terminal. You describe wh
 rudra init                # scaffold .rudra/config.toml
 rudra models test         # confirm the model works
 rudra "write a Python CLI that reverses a string"
-rudra verify              # check the result: syntax, types, tests, placeholders
+rudra verify              # the same gate the loop uses, run by hand
 ```
 
 It works with any model — local via Ollama, or hosted via OpenRouter, Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint. Switching takes one line of config.
