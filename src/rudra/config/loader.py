@@ -42,7 +42,7 @@ from rudra.config.schema import (
 from rudra.state.paths import rudra_paths
 
 _TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools")
-_AGENT_KEYS = frozenset({"verbose"})
+_AGENT_KEYS = frozenset({"verbose", "max_fix_attempts"})
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
 _TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch"})
@@ -138,9 +138,20 @@ def validate(
                         f"temperature in [model.{role}] must be a number, got {value!r}."
                     )
 
-    for key in merged.get("agent", {}):
+    agent = merged.get("agent", {})
+    for key in agent:
         if key not in _AGENT_KEYS:
             raise ConfigError(f"Unknown key '{key}' in [agent].{_suggest(key, _AGENT_KEYS)}")
+
+    attempts = agent.get("max_fix_attempts")
+    if attempts is not None and (
+        not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1
+    ):
+        # Zero would make every task block without the coder running once,
+        # which looks like a broken model rather than a config mistake.
+        raise ConfigError(
+            f"max_fix_attempts in [agent] must be a whole number of 1 or more, got {attempts!r}."
+        )
 
     permissions = merged.get("permissions", {})
     for key in permissions:
@@ -287,7 +298,10 @@ def build_config(
 
     permissions = merged.get("permissions", {})
     return Config(
-        agent=AgentConfig(verbose=bool(merged.get("agent", {}).get("verbose", True))),
+        agent=AgentConfig(
+            verbose=bool(merged.get("agent", {}).get("verbose", True)),
+            max_fix_attempts=int(merged.get("agent", {}).get("max_fix_attempts", 3)),
+        ),
         permissions=PermissionsConfig(
             mode=permissions.get("mode", "ask"),
             allow=tuple(permissions.get("allow", [])),

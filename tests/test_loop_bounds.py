@@ -111,3 +111,30 @@ def test_an_absent_test_stage_is_not_a_missing_judgement():
     # a project without tests -- dispatching the tester would be wrong.
     report = report_with(failing(name="syntax"))
     assert tests_produced_no_judgement(report) is False
+
+
+def test_max_fix_attempts_must_be_a_positive_whole_number(tmp_path):
+    # Zero would make every task block without the coder running once,
+    # which reads as a broken model rather than a config mistake.
+    from rudra.config import ConfigError, build_config
+
+    rudra = tmp_path / ".rudra"
+    rudra.mkdir(parents=True)
+    base = (
+        '[model.default]\nprovider = "ollama"\n'
+        'base_url = "http://localhost:11434"\nmodel = "qwen3:32b"\n'
+    )
+
+    for bad in ("0", "-1", "true", '"three"'):
+        (rudra / "config.toml").write_text(
+            f"{base}\n[agent]\nmax_fix_attempts = {bad}\n", encoding="utf-8"
+        )
+        try:
+            build_config(tmp_path)
+        except ConfigError as exc:
+            assert "max_fix_attempts" in str(exc)
+        else:  # pragma: no cover - the assertion below reports it
+            raise AssertionError(f"max_fix_attempts = {bad} was accepted")
+
+    (rudra / "config.toml").write_text(f"{base}\n[agent]\nmax_fix_attempts = 5\n", encoding="utf-8")
+    assert build_config(tmp_path).agent.max_fix_attempts == 5
