@@ -9,9 +9,16 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
-from rudra.stacks.profile import StackProfile
+from rudra.stacks.profile import (
+    MISSING_TOOL,
+    NOT_APPLICABLE,
+    OK,
+    CommandResolution,
+    StackProfile,
+)
 from rudra.stacks.registry import PROFILES
 
 
@@ -174,3 +181,126 @@ def resolve_test_command(project_path: Path, profile: StackProfile) -> list[str]
     ):
         return ["npm", "test"]
     return None
+
+
+# Stacks whose lint and typecheck answers come from package.json rather
+# than a fixed command.
+_NODE_FAMILY = frozenset({"node", "react", "angular"})
+
+
+def _bundled(tool: str, *arguments: str) -> tuple[str, ...]:
+    """Rudra's own copy of a tool, invoked through its own interpreter.
+
+    `sys.executable`, not `shutil.which`: PATH is unreliable under
+    `uv tool install`, and permissions/env.py:4 records that scrubbed_env
+    produces an environment in which `which ruff` finds nothing.
+
+    This is the one place sys.executable is correct, and it is worth saying
+    so out loud because `_system_interpreter` above forbids it. That
+    prohibition is about the *target project's* interpreter -- D18 is
+    explicit that the user's tests must never run under Rudra's Python.
+    Here the call deliberately invokes Rudra's own bundled tool, which is
+    exactly what sys.executable names.
+    """
+    return (sys.executable, "-m", tool, *arguments)
+
+
+def _node_binary(project_path: Path, name: str) -> Path | None:
+    candidate = Path(project_path) / "node_modules" / ".bin" / name
+    return candidate if candidate.is_file() else None
+
+
+def resolve_lint_command(project_path: Path, profile: StackProfile) -> CommandResolution:
+    """The argv for this stack's linter.
+
+    Lint is advisory (spec S9a.2), so nothing here can fail a task -- but
+    it still distinguishes "this project has no linter" from "it declares
+    one that is not installed", because the report shows the difference and
+    a user acting on it needs to know which.
+    """
+    project_path = Path(project_path)
+
+    if profile.lint_command is not None:
+        return CommandResolution(tuple(profile.lint_command), OK, tool=profile.lint_command[0])
+
+    if profile.name == "python":
+        ruff = _venv_executable(project_path, "ruff")
+        if ruff is not None:
+            return CommandResolution((str(ruff), "check", "."), OK, tool="ruff")
+        return CommandResolution(_bundled("ruff", "check", "."), OK, tool="ruff")
+
+    if profile.name not in _NODE_FAMILY:
+        return CommandResolution(
+            None, NOT_APPLICABLE, detail=f"no linter is defined for the {profile.name} stack"
+        )
+
+    package_json = _load_package_json(project_path)
+    if not _declares_dependency(package_json, "eslint"):
+        return CommandResolution(
+            None, NOT_APPLICABLE, detail="this project declares no eslint", tool="eslint"
+        )
+    eslint = _node_binary(project_path, "eslint")
+    if eslint is None:
+        return CommandResolution(
+            None,
+            MISSING_TOOL,
+            detail="package.json declares eslint but node_modules/.bin/eslint is absent",
+            tool="eslint",
+        )
+    return CommandResolution((str(eslint), "."), OK, tool="eslint")
+
+
+def resolve_typecheck_command(project_path: Path, profile: StackProfile) -> CommandResolution:
+    """The argv for this stack's type checker.
+
+    Typecheck blocks, so the not_applicable / missing_tool split carries
+    real weight here: plain JavaScript has no type checker and must pass,
+    while a TypeScript project without tsc must stop and tell the user.
+    """
+    project_path = Path(project_path)
+
+    if profile.typecheck_command is not None:
+        return CommandResolution(
+            tuple(profile.typecheck_command), OK, tool=profile.typecheck_command[0]
+        )
+
+    if profile.name == "python":
+        mypy = _venv_executable(project_path, "mypy")
+        if mypy is not None:
+            return CommandResolution((str(mypy), "."), OK, tool="mypy")
+        # --ignore-missing-imports because Rudra's mypy cannot see the
+        # project's dependencies. It still catches type errors in the
+        # project's own code, which is where generated code goes wrong.
+        return CommandResolution(
+            _bundled("mypy", "--ignore-missing-imports", "."),
+            OK,
+            detail="Rudra's bundled mypy; project dependencies are not resolved",
+            tool="mypy",
+        )
+
+    if profile.name not in _NODE_FAMILY:
+        return CommandResolution(
+            None, NOT_APPLICABLE, detail=f"no type checker is defined for the {profile.name} stack"
+        )
+
+    package_json = _load_package_json(project_path)
+    typescript = (
+        _declares_dependency(package_json, "typescript")
+        or (project_path / "tsconfig.json").is_file()
+    )
+    if not typescript:
+        return CommandResolution(
+            None,
+            NOT_APPLICABLE,
+            detail="plain JavaScript project -- no type checker applies",
+            tool="tsc",
+        )
+    tsc = _node_binary(project_path, "tsc")
+    if tsc is None:
+        return CommandResolution(
+            None,
+            MISSING_TOOL,
+            detail="this project is TypeScript but node_modules/.bin/tsc is absent",
+            tool="tsc",
+        )
+    return CommandResolution((str(tsc), "--noEmit"), OK, tool="tsc")
