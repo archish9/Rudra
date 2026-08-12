@@ -60,6 +60,7 @@ model = "qwen3-coder:32b"
 
 [agent]
 verbose = true
+max_fix_attempts = 3
 
 [permissions]
 mode  = "ask"    # ask | auto | plan
@@ -191,6 +192,22 @@ Sections that aren't supported yet say when they will be:
 Configuration error: [skills] is not supported yet — arrives in Step 11 (C5.1).
 ```
 
+## The agent section
+
+| Key | Means |
+|---|---|
+| `verbose` | Show detailed tool-call output during a run |
+| `max_fix_attempts` | How many times the fix loop retries one task before giving up. Default 3 |
+
+`max_fix_attempts` is an upper bound, not a target. The loop usually stops
+sooner: two attempts that fail *identically* count as no progress and stop
+immediately, because a third would produce the same result. Raising it helps
+only when attempts are genuinely converging.
+
+It must be a whole number of 1 or more. Zero would block every task without
+the coder running once, which reads as a broken model rather than a config
+mistake, so it is rejected at load time.
+
 ## Permissions
 
 `[permissions]` and `[tools]` control what Rudra may do without asking. The
@@ -255,7 +272,7 @@ contents in code fences write broken files.
   memory/export/  ← durable
   memory/palace/    volatile, ignored
   run/              volatile, ignored
-    PLAN.md, current_task.md, tech_stack.md, checkpoints.db
+    ledger.json, tech_stack.md, checkpoints.db
     logs/           permissions.jsonl — every gated decision
     artifacts/      oversized tool output, offloaded out of your project
 ```

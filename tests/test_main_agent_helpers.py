@@ -1,8 +1,9 @@
 """Tests for main_agent's stable helper functions (C0.5).
 
-Deliberately NOT covered: RudraAgent.run(), per-file dispatch, the retry loop.
-Step 9 (C6.1-C6.6) replaces the orchestration loop wholesale, so tests against
-it would be written to be deleted. These helpers are the seams that survive.
+These are the seams that survived Step 9c. The orchestration loop they
+used to sit beside is gone -- the ledger, the fix loop and the gate live
+in `rudra.loop` now, and are tested there. The _check_off_file cases that
+were here went with the PLAN.md checklist they ticked.
 
 Fixtures span the D18 target stacks so no Python assumption calcifies.
 """
@@ -12,53 +13,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from rudra.agent.main_agent import (
-    _check_off_file,
     _ensure_agents_md,
     _write_tech_stack_file,
 )
 from rudra.state import ProjectContext
-
-
-def test_check_off_file_ticks_the_matching_item(tmp_path: Path):
-    plan = tmp_path / "PLAN.md"
-    plan.write_text("- [ ] main.py\n- [ ] models.py\n", encoding="utf-8")
-
-    _check_off_file(plan, "main.py")
-
-    assert plan.read_text(encoding="utf-8") == "- [x] main.py\n- [ ] models.py\n"
-
-
-def test_check_off_file_works_for_every_target_stack(tmp_path: Path):
-    """D18: the checklist is filenames, whatever the language."""
-    plan = tmp_path / "PLAN.md"
-    plan.write_text(
-        "- [ ] src/main.rs\n- [ ] Cargo.toml\n- [ ] package.json\n- [ ] src/app/app.component.ts\n",
-        encoding="utf-8",
-    )
-
-    for name in ("src/main.rs", "Cargo.toml", "package.json", "src/app/app.component.ts"):
-        _check_off_file(plan, name)
-
-    assert "- [ ]" not in plan.read_text(encoding="utf-8")
-
-
-def test_check_off_file_ticks_only_the_first_occurrence(tmp_path: Path):
-    plan = tmp_path / "PLAN.md"
-    plan.write_text("- [ ] a.py\n- [ ] a.py\n", encoding="utf-8")
-
-    _check_off_file(plan, "a.py")
-
-    assert plan.read_text(encoding="utf-8") == "- [x] a.py\n- [ ] a.py\n"
-
-
-def test_check_off_file_leaves_the_plan_untouched_when_absent(tmp_path: Path):
-    plan = tmp_path / "PLAN.md"
-    original = "- [ ] main.py\n"
-    plan.write_text(original, encoding="utf-8")
-
-    _check_off_file(plan, "nonexistent.rs")
-
-    assert plan.read_text(encoding="utf-8") == original
 
 
 def test_ensure_agents_md_creates_the_file_once(tmp_path: Path):

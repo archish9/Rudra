@@ -112,9 +112,10 @@ def test_permissions_are_never_passed_to_deepagents():
     import ast
     import inspect
 
-    from rudra.agent import coder_agent, main_agent, planner_agent
+    from rudra.agent import main_agent, planner_agent
+    from rudra.subagents import build as subagent_build
 
-    for module in (main_agent, coder_agent, planner_agent):
+    for module in (main_agent, planner_agent, subagent_build):
         tree = ast.parse(inspect.getsource(module))
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):

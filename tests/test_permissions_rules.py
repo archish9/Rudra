@@ -98,7 +98,7 @@ def test_plan_mode_still_allows_reads(tmp_path):
 
 def test_control_plane_tools_are_never_gated(tmp_path):
     """update_plan and friends write only under .rudra/run/ (spec §4.6)."""
-    for tool in ("update_plan", "write_task_assignment", "ask_user"):
+    for tool in ("add_tasks", "drop_task", "ask_user"):
         decision = engine(tmp_path, mode="plan").decide(tool, {})
         assert (decision.effect, decision.source) == ("allow", "control-plane")
 

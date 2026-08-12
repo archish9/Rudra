@@ -324,7 +324,7 @@ A model call failed partway through — rate limit, dropped connection, upstream
 Check before assuming nothing happened:
 
 ```bash
-cat .rudra/run/PLAN.md      # ticked items were genuinely written
+cat .rudra/run/ledger.json  # tasks marked done genuinely passed the gate
 ls
 ```
 
@@ -332,7 +332,7 @@ Re-running continues from the unticked items.
 
 ### `2/2 files generated` but a file I asked for is missing
 
-Rudra plans by filename, and `PLAN.md` entries that don't parse as file paths are silently dropped — and the count reports only what survived. A plan item written as prose rather than a filename disappears without a trace.
+Every task the planner declared appears in the summary with a status, and anything not `done` says why. If a task is `blocked`, read its reason: `no progress: the same failure twice` means two attempts failed identically, and `attempts exhausted` means it never converged.
 
 Check the plan, then ask again naming the file explicitly:
 
@@ -342,9 +342,13 @@ rudra "also write tests/test_parser.py covering the CSV edge cases"
 
 ### The generated code doesn't run
 
-Expected, unfortunately. Rudra counts a file as done **when it exists**, not when it works. Ask it to run the tests (`run_tests`) and it will tell you honestly that they failed — but nothing loops back and fixes them yet, so the run still ends reporting success. Always review the output.
+A task marked `done` passed the verification gate: it parsed, type checked, its tests ran, and no placeholders were left in the files that task touched. So this should be rare — and when it happens it usually means one of:
 
-That loop is the next major piece of work. See [Project Status](08-project-status.md).
+- **The gate could not run.** Under `--auto` without `--allow-shell`, lint, typecheck and tests are all denied and the run stops on the first task. Check the summary for `never attempted`.
+- **The project has no tests.** The gate reports `not_applicable` rather than failing, so nothing exercised the code. Ask for tests explicitly.
+- **The task was blocked, not done.** Read the summary: anything not `done` says why.
+
+Run `rudra verify` yourself to see the same verdict. Always review generated code.
 
 ### `run_tests` says "Running tests was not permitted"
 

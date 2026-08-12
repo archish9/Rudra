@@ -17,59 +17,43 @@ What actually happens between typing a prompt and finding files on disk.
 ## The short story
 
 ```
-you ──▶ planner ──▶ PLAN.md ──▶ for each file: planner writes instructions
-                                                        │
-                                                        ▼
-                                              a fresh coder writes it
-                                                        │
-                                                        ▼
-                                        ┌───── permission gate ─────┐
-                                        │ allow · deny · ask you    │
-                                        └───────────┬───────────────┘
-                                                    ▼
-                                              file exists? tick it off
+you ──▶ planner ──▶ ledger of tasks ──▶ for each task:
+                                              │
+                                    ┌─────────▼──────────┐
+                                    │ coder writes it    │
+                                    │ gate verifies it   │
+                                    │ fix loop retries   │
+                                    └─────────┬──────────┘
+                                              ▼
+                                    gate passed? task done
 ```
 
-One planner decides *what* to build. A new coder is created for *each* file and writes exactly that one file. Rudra loops until the list is done.
+The planner decides *what work* the request needs and records it as tasks — plain language, not filenames. For each task a coder writes whatever files it needs, then a deterministic gate checks the result. If the gate fails, the coder gets the exact errors back and tries again.
+
+**The planner cannot mark anything done.** There is no tool for it. Only the gate grants that, which is why "it says it finished" and "it finished" are the same statement here.
 
 Every write, edit, delete and command passes the permission gate first. In the default `ask` mode that means it stops and shows you a diff; in `auto` it proceeds; in either, a small built-in floor still blocks the things nobody wants. See [Permissions](09-permissions.md).
 
 ---
 
-## The two agents
+## The planner
 
-### Planner
-
-Runs once at the start, then again before each file. It:
+Runs at the start, and again only when the work stalls. It:
 
 - reads your request and the project's file tree
-- decides the complete list of files
-- writes that list to `.rudra/run/PLAN.md` as a checklist of bare filenames
-- writes detailed instructions for one file at a time into `.rudra/run/current_task.md`
+- calls `add_tasks` with the work it foresees
+- may call `drop_task` later, with a reason, if something turns out unnecessary
 
-It never writes project code itself.
+It never writes project code, and it has no tool that can mark a task finished.
 
-`PLAN.md` looks like this:
+Tasks are work, not filenames:
 
-```markdown
-- [ ] main.py
-- [ ] parser.py
-- [ ] tests/test_parser.py
+```
+t1  implement a CSV parser that handles quoted commas
+t2  write tests for the parser
 ```
 
-Filenames only, no prose — the orchestrator parses this file, so entries that don't look like paths are skipped.
-
-### Coder
-
-Created fresh for every single file, with a clean conversation each time. It:
-
-- reads `.rudra/run/current_task.md` for its assignment
-- reads `.rudra/run/tech_stack.md` for language and framework constraints
-- reads any files it was told to look at for context
-- writes exactly one file
-- stops
-
-Starting fresh each time keeps the context small and stops earlier files' details from bleeding into later ones.
+One task may touch several files. The planner is consulted again when a task is given up on — so it can propose a different approach — and once when the list empties, in case something is missing. It is **not** consulted after an ordinary success, which is what keeps a run from spending a model call per task on bookkeeping.
 
 ---
 
@@ -114,22 +98,31 @@ From the files present — `Cargo.toml` means Rust, `package.json` means Node, a
 
 **5. The planner plans**
 
-It produces `PLAN.md` and the first task assignment, then stops.
+It calls `add_tasks` with the work the request needs, then stops.
 
 **6. The loop runs**
 
-For each unticked file:
+For each pending task:
 
-- the planner writes instructions into `.rudra/run/current_task.md`
-- a brand-new coder reads them and writes the file
-- Rudra checks the file exists; if not, it retries, up to three attempts
-- on success the item is ticked off in `PLAN.md`
+- a coder writes every file the task needs
+- the gate verifies the result: syntax, lint, type check, tests, placeholders
+- if it fails, the coder gets the exact errors back and tries again
+- if two attempts fail *identically*, Rudra stops rather than burning the budget
+- when the gate passes, the task is done
+
+If the gate can't run at all — a denied command, a missing tool — the whole run stops there, because every remaining task would hit the same wall.
 
 **7. It reports**
 
 ```
-🏁 Complete: 3/3 files generated
+Tasks: 3 requested · 2 done · 1 blocked · 0 dropped
+
+  ✓ t1  implement a CSV parser that handles quoted commas
+  ✓ t2  write tests for the parser
+  ✗ t3  handle escaped quotes          no progress: the same failure twice
 ```
+
+Every task you were told about appears here with a status, and anything not done says why.
 
 ---
 
@@ -139,14 +132,14 @@ Rudra keeps its state inside your project:
 
 | File | Written by | Purpose |
 |---|---|---|
-| `PLAN.md` | planner | The checklist, ticked off as work completes |
-| `current_task.md` | planner | Instructions for the file being written now |
-| `tech_stack.md` | Rudra | Detected language and frameworks |
+| `run/ledger.json` | planner + Rudra | The tasks, their status, and why anything stopped |
+| `run/tech_stack.md` | Rudra | Detected language and frameworks |
+| `run/logs/verify.log` | Rudra | The gate's full output from the last check |
 | `AGENTS.md` | Rudra | Project notes fed into the planner's prompt |
 | `project.json` | Rudra | Saved project context |
 | `checkpoints.db` | LangGraph | Conversation checkpoints |
 
-Deleting the folder is safe — Rudra recreates what it needs, though it forgets any plan in progress.
+Deleting the folder is safe — Rudra recreates what it needs. The ledger is per-run and never resumed, so a new run starts from a clean list either way.
 
 **Committing it is your call.** Rudra never touches your `.gitignore`. Add `.rudra/` if you'd rather keep it local.
 
@@ -154,17 +147,29 @@ Deleting the folder is safe — Rudra recreates what it needs, though it forgets
 
 ## How Rudra decides it's finished
 
-Worth understanding clearly, because it's the biggest current limitation:
+> **A task is done when the verification gate passes.**
 
-> **A file counts as done when it exists on disk.**
+Not when a file exists. The gate runs five stages in order and stops at the first blocking failure:
 
-Not when it compiles. Not when tests pass. Not when it's correct. Just present.
+| Stage | Blocks? | Asks |
+|---|---|---|
+| syntax | yes | Does every changed file parse? |
+| lint | **no — advisory** | Reported in full, never fails a task |
+| typecheck | yes | Do the types hold? |
+| test | yes | Does your suite pass? |
+| stubs | yes | Any placeholders left in the files this run touched? |
 
-So Rudra will happily report `3/3 files generated` for three files that don't run. Always review what it produces.
+The stub scan is why this is more than "run the tests": an agent can pass a suite and still leave `pass` where an implementation belongs.
 
-**Running the tests doesn't change this yet.** Rudra can now run your suite — the agent may call `run_tests`, be told it failed, and still finish the run reporting success, because nothing connects that answer back to the checklist. The measurement exists; the gate that acts on it does not.
+No model decides any of this. There is no tool that marks a task done — only the gate grants it.
 
-That gate is the next major piece of work. See [Project Status](08-project-status.md).
+**When it can't finish**, it says so rather than looping:
+
+- **Two identical failures in a row** → the task is blocked, and the run moves on
+- **The attempt budget runs out** (`[agent] max_fix_attempts`, default 3) → same
+- **The gate itself can't run** — denied command, missing tool → the whole run stops
+
+Run `rudra verify` yourself any time to see the same gate's verdict. Details in [Verification](10-verification.md).
 
 ---
 
@@ -202,7 +207,7 @@ Rudra adds a few of its own:
 
 | Tool | What it does |
 |---|---|
-| `update_plan` / `read_plan` | The file checklist in `.rudra/run/PLAN.md` |
+| `add_tasks` / `drop_task` / `read_ledger` | The task ledger in `.rudra/run/ledger.json` |
 | `write_task_assignment` | The planner's brief for the coder |
 | `ask_user` | Asks you a question mid-run |
 | `run_tests` | Works out your project's test command, runs it, reports counts and the failure tail |
@@ -222,7 +227,7 @@ Things worth knowing before you rely on it:
 
 **Existence is the only success test.** As above — a file that exists counts as done.
 
-**Silently skipped plan items.** If a `PLAN.md` line doesn't parse as a filename it's dropped, and the summary counts only what survived. `2/2 files generated` can hide a third item nobody wrote.
+**The reviewer sees nothing on a brand-new project.** Its advisory pass reads the git diff, which shows changes to *tracked* files — so on a fresh repo, where everything is new and untracked, it reports nothing and the summary gives no hint that it did.
 
 **A failed model call ends the run.** A dropped connection or rate limit raises an error and exits `1`, even if files were already written. Check your directory before assuming nothing happened.
 

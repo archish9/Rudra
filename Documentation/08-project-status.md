@@ -54,27 +54,19 @@ Rudra can plan a set of files, write them with your approval, run your test suit
 
 Ordered roughly by how much you'll miss them.
 
-### "Done" only means "the file exists"
+### The run can't resume
 
-Rudra ticks an item off when the file is present on disk — not when it compiles, not when tests pass. It will cheerfully report `3/3 files generated` for three files that don't run.
+Each run starts a fresh task ledger. If a run stops early — a denied command, a dropped connection — the work already on disk stays, but there is no `--continue` to pick up the remaining tasks. Re-run and the planner starts over.
 
-This is now the single biggest limitation, and everything below follows from it.
+**One consequence to know now:** the gate's lint, typecheck and test stages are shell commands underneath and are gated like them, so **`--auto` on its own verifies nothing** — the gate escalates and the run stops on the first task. Pair it with `--allow-shell`. See [Permissions](09-permissions.md).
 
-**Always review generated code.**
+### A failed model call is not retried
 
-### No test → review → fix loop
+There is no backoff around model invocation. A rate limit or a dropped connection stops the run where it is. Tasks already marked `done` genuinely passed the gate; the rest are reported as never attempted.
 
-The headline idea — write code, run its tests, review it, fix it, repeat — isn't built.
+### The reviewer is quiet on new projects
 
-The *inputs* now exist. Rudra can run your suite and read the result as structured data rather than a wall of text. What's missing is the loop that consumes it: nothing re-plans when tests fail, nothing gates completion on them, and the orchestrator still ticks a file off because it exists. The agent may call `run_tests` and be told the suite failed, and then finish the run reporting success anyway.
-
-That's the next milestone, and it's the one that changes what "done" means.
-
-**One consequence to know now:** `run_tests` is a shell command underneath and is gated like one, so **`--auto` on its own runs no tests**. An unattended run without `--allow-shell` writes code it cannot check. See [Permissions](09-permissions.md).
-
-### No self-review
-
-Nothing inspects the generated code before reporting success.
+The advisory review reads the git diff, which shows changes to *tracked* files. On a fresh repository every file is new and untracked, so the reviewer reports nothing — and the summary does not point that out. The gate's verdict is unaffected; only the quality commentary is missing.
 
 ### No clarifying questions
 
@@ -102,8 +94,8 @@ Things that work, but not the way you'd hope.
 
 | Issue | What happens | Workaround |
 |---|---|---|
-| **A failed model call ends everything** | Rate limit or dropped connection raises an error and exits `1`, even if files were already written | Check `.rudra/run/PLAN.md` — ticked items were genuinely written. Re-run to continue |
-| **Silently dropped plan items** | A `PLAN.md` line that doesn't parse as a filename is skipped, and the count reports only survivors — `2/2` can hide a missing third | Read `PLAN.md`; ask again naming the file explicitly |
+| **A failed model call ends everything** | Rate limit or dropped connection stops the run, even if earlier tasks finished | Check `.rudra/run/ledger.json` — tasks marked `done` genuinely passed the gate. Re-run to continue |
+| **The reviewer is quiet on new projects** | Its advisory pass reads the git diff, so on a fresh repo where every file is untracked it reports nothing | Run `rudra verify` yourself, and review the code — the gate's verdict is unaffected |
 | **`--dry-run` does nothing** | Exits immediately with no plan and no preview | Use `--plan`, which really does write a plan and touch nothing else |
 | **Ollama truncates silently** | Default 4096-token window, no warning, and the agent forgets its plan | Set `RUDRA_CONTEXT_TOKENS` |
 | **Free hosted models are unreliable** | `429` daily caps and transient `502`s mid-run | Retry, or use a paid or local model |

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
 
 from rudra.llm import build_model
@@ -109,9 +110,9 @@ def _middleware_for(spec: RudraSubagent, context: Any) -> list:
 def build_agent(spec: RudraSubagent, context: Any) -> Any:
     """A compiled deep agent for this spec, ready to invoke directly.
 
-    The same create_deep_agent call create_coder_agent already makes
-    (coder_agent.py:90), so the subagent inherits upstream's middleware
-    stack rather than a hand-assembled copy of it.
+    Goes through create_deep_agent so the subagent inherits upstream's
+    middleware stack rather than a hand-assembled copy of it. Imported at
+    module level so a test can record the call (Step 9c).
 
     `permissions=` is deliberately absent: it raises NotImplementedError on
     any execute-capable backend, which is every backend Rudra builds
@@ -127,7 +128,6 @@ def build_agent(spec: RudraSubagent, context: Any) -> Any:
     subagent's thread is per-invocation and never resumed (A1.2); a caller
     that wants persistence passes its own.
     """
-    from deepagents import create_deep_agent
     from langgraph.checkpoint.memory import InMemorySaver
 
     return create_deep_agent(

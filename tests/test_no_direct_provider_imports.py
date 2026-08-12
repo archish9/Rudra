@@ -7,7 +7,7 @@ be caught only by someone reading the diff.
 
 The agent-construction tests at the bottom close a gap this step exposed:
 migrating config.py to ModelConfig broke create_planner_agent and
-create_coder_agent at runtime, and the whole suite stayed green, because
+the coder subagent at runtime, and the whole suite stayed green, because
 nothing had ever constructed either one. Construction does no network I/O —
 only .invoke()/.stream() would — so there is no reason not to cover it.
 """
@@ -116,14 +116,35 @@ def test_the_planner_agent_can_be_constructed(tmp_path: Path, coded_defaults) ->
     assert agent is not None
 
 
-def test_the_coder_agent_can_be_constructed(coded_defaults) -> None:
-    """Same guard for the coder half."""
-    from rudra.agent.coder_agent import create_coder_agent
+def test_the_coder_agent_can_be_constructed(coded_defaults, tmp_path) -> None:
+    """Same guard for the coder half, which is a subagent since Step 9c."""
+    from dataclasses import dataclass
+    from typing import Any
 
-    agent = create_coder_agent(
-        tech_stack_content="",
-        filesystem_backend=None,
-        checkpointer=None,
+    from rich.console import Console
+
+    from rudra.config import get_config
+    from rudra.subagents.build import build_agent
+    from rudra.subagents.registry import REGISTRY
+
+    @dataclass
+    class Ctx:
+        project_path: Any
+        backend: Any
+        gate: Any
+        console: Any
+        cfg: Any
+        checkpointer: Any = None
+
+    agent = build_agent(
+        REGISTRY["coder"],
+        Ctx(
+            project_path=tmp_path,
+            backend=None,
+            gate=None,
+            console=Console(quiet=True),
+            cfg=get_config(),
+        ),
     )
 
     assert agent is not None

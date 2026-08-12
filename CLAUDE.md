@@ -38,7 +38,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ---
 
-## 3. Current Architecture (as of 2026-08-12, Step 9b)
+## 3. Current Architecture (as of 2026-08-12, Step 9c)
 
 ```
 src/rudra/
@@ -67,11 +67,15 @@ src/rudra/
 │                           inherits interrupt_on but NOT middleware.
 │                           The reviewer cannot write because the tools are
 │                           never registered, not because a prompt says so
+├── loop/                   The agentic loop (Step 9c). ledger · bounds · tools ·
+│                           engine. ledger.py and bounds.py import nothing from
+│                           Rudra. No agent-facing tool can write DONE — only
+│                           engine.py, and only on VerifyReport.passed
 ├── agent/
-│   ├── main_agent.py       RudraAgent — hand-rolled planner→coder orchestration loop,
+│   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
-│   ├── planner_agent.py    deep agent; gate.middleware first, gate.interrupt_on wired
-│   └── coder_agent.py      deep agent, tools=[]; same gate wiring
+│   └── planner_agent.py    deep agent; ledger tools; consult_planner + the
+│                           lifted _stream_planner_turn
 ├── middleware/             2 survivors of D4, both opt-in behind [compat]
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           planning · interaction · git_tools · testing_tools.
@@ -92,14 +96,23 @@ that interprets policy. Precedence, top down: **deny floor** (every mode,
 Rudra's own `update_plan`/`write_task_assignment`/`ask_user` are control plane
 and never gated.
 
-### Control flow (`main_agent.py:345-437`)
-1. Planner runs once → must produce `.rudra/PLAN.md`, a checklist of **bare filenames** (`- [ ] main.py`).
-2. Orchestrator parses pending filenames (`_parse_pending_files`, `main_agent.py:53`).
-3. For each file: planner (same thread) writes `.rudra/current_task.md` → a **fresh** coder agent with a **fresh thread** writes that one file → up to 3 attempts.
-4. Success check = **file exists on disk** (`main_agent.py:411`). Not content correctness.
-5. Tick off with a string replace (`_check_off_file`, `main_agent.py:61`).
+### Control flow (`loop/engine.py`)
+1. Planner is consulted → calls `add_tasks` with units of **work**, not filenames. It has no tool that can mark anything done.
+2. `run_loop` takes the next pending task and calls `run_task`.
+3. `run_task`: coder subagent writes → `verify_project` gates → on failure the blocker goes back **verbatim** and it retries, up to `[agent] max_fix_attempts`.
+4. Success = **`VerifyReport.passed`**. Only `engine.py` writes `DONE`, and only there.
+5. Two identical failure signatures in a row → `BLOCKED` (C6.5a). A gate `escalate` → the whole run stops.
+6. The planner is consulted again **only** on a block or an empty ledger — never after an ordinary success.
+7. Reviewer runs once at the end, advisory, printed, gating nothing.
 
-This is a hardcoded Python loop, not an agentic loop. There is no test/review/fix stage.
+**The split that makes this work (S9c.1):** the model decides what work exists;
+Python decides when a task is done and when to stop. `C6.1` wanted an agent that
+owns the todo list, D9 forbids an LLM deciding termination — both hold because
+the ledger tools *cannot express* `DONE`, not because a prompt asks nicely.
+
+Two edges worth knowing before touching it: an **empty diff is a failed attempt**
+(with no changed files the gate reports "0 files parsed" and would pass an
+untouched task), and `files_touched` comes from **git**, not from the model.
 
 ### `.rudra/` state directory
 
@@ -114,18 +127,20 @@ only function that creates anything.
 | `AGENTS.md` | durable | `_ensure_agents_md` | planner via `memory=` | **Created once, never updated** (A1.9) |
 | `project.json` | durable | `save_project_context` | `ProjectConfigManager` | Becomes `facts.json` at C6.8a |
 | `.gitignore` | durable | `ensure_layout` | git | Written by Rudra, scopes **only** `.rudra/` |
-| `run/PLAN.md` | volatile | `update_plan` | orchestrator + `read_plan` | Filenames only |
-| `run/current_task.md` | volatile | `write_task_assignment` | coder | Planner→coder handoff |
+| `run/ledger.json` | volatile | `add_tasks`/`drop_task` (agent) + `engine.py` (status) | `run_loop`, `summarise` | Tasks are **work**, not filenames. Written atomically after every status change; never resumed |
 | `run/tech_stack.md` | volatile | `_write_tech_stack_file` | both | Rewritten every run |
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
+| `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
 | `memory/export/` | durable | — | — | Step 14 |
 | `memory/palace/` | volatile | — | — | Step 14 |
 
-Agent-facing prompts name these paths as literal strings. If a path moves,
-the prompt text must move in the same commit or the coder writes where
-nothing reads — `tests/test_rudra_dir_migration.py` guards this.
+Agent-facing prompts used to name these paths as literal strings, and a path
+that moved without its prompt meant the coder wrote where nothing reads. Step 9c
+removed the hazard rather than guarding it: the ledger is reached only through
+tools, so **no prompt names a state path at all**.
+`tests/test_rudra_dir_migration.py` now asserts that absence.
 
 ---
 
@@ -261,7 +276,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-uv run pytest -q                     # 827 passed, 2 skipped at Step 9b; must never go down
+uv run pytest -q                     # 880 passed, 2 skipped at Step 9c; must never go down
 git config core.hooksPath .githooks  # once per clone: run all three gates on push (A3.7)
 .venv/bin/rudra --version            # Rudra v0.2.0
 

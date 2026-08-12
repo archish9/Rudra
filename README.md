@@ -14,7 +14,7 @@ Point it at **any model you like** — a local Ollama model on your own machine,
 
 > ### 🚧 Early days — please read
 >
-> Rudra is **alpha software under active development**. It plans a set of files, writes them, runs commands, and can run your test suite and tell you what failed. What it does **not** do yet is act on that: nothing loops back to fix a failing test, and a file still counts as done when it exists, not when it works. Review everything it produces.
+> Rudra is **alpha software under active development**. It plans the work, writes it, and verifies the result — a task is done when a deterministic gate passes it: the code parses, type checks, its tests run, and no placeholders are left behind. If the gate fails, Rudra feeds the exact errors back and tries again, and stops rather than looping when two attempts fail identically. What it does **not** do yet is resume an interrupted run or retry a flaky provider. Review everything it produces.
 >
 > **It asks before it writes.** By default every write, edit, delete and command stops for your approval and shows you a diff first. `--auto` skips the prompts for unattended runs.
 >
@@ -206,7 +206,7 @@ FAILED tests/test_parser.py::test_quoted_commas - AssertionError
 
 Full output goes to `.rudra/run/logs/tests.log`; only the tail comes back to the model.
 
-**It reports, it doesn't yet repair.** The agent can be told the suite failed and still finish the run reporting success — nothing connects that answer back to the checklist. Closing that loop is the next milestone.
+**It repairs, within bounds.** A failing gate sends the exact errors back to the coder for another attempt, up to `[agent] max_fix_attempts` (default 3). Two identical failures in a row stop the task rather than burning the budget, and the summary says which tasks were blocked and why.
 
 Prefer it worked on its own branch?
 

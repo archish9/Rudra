@@ -166,21 +166,34 @@ def test_planner_puts_the_permission_gate_first(monkeypatch, tmp_path):
         reset_config()
 
 
+def _subagent_context(tmp_path, cfg, gate):
+    """A SubagentContext with a throwaway backend, for construction tests."""
+    from rich.console import Console
+
+    from rudra.subagents import SubagentContext
+
+    return SubagentContext(
+        project_path=tmp_path,
+        backend=object(),
+        gate=gate,
+        console=Console(quiet=True),
+        cfg=cfg,
+    )
+
+
 def test_coder_puts_the_permission_gate_first(monkeypatch, tmp_path):
-    from rudra.agent.coder_agent import create_coder_agent
+    """Step 9c: the coder is a registry entry built by subagents/build.py."""
     from rudra.config.loader import build_config, reset_config
     from rudra.permissions import build_gate
+    from rudra.subagents.build import build_agent
+    from rudra.subagents.registry import REGISTRY
 
     reset_config()
     try:
-        gate = build_gate(build_config(tmp_path), tmp_path)
-        captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
-        create_coder_agent(
-            tech_stack_content="",
-            filesystem_backend=object(),
-            checkpointer=None,
-            gate=gate,
-        )
+        cfg = build_config(tmp_path)
+        gate = build_gate(cfg, tmp_path)
+        captured = _record_create_deep_agent(monkeypatch, "rudra.subagents.build")
+        build_agent(REGISTRY["coder"], _subagent_context(tmp_path, cfg, gate))
         assert captured["middleware"][0] is gate.middleware
         assert captured["interrupt_on"] is gate.interrupt_on
     finally:
@@ -189,11 +202,18 @@ def test_coder_puts_the_permission_gate_first(monkeypatch, tmp_path):
 
 def test_no_gate_means_no_interrupt_config(monkeypatch, tmp_path):
     """A caller without a gate must still build a working agent."""
-    from rudra.agent.coder_agent import create_coder_agent
+    from rudra.config.loader import build_config, reset_config
+    from rudra.subagents.build import build_agent
+    from rudra.subagents.registry import REGISTRY
 
-    captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
-    create_coder_agent(tech_stack_content="", filesystem_backend=object(), checkpointer=None)
-    assert captured["interrupt_on"] is None
+    reset_config()
+    try:
+        cfg = build_config(tmp_path)
+        captured = _record_create_deep_agent(monkeypatch, "rudra.subagents.build")
+        build_agent(REGISTRY["coder"], _subagent_context(tmp_path, cfg, None))
+        assert captured["interrupt_on"] is None
+    finally:
+        reset_config()
 
 
 def test_main_agent_constructs_filesystem_backend_with_virtual_mode():
@@ -258,43 +278,65 @@ def _planner_tool_names(monkeypatch, tmp_path) -> list[str]:
     return [tool.name for tool in captured["tools"]]
 
 
-def test_planner_registers_the_step_8_tools(monkeypatch, tmp_path):
-    names = _planner_tool_names(monkeypatch, tmp_path)
-    assert "git_diff" in names
-    assert "run_tests" in names
+def test_the_planner_registers_the_ledger_tools(monkeypatch, tmp_path):
+    """Step 9c: the planner declares work and nothing else.
 
-
-def test_every_wrapped_execute_name_is_actually_registered(monkeypatch, tmp_path):
-    """Otherwise the engine allows a name that reaches no tool (A1.53's shape)."""
-    from rudra.permissions.rules import WRAPPED_EXECUTE_TOOLS
-
-    names = set(_planner_tool_names(monkeypatch, tmp_path))
-    assert WRAPPED_EXECUTE_TOOLS <= names
-
-
-def test_the_planning_tools_are_still_registered(monkeypatch, tmp_path):
-    """Step 8 adds; it must not displace."""
-    names = set(_planner_tool_names(monkeypatch, tmp_path))
-    assert {"update_plan", "read_plan", "write_task_assignment"} <= names
-
-
-def test_coder_still_has_no_tools(monkeypatch, tmp_path):
-    """coder_agent.py tells it to STOP after one write_file.
-
-    A test runner in the same context window would contradict its own
-    instructions. Step 9 revisits this when subagents land (C6.2).
+    git_diff and run_tests moved to the reviewer and tester subagents --
+    the loop runs the gate itself, so the planner has no reason to.
     """
-    from rudra.agent.coder_agent import create_coder_agent
+    names = set(_planner_tool_names(monkeypatch, tmp_path))
+    assert {"add_tasks", "drop_task", "read_ledger"} <= names
+    assert "git_diff" not in names
+    assert "run_tests" not in names
 
-    captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
-    create_coder_agent(tech_stack_content="", filesystem_backend=object(), checkpointer=None)
-    assert captured["tools"] == []
+
+def test_every_wrapped_execute_name_is_actually_registered():
+    """Otherwise the engine allows a name that reaches no tool (A1.53's shape).
+
+    Step 9c moved these off the planner onto the subagents that use them,
+    so the invariant is checked against the registry now. A1.64.
+    """
+    from rudra.permissions.rules import WRAPPED_EXECUTE_TOOLS
+    from rudra.subagents.registry import REGISTRY
+
+    registered = {name for spec in REGISTRY.values() for name in spec.rudra_tools}
+    assert WRAPPED_EXECUTE_TOOLS <= registered
 
 
-def test_the_planner_prompt_tells_the_model_not_to_commit(tmp_path):
-    """S8.5's prompt half. The config template carries the other half."""
-    from rudra.agent.planner_agent import build_planner_prompt
+def test_the_interaction_tools_survive_the_ledger_switch(monkeypatch, tmp_path):
+    """Step 9c replaces the planning tools; it must not displace ask_user."""
+    names = set(_planner_tool_names(monkeypatch, tmp_path))
+    assert "ask_user" in names
 
-    prompt = build_planner_prompt("t", tmp_path)
-    assert "git commit" in prompt
-    assert "run_tests" in prompt
+
+def test_the_coder_still_has_no_rudra_tools(monkeypatch, tmp_path):
+    """The coder writes files; it does not run tests or read diffs.
+
+    Step 9c keeps that split: the loop runs the gate, the tester writes
+    tests, the reviewer reads the diff.
+    """
+    from rudra.config.loader import build_config, reset_config
+    from rudra.subagents.build import build_agent
+    from rudra.subagents.registry import REGISTRY
+
+    reset_config()
+    try:
+        cfg = build_config(tmp_path)
+        captured = _record_create_deep_agent(monkeypatch, "rudra.subagents.build")
+        build_agent(REGISTRY["coder"], _subagent_context(tmp_path, cfg, None))
+        assert captured["tools"] == []
+    finally:
+        reset_config()
+
+
+def test_the_tester_prompt_tells_the_model_not_to_commit():
+    """S8.5's prompt half, re-pointed by Step 9c (A1.63).
+
+    It lived on the planner because that is where the execute-capable
+    tools were. The tester carries execute now, so the instruction has to
+    live where the capability does.
+    """
+    from rudra.subagents.registry import TESTER
+
+    assert "git commit" in TESTER.system_prompt
+    assert "run_tests" in TESTER.system_prompt

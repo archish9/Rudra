@@ -77,16 +77,20 @@ def test_registered_ask_tool_still_falls_through_to_the_interrupt(tmp_path: Path
     assert result == "ran", "interrupt_on owns the ask path for registered tools"
 
 
-def test_read_plan_is_a_read_and_never_prompts(tmp_path: Path):
-    assert "read_plan" in READ_ONLY_TOOLS
-    assert _engine(tmp_path).decide("read_plan", {}).effect == "allow"
+def test_read_ledger_is_a_read_and_never_prompts(tmp_path: Path):
+    assert "read_ledger" in READ_ONLY_TOOLS
+    assert _engine(tmp_path).decide("read_ledger", {}).effect == "allow"
 
 
-def test_read_plan_runs_without_an_interrupt_entry(tmp_path: Path):
-    """The instance A1.53 was reachable through today."""
+def test_read_ledger_runs_without_an_interrupt_entry(tmp_path: Path):
+    """The instance A1.53 was reachable through today.
+
+    read_plan carried this in Step 8; Step 9c renamed the tool, not the
+    hazard.
+    """
     middleware = _middleware(tmp_path, frozenset({"write_file"}))
-    result = middleware.wrap_tool_call(_Request("read_plan", {}), lambda request: "the plan")
-    assert result == "the plan"
+    result = middleware.wrap_tool_call(_Request("read_ledger", {}), lambda request: "the ledger")
+    assert result == "the ledger"
 
 
 @pytest.mark.parametrize("tool", sorted(WRAPPED_EXECUTE_TOOLS))

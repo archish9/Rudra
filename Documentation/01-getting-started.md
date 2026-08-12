@@ -308,8 +308,8 @@ Rudra keeps its working state in a `.rudra/` folder inside your project, split b
 
 | File | What it is |
 |---|---|
-| `run/PLAN.md` | The checklist of files, ticked off as they're written |
-| `run/current_task.md` | The instructions the planner handed the coder for the current file |
+| `run/ledger.json` | The tasks, their status, and why anything stopped |
+| `run/logs/verify.log` | The verification gate's full output from the last check |
 | `run/tech_stack.md` | The detected or configured stack for this project |
 | `run/checkpoints.db` | Conversation checkpoints |
 | `run/logs/permissions.jsonl` | One line per gated decision — what was allowed, denied, or approved |

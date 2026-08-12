@@ -26,13 +26,14 @@ if TYPE_CHECKING:  # pragma: no cover - broken at runtime to avoid a cycle
 # Rudra's own orchestration tools. They write only under .rudra/run/ and are
 # how the loop functions; gating them would make mode="ask" prompt for
 # Rudra's own bookkeeping (spec §4.6).
-CONTROL_PLANE_TOOLS = frozenset({"update_plan", "write_task_assignment", "ask_user"})
+CONTROL_PLANE_TOOLS = frozenset({"add_tasks", "drop_task", "ask_user"})
 
-# `read_plan` belongs here, not in the control plane: it only reads
-# .rudra/run/PLAN.md. It was in neither set until Step 8, which made it the
-# one instance of A1.53 reachable today -- decided "ask", no interrupt
-# registered, so it ran unprompted and unaudited.
-READ_ONLY_TOOLS = frozenset({"read_file", "ls", "glob", "grep", "read_plan"})
+# `read_ledger` belongs here, not in the control plane: it only reads
+# .rudra/run/ledger.json. Its predecessor `read_plan` was in neither set
+# until Step 8, which made it the one instance of A1.53 reachable today --
+# decided "ask", no interrupt registered, so it ran unprompted and
+# unaudited.
+READ_ONLY_TOOLS = frozenset({"read_file", "ls", "glob", "grep", "read_ledger"})
 MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete", "execute"})
 
 # Tools that are a shell command wearing a different name. Their own

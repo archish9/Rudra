@@ -1,4 +1,4 @@
-"""Orchestrator agent for Rudra — coordinates planner and coder agents."""
+"""Run setup for Rudra. The loop itself lives in rudra.loop (Step 9c)."""
 
 from __future__ import annotations
 
@@ -10,9 +10,8 @@ from rich.console import Console
 
 from rudra.config import get_config
 from rudra.git.core import auto_branch
-from rudra.permissions import run_with_approvals
+from rudra.loop import run_loop
 from rudra.state import ProjectContext, ensure_layout
-from rudra.tools.planning_tools import looks_like_path
 
 
 @dataclass
@@ -45,31 +44,14 @@ class AgentResult:
     iterations: int = 0
 
 
-def _parse_pending_files(plan_content: str) -> list[str]:
-    """Pending filenames from PLAN.md, skipping anything that is not a path.
-
-    The skip is silent by design. update_plan blocks prose and explains why
-    (A1.7), which is where the model needs feedback; here the file may have
-    been hand-edited by the user or rewritten by the agent's own edit_file, so
-    there is no author to correct.
-    """
-    items = (
-        line.strip().replace("- [ ]", "").strip()
-        for line in plan_content.splitlines()
-        if "- [ ]" in line
-    )
-    return [item for item in items if looks_like_path(item)]
-
-
-def _check_off_file(plan_path: Path, filename: str) -> None:
-    content = plan_path.read_text(encoding="utf-8")
-    updated = content.replace(f"- [ ] {filename}", f"- [x] {filename}", 1)
-    if updated != content:
-        plan_path.write_text(updated, encoding="utf-8")
-
-
 class RudraAgent:
-    """Orchestrates planner + coder agents for Rudra."""
+    """Owns one run's setup and hands the work to the loop (Step 9c).
+
+    The file-by-file orchestration this class used to carry is gone: the
+    ledger, the fix loop and the gate live in `rudra.loop`. What remains
+    here is assembly -- the branch, the trace header, and the checkpointer
+    to close.
+    """
 
     def __init__(
         self,
@@ -77,8 +59,9 @@ class RudraAgent:
         planner_agent,
         session_id: str,
         db_conn,
-        coder_config: dict,
-        plan_path: Path,
+        loop_context,
+        planner_callback,
+        ledger,
         gate=None,
     ):
         self.context = context
@@ -86,8 +69,11 @@ class RudraAgent:
         self.session_id = session_id
         self.console = context.console
         self._db_conn = db_conn
-        self._coder_config = coder_config
-        self.plan_path = plan_path
+        self._loop_context = loop_context
+        self._planner_callback = planner_callback
+        # The same Ledger object the planner's tools mutate. A copy would
+        # leave the loop with no tasks.
+        self._ledger = ledger
         # The permission gate. None streams ungated, which only a caller
         # constructing RudraAgent by hand can produce.
         self.gate = gate
@@ -153,216 +139,12 @@ class RudraAgent:
             content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
             self._log_always(f"[dim]{tag}[{index}] {msg_type}: {content}[/dim]")
 
-    async def _stream_planner(self, messages: list[dict], thread_id: str) -> bool:
-        """Stream the planner agent. Returns False if halted by guards."""
-        lg_config = {"configurable": {"thread_id": thread_id}}
-        processed = 0
-        consecutive_failures = 0
-        planning_tool_calls: dict[str, int] = {}
-        MAX_PLANNING_CALLS = 4
-        _halt = False
-
-        # run_with_approvals yields exactly what astream yields, so the parse
-        # loop below is unchanged. It reads interrupts from get_state after
-        # the stream drains, because __interrupt__ never appears in "values"
-        # chunks and changing stream_mode would change the chunk shape this
-        # loop depends on -- the loop that still carries A1.20's hole.
-        async for chunk in run_with_approvals(
-            self.planner_agent,
-            {"messages": messages},
-            lg_config,
-            self.gate,
-            self.console,
-        ):
-            if _halt:
-                break
-
-            namespace, event = (
-                chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
-            )
-            msgs = event.get("messages", [])
-
-            while processed < len(msgs):
-                msg = msgs[processed]
-                msg_type = type(msg).__name__
-
-                if namespace:
-                    self._log_always(f"[dim](planner subagent {':'.join(namespace)})[/dim]")
-
-                self._log_single_message(msg, processed + 1, prefix="planner")
-
-                if msg_type == "AIMessage":
-                    for tc in getattr(msg, "tool_calls", []):
-                        name = tc.get("name", "")
-                        if name in ("write_file", "write_task_assignment"):
-                            planning_tool_calls.clear()
-                        elif name in ("update_plan", "read_plan"):
-                            planning_tool_calls[name] = planning_tool_calls.get(name, 0) + 1
-                            if planning_tool_calls[name] >= MAX_PLANNING_CALLS:
-                                self._log_always(
-                                    f"[bold yellow]!! Planner loop guard: '{name}' called "
-                                    f"{planning_tool_calls[name]}x — stopping.[/bold yellow]"
-                                )
-                                _halt = True
-                                break
-                    if _halt:
-                        break
-
-                elif msg_type == "ToolMessage":
-                    content = str(getattr(msg, "content", ""))
-                    first_line = content.split("\n")[0] if content else ""
-                    is_error = (
-                        first_line.startswith("Error:")
-                        or first_line.startswith("Cannot write to")
-                        or "Error:" in first_line
-                        or "Traceback" in first_line
-                        or "Errno" in first_line
-                    )
-                    if is_error:
-                        consecutive_failures += 1
-                        if consecutive_failures >= 3:
-                            self._log_always(
-                                "[bold yellow]!! 3 consecutive planner failures — stopping.[/bold yellow]"
-                            )
-                            _halt = True
-                    else:
-                        consecutive_failures = 0
-
-                if _halt:
-                    break
-                processed += 1
-
-        return not _halt
-
-    async def _stream_coder(self, coder_agent, messages: list[dict], thread_id: str) -> bool:
-        """Stream a coder agent. Returns False if halted by guards."""
-        lg_config = {"configurable": {"thread_id": thread_id}}
-        processed = 0
-        consecutive_failures = 0
-        repeated_tool_calls: dict[tuple, int] = {}
-        MAX_REPEATED_CALLS = 3
-        _halt = False
-
-        async for chunk in run_with_approvals(
-            coder_agent,
-            {"messages": messages},
-            lg_config,
-            self.gate,
-            self.console,
-        ):
-            if _halt:
-                break
-
-            namespace, event = (
-                chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
-            )
-            msgs = event.get("messages", [])
-
-            while processed < len(msgs):
-                msg = msgs[processed]
-                msg_type = type(msg).__name__
-
-                if namespace:
-                    self._log_always(f"[dim](coder subagent {':'.join(namespace)})[/dim]")
-
-                self._log_single_message(msg, processed + 1, prefix="coder")
-
-                if msg_type == "AIMessage":
-                    for tc in getattr(msg, "tool_calls", []):
-                        name = tc.get("name", "")
-                        if name in ("write_file", "edit_file", "read_file", "task"):
-                            args = tc.get("args", {})
-                            key_arg = args.get("file_path", args.get("path", ""))
-                            call_key = (name, key_arg)
-                            repeated_tool_calls[call_key] = repeated_tool_calls.get(call_key, 0) + 1
-                            if repeated_tool_calls[call_key] >= MAX_REPEATED_CALLS:
-                                self._log_always(
-                                    f"[bold yellow]!! Coder loop guard: '{name}' on '{key_arg}' "
-                                    f"repeated {repeated_tool_calls[call_key]}x — stopping.[/bold yellow]"
-                                )
-                                _halt = True
-                                break
-                    if _halt:
-                        break
-
-                elif msg_type == "ToolMessage":
-                    content = str(getattr(msg, "content", ""))
-                    first_line = content.split("\n")[0] if content else ""
-                    is_error = (
-                        first_line.startswith("Error:")
-                        or first_line.startswith("Cannot write to")
-                        or "Error:" in first_line
-                        or "Traceback" in first_line
-                        or "Errno" in first_line
-                        or "not a valid tool" in content
-                        or "Input should be a valid string" in content
-                        or "BLOCKED:" in first_line
-                    )
-                    if is_error:
-                        consecutive_failures += 1
-                        if self.context.stop_on_error and consecutive_failures >= 3:
-                            self._log_always(
-                                "[bold yellow]!! 3 consecutive coder failures — stopping.[/bold yellow]"
-                            )
-                            _halt = True
-                    else:
-                        consecutive_failures = 0
-
-                if _halt:
-                    break
-                processed += 1
-
-        return not _halt
-
-    async def _run_planner_phase(self) -> bool:
-        """Phase 1: run planner to create PLAN.md and first task assignment."""
-        self._log_always(
-            f"\n[bold blue]🔵 Phase 1: Planning (model: {self.context.planner_model})[/bold blue]"
-        )
-        self._status("Analyzing task and creating plan...")
-        return await self._stream_planner(
-            [{"role": "user", "content": self.context.task}],
-            thread_id=f"{self.session_id}-planner",
-        )
-
-    async def _request_task_assignment(self, filename: str) -> bool:
-        """Ask the planner (continuing same thread) to write current_task.md for a file."""
-        msg = (
-            f"Write the task assignment for: `{filename}`\n\n"
-            "Call write_task_assignment() now with:\n"
-            f"- file_path: {filename}\n"
-            "- instructions: complete, detailed spec for this file\n"
-            "- context_files: any existing files the coder should read first\n\n"
-            "STOP after write_task_assignment() returns."
-        )
-        return await self._stream_planner(
-            [{"role": "user", "content": msg}],
-            thread_id=f"{self.session_id}-planner",
-        )
-
-    async def _run_coder_for_file(self, filename: str, index: int, attempt: int = 0) -> bool:
-        """Create a fresh coder agent and write the file specified in current_task.md.
-
-        Each attempt gets a distinct thread ID so retries start with a clean context.
-        """
-        from rudra.agent.coder_agent import create_coder_agent
-
-        coder = create_coder_agent(**self._coder_config)
-        thread_id = f"{self.session_id}-coder-{index}-{attempt}"
-        coder_task = (
-            f"Read .rudra/run/current_task.md and write the file specified there: `{filename}`.\n"
-            f"Call write_file(file_path='{filename}', content='...') then stop."
-        )
-        return await self._stream_coder(
-            coder,
-            [{"role": "user", "content": coder_task}],
-            thread_id=thread_id,
-        )
-
     async def run(self) -> AgentResult:
-        """Orchestrate planner → coder loop."""
+        """Plan, work, verify, fix, and report. The whole run (C6.1)."""
         try:
             if self.context.dry_run:
+                # A1.40: this still previews nothing. The flag's behaviour is
+                # unchanged by Step 9c; the row moved with the code.
                 self._status("Dry run — no files written.")
                 return AgentResult(
                     success=True,
@@ -372,8 +154,8 @@ class RudraAgent:
                 )
 
             # After the dry-run return, so --dry-run creates nothing; before
-            # the planner, so the plan and every file it produces land on the
-            # new branch rather than straddling two.
+            # the planner, so every file the run produces lands on the new
+            # branch rather than straddling two.
             _maybe_auto_branch(
                 self.context.project_path,
                 self.context.task,
@@ -383,85 +165,11 @@ class RudraAgent:
             )
 
             self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
-
-            # Phase 1: Planning
-            await self._run_planner_phase()
-
-            if not self.plan_path.exists():
-                return AgentResult(
-                    success=False,
-                    message="Planner did not create PLAN.md — cannot proceed.",
-                )
-
-            plan_content = self.plan_path.read_text(encoding="utf-8")
-            pending_files = _parse_pending_files(plan_content)
-            total = len(pending_files)
-
-            if total == 0:
-                return AgentResult(
-                    success=False,
-                    message="PLAN.md has no pending files.",
-                )
-
-            self._log_always(f"\n[bold]📋 Plan: {total} file(s) to generate[/bold]")
-
-            MAX_CODER_RETRIES = 2
-
-            # Phase 2: Coding loop
-            files_created: list[str] = []
-            for i, filename in enumerate(pending_files, start=1):
-                self._log_always(
-                    f"\n[bold green]🟢 Coding [{i}/{total}]: {filename} "
-                    f"(model: {self.context.coder_model})[/bold green]"
-                )
-
-                # For files after the first, ask planner to write current_task.md
-                if i > 1:
-                    self._log_always(f"[dim]  Requesting task assignment for {filename}...[/dim]")
-                    await self._request_task_assignment(filename)
-
-                # Verify current_task.md exists before running coder
-                task_assignment_path = self.plan_path.parent / "current_task.md"
-                if not task_assignment_path.exists():
-                    self._log_always(f"[red]🔴 No current_task.md for {filename} — skipping[/red]")
-                    continue
-
-                file_written = False
-                for attempt in range(1 + MAX_CODER_RETRIES):
-                    if attempt > 0:
-                        self._log_always(
-                            f"[yellow]🔄 Retry {attempt}/{MAX_CODER_RETRIES} for {filename}[/yellow]"
-                        )
-
-                    await self._run_coder_for_file(filename, i, attempt=attempt)
-
-                    file_on_disk = self.context.project_path / filename
-                    if file_on_disk.exists():
-                        _check_off_file(self.plan_path, filename)
-                        files_created.append(filename)
-                        self._log_always(f"[green]✅ {filename} written[/green]")
-                        file_written = True
-                        break
-                    else:
-                        self._log_always(
-                            f"[red]🔴 {filename} not found on disk (attempt {attempt + 1})[/red]"
-                        )
-
-                if not file_written:
-                    self._log_always(
-                        f"[bold red]⛔ {filename} failed after {1 + MAX_CODER_RETRIES} attempts — skipping[/bold red]"
-                    )
-
-            self._log_always(
-                f"\n[bold]🏁 Complete: {len(files_created)}/{total} files generated[/bold]"
-            )
-
-            return AgentResult(
-                success=len(files_created) > 0,
-                message=f"{len(files_created)}/{total} files generated",
-                files_created=files_created,
-                files_modified=[],
-                iterations=total,
+            return await run_loop(
+                self.context.task,
+                context=self._loop_context,
+                planner=self._planner_callback,
+                ledger=self._ledger,
             )
 
         except Exception:
@@ -657,7 +365,9 @@ async def create_main_agent(
 
     paths = ensure_layout(project_path)
 
-    install_path_normalizer(project_path, plan_path=paths.plan_md)
+    # No plan path: PLAN.md went with the checklist in Step 9c, so the
+    # normalizer's planned-filename hint has nothing to read (A1.65).
+    install_path_normalizer(project_path)
 
     filesystem_backend = build_backend(cfg, project_path)
 
@@ -678,8 +388,30 @@ async def create_main_agent(
 
     session_id = uuid.uuid4().hex[:12]
 
-    from rudra.agent.planner_agent import create_planner_agent
+    from rudra.agent.planner_agent import consult_planner, create_planner_agent
+    from rudra.loop import Ledger, LoopContext
+    from rudra.subagents import SubagentContext
 
+    subagent_context = SubagentContext(
+        project_path=project_path,
+        backend=filesystem_backend,
+        gate=gate,
+        console=console,
+        cfg=cfg,
+        checkpointer=checkpointer,
+        session_id=session_id,
+    )
+    loop_context = LoopContext(
+        subagents=subagent_context,
+        project_path=project_path,
+        console=console,
+        cfg=cfg,
+        paths=paths,
+    )
+
+    # One Ledger, shared by reference: the planner's tools mutate it and the
+    # loop reads it back. Two objects would leave the loop with no tasks.
+    ledger = Ledger()
     planner = create_planner_agent(
         task=task,
         project_path=project_path,
@@ -688,23 +420,29 @@ async def create_main_agent(
         checkpointer=checkpointer,
         console=console,
         gate=gate,
+        ledger=ledger,
+        paths=paths,
     )
 
-    coder_config = {
-        "tech_stack_content": tech_stack_content,
-        "filesystem_backend": filesystem_backend,
-        "checkpointer": checkpointer,
-        "gate": gate,
-    }
-
-    plan_path = paths.plan_md
+    async def planner_callback(run_ledger, request, *, reason, task=None):
+        await consult_planner(
+            planner,
+            run_ledger,
+            request,
+            reason=reason,
+            task=task,
+            gate=gate,
+            console=console,
+            session_id=session_id,
+        )
 
     return RudraAgent(
         context=context,
         planner_agent=planner,
         session_id=session_id,
         db_conn=db_conn,
-        coder_config=coder_config,
-        plan_path=plan_path,
+        loop_context=loop_context,
+        planner_callback=planner_callback,
+        ledger=ledger,
         gate=gate,
     )

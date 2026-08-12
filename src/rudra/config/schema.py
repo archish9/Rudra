@@ -72,6 +72,11 @@ class AgentConfig:
     """Agent execution settings."""
 
     verbose: bool
+    # How many times the fix loop may retry one task before giving up
+    # (C6.5a). Three matches the convention the deleted file-by-file
+    # orchestrator used. The loop usually stops sooner than this, on
+    # no-progress detection -- see loop/bounds.py.
+    max_fix_attempts: int = 3
 
 
 @dataclass(frozen=True)
@@ -142,7 +147,7 @@ DEFAULTS: dict[str, Any] = {
             "timeout": 300,
         }
     },
-    "agent": {"verbose": True},
+    "agent": {"verbose": True, "max_fix_attempts": 3},
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},
     "tools": {

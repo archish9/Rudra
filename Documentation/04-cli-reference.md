@@ -248,7 +248,7 @@ rudra "refactor the parser" --verbose
 | `1` | Something failed |
 | `2` | `mode = "ask"` was set but stdin is not a terminal — nothing ran. For `rudra verify`, also a denied command, a missing tool, or an internal error |
 
-Be aware of one rough edge: if a model call fails partway through a run, Rudra exits `1` even if files were already written successfully. Check `.rudra/run/PLAN.md` and your working directory before assuming nothing happened.
+Be aware of one rough edge: if a model call fails partway through a run, Rudra exits `1` even if files were already written successfully. Check `.rudra/run/ledger.json` and your working directory before assuming nothing happened — tasks marked `done` genuinely passed the gate.
 
 `rudra models test` and `rudra doctor` exit `1` when a check fails, which makes them usable in a setup script.
 

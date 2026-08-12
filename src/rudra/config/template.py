@@ -42,6 +42,11 @@ model = "qwen3-coder:32b"
 [agent]
 verbose = true
 
+# How many times the fix loop retries one task before giving up. It
+# usually stops sooner: two attempts that fail identically count as no
+# progress and stop immediately.
+max_fix_attempts = 3
+
 [permissions]
 # ask | auto | plan
 #
