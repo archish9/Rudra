@@ -89,7 +89,7 @@ def test_allowed_reads_are_not_recorded(tmp_path):
     """Hundreds of read_file lines would bury the signal (spec §6.7)."""
     log_path = tmp_path / "permissions.jsonl"
     log = AuditLog(log_path)
-    for tool in ("read_file", "ls", "glob", "grep", "update_plan"):
+    for tool in ("read_file", "ls", "glob", "grep", "add_tasks"):
         log.record(
             tool,
             "src/app.py",

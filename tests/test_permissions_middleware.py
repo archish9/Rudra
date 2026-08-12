@@ -140,7 +140,10 @@ def test_a_denial_is_written_to_the_audit_log(tmp_path):
 
 
 def test_control_plane_tools_pass_through_untouched(tmp_path):
-    """update_plan is not a backend tool; it must not be gated (spec §4.6)."""
+    """add_tasks is not a backend tool; it must not be gated (spec §4.6).
+
+    Step 9c replaced update_plan with the ledger tools that superseded it.
+    """
     engine = PermissionEngine(
         mode="plan", allow=(), deny=(), floor_disable=(), project_root=tmp_path
     )
@@ -148,7 +151,7 @@ def test_control_plane_tools_pass_through_untouched(tmp_path):
     calls = []
 
     class Request:
-        tool_call = {"name": "update_plan", "args": {"plan_markdown": "- [ ] a.py"}, "id": "c"}
+        tool_call = {"name": "add_tasks", "args": {"descriptions": ["write it"]}, "id": "c"}
 
     middleware.wrap_tool_call(Request(), lambda request: calls.append(request) or "handled")
     assert calls, "control-plane tool was gated when it must pass through"
