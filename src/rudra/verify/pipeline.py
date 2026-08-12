@@ -31,7 +31,7 @@ from rudra.stacks.detect import (
 from rudra.stacks.profile import MISSING_TOOL as RESOLUTION_MISSING_TOOL
 from rudra.stacks.profile import NOT_APPLICABLE as RESOLUTION_NOT_APPLICABLE
 from rudra.stacks.profile import CommandResolution, StackProfile
-from rudra.testing.runner import MAX_TAIL_CHARS
+from rudra.testing.runner import MAX_TAIL_CHARS, run_tests
 from rudra.verify.result import (
     COVERED_BY,
     DENIED,
@@ -511,9 +511,101 @@ def typecheck_stage(
     )
 
 
-def test_stage(project_path, *, gate, console, cfg, _override=None) -> StageResult:
-    """Replaced in Task 6."""
-    return StageResult(name="test", outcome=PASSED, blocking=True)
+def test_stage(
+    project_path: Path,
+    *,
+    gate: Any,
+    console: Any,
+    cfg: Any,
+    _override: list[str] | None = None,
+) -> StageResult:
+    """The project's own test suite, via run_tests (C3.6, Step 8).
+
+    Reused whole rather than reimplemented: TestResult already keeps
+    available / denied / timed_out / launch_error / no_tests_collected
+    distinct precisely so a completion gate can act on them
+    (testing/runner.py:39-43), and duplicating that logic here would give
+    the two callers two different answers.
+    """
+    result = run_tests(
+        Path(project_path), gate=gate, console=console, cfg=cfg, _command_override=_override
+    )
+
+    if not result.available:
+        return StageResult(
+            name="test",
+            outcome=NOT_APPLICABLE,
+            blocking=True,
+            stack=result.stack,
+            detail="this project declares no test command",
+        )
+    if result.denied:
+        return StageResult(
+            name="test",
+            outcome=DENIED,
+            blocking=True,
+            escalate=True,
+            command=result.command,
+            stack=result.stack,
+            detail=result.output_tail or "denied by the permission gate",
+        )
+    if result.launch_error is not None:
+        return StageResult(
+            name="test",
+            outcome=MISSING_TOOL,
+            blocking=True,
+            escalate=True,
+            command=result.command,
+            stack=result.stack,
+            detail=result.launch_error,
+            docs_anchor=_DOCS,
+        )
+    if result.timed_out:
+        return StageResult(
+            name="test",
+            outcome=FAILED,
+            blocking=True,
+            command=result.command,
+            stack=result.stack,
+            detail=f"the suite timed out after {cfg.tools.test_timeout}s -- raise "
+            "[tools] test_timeout if it is genuinely slow",
+            output_tail=result.output_tail,
+        )
+    if result.no_tests_collected:
+        # Neither a pass nor a failure: the code was never exercised. Calling
+        # it a failure sends the fix loop to repair working code (A1.57).
+        return StageResult(
+            name="test",
+            outcome=NOT_APPLICABLE,
+            blocking=True,
+            command=result.command,
+            stack=result.stack,
+            detail="no tests were collected -- the suite ran but found nothing to execute",
+        )
+    if result.passed:
+        return StageResult(
+            name="test",
+            outcome=PASSED,
+            blocking=True,
+            command=result.command,
+            stack=result.stack,
+            detail="" if result.total is None else f"{result.total} run",
+        )
+    counted = (
+        ""
+        if result.total is None
+        else f"{result.total} run, {result.failed} failed, {result.skipped} skipped"
+    )
+    return StageResult(
+        name="test",
+        outcome=FAILED,
+        blocking=True,
+        command=result.command,
+        stack=result.stack,
+        findings=_parse_findings(result.output_tail),
+        output_tail=result.output_tail,
+        detail=counted,
+    )
 
 
 __all__ = ["run_pipeline", "stubs_stage", "syntax_stage"]
