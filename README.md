@@ -123,6 +123,14 @@ For everything else — which config files were found, which `.env` was read, wh
 rudra doctor
 ```
 
+To check the code itself rather than the setup — does it parse, do the types hold, do the tests pass, are there placeholders left behind:
+
+```bash
+rudra verify                 # deterministic gate: syntax, lint, typecheck, tests, stubs
+```
+
+No model is involved. Details in **[Verification](Documentation/10-verification.md)**.
+
 > **Your API key never goes in a config file.** `api_key_env` holds the *name* of an environment variable; the key itself lives in your environment or in `.env`, which is gitignored. Rudra reads the value at run time and never stores, logs, or prints it.
 
 ### Where settings come from

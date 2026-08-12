@@ -13,6 +13,7 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 | 7 | **[Development](07-development.md)** | Work on Rudra itself — tests, layout, conventions |
 | 8 | **[Project Status](08-project-status.md)** | Know what genuinely works and what doesn't |
 | 9 | **[Permissions](09-permissions.md)** | Approval prompts, allow/deny rules, the deny floor, the audit log |
+| 10 | **[Verification](10-verification.md)** | Run the deterministic gate, read its verdict, install the per-stack tools |
 
 ---
 
@@ -23,6 +24,8 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 **About to run it unattended** → [Permissions](09-permissions.md)
 
 **Something's broken** → [Troubleshooting](06-troubleshooting.md), or run `rudra models test` first — it usually names the problem for you
+
+**Checking whether generated code is actually finished** → [Verification](10-verification.md)
 
 **Tuning your setup** → [Configuration](02-configuration.md) → [Choosing a Model](03-providers.md)
 
@@ -40,6 +43,7 @@ Rudra is a local-first autonomous coding agent for the terminal. You describe wh
 rudra init                # scaffold .rudra/config.toml
 rudra models test         # confirm the model works
 rudra "write a Python CLI that reverses a string"
+rudra verify              # check the result: syntax, types, tests, placeholders
 ```
 
 It works with any model — local via Ollama, or hosted via OpenRouter, Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint. Switching takes one line of config.
@@ -48,4 +52,4 @@ Settings come from five layers — built-in defaults, your user config, the proj
 
 By default it asks before every write, edit, delete and command, and shows you a diff first. `--auto` skips the prompts for unattended runs — see [Permissions](09-permissions.md).
 
-**It's alpha.** It writes files well, runs commands, and can run your test suite and report what failed — but it does not yet act on the answer: a file counts as "done" when it exists on disk, not when it works. Review everything it produces, and see [Project Status](08-project-status.md) before pointing it at anything you care about.
+**It's alpha.** It writes files well, runs commands, and can run your test suite and report what failed — but an agent run does not yet act on the answer: a file counts as "done" when it exists on disk, not when it works. `rudra verify` will tell you the truth about the result ([Verification](10-verification.md)); wiring that verdict back into the run is the next step. Review everything it produces, and see [Project Status](08-project-status.md) before pointing it at anything you care about.

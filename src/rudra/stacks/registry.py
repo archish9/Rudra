@@ -16,6 +16,11 @@ PYTHON = StackProfile(
     # Django or stdlib-unittest project. resolve_test_command works it out
     # from the project's own layout. TODO.md A1.33(b).
     test_command=None,
+    # None for both: the answer depends on the project's own layout -- a
+    # virtualenv here, a declared devDependency for the Node family.
+    # resolve_lint_command / resolve_typecheck_command work them out.
+    lint_command=None,
+    typecheck_command=None,
     skip_dirs=frozenset(
         {
             "__pycache__",
@@ -36,6 +41,10 @@ RUST = StackProfile(
     name="rust",
     markers=("Cargo.toml",),
     test_command=("cargo", "test"),
+    # The only stack whose answer is fixed: both ship with the toolchain a
+    # Rust project already requires.
+    lint_command=("cargo", "clippy"),
+    typecheck_command=("cargo", "check"),
     skip_dirs=frozenset({"target"}),
     specificity=10,
 )
@@ -44,6 +53,9 @@ NODE = StackProfile(
     name="node",
     markers=("package.json",),
     test_command=None,  # read from scripts.test
+    # eslint only when declared; no typechecker unless the project is TypeScript.
+    lint_command=None,
+    typecheck_command=None,
     skip_dirs=frozenset({"node_modules", "dist", "build", "coverage"}),
     specificity=10,
 )
@@ -53,6 +65,8 @@ REACT = StackProfile(
     markers=("package.json",),
     dependency="react",
     test_command=None,
+    lint_command=None,
+    typecheck_command=None,
     skip_dirs=frozenset({"node_modules", "dist", "build", ".next", "out", "coverage"}),
     specificity=20,
 )
@@ -62,6 +76,8 @@ ANGULAR = StackProfile(
     markers=("angular.json",),
     requires=("package.json",),
     test_command=None,
+    lint_command=None,
+    typecheck_command=None,
     skip_dirs=frozenset({"node_modules", "dist", ".angular", "coverage"}),
     specificity=30,
 )

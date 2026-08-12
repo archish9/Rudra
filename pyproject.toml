@@ -55,11 +55,16 @@ dependencies = [
     "python-dotenv>=1.2.1",
     # Interactive REPL prompt with blinking cursor
     "prompt-toolkit>=3.0.0",
+    # Bundled verification toolchain (Step 9a, S9a.3). Runtime, not dev:
+    # `rudra verify` runs these against the user's project when the project
+    # brings none of its own. Invoked as `sys.executable -m <tool>`, never
+    # via PATH -- see stacks/detect.py::_bundled.
+    "ruff>=0.15.8",
+    "mypy>=1.14",
 ]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.8",
     "pytest>=9.0.2",
 ]
 

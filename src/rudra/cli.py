@@ -487,6 +487,67 @@ def doctor_command(
     )
 
 
+@app.command("verify")
+def verify_command(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+    scan_all: bool = typer.Option(
+        False, "--all", help="Scan every source file, not just the ones git reports as changed"
+    ),
+    changed: Optional[list[Path]] = typer.Option(
+        None, "--changed", help="Scope the stub scan to these files (repeatable)"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+) -> None:
+    """Run the deterministic verification gate: syntax, lint, typecheck, tests, stubs."""
+    import json as json_module
+
+    from rudra.permissions import build_gate
+    from rudra.state.paths import ensure_layout
+    from rudra.verify import (
+        changed_files_from_git,
+        exit_code,
+        render,
+        source_files,
+        to_dict,
+        verify_project,
+    )
+
+    if scan_all and changed:
+        # Silently letting one win would make the report's scope a guess.
+        console.print("[red]--all and --changed are mutually exclusive.[/red]")
+        raise typer.Exit(code=2)
+
+    project_path = get_project_path(project_dir)
+    cfg = _load_config_or_exit(project_dir)
+    ensure_layout(project_path)
+    gate = build_gate(cfg, project_path)
+    quiet = Console(quiet=True) if as_json else console
+
+    if changed:
+        files: tuple[str, ...] = tuple(str(path) for path in changed)
+    elif scan_all:
+        files = source_files(project_path)
+    else:
+        from_git = changed_files_from_git(project_path, gate=gate, console=quiet, cfg=cfg)
+        if from_git is None:
+            # Not a repo. Scanning nothing would report a clean stub stage
+            # over an unexamined tree, so scan everything and say so.
+            files = source_files(project_path)
+            if not as_json:
+                console.print("[dim]Not a git repository — scanning every source file.[/dim]")
+        else:
+            files = from_git
+
+    report = verify_project(project_path, changed_files=files, gate=gate, console=quiet, cfg=cfg)
+
+    if as_json:
+        console.print_json(json_module.dumps(to_dict(report)))
+    else:
+        render(report, console)
+
+    raise typer.Exit(code=exit_code(report))
+
+
 @app.command("init")
 def init_command(
     project_dir: Optional[Path] = typer.Option(

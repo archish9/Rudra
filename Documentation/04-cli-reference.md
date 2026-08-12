@@ -172,6 +172,44 @@ MCP servers, skills, and memory aren't checked because they don't exist yet.
 
 ---
 
+## `rudra verify`
+
+Runs the deterministic verification gate over the project — syntax, lint,
+typecheck, tests, and a stub scan. No model is involved.
+
+```bash
+rudra verify                        # the files git reports as changed
+rudra verify --all                  # every source file in the project
+rudra verify --changed src/a.py     # name files explicitly (repeatable)
+rudra verify --json                 # machine-readable
+```
+
+| Flag | Means |
+|---|---|
+| `-d`, `--project-dir PATH` | Project to verify. Defaults to the current directory |
+| `--all` | Scan every source file, not just what git reports as changed |
+| `--changed PATH` | Scope the stub scan to these files. Repeatable |
+| `--json` | Machine-readable output instead of the table |
+
+`--all` and `--changed` are mutually exclusive.
+
+| Exit code | Means |
+|---|---|
+| `0` | Passed. The verdict still names any stage that produced no judgement |
+| `1` | A blocking stage failed — syntax, typecheck, test, or stubs |
+| `2` | Something needs you: a denied command, a missing tool, or an internal error |
+
+Lint never fails a task. It is reported in full and ignored by the verdict.
+
+Stages that run commands go through the permission gate as `execute`, so under
+`--auto` without `--allow-shell` — and under `mode = "ask"` with no terminal —
+they are denied and the run exits `2`.
+
+See [Verification](10-verification.md) for the stages, the outcomes, and the
+per-stack install matrix.
+
+---
+
 ## Global flags
 
 | Flag | Short | Does |
@@ -208,7 +246,7 @@ rudra "refactor the parser" --verbose
 |---|---|
 | `0` | Success |
 | `1` | Something failed |
-| `2` | `mode = "ask"` was set but stdin is not a terminal — nothing ran |
+| `2` | `mode = "ask"` was set but stdin is not a terminal — nothing ran. For `rudra verify`, also a denied command, a missing tool, or an internal error |
 
 Be aware of one rough edge: if a model call fails partway through a run, Rudra exits `1` even if files were already written successfully. Check `.rudra/run/PLAN.md` and your working directory before assuming nothing happened.
 

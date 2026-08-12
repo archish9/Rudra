@@ -38,7 +38,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ---
 
-## 3. Current Architecture (as of 2026-08-10, Step 7)
+## 3. Current Architecture (as of 2026-08-12, Step 9a)
 
 ```
 src/rudra/
@@ -53,7 +53,13 @@ src/rudra/
 │                           Renders argv, asks the engine as execute:<command>
 ├── git/                    core.py — Python git API (C3.5). Orchestrator-facing
 ├── testing/                runner.py → TestResult, parse.py counts (C3.6).
-│                           Step 9's fix loop consumes this directly
+│                           Step 9c's fix loop consumes this directly
+├── verify/                 The deterministic gate (Step 9a, C6.6):
+│                           syntax · lint · typecheck · test · stubs.
+│                           Blocking except lint. Six outcomes, not two.
+│                           VerifyReport.escalate splits fix-loop input
+│                           (iterate) from user action (stop). Calls
+│                           run_gated and run_tests; starts no subprocess
 ├── agent/
 │   ├── main_agent.py       RudraAgent — hand-rolled planner→coder orchestration loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -248,7 +254,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-uv run pytest -q                     # 661 passed, 2 skipped at Step 8; must never go down
+uv run pytest -q                     # 742 passed, 2 skipped at Step 9a; must never go down
 git config core.hooksPath .githooks  # once per clone: run all three gates on push (A3.7)
 .venv/bin/rudra --version            # Rudra v0.2.0
 
@@ -256,6 +262,8 @@ git config core.hooksPath .githooks  # once per clone: run all three gates on pu
 .venv/bin/rudra config list          # every effective value + which layer set it
 .venv/bin/rudra doctor --offline     # diagnose config, layout, deps; --offline skips network
 .venv/bin/rudra models test          # verify each role is reachable and can call tools
+.venv/bin/rudra verify               # deterministic gate over the changed files (Step 9a)
+.venv/bin/rudra verify --all --json  # whole project, machine-readable. Exit 0/1/2
 .venv/bin/rudra "build a flask app"  # single-shot; prompts before each write and command
 .venv/bin/rudra --auto "..."         # unattended: files yes, commands no (A1.49)
 .venv/bin/rudra --auto --allow-shell "..."   # ...and commands too, opted in explicitly
@@ -287,6 +295,12 @@ runs no tests.** `run_tests` is gated as `execute` — correctly, since
 run cannot verify its own output unless shell is opted in. A
 loop-engineering run wants `--auto --allow-shell`. Step 9's fix loop
 inherits this rather than working around it.
+
+**Step 9a extends this to `rudra verify`.** Its lint, typecheck, and test
+stages are commands, so the same rule applies: under `--auto` without
+`--allow-shell`, and under `mode = "ask"` with no terminal, they report
+`denied`, the verdict escalates, and the command exits 2. Only Python's
+`ast.parse` syntax check and the stub scan are native and always run.
 
 `ask` mode is unaffected and keeps full shell, because there the user reads
 each command before it runs. An explicit `allow = ["execute:pytest*"]` also
