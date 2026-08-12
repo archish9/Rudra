@@ -51,6 +51,7 @@ class RudraPaths:
     run: Path
     checkpoints_db: Path
     plan_md: Path
+    ledger_json: Path
     current_task_md: Path
     tech_stack_md: Path
     session_id_txt: Path
@@ -73,6 +74,10 @@ def rudra_paths(project_root: Path) -> RudraPaths:
         run=run,
         checkpoints_db=run / "checkpoints.db",
         plan_md=run / "PLAN.md",
+        # The task ledger (Step 9c, C6.10). Volatile: a run's tasks are
+        # meaningless to the next run's request, so it is never resumed --
+        # that is C7.2's --continue.
+        ledger_json=run / "ledger.json",
         current_task_md=run / "current_task.md",
         tech_stack_md=run / "tech_stack.md",
         session_id_txt=run / "session_id.txt",
