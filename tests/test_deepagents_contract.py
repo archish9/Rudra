@@ -311,3 +311,155 @@ def test_execute_is_registered_but_non_functional_without_a_sandbox(tmp_path):
         backend=FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True),
     )
     assert "execute" in _tool_names(agent)
+
+
+# --- Step 9b: the three upstream facts the subagent design rests on ----------
+#
+# These exist so a deepagents upgrade fails a test that names the decision
+# it invalidates, rather than silently changing behaviour. Same role
+# test_permissions_still_rejected_with_execute_backend plays for U.7.
+
+
+def _minimal_subagent(name: str) -> dict:
+    return {
+        "name": name,
+        "description": f"{name} for contract testing",
+        "system_prompt": "Do nothing. Stop.",
+        "model": ScriptedToolModel(),
+        "tools": [],
+    }
+
+
+def test_a_supplied_general_purpose_spec_suppresses_the_auto_added_one(tmp_path):
+    """S9b.2 rests on this: graph.py:751 skips the auto-add on a name match.
+
+    If upstream changes the name or the check, Rudra silently regains an
+    ungated subagent carrying the main agent's whole tool list.
+    """
+    from deepagents import create_deep_agent
+    from deepagents.backends.filesystem import FilesystemBackend
+
+    backend = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+    agent = create_deep_agent(
+        model=ScriptedToolModel(),
+        tools=[],
+        backend=backend,
+        subagents=[_minimal_subagent("general-purpose")],
+    )
+
+    # Count registered agents, not mentions: the task tool's description
+    # also names general-purpose in its usage notes, so a substring count
+    # would pass for the wrong reason.
+    description = _tools_by_name(agent)["task"].description
+    registered = [
+        line for line in description.splitlines() if line.startswith("- general-purpose: ")
+    ]
+    assert len(registered) == 1, f"expected exactly one general-purpose subagent, got {registered}"
+    assert "for contract testing" in registered[0], (
+        "the listed general-purpose is upstream's, not the supplied spec -- "
+        "the suppression at graph.py:751 no longer works"
+    )
+
+
+def test_top_level_middleware_does_not_reach_subagents(tmp_path):
+    """The asymmetry S9b.2 exists to handle (graph.py:666-703).
+
+    Rudra injects its permission middleware into every subagent spec
+    because the parent's does not propagate. If that ever changes, the
+    per-spec injection becomes redundant rather than wrong -- but the
+    reason for it changes, and the spec should be corrected.
+    """
+    import inspect as _inspect
+
+    from deepagents import graph as deepagents_graph
+
+    source = _inspect.getsource(deepagents_graph)
+    # The subagent stack is built fresh; only spec["middleware"] is applied.
+    assert 'spec.get("middleware", [])' in source, (
+        "subagents no longer take their middleware solely from the spec"
+    )
+
+
+def test_top_level_interrupt_on_does_reach_subagents():
+    """The other half: graph.py:718 inherits interrupt_on.
+
+    Rudra relies on this for approvals inside subagents; if it stops being
+    true, every subagent silently loses its prompts under `ask`.
+    """
+    import inspect as _inspect
+
+    from deepagents import graph as deepagents_graph
+
+    source = _inspect.getsource(deepagents_graph)
+    assert 'spec.get("interrupt_on", interrupt_on)' in source, (
+        "subagents no longer inherit the parent's interrupt_on"
+    )
+
+
+def _ollama_model(tmp_path, monkeypatch):
+    """A real ChatOllama built the way Rudra builds one. No network."""
+    from rudra.config import build_config
+    from rudra.llm import build_model
+
+    monkeypatch.delenv("RUDRA_MODEL", raising=False)
+    rudra = tmp_path / ".rudra"
+    rudra.mkdir(parents=True, exist_ok=True)
+    (rudra / "config.toml").write_text(
+        '[model.default]\nprovider = "ollama"\n'
+        'base_url = "http://localhost:11434"\nmodel = "qwen3:32b"\n',
+        encoding="utf-8",
+    )
+    return build_model("default", build_config(tmp_path))
+
+
+def test_a_provider_harness_profile_does_match_a_prebuilt_model(tmp_path, monkeypatch):
+    """A1.35 holds for BUILT-IN profiles; a provider-keyed one still matches.
+
+    A1.35 is confirmed, not superseded: every built-in is a model-level
+    `provider:model` key, and none of them can match an Ollama tag. But
+    _harness_profile_for_model has a provider-only tier
+    (harness_profiles.py:1087) that A1.35 does not mention, and it works on
+    a pre-built instance because _get_ls_params reports ls_provider.
+
+    That is what makes U.10 reachable at provider granularity. See A1.60.
+    """
+    from deepagents.profiles.harness import harness_profiles as hp
+
+    model = _ollama_model(tmp_path, monkeypatch)
+
+    # Built-ins load lazily; force it so this asserts against the real
+    # registry rather than an empty one (harness_profiles.py:948-950).
+    hp._get_harness_profile("openai")
+    assert hp._HARNESS_PROFILES, "built-in profiles failed to load"
+    assert not any(":" not in key for key in hp._HARNESS_PROFILES), (
+        "a built-in now uses a provider-only key; A1.35's reasoning needs re-checking"
+    )
+
+    # No built-in matches an Ollama model -- A1.35's claim.
+    assert hp._harness_profile_for_model(model, None).base_system_prompt is None
+
+    monkeypatch.setattr(hp, "_HARNESS_PROFILES", dict(hp._HARNESS_PROFILES))
+    hp.register_harness_profile("ollama", hp.HarnessProfile(base_system_prompt="MATCHED"))
+    matched = hp._harness_profile_for_model(model, None)
+    assert matched.base_system_prompt == "MATCHED", (
+        "a provider-keyed harness profile no longer matches a pre-built instance"
+    )
+
+
+def test_an_ollama_model_level_profile_key_cannot_be_registered(tmp_path, monkeypatch):
+    """A1.61: Ollama tags collide with the profile key separator.
+
+    A model-level key is `provider:model`, but an Ollama model name is
+    itself `family:size` -- so `ollama:qwen3:32b` carries two colons and
+    validate_profile_key rejects it (profiles/_keys.py:34). Per-model
+    tuning is therefore unreachable for the provider Rudra targets first,
+    independently of anything Rudra does.
+    """
+    import pytest
+    from deepagents.profiles.harness.harness_profiles import (
+        HarnessProfile,
+        register_harness_profile,
+    )
+
+    with pytest.raises(ValueError, match="more than one ':'"):
+        register_harness_profile("ollama:qwen3:32b", HarnessProfile())

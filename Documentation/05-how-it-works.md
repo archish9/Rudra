@@ -4,6 +4,7 @@ What actually happens between typing a prompt and finding files on disk.
 
 - [The short story](#the-short-story)
 - [The two agents](#the-two-agents)
+- [The subagents](#the-subagents)
 - [Step by step](#step-by-step)
 - [The `.rudra/` folder](#the-rudra-folder)
 - [How Rudra decides it's finished](#how-rudra-decides-its-finished)
@@ -69,6 +70,25 @@ Created fresh for every single file, with a clean conversation each time. It:
 - stops
 
 Starting fresh each time keeps the context small and stops earlier files' details from bleeding into later ones.
+
+---
+
+## The subagents
+
+Rudra ships four subagents. Each has its own model role and its own tool set, and **the tool set is the enforcement** — a subagent cannot call a tool it was never given.
+
+| Subagent | Model role | Can write? | Can run commands? |
+|---|---|---|---|
+| `coder` | `coder` | yes | no |
+| `tester` | `tester` | yes | yes |
+| `reviewer` | `reviewer` | **no** | **no** |
+| `general-purpose` | `default` | **no** | **no** |
+
+The reviewer has no `write_file`, `edit_file`, `delete` or `execute` tool at all. It reads the diff, reports what it finds, and cannot act on it. That split is deliberate: the deterministic gate (`rudra verify`) decides done-or-not, and the reviewer only comments on quality — its findings never block anything.
+
+Every subagent goes through the same permission gate as the main agent, so the same approval prompts, allow/deny rules and deny floor apply inside them.
+
+**They are not wired into a run yet.** Today's flow is still the planner-and-coder loop described above; the subagents exist, are tested, and are called directly from Python. Connecting them to a real loop is the next step — see [Project Status](08-project-status.md).
 
 ---
 
