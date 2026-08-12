@@ -25,8 +25,7 @@ def test_volatile_files_sit_under_run(tmp_path: Path) -> None:
     run = tmp_path / ".rudra" / "run"
     assert paths.run == run
     assert paths.checkpoints_db == run / "checkpoints.db"
-    assert paths.plan_md == run / "PLAN.md"
-    assert paths.current_task_md == run / "current_task.md"
+    assert paths.ledger_json == run / "ledger.json"
     assert paths.tech_stack_md == run / "tech_stack.md"
     assert paths.session_id_txt == run / "session_id.txt"
     assert paths.logs == run / "logs"

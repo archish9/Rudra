@@ -89,10 +89,46 @@ def test_task_anchor_is_present_when_compat_enables_it(tmp_path: Path) -> None:
     assert "TaskAnchorMiddleware" in names
 
 
-def test_task_anchor_is_absent_from_the_coder_by_default(tmp_path: Path) -> None:
-    from rudra.agent.coder_agent import build_coder_middleware
+def test_task_anchor_is_absent_from_the_subagents(tmp_path: Path) -> None:
+    """Step 9c: subagents never take TaskAnchorMiddleware at all.
 
-    names = [type(m).__name__ for m in build_coder_middleware(compat_task_anchor=False)]
+    It is a D4 compat shim for qwen3:14b losing the task mid-run, default
+    off since C1.8, and a subagent's prompt is already narrow -- so
+    subagents/build.py does not wire it even when [compat] turns it on.
+    """
+    from dataclasses import dataclass
+    from typing import Any
+
+    from rich.console import Console
+
+    from rudra.subagents.build import _middleware_for
+    from rudra.subagents.registry import REGISTRY
+
+    @dataclass
+    class Compat:
+        task_anchor: bool = True
+        sandbox_paths: bool = False
+
+    @dataclass
+    class Cfg:
+        compat: Any = None
+
+    @dataclass
+    class Ctx:
+        project_path: Any = None
+        backend: Any = None
+        gate: Any = None
+        console: Any = None
+        cfg: Any = None
+
+    context = Ctx(
+        project_path=tmp_path,
+        backend=object(),
+        gate=None,
+        console=Console(quiet=True),
+        cfg=Cfg(compat=Compat()),
+    )
+    names = [type(m).__name__ for m in _middleware_for(REGISTRY["coder"], context)]
     assert "TaskAnchorMiddleware" not in names
     assert "FixWriteParamsMiddleware" in names
 

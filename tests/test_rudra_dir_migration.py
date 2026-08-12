@@ -3,6 +3,10 @@
 The dangerous failure mode is a path that moved in code while an
 agent-facing prompt still names the old one — the coder would then write
 where nothing reads. See TODO.md A1.25 for how that class surfaced before.
+
+Step 9c removed the class rather than guarding it: the ledger replaced
+PLAN.md and current_task.md, and it is reached only through tools, so no
+prompt names a state path any more.
 """
 
 from pathlib import Path
@@ -11,29 +15,39 @@ from rudra.state.paths import rudra_paths
 
 
 def _tools(project_path: Path) -> dict:
-    from rudra.tools.planning_tools import create_planning_tools
+    from rudra.loop.ledger import Ledger
+    from rudra.loop.tools import create_ledger_tools
 
-    return {tool.name: tool for tool in create_planning_tools(project_path)}
-
-
-def test_planning_tools_write_plan_under_run(tmp_path: Path) -> None:
-    _tools(tmp_path)["update_plan"].invoke({"plan_markdown": "- [ ] main.py"})
-    assert rudra_paths(tmp_path).plan_md.exists()
-    assert not (tmp_path / ".rudra" / "PLAN.md").exists()
+    ledger = Ledger()
+    path = rudra_paths(project_path).ledger_json
+    return {tool.name: tool for tool in create_ledger_tools(ledger, path)}
 
 
-def test_read_plan_reads_the_run_location(tmp_path: Path) -> None:
+def test_the_ledger_is_written_under_run(tmp_path: Path) -> None:
+    _tools(tmp_path)["add_tasks"].invoke({"descriptions": ["write the parser"]})
+    assert rudra_paths(tmp_path).ledger_json.exists()
+    assert not (tmp_path / ".rudra" / "ledger.json").exists()
+
+
+def test_read_ledger_reads_the_run_location(tmp_path: Path) -> None:
     tools = _tools(tmp_path)
-    tools["update_plan"].invoke({"plan_markdown": "- [ ] main.py"})
-    assert "main.py" in tools["read_plan"].invoke({})
+    tools["add_tasks"].invoke({"descriptions": ["write the parser"]})
+    assert "write the parser" in tools["read_ledger"].invoke({})
 
 
-def test_task_assignment_lands_under_run(tmp_path: Path) -> None:
-    _tools(tmp_path)["write_task_assignment"].invoke(
-        {"file_path": "main.py", "instructions": "do it"}
-    )
-    assert rudra_paths(tmp_path).current_task_md.exists()
-    assert not (tmp_path / ".rudra" / "current_task.md").exists()
+def test_the_planner_prompt_names_no_state_paths(tmp_path: Path) -> None:
+    """Step 9c's version of this guard, and a stronger one.
+
+    The old risk was a prompt naming a path that had moved. The ledger is
+    reached only through tools, so the prompt names no path at all -- there
+    is nothing left to drift.
+    """
+    from rudra.agent.planner_agent import build_planner_prompt
+
+    prompt = build_planner_prompt("build it", tmp_path)
+    assert ".rudra" not in prompt
+    assert "PLAN.md" not in prompt
+    assert "ledger.json" not in prompt
 
 
 def test_durable_files_did_not_move(tmp_path: Path) -> None:

@@ -166,21 +166,34 @@ def test_planner_puts_the_permission_gate_first(monkeypatch, tmp_path):
         reset_config()
 
 
+def _subagent_context(tmp_path, cfg, gate):
+    """A SubagentContext with a throwaway backend, for construction tests."""
+    from rich.console import Console
+
+    from rudra.subagents import SubagentContext
+
+    return SubagentContext(
+        project_path=tmp_path,
+        backend=object(),
+        gate=gate,
+        console=Console(quiet=True),
+        cfg=cfg,
+    )
+
+
 def test_coder_puts_the_permission_gate_first(monkeypatch, tmp_path):
-    from rudra.agent.coder_agent import create_coder_agent
+    """Step 9c: the coder is a registry entry built by subagents/build.py."""
     from rudra.config.loader import build_config, reset_config
     from rudra.permissions import build_gate
+    from rudra.subagents.build import build_agent
+    from rudra.subagents.registry import REGISTRY
 
     reset_config()
     try:
-        gate = build_gate(build_config(tmp_path), tmp_path)
-        captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
-        create_coder_agent(
-            tech_stack_content="",
-            filesystem_backend=object(),
-            checkpointer=None,
-            gate=gate,
-        )
+        cfg = build_config(tmp_path)
+        gate = build_gate(cfg, tmp_path)
+        captured = _record_create_deep_agent(monkeypatch, "rudra.subagents.build")
+        build_agent(REGISTRY["coder"], _subagent_context(tmp_path, cfg, gate))
         assert captured["middleware"][0] is gate.middleware
         assert captured["interrupt_on"] is gate.interrupt_on
     finally:
@@ -189,11 +202,18 @@ def test_coder_puts_the_permission_gate_first(monkeypatch, tmp_path):
 
 def test_no_gate_means_no_interrupt_config(monkeypatch, tmp_path):
     """A caller without a gate must still build a working agent."""
-    from rudra.agent.coder_agent import create_coder_agent
+    from rudra.config.loader import build_config, reset_config
+    from rudra.subagents.build import build_agent
+    from rudra.subagents.registry import REGISTRY
 
-    captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
-    create_coder_agent(tech_stack_content="", filesystem_backend=object(), checkpointer=None)
-    assert captured["interrupt_on"] is None
+    reset_config()
+    try:
+        cfg = build_config(tmp_path)
+        captured = _record_create_deep_agent(monkeypatch, "rudra.subagents.build")
+        build_agent(REGISTRY["coder"], _subagent_context(tmp_path, cfg, None))
+        assert captured["interrupt_on"] is None
+    finally:
+        reset_config()
 
 
 def test_main_agent_constructs_filesystem_backend_with_virtual_mode():
@@ -289,17 +309,24 @@ def test_the_interaction_tools_survive_the_ledger_switch(monkeypatch, tmp_path):
     assert "ask_user" in names
 
 
-def test_coder_still_has_no_tools(monkeypatch, tmp_path):
-    """coder_agent.py tells it to STOP after one write_file.
+def test_the_coder_still_has_no_rudra_tools(monkeypatch, tmp_path):
+    """The coder writes files; it does not run tests or read diffs.
 
-    A test runner in the same context window would contradict its own
-    instructions. Step 9 revisits this when subagents land (C6.2).
+    Step 9c keeps that split: the loop runs the gate, the tester writes
+    tests, the reviewer reads the diff.
     """
-    from rudra.agent.coder_agent import create_coder_agent
+    from rudra.config.loader import build_config, reset_config
+    from rudra.subagents.build import build_agent
+    from rudra.subagents.registry import REGISTRY
 
-    captured = _record_create_deep_agent(monkeypatch, "rudra.agent.coder_agent")
-    create_coder_agent(tech_stack_content="", filesystem_backend=object(), checkpointer=None)
-    assert captured["tools"] == []
+    reset_config()
+    try:
+        cfg = build_config(tmp_path)
+        captured = _record_create_deep_agent(monkeypatch, "rudra.subagents.build")
+        build_agent(REGISTRY["coder"], _subagent_context(tmp_path, cfg, None))
+        assert captured["tools"] == []
+    finally:
+        reset_config()
 
 
 def test_the_tester_prompt_tells_the_model_not_to_commit():
