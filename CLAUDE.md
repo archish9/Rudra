@@ -81,8 +81,9 @@ src/rudra/
 ├── agent/
 │   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
-│   └── planner_agent.py    deep agent; ledger + fact tools; consult_planner + the
-│                           lifted _stream_planner_turn
+│   └── planner_agent.py    THREE staged agents (Step 10b): clarify · architect ·
+│                           breakdown, one tool set each via _tools_for_stage.
+│                           consult_planner + the lifted _stream_planner_turn
 ├── middleware/             2 survivors of D4, both opt-in behind [compat]
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           interaction (record_fact · ask_user) · git_tools ·
@@ -106,12 +107,12 @@ Rudra's own `add_tasks`/`drop_task`/`ask_user` are control plane
 and never gated.
 
 ### Control flow (`loop/engine.py`)
-1. Planner is consulted → calls `add_tasks` with units of **work**, not filenames. It has no tool that can mark anything done.
+1. **Planning runs in three stages before any code** (Step 10b, C6.7): `clarify` settles the facts, `architect` records layout and boundaries, `breakdown` calls `add_tasks` with units of **work**, not filenames. Each stage is a separate agent with its own tool set — clarify cannot `add_tasks`, breakdown cannot `ask_user` or `record_fact` — so a stage cannot do another stage's job. The fact store is the only channel between them, and no stage has a tool that can mark anything done.
 2. `run_loop` takes the next pending task and calls `run_task`.
 3. `run_task`: coder subagent writes → `verify_project` gates → on failure the blocker goes back **verbatim** and it retries, up to `[agent] max_fix_attempts`.
 4. Success = **`VerifyReport.passed`**. Only `engine.py` writes `DONE`, and only there.
 5. Two identical failure signatures in a row → `BLOCKED` (C6.5a). A gate `escalate` → the whole run stops.
-6. The planner is consulted again **only** on a block or an empty ledger — never after an ordinary success.
+6. The planner is consulted again **only** on a block or an empty ledger — never after an ordinary success, and only the `breakdown` stage is re-entered (S10b.3). Clarify and architect run once: re-opening the questions after code exists churns decisions the coder already built on.
 7. Reviewer runs once at the end, advisory, printed, gating nothing.
 
 **The split that makes this work (S9c.1):** the model decides what work exists;

@@ -64,22 +64,13 @@ Each run starts a fresh task ledger. If a run stops early — a denied command, 
 
 There is no backoff around model invocation. A rate limit or a dropped connection stops the run where it is. Tasks already marked `done` genuinely passed the gate; the rest are reported as never attempted.
 
-### The reviewer is quiet on new projects
+### Planning is staged, but you do not approve it
 
-The advisory review reads the git diff, which shows changes to *tracked* files. On a fresh repository every file is new and untracked, so the reviewer reports nothing — and the summary does not point that out. The gate's verdict is unaffected; only the quality commentary is missing.
-
-### Clarifying questions are not yet staged
-
-Rudra does ask now: the planner can send a batch of related questions in one
-prompt, and every answer is recorded in `.rudra/facts.json` with why it is
-believed, so the coder and the reviewer see it too. The budget is
-`[agent] max_questions` (default 5), and an unattended run never asks — it
-infers and records what it inferred.
-
-What is missing is the *staging*: the questions come as part of planning rather
-than from a distinct clarify → architect → breakdown sequence, so a run can
-still start writing code before every ambiguity is settled. That sequencing is
-Step 10b (`C6.7`).
+Rudra clarifies, architects, then breaks the work down, each as its own stage,
+and records every fact and decision with the reason behind it. What is missing
+is the last step: you do not get to see the plan and approve it before the coder
+starts. `--plan` today writes nothing and runs nothing, but it does not present
+anything either. That is the next step (`C6.9`).
 
 ### Little memory between runs
 
@@ -108,7 +99,6 @@ Things that work, but not the way you'd hope.
 | Issue | What happens | Workaround |
 |---|---|---|
 | **A failed model call ends everything** | Rate limit or dropped connection stops the run, even if earlier tasks finished | Check `.rudra/run/ledger.json` — tasks marked `done` genuinely passed the gate. Re-run to continue |
-| **The reviewer is quiet on new projects** | Its advisory pass reads the git diff, so on a fresh repo where every file is untracked it reports nothing | Run `rudra verify` yourself, and review the code — the gate's verdict is unaffected |
 | **`--dry-run` does nothing** | Exits immediately with no plan and no preview | Use `--plan`, which really does write a plan and touch nothing else |
 | **Ollama truncates silently** | Default 4096-token window, no warning, and the agent forgets its plan | Set `RUDRA_CONTEXT_TOKENS` |
 | **Free hosted models are unreliable** | `429` daily caps and transient `502`s mid-run | Retry, or use a paid or local model |
