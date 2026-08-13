@@ -22,6 +22,7 @@ from typing import Any
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
 
+from rudra.facts import facts_block
 from rudra.llm import build_model
 from rudra.middleware import FixWriteParamsMiddleware
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
@@ -71,6 +72,25 @@ def _tools_for(spec: RudraSubagent, context: Any) -> list:
         raise ValueError(msg)
 
     return [available[name] for name in spec.rudra_tools]
+
+
+def _prompt_for(spec: RudraSubagent, context: Any) -> str:
+    """The spec's prompt, plus whatever this project has established.
+
+    Rendered here rather than baked into the spec because build_agent runs
+    once per invocation (runner.py:124): a fact recorded during task 1
+    reaches task 2's coder with no plumbing. Shared with to_subagent_spec
+    for the reason _tools_for and _middleware_for are shared -- the
+    delegating path must not quietly differ from the direct one.
+
+    Before this existed, facts reached the planner's prompt alone
+    (planner_agent.py:42), so a project whose facts said Rust had a coder
+    that was never told.
+    """
+    block = facts_block(getattr(context, "facts", None))
+    if not block:
+        return spec.system_prompt
+    return f"{spec.system_prompt}\n\n{block}"
 
 
 def _middleware_for(spec: RudraSubagent, context: Any) -> list:
@@ -133,7 +153,7 @@ def build_agent(spec: RudraSubagent, context: Any) -> Any:
     return create_deep_agent(
         model=_model_for(spec, context.cfg),
         tools=_tools_for(spec, context),
-        system_prompt=spec.system_prompt,
+        system_prompt=_prompt_for(spec, context),
         backend=context.backend,
         checkpointer=context.checkpointer or InMemorySaver(),
         middleware=_middleware_for(spec, context),
@@ -155,7 +175,7 @@ def to_subagent_spec(spec: RudraSubagent, context: Any) -> dict:
     return {
         "name": spec.name,
         "description": spec.description,
-        "system_prompt": spec.system_prompt,
+        "system_prompt": _prompt_for(spec, context),
         "model": _model_for(spec, context.cfg),
         "tools": _tools_for(spec, context),
         "middleware": _middleware_for(spec, context),
@@ -163,4 +183,4 @@ def to_subagent_spec(spec: RudraSubagent, context: Any) -> dict:
     }
 
 
-__all__ = ["build_agent", "to_subagent_spec"]
+__all__ = ["_prompt_for", "build_agent", "to_subagent_spec"]
