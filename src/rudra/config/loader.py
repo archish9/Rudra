@@ -42,7 +42,7 @@ from rudra.config.schema import (
 from rudra.state.paths import rudra_paths
 
 _TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools")
-_AGENT_KEYS = frozenset({"verbose", "max_fix_attempts"})
+_AGENT_KEYS = frozenset({"verbose", "max_fix_attempts", "max_questions"})
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
 _TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch"})
@@ -151,6 +151,17 @@ def validate(
         # which looks like a broken model rather than a config mistake.
         raise ConfigError(
             f"max_fix_attempts in [agent] must be a whole number of 1 or more, got {attempts!r}."
+        )
+
+    questions = agent.get("max_questions")
+    if questions is not None and (
+        not isinstance(questions, int) or isinstance(questions, bool) or questions < 0
+    ):
+        # 0 is legal here, unlike max_fix_attempts: it is how an
+        # unattended workflow says "never ask" in config rather than at
+        # the command line.
+        raise ConfigError(
+            f"max_questions in [agent] must be a whole number of 0 or more, got {questions!r}."
         )
 
     permissions = merged.get("permissions", {})
@@ -301,6 +312,7 @@ def build_config(
         agent=AgentConfig(
             verbose=bool(merged.get("agent", {}).get("verbose", True)),
             max_fix_attempts=int(merged.get("agent", {}).get("max_fix_attempts", 3)),
+            max_questions=int(merged.get("agent", {}).get("max_questions", 5)),
         ),
         permissions=PermissionsConfig(
             mode=permissions.get("mode", "ask"),

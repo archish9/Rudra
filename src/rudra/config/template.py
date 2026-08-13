@@ -47,6 +47,10 @@ verbose = true
 # progress and stop immediately.
 max_fix_attempts = 3
 
+# How many clarifying questions the planner may ask across one run.
+# Set to 0 to never ask; unattended runs (--auto) never ask regardless.
+max_questions = 5
+
 [permissions]
 # ask | auto | plan
 #
