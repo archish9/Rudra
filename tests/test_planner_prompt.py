@@ -27,14 +27,17 @@ def test_no_static_field_names_survive(tmp_path: Path):
 
 
 def test_the_prompt_states_the_question_budget(tmp_path: Path):
-    prompt = build_planner_prompt("build a web API", tmp_path, can_ask=True, max_questions=4)
+    """Step 10b moved asking onto the clarify stage; the budget went with it."""
+    prompt = build_planner_prompt(
+        "build a web API", tmp_path, stage="clarify", can_ask=True, max_questions=4
+    )
     assert "4" in prompt
     assert "ask_user" in prompt
     assert "record_fact" in prompt
 
 
 def test_an_unattended_run_is_told_there_is_nobody_to_ask(tmp_path: Path):
-    prompt = build_planner_prompt("build a web API", tmp_path, can_ask=False)
+    prompt = build_planner_prompt("build a web API", tmp_path, stage="clarify", can_ask=False)
     assert "ask_user" not in prompt
     assert "unattended" in prompt
     assert "record_fact" in prompt

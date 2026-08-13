@@ -96,9 +96,27 @@ Rudra builds a file tree of your project, skipping `.git`, `node_modules`, `targ
 
 From the files present — `Cargo.toml` means Rust, `package.json` means Node, and so on. Recognised stacks: Python, Rust, Node, React/Next.js, Angular. That detection feeds the verification gate, which needs your project's real lint, type-check and test commands. Anything the agent works out for itself — the framework, a version floor, a constraint you stated — is recorded separately as a project fact in `.rudra/facts.json`, together with why it believes it.
 
-**5. The planner plans**
+**5. Planning runs in three stages**
 
-It calls `add_tasks` with the work the request needs, then stops.
+Before any code is written, Rudra consults the planner three times, and each
+stage is a separate agent that holds only the tools its own job needs:
+
+- **clarify** — settles what the work depends on. It asks you a batch of related
+  questions (up to `[agent] max_questions` for the whole run) and infers the
+  rest, recording each fact with *why* it believes it. It cannot create tasks.
+- **architect** — decides the shape: which file holds what, module boundaries,
+  how errors surface, what is worth testing. Each decision is recorded as a fact
+  with its reason. It cannot ask you anything; the questions are settled.
+- **breakdown** — turns the request and those facts into tasks, then stops. It
+  cannot ask questions or record facts.
+
+A stage cannot do another stage's job, because the tool simply is not there. The
+facts are the only thing passed between them, which is also how the coder, the
+tester and the reviewer come to know the architecture: every one of them gets
+those facts in its prompt.
+
+If a task later blocks, only the **breakdown** stage is consulted again — the
+architecture is not rewritten under a coder that already built on it.
 
 **6. The loop runs**
 

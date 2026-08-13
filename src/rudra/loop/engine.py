@@ -381,9 +381,10 @@ async def run_loop(
     """Plan, work, verify, and stop. The whole run.
 
     `planner` is an awaitable called as
-    `planner(ledger, request, reason=..., task=...)`; it adds or drops
-    tasks through the ledger tools and returns nothing. Injected rather
-    than constructed here so the loop is testable without a model.
+    `planner(ledger, request, stage=..., reason=..., task=...)`; it adds
+    or drops tasks and records facts through its tools and returns
+    nothing. Injected rather than constructed here so the loop is
+    testable without a model.
 
     `ledger` must be the SAME object the planner's tools were bound to --
     otherwise the tasks it adds are invisible here. Defaults to a fresh one
@@ -391,7 +392,14 @@ async def run_loop(
     """
     ledger = ledger if ledger is not None else Ledger()
     ledger.save(context.paths.ledger_json)
-    await planner(ledger, request, reason="initial")
+
+    # Three stages, in order, before any coder runs (C6.7, S10b.1): settle
+    # the facts, decide the shape, then declare the work. Each is a
+    # separate agent with its own tools, so a stage cannot do another
+    # stage's job. Only `breakdown` is ever re-entered below (S10b.3).
+    for stage in ("clarify", "architect", "breakdown"):
+        await planner(ledger, request, stage=stage, reason="initial")
+
     consulted_on_empty = False
 
     while True:
@@ -400,7 +408,7 @@ async def run_loop(
             if consulted_on_empty:
                 break
             consulted_on_empty = True
-            await planner(ledger, request, reason="ledger_empty")
+            await planner(ledger, request, stage="breakdown", reason="ledger_empty")
             continue
 
         outcome = await run_task(task, ledger, context=context)
@@ -414,7 +422,7 @@ async def run_loop(
         if outcome is Outcome.BLOCKED:
             # Only a stall consults the planner -- never an ordinary success.
             consulted_on_empty = False
-            await planner(ledger, request, reason="blocked", task=task)
+            await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
 
     if any(task.status is TaskStatus.DONE for task in ledger.tasks):
         await review_once(context, ledger)

@@ -49,13 +49,25 @@ def context(tmp_path):
 
 
 class FakePlanner:
-    """Records why it was consulted; adds whatever it was scripted to add."""
+    """Records why it was consulted; adds whatever it was scripted to add.
+
+    Since Step 10b the loop consults three stages, but only `breakdown`
+    declares work -- clarify and architect record facts, which these tests
+    do not model. So only breakdown consumes the script and appends to
+    `reasons`, which keeps every existing assertion about *why* the
+    planner was consulted meaning what it meant before. `stages` records
+    the whole sequence for the tests that care about it.
+    """
 
     def __init__(self, script=None):
         self.reasons: list[str] = []
+        self.stages: list[str] = []
         self.script = list(script or [])
 
-    async def __call__(self, ledger, request, *, reason, task=None):
+    async def __call__(self, ledger, request, *, stage="breakdown", reason="initial", task=None):
+        self.stages.append(stage)
+        if stage != "breakdown":
+            return
         self.reasons.append(reason)
         if self.script:
             for description in self.script.pop(0):
@@ -177,3 +189,69 @@ async def test_a_caller_supplied_ledger_is_the_one_used(monkeypatch, context):
     await run_loop("build it", context=context, planner=planner, ledger=shared)
     assert [task.description for task in shared.tasks] == ["a"]
     assert shared.tasks[0].status is TaskStatus.DONE
+
+
+# --- Step 10b: three stages before any work ---
+
+
+async def test_the_three_stages_run_in_order_before_any_task(monkeypatch, context):
+    seen: list[tuple[str, str]] = []
+    ran: list[str] = []
+
+    async def planner(ledger, request, *, stage, reason="initial", task=None):
+        seen.append((stage, reason))
+        if stage == "breakdown" and reason == "initial":
+            ledger.add("write it")
+
+    async def fake_run_task(task, ledger, *, context):
+        ran.append(task.id)
+        task.status = TaskStatus.DONE
+        return Outcome.DONE
+
+    monkeypatch.setattr(engine, "run_task", fake_run_task)
+    monkeypatch.setattr(engine, "review_once", _noop)
+
+    await engine.run_loop("build it", context=context, planner=planner)
+
+    assert seen[:3] == [
+        ("clarify", "initial"),
+        ("architect", "initial"),
+        ("breakdown", "initial"),
+    ]
+    assert ran, "the work must still run after planning"
+
+
+async def test_a_block_re_enters_breakdown_only(monkeypatch, context):
+    seen: list[tuple[str, str]] = []
+
+    async def planner(ledger, request, *, stage, reason="initial", task=None):
+        seen.append((stage, reason))
+        if stage == "breakdown" and reason == "initial":
+            ledger.add("write it")
+
+    monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.BLOCKED))
+    monkeypatch.setattr(engine, "review_once", _noop)
+
+    await engine.run_loop("build it", context=context, planner=planner)
+
+    after_planning = seen[3:]
+    assert after_planning, "a block must consult the planner"
+    assert all(stage == "breakdown" for stage, _ in after_planning)
+    assert ("clarify", "blocked") not in seen
+    assert ("architect", "blocked") not in seen
+
+
+async def test_planning_runs_even_when_the_breakdown_declares_nothing(monkeypatch, context):
+    """An empty plan is a real outcome, not a crash."""
+    seen: list[tuple[str, str]] = []
+
+    async def planner(ledger, request, *, stage, reason="initial", task=None):
+        seen.append((stage, reason))
+
+    monkeypatch.setattr(engine, "review_once", _noop)
+
+    result = await engine.run_loop("build it", context=context, planner=planner)
+
+    assert ("clarify", "initial") in seen
+    assert result.success is False
+    assert "0 requested" in result.message or "Tasks: 0" in result.message

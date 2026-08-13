@@ -71,6 +71,34 @@ def create_interaction_tools(
         Returns:
             Confirmation, or REJECTED and what would be acceptable.
         """
+        # A1.72: an unattended run has no ask_user at all (S10a.5), so a
+        # fact cannot have been asked. The model said otherwise in Step
+        # 10a's acceptance run -- honestly enough, since the request it
+        # read was written by the user -- and `asked` is the label a later
+        # stage trusts as "settled, do not revisit". Python knows the
+        # truth here; the prompt can only request it.
+        #
+        # An unknown source still falls through to store.record and is
+        # rejected there: coercion must not launder bad input.
+        #
+        # A1.73: a fact the user answered in an EARLIER run keeps its
+        # provenance when this run merely restates it. Demoting it made
+        # the record contradict itself -- "source": "inferred" beside a
+        # why reading "the user chose it last run" -- and demoted the one
+        # signal a later stage trusts. Restating what the user said is
+        # honest; claiming a *different* value was asked is not, so the
+        # value must match too.
+        if not interactive and source == "asked":
+            known = store.get(key)
+            restated = (
+                known is not None
+                and known.source == "asked"
+                and isinstance(value, str)
+                and known.value == value.strip()
+            )
+            if not restated:
+                source = "inferred"
+
         try:
             fact = store.record(key, value, why, source)
         except FactRejected as exc:

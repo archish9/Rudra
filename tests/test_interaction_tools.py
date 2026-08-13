@@ -161,3 +161,100 @@ def test_an_invalid_key_rejects_only_its_own_pair(tmp_path: Path, monkeypatch):
 
     assert store.get("good_key").value == "yes"
     assert "NOT recorded" in out
+
+
+# --- A1.72: an unattended run cannot have asked anybody ---
+
+
+def test_an_unattended_record_fact_downgrades_asked_to_inferred(tmp_path: Path):
+    """Measured in Step 10a's acceptance run: --auto, ask_user never
+    registered, and all three facts came back source="asked".
+
+    Python knows with certainty that nobody was asked, and `asked` is the
+    label a later stage trusts as "the user settled this, do not revisit".
+    """
+    store, tools = _tools(tmp_path, interactive=False)
+    out = tools["record_fact"].invoke(
+        {"key": "language", "value": "Rust", "why": "the request says Rust", "source": "asked"}
+    )
+
+    assert store.get("language").source == "inferred"
+    assert "inferred" in out
+
+
+def test_an_interactive_record_fact_keeps_asked(tmp_path: Path):
+    store, tools = _tools(tmp_path, interactive=True)
+    tools["record_fact"].invoke(
+        {"key": "language", "value": "Rust", "why": "the user said so", "source": "asked"}
+    )
+
+    assert store.get("language").source == "asked"
+
+
+def test_the_other_sources_are_untouched_when_unattended(tmp_path: Path):
+    store, tools = _tools(tmp_path, interactive=False)
+    tools["record_fact"].invoke({"key": "a", "value": "v", "why": "w", "source": "inferred"})
+    tools["record_fact"].invoke({"key": "b", "value": "v", "why": "w", "source": "detected"})
+
+    assert store.get("a").source == "inferred"
+    assert store.get("b").source == "detected"
+
+
+def test_an_invalid_source_is_still_rejected_when_unattended(tmp_path: Path):
+    """Coercion must not become a place bad input gets laundered."""
+    store, tools = _tools(tmp_path, interactive=False)
+    out = tools["record_fact"].invoke({"key": "a", "value": "v", "why": "w", "source": "invented"})
+
+    assert out.startswith("REJECTED:")
+    assert store.items() == []
+
+
+def test_a_previously_asked_fact_keeps_its_provenance_when_restated(tmp_path: Path):
+    """A1.73: coercion must not demote what a human actually settled.
+
+    Found by Step 10b's brownfield run, which neither the unit tests nor
+    the greenfield runs could reach: both started from an empty store.
+    A repo seeded with an answered fact came back with it marked
+    "inferred" while its why still said the user chose it.
+    """
+    store = FactStore()
+    store.record("cli_framework", "argparse", "the user chose it last run", "asked")
+    _store, tools = _tools(tmp_path, store=store, interactive=False)
+
+    tools["record_fact"].invoke(
+        {
+            "key": "cli_framework",
+            "value": "argparse",
+            "why": "the user chose it last run",
+            "source": "asked",
+        }
+    )
+
+    assert store.get("cli_framework").source == "asked"
+
+
+def test_a_changed_value_cannot_inherit_asked(tmp_path: Path):
+    """Restating what the user said is honest; changing it is not."""
+    store = FactStore()
+    store.record("cli_framework", "argparse", "the user chose it", "asked")
+    _store, tools = _tools(tmp_path, store=store, interactive=False)
+
+    tools["record_fact"].invoke(
+        {"key": "cli_framework", "value": "clap", "why": "rust needs clap", "source": "asked"}
+    )
+
+    fact = store.get("cli_framework")
+    assert fact.value == "clap"
+    assert fact.source == "inferred", "nobody was asked about clap"
+
+
+def test_an_inferred_fact_is_not_promoted_by_restating_it(tmp_path: Path):
+    store = FactStore()
+    store.record("language", "Rust", "the request says Rust", "inferred")
+    _store, tools = _tools(tmp_path, store=store, interactive=False)
+
+    tools["record_fact"].invoke(
+        {"key": "language", "value": "Rust", "why": "the request says Rust", "source": "asked"}
+    )
+
+    assert store.get("language").source == "inferred"
