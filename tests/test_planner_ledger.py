@@ -10,20 +10,20 @@ from rudra.loop.tools import create_ledger_tools
 def test_the_prompt_names_no_rudra_paths(tmp_path):
     # The ledger is reached through tools, so the prompt has no path to
     # drift from (CLAUDE.md §3).
-    prompt = build_planner_prompt("build a parser", tmp_path, "")
+    prompt = build_planner_prompt("build a parser", tmp_path)
     assert "PLAN.md" not in prompt
     assert "current_task.md" not in prompt
     assert ".rudra" not in prompt
 
 
 def test_the_prompt_asks_for_work_not_filenames(tmp_path):
-    prompt = build_planner_prompt("build a parser", tmp_path, "").lower()
+    prompt = build_planner_prompt("build a parser", tmp_path).lower()
     assert "add_tasks" in prompt
     assert "filename" in prompt  # it says NOT to use them
 
 
 def test_the_prompt_says_it_cannot_mark_anything_done(tmp_path):
-    prompt = build_planner_prompt("build a parser", tmp_path, "").lower()
+    prompt = build_planner_prompt("build a parser", tmp_path).lower()
     assert "done" in prompt
     assert "verification" in prompt or "gate" in prompt
 

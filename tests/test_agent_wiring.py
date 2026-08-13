@@ -129,7 +129,6 @@ def test_planner_passes_its_built_stack_to_create_deep_agent(monkeypatch, tmp_pa
     create_planner_agent(
         task="t",
         project_path=tmp_path,
-        tech_stack_content="",
         filesystem_backend=object(),
         checkpointer=None,
         console=Console(quiet=True),
@@ -154,7 +153,6 @@ def test_planner_puts_the_permission_gate_first(monkeypatch, tmp_path):
         create_planner_agent(
             task="t",
             project_path=tmp_path,
-            tech_stack_content="",
             filesystem_backend=object(),
             checkpointer=None,
             console=Console(quiet=True),
@@ -261,7 +259,7 @@ def test_main_agent_constructs_filesystem_backend_with_virtual_mode():
 # --- Step 8: the git and test-runner tools ---
 
 
-def _planner_tool_names(monkeypatch, tmp_path) -> list[str]:
+def _planner_tool_names(monkeypatch, tmp_path, **kwargs) -> list[str]:
     from rich.console import Console
 
     from rudra.agent.planner_agent import create_planner_agent
@@ -270,10 +268,10 @@ def _planner_tool_names(monkeypatch, tmp_path) -> list[str]:
     create_planner_agent(
         task="t",
         project_path=tmp_path,
-        tech_stack_content="",
         filesystem_backend=object(),
         checkpointer=None,
         console=Console(quiet=True),
+        **kwargs,
     )
     return [tool.name for tool in captured["tools"]]
 
@@ -304,9 +302,18 @@ def test_every_wrapped_execute_name_is_actually_registered():
 
 
 def test_the_interaction_tools_survive_the_ledger_switch(monkeypatch, tmp_path):
-    """Step 9c replaces the planning tools; it must not displace ask_user."""
+    """Step 9c replaced the planning tools; 10a replaced these two."""
     names = set(_planner_tool_names(monkeypatch, tmp_path))
+    assert "record_fact" in names
     assert "ask_user" in names
+    assert "save_project_context" not in names
+
+
+def test_an_unattended_planner_has_no_ask_user(monkeypatch, tmp_path):
+    """S10a.5: the tool is absent, not refusing."""
+    names = set(_planner_tool_names(monkeypatch, tmp_path, interactive=False))
+    assert "record_fact" in names
+    assert "ask_user" not in names
 
 
 def test_the_coder_still_has_no_rudra_tools(monkeypatch, tmp_path):

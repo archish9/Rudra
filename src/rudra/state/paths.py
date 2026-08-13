@@ -45,6 +45,7 @@ class RudraPaths:
     config_toml: Path
     agents_md: Path
     project_json: Path
+    facts_json: Path
     memory_export: Path
     # volatile
     memory_palace: Path
@@ -67,6 +68,9 @@ def rudra_paths(project_root: Path) -> RudraPaths:
         config_toml=root / "config.toml",
         agents_md=root / "AGENTS.md",
         project_json=root / "project.json",
+        # The open fact store (Step 10a, C6.8a). Durable: what a previous
+        # run established about this project is still true.
+        facts_json=root / "facts.json",
         memory_export=memory / "export",
         memory_palace=memory / "palace",
         run=run,
