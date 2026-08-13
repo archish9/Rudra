@@ -207,3 +207,54 @@ def test_an_invalid_source_is_still_rejected_when_unattended(tmp_path: Path):
 
     assert out.startswith("REJECTED:")
     assert store.items() == []
+
+
+def test_a_previously_asked_fact_keeps_its_provenance_when_restated(tmp_path: Path):
+    """A1.73: coercion must not demote what a human actually settled.
+
+    Found by Step 10b's brownfield run, which neither the unit tests nor
+    the greenfield runs could reach: both started from an empty store.
+    A repo seeded with an answered fact came back with it marked
+    "inferred" while its why still said the user chose it.
+    """
+    store = FactStore()
+    store.record("cli_framework", "argparse", "the user chose it last run", "asked")
+    _store, tools = _tools(tmp_path, store=store, interactive=False)
+
+    tools["record_fact"].invoke(
+        {
+            "key": "cli_framework",
+            "value": "argparse",
+            "why": "the user chose it last run",
+            "source": "asked",
+        }
+    )
+
+    assert store.get("cli_framework").source == "asked"
+
+
+def test_a_changed_value_cannot_inherit_asked(tmp_path: Path):
+    """Restating what the user said is honest; changing it is not."""
+    store = FactStore()
+    store.record("cli_framework", "argparse", "the user chose it", "asked")
+    _store, tools = _tools(tmp_path, store=store, interactive=False)
+
+    tools["record_fact"].invoke(
+        {"key": "cli_framework", "value": "clap", "why": "rust needs clap", "source": "asked"}
+    )
+
+    fact = store.get("cli_framework")
+    assert fact.value == "clap"
+    assert fact.source == "inferred", "nobody was asked about clap"
+
+
+def test_an_inferred_fact_is_not_promoted_by_restating_it(tmp_path: Path):
+    store = FactStore()
+    store.record("language", "Rust", "the request says Rust", "inferred")
+    _store, tools = _tools(tmp_path, store=store, interactive=False)
+
+    tools["record_fact"].invoke(
+        {"key": "language", "value": "Rust", "why": "the request says Rust", "source": "asked"}
+    )
+
+    assert store.get("language").source == "inferred"
