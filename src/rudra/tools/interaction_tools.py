@@ -71,6 +71,18 @@ def create_interaction_tools(
         Returns:
             Confirmation, or REJECTED and what would be acceptable.
         """
+        # A1.72: an unattended run has no ask_user at all (S10a.5), so a
+        # fact cannot have been asked. The model said otherwise in Step
+        # 10a's acceptance run -- honestly enough, since the request it
+        # read was written by the user -- and `asked` is the label a later
+        # stage trusts as "settled, do not revisit". Python knows the
+        # truth here; the prompt can only request it.
+        #
+        # An unknown source still falls through to store.record and is
+        # rejected there: coercion must not launder bad input.
+        if not interactive and source == "asked":
+            source = "inferred"
+
         try:
             fact = store.record(key, value, why, source)
         except FactRejected as exc:

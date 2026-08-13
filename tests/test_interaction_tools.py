@@ -161,3 +161,49 @@ def test_an_invalid_key_rejects_only_its_own_pair(tmp_path: Path, monkeypatch):
 
     assert store.get("good_key").value == "yes"
     assert "NOT recorded" in out
+
+
+# --- A1.72: an unattended run cannot have asked anybody ---
+
+
+def test_an_unattended_record_fact_downgrades_asked_to_inferred(tmp_path: Path):
+    """Measured in Step 10a's acceptance run: --auto, ask_user never
+    registered, and all three facts came back source="asked".
+
+    Python knows with certainty that nobody was asked, and `asked` is the
+    label a later stage trusts as "the user settled this, do not revisit".
+    """
+    store, tools = _tools(tmp_path, interactive=False)
+    out = tools["record_fact"].invoke(
+        {"key": "language", "value": "Rust", "why": "the request says Rust", "source": "asked"}
+    )
+
+    assert store.get("language").source == "inferred"
+    assert "inferred" in out
+
+
+def test_an_interactive_record_fact_keeps_asked(tmp_path: Path):
+    store, tools = _tools(tmp_path, interactive=True)
+    tools["record_fact"].invoke(
+        {"key": "language", "value": "Rust", "why": "the user said so", "source": "asked"}
+    )
+
+    assert store.get("language").source == "asked"
+
+
+def test_the_other_sources_are_untouched_when_unattended(tmp_path: Path):
+    store, tools = _tools(tmp_path, interactive=False)
+    tools["record_fact"].invoke({"key": "a", "value": "v", "why": "w", "source": "inferred"})
+    tools["record_fact"].invoke({"key": "b", "value": "v", "why": "w", "source": "detected"})
+
+    assert store.get("a").source == "inferred"
+    assert store.get("b").source == "detected"
+
+
+def test_an_invalid_source_is_still_rejected_when_unattended(tmp_path: Path):
+    """Coercion must not become a place bad input gets laundered."""
+    store, tools = _tools(tmp_path, interactive=False)
+    out = tools["record_fact"].invoke({"key": "a", "value": "v", "why": "w", "source": "invented"})
+
+    assert out.startswith("REJECTED:")
+    assert store.items() == []
