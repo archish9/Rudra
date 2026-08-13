@@ -85,9 +85,15 @@ def ask_approval(console: Console) -> PlanAnswer:
     execute because a pipe closed or a user gave up. That asymmetry is
     the one safety property this function has.
     """
+    # The key hints are escaped (A1.76). Unescaped, Rich reads [a], [r]
+    # and [c] as style tags and shows "pprove evise ancel" -- eating
+    # precisely the letters that say which key does what. The rule is not
+    # "escape model output"; it is "escape anything with brackets", and a
+    # literal in Rudra's own source is no safer than a fact value.
+    hints = escape("[a]pprove [r]evise [c]ancel")
     try:
         choice = Prompt.ask(
-            "[bold]Proceed?[/bold] [dim][a]pprove [r]evise [c]ancel[/dim]",
+            f"[bold]Proceed?[/bold] [dim]{hints}[/dim]",
             choices=["a", "r", "c"],
             default="a",
         )
