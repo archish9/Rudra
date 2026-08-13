@@ -78,7 +78,7 @@ def _outcomes(*outcomes):
     return fake_run_task
 
 
-async def _noop(context):
+async def _noop(context, ledger=None):
     return None
 
 
@@ -136,7 +136,7 @@ async def test_the_reviewer_runs_once_when_something_landed(monkeypatch, context
     planner = FakePlanner([["a"], []])
     reviews: list[int] = []
 
-    async def review(ctx):
+    async def review(ctx, ledger=None):
         reviews.append(1)
 
     monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.DONE))
@@ -149,7 +149,7 @@ async def test_the_reviewer_is_skipped_when_nothing_landed(monkeypatch, context)
     planner = FakePlanner([["a"], []])
     reviews: list[int] = []
 
-    async def review(ctx):
+    async def review(ctx, ledger=None):
         reviews.append(1)
 
     monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.BLOCKED))

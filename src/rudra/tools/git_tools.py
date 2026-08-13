@@ -9,7 +9,7 @@ does badly, so `git_diff` is the one that ships (Step 8 spec §5.1).
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from langchain_core.tools import tool
@@ -20,6 +20,10 @@ from rudra.permissions.env import scrubbed_env
 from rudra.shell.runner import run_gated
 
 MAX_DIFF_LINES = 400
+
+# How many untracked files to name before summarising the rest. Bounded for
+# the reason the diff is: this tool exists to fit a 32B window (D6).
+MAX_UNTRACKED_LISTED = 40
 
 
 def _within_root(project_path: Path, candidate: str) -> bool:
@@ -37,6 +41,50 @@ def _within_root(project_path: Path, candidate: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _untracked_note(project_path: Path, *, gate: Any, console: Console, cfg: Any) -> str:
+    """The new files `git diff` cannot show, named (A1.68).
+
+    `git diff` reports changes to files git already tracks, so on a fresh
+    repository -- where every file the run wrote is untracked -- it is
+    empty and the honest answer is not "nothing changed". Measured: a Step
+    9c acceptance run wrote parser.py and test_parser.py into a new repo
+    and the reviewer reported no changes, while an edit to a committed
+    file produced a real finding.
+
+    Naming the files rather than diffing them is deliberate. `git diff
+    --no-index /dev/null <file>` would print each new file in full, which
+    is the uncapped output this tool exists to avoid, and `git add -N`
+    would make the reviewer -- which cannot write -- mutate the index. The
+    model has read_file for anything it wants to see.
+    """
+    entries = core.status(project_path, gate=gate, console=console, cfg=cfg, all_untracked=True)
+    paths = [
+        entry.path
+        for entry in entries
+        if entry.path and "?" in entry.index + entry.worktree and not _is_noise(entry.path)
+    ]
+    if not paths:
+        return ""
+
+    shown = sorted(paths)[:MAX_UNTRACKED_LISTED]
+    listed = "\n".join(f"  {path}" for path in shown)
+    note = f"Untracked files (new, so no diff exists yet):\n{listed}"
+    if len(paths) > len(shown):
+        note += f"\n  ... and {len(paths) - len(shown)} more"
+    return note
+
+
+def _is_noise(path: str) -> bool:
+    """Build output and Rudra's own state, which are nobody's work.
+
+    Shares `SKIP_DIRS` with the gate and the loop, so all three agree
+    about what a build directory is (A1.66).
+    """
+    from rudra.verify.stubs import SKIP_DIRS
+
+    return any(part in SKIP_DIRS for part in PurePosixPath(path).parts)
 
 
 def create_git_tools(project_path: Path, *, gate: Any, console: Console, cfg: Any) -> list:
@@ -94,7 +142,19 @@ def create_git_tools(project_path: Path, *, gate: Any, console: Console, cfg: An
         text = core.diff(
             project_path, path=target, staged=staged, max_lines=MAX_DIFF_LINES, **common
         )
-        return text if text.strip() else "No changes in the working tree."
+
+        # A path-limited or staged request asked a narrow question; answer
+        # that one. The untracked note belongs to the broad "what changed?"
+        # call, which is the one the reviewer makes.
+        if target is not None or staged:
+            return text if text.strip() else "No changes."
+
+        untracked = _untracked_note(project_path, **common)
+        if text.strip():
+            return f"{text}\n\n{untracked}" if untracked else text
+        if untracked:
+            return untracked
+        return "No changes in the working tree."
 
     return [git_diff]
 

@@ -106,3 +106,67 @@ def test_staged_changes_can_be_requested(repo: Path, tmp_path: Path):
     git(repo, "add", "a.txt")
     text = _tool(repo, AutoGate(tmp_path)).invoke({"staged": True})
     assert "+staged" in text
+
+
+# --- A1.68: an untracked-only tree is not "no changes" ---
+
+
+def test_git_diff_names_untracked_files_instead_of_claiming_nothing_changed(
+    repo: Path, tmp_path: Path
+):
+    """The greenfield case: every file is new, so `git diff` shows nothing.
+
+    Reporting "No changes in the working tree" there is false, and it is
+    what left the reviewer silent on the runs that most needed it.
+    """
+    (repo / "parser.py").write_text("def parse(): ...\n", encoding="utf-8")
+    (repo / "src").mkdir()
+    (repo / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+
+    text = _tool(repo, AutoGate(tmp_path)).invoke({})
+
+    assert "parser.py" in text
+    assert "src/main.rs" in text
+    assert "no changes in the working tree" not in text.lower()
+
+
+def test_git_diff_still_says_no_changes_on_a_genuinely_clean_tree(repo: Path, tmp_path: Path):
+    text = _tool(repo, AutoGate(tmp_path)).invoke({})
+    assert "no changes" in text.lower()
+
+
+def test_git_diff_prefers_the_real_diff_when_there_is_one(repo: Path, tmp_path: Path):
+    """A tracked edit still returns a diff, untracked files notwithstanding."""
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+    (repo / "untracked.py").write_text("x = 1\n", encoding="utf-8")
+
+    text = _tool(repo, AutoGate(tmp_path)).invoke({})
+
+    assert "+changed" in text
+    assert "untracked.py" in text, "the model must still learn the new file exists"
+
+
+def test_git_diff_does_not_list_build_output_as_untracked_work(repo: Path, tmp_path: Path):
+    """A Rust target/ holds thousands of files; naming them is noise (A1.66)."""
+    for directory in ("target", "node_modules", "__pycache__"):
+        built = repo / directory
+        built.mkdir()
+        (built / "artifact.bin").write_text("generated\n", encoding="utf-8")
+    (repo / "real.py").write_text("x = 1\n", encoding="utf-8")
+
+    text = _tool(repo, AutoGate(tmp_path)).invoke({})
+
+    assert "real.py" in text
+    for noise in ("target/", "node_modules/", "__pycache__/"):
+        assert noise not in text
+
+
+def test_the_untracked_listing_is_capped(repo: Path, tmp_path: Path):
+    """Bounded output is the whole reason this tool exists rather than execute."""
+    for index in range(120):
+        (repo / f"file{index}.py").write_text("x = 1\n", encoding="utf-8")
+
+    text = _tool(repo, AutoGate(tmp_path)).invoke({})
+
+    assert len(text.splitlines()) < 80
+    assert "more" in text.lower()

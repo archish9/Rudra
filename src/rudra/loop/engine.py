@@ -276,7 +276,38 @@ _STATUS_MARK = {
 _NOT_ATTEMPTED = "never attempted — the run stopped"
 
 
-async def review_once(context: LoopContext) -> None:
+def _review_prompt(ledger: Ledger) -> str:
+    """Tell the reviewer what this run touched, by name (A1.68).
+
+    `git_diff` shows changes to *tracked* files, and on a greenfield run
+    every file is new and untracked, so the reviewer was handed nothing
+    and reported nothing -- silently, because an empty review prints
+    nothing. It worked exactly when a file was already committed, which is
+    the case Rudra is least often pointed at.
+
+    The names come from the ledger rather than from a second git call: the
+    loop already recorded them per task, and since A1.66 that record is
+    file-level and correct. Blocked tasks are included deliberately --
+    half-finished work is what most deserves a second opinion.
+    """
+    seen: dict[str, None] = {}
+    for task in ledger.tasks:
+        for path in task.files_touched:
+            seen.setdefault(path, None)
+
+    prompt = "Review the changes this run made and report any problems."
+    if seen:
+        listed = "\n".join(f"- {path}" for path in seen)
+        prompt += (
+            f"\n\nThese files were written or changed:\n{listed}\n\n"
+            "Read them with read_file. git_diff shows changes to files git "
+            "already tracks, so on a new project it will show nothing even "
+            "though the files above exist."
+        )
+    return prompt
+
+
+async def review_once(context: LoopContext, ledger: Ledger) -> None:
     """One advisory pass over everything that changed. Printed, never acted on.
 
     D9's split: the deterministic gate decides done-or-not; the reviewer
@@ -284,7 +315,7 @@ async def review_once(context: LoopContext) -> None:
     """
     result = await run_subagent(
         "reviewer",
-        "Review the working-tree changes from this run and report any problems.",
+        _review_prompt(ledger),
         context=context.subagents,
         thread_id=f"{context.subagents.session_id}-review",
     )
@@ -386,7 +417,7 @@ async def run_loop(
             await planner(ledger, request, reason="blocked", task=task)
 
     if any(task.status is TaskStatus.DONE for task in ledger.tasks):
-        await review_once(context)
+        await review_once(context, ledger)
     return summarise(ledger, context.console)
 
 

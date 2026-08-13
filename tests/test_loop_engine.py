@@ -259,3 +259,92 @@ async def test_a_budget_of_one_allows_no_retry(monkeypatch, context):
     outcome, task, _ = await run_one(context)
     assert outcome is Outcome.BLOCKED
     assert task.attempts == 1
+
+
+# --- A1.68: the reviewer must be told what changed ---
+
+
+async def test_the_reviewer_is_told_which_files_the_run_touched(monkeypatch, context):
+    """A1.68: git_diff shows tracked changes, and greenfield files are untracked.
+
+    Measured across two Step 9c acceptance runs: a run that wrote
+    parser.py and test_parser.py into a fresh repo got "No changes in the
+    working tree" from the reviewer, while a run that edited a committed
+    file produced a real finding. The reviewer worked exactly when a file
+    was already tracked -- which is never, on the greenfield runs Rudra is
+    most often pointed at.
+    """
+    prompts: list[str] = []
+
+    async def fake(name, prompt, *, context, thread_id=None):
+        prompts.append(prompt)
+        return SubagentResult(name=name, text="looks fine", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", fake)
+
+    ledger = Ledger()
+    done = ledger.add("write the parser")
+    done.status = TaskStatus.DONE
+    done.files_touched = ("parser.py", "src/lib.rs")
+
+    await engine.review_once(context, ledger)
+
+    assert prompts, "the reviewer must be dispatched"
+    assert "parser.py" in prompts[0]
+    assert "src/lib.rs" in prompts[0]
+
+
+async def test_the_reviewer_prompt_lists_each_file_once(monkeypatch, context):
+    """Two tasks touching one file is the norm, not the exception."""
+    prompts: list[str] = []
+
+    async def fake(name, prompt, *, context, thread_id=None):
+        prompts.append(prompt)
+        return SubagentResult(name=name, text="", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", fake)
+
+    ledger = Ledger()
+    for description in ("write it", "fix it"):
+        task = ledger.add(description)
+        task.status = TaskStatus.DONE
+        task.files_touched = ("src/main.rs",)
+
+    await engine.review_once(context, ledger)
+
+    assert prompts[0].count("src/main.rs") == 1
+
+
+async def test_a_blocked_task_s_files_are_still_reviewed(monkeypatch, context):
+    """Blocked work is exactly the work most worth a second opinion."""
+    prompts: list[str] = []
+
+    async def fake(name, prompt, *, context, thread_id=None):
+        prompts.append(prompt)
+        return SubagentResult(name=name, text="", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", fake)
+
+    ledger = Ledger()
+    blocked = ledger.add("write the parser")
+    blocked.status = TaskStatus.BLOCKED
+    blocked.files_touched = ("half_done.py",)
+
+    await engine.review_once(context, ledger)
+
+    assert "half_done.py" in prompts[0]
+
+
+async def test_the_reviewer_still_runs_when_nothing_was_recorded(monkeypatch, context):
+    """files_touched is empty outside a git repo; the pass must not vanish."""
+    prompts: list[str] = []
+
+    async def fake(name, prompt, *, context, thread_id=None):
+        prompts.append(prompt)
+        return SubagentResult(name=name, text="", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", fake)
+
+    await engine.review_once(context, Ledger())
+
+    assert prompts, "an empty file list must not skip the review"
