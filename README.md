@@ -4,7 +4,7 @@
 >
 > *The roaring storm that hammers and purifies code.*
 
-Rudra is a **local-first autonomous coding agent for your terminal**. Tell it what you want in plain English, and it plans the work and writes the files.
+Rudra is a **local-first autonomous coding agent for your terminal**. Tell it what you want in plain English. It asks what it can't work out, shows you the plan, then writes the files and checks its own work.
 
 ```bash
 rudra "write a Python CLI that reverses a string"
@@ -14,9 +14,9 @@ Point it at **any model you like** — a local Ollama model on your own machine,
 
 > ### 🚧 Early days — please read
 >
-> Rudra is **alpha software under active development**. It plans the work, writes it, and verifies the result — a task is done when a deterministic gate passes it: the code parses, type checks, its tests run, and no placeholders are left behind. If the gate fails, Rudra feeds the exact errors back and tries again, and stops rather than looping when two attempts fail identically. What it does **not** do yet is resume an interrupted run or retry a flaky provider. Review everything it produces.
+> Rudra is **alpha software under active development**. It asks what it cannot infer, decides how the work should be built, shows you the plan, and only then writes anything. A task is done when a deterministic gate passes it: the code parses, type checks, its tests run, and no placeholders are left behind. If the gate fails, Rudra feeds the exact errors back and tries again, and stops rather than looping when two attempts fail identically. What it does **not** do yet is resume an interrupted run or retry a flaky provider. Review everything it produces.
 >
-> **It asks before it writes.** By default every write, edit, delete and command stops for your approval and shows you a diff first. `--auto` skips the prompts for unattended runs.
+> **It asks twice: once about the plan, then about every file.** You approve the task list before any code is written, and by default each write, edit, delete and command stops for approval with a diff. `--auto` skips both for unattended runs; `--plan` stops after showing you the plan.
 >
 > See **[Project Status](Documentation/08-project-status.md)** for an honest, up-to-date list of what works and what doesn't.
 
@@ -153,7 +153,24 @@ rudra init
 rudra "write wordcount.py: an argparse CLI that counts lines, words and characters in a file"
 ```
 
-Rudra writes a plan to `.rudra/run/PLAN.md`, then works through it. Before each file lands, it stops and shows you what's about to change:
+Rudra plans in three stages before writing anything — it settles what the work depends on (asking you only what it cannot work out), decides how it should be built, then breaks it into tasks. Then it shows you the result and waits:
+
+```
+Plan
+  facts:
+    language = Python (asked)
+    cli_framework = argparse (asked)
+    layout = wordcount.py holds parsing and counting (inferred)
+  tasks:
+    t1  implement an argparse CLI that counts lines, words and characters
+    t2  write tests for the counting logic
+
+Proceed? [a]pprove [r]evise [c]ancel [a/r/c] (a):
+```
+
+Each fact says where it came from — `asked` means you said so, `inferred` means Rudra worked it out — so the guesses are the ones that catch your eye. `r` takes a sentence like *"drop the tests task, I'll write those myself"* and re-plans around it, up to three times. `c` stops without touching anything.
+
+Then, before each file lands, it stops again:
 
 ```
 ╭─ approval required ────────────────────────────────╮
@@ -166,6 +183,8 @@ Rudra writes a plan to `.rudra/run/PLAN.md`, then works through it. Before each 
 ```
 
 `a` approves once, `r` rejects it, `A` stops asking about that file for the rest of the run, `d` shows the whole diff. On an existing file you get a real unified diff, not just a filename.
+
+Want the plan without the work? `rudra --plan "..."` stops after showing it and changes nothing.
 
 When it's finished:
 
@@ -181,7 +200,7 @@ Want to chat instead of firing one-off tasks? Run `rudra` with no arguments for 
 rudra --auto "add type hints to utils.py"
 ```
 
-`--auto` approves everything without asking, for CI or a long run you don't want to babysit. Two things still hold:
+`--auto` approves everything without asking — the plan and every file — for CI or a long run you don't want to babysit. It also never asks you a clarifying question: with nobody there to answer, Rudra infers what it needs and records each inference as such. Two things still hold:
 
 - **Commands stay off** unless you add `--allow-shell`. Writes are confined to your project; a shell command isn't, and nobody is reading it before it runs. Since running your tests *is* a command, `--auto` on its own writes code it cannot check — pair the flags if you want it verified.
 - **A small deny floor always applies**, in every mode — no writing into `.git/`, no `rm -rf /`.
@@ -221,12 +240,18 @@ Only fires from a clean tree with a branch checked out; otherwise it says why an
 
 ```
 .rudra/
-  config.toml     your settings                ← worth committing
-  AGENTS.md       project notes                ← worth committing
-  run/            plan, checkpoints, artifacts,
+  config.toml     your settings                     ← worth committing
+  facts.json      what Rudra established, and why   ← worth committing
+  AGENTS.md       project notes                     ← worth committing
+  run/            ledger.json, checkpoints, artifacts,
                   logs/permissions.jsonl,
-                  logs/tests.log                 (regenerated every run)
+                  logs/tests.log                      (regenerated every run)
 ```
+
+`facts.json` is the durable one worth knowing about: it holds what Rudra
+established about your project and *why* it believes each thing — so the next
+run starts knowing your stack instead of asking again, and you can correct a
+wrong assumption by editing one line.
 
 Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committing `.rudra/` is safe by default. It never touches your project's own `.gitignore` — whether you commit any of it is your call.
 
@@ -245,6 +270,7 @@ Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committ
 | **[7. Development](Documentation/07-development.md)** | Running tests, project layout, contributing |
 | **[8. Project Status](Documentation/08-project-status.md)** | What works today, what doesn't, what's coming |
 | **[9. Permissions](Documentation/09-permissions.md)** | Approval prompts, allow/deny rules, the deny floor, the audit log |
+| **[10. Verification](Documentation/10-verification.md)** | `rudra verify`: the gate that decides a task is done, and how to run it yourself |
 
 New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)**.
 

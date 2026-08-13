@@ -23,10 +23,21 @@ mode = "ask"        # ask | auto | plan
 |---|---|
 | `ask` *(default)* | Every write, edit, delete and command stops for approval, with a diff |
 | `auto` | Approves everything without prompting. Also `--auto` or `--yolo` |
-| `plan` | Writes the plan, then stops. No project files touched, no commands run. Also `--plan` |
+| `plan` | Shows you the plan — the facts Rudra established and the tasks it declared — then stops. No project files touched, no commands run. Also `--plan` |
 
 Reading is never gated in any mode. A single run reads dozens of files, and
 none of them can destroy anything.
+
+**Rudra's own bookkeeping is never gated either.** `add_tasks`, `drop_task`,
+`ask_user` and `record_fact` write only inside `.rudra/` — the task ledger and
+the fact store — so gating them would mean `ask` mode prompting you about
+Rudra's own note-taking, and `plan` mode denying the very thing `--plan` exists
+to show you. They are allowed in every mode, and they cannot touch your project.
+
+There is a second, separate gate that is *not* about permissions at all: before
+any code is written you are shown the plan and asked to approve, revise or
+cancel it. That one runs in `ask` mode and is skipped by `--auto`; see
+[How It Works](05-how-it-works.md).
 
 **`ask` needs a terminal.** Piped or redirected input exits `2` immediately
 rather than hanging on a prompt nobody can answer:

@@ -223,17 +223,32 @@ cd ~/rudra-playground
 rudra "write wordcount.py: an argparse CLI that counts lines, words and characters in a text file"
 ```
 
-You'll see the banner, the task, and then live progress as Rudra plans and writes:
+You'll see the banner, the task, and then live progress as Rudra establishes
+what it needs, plans, and — once you approve — writes:
 
 ```
  ✓ [1] record_fact: Recorded language = "Python" (inferred).
  ✓ [3] add_tasks: Added 1 task(s): t1 (write an argparse CLI that counts lines, words and characters)
+
+Plan
+  facts:
+    language = Python (inferred)
+  tasks:
+    t1  write an argparse CLI that counts lines, words and characters
+
+Proceed? [a]pprove [r]evise [c]ancel [a/r/c] (a): a
+
  ✓ [5] write_file: Updated file /wordcount.py
 
 Tasks: 1 requested · 1 done · 0 blocked · 0 dropped
 
   ✓ t1  write an argparse CLI that counts lines, words and characters
 ```
+
+Press Enter to approve — that is the default. `r` lets you correct the plan in a
+sentence; `c` stops without writing anything. On a request this small there is
+little to correct, but on a real one the plan is where you catch a wrong
+assumption before it costs you a run.
 
 Try what it made:
 

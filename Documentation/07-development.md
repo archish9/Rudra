@@ -123,9 +123,26 @@ src/rudra/
 │   ├── grants.py     "always" grants, in memory for the run only
 │   └── env.py        The environment commands run with, minus secrets
 ├── agent/
-│   ├── main_agent.py Orchestrates planner → coder; builds the backend and gate
-│   ├── planner_agent.py
-│   └── coder_agent.py
+│   ├── main_agent.py Run setup: backend, gate, the three planner stages, and
+│   │                 the plan-approval gate between planning and working
+│   └── planner_agent.py  The three staged agents (clarify · architect ·
+│                     breakdown), one tool set each via _tools_for_stage
+├── facts/            What this project's agents established, and why
+│   ├── store.py      Fact{value, why, source} + FactStore. Imports nothing
+│   │                 from Rudra; keys are enumerated nowhere in code
+│   └── render.py     facts_block() — the same facts into every agent prompt
+├── loop/             The agentic loop
+│   ├── ledger.py     Task · TaskStatus · Ledger. Pure data plus load/save
+│   ├── tools.py      add_tasks · drop_task · read_ledger — typed, agent-facing
+│   ├── bounds.py     failure_signature() — no-progress detection
+│   ├── plan_view.py  render_plan() and the approve/revise/cancel prompt
+│   └── engine.py     plan() · work() · run_loop() · run_task(). The only
+│                     module that writes DONE, and only on a passing gate
+├── verify/           The deterministic gate: syntax · lint · typecheck ·
+│                     tests · stubs. Six outcomes, not two
+├── subagents/        coder · tester · reviewer · general-purpose.
+│                     build.py is the ONLY assembly path, so every subagent
+│                     carries the permission gate
 ├── middleware/       Behaviour patches applied to agents
 ├── shell/
 │   └── runner.py     run_gated() — the ONLY subprocess call site in Rudra
@@ -141,7 +158,7 @@ src/rudra/
 ├── stacks/           Language/framework detection
 ├── filesystem/       Project tree walking
 ├── compat/           deepagents version guards and monkeypatches
-└── state/            paths.py (the .rudra/ layout), project config persistence
+└── state/            paths.py (the .rudra/ layout) and the session id
 ```
 
 **Four architectural rules worth knowing:**
@@ -152,7 +169,7 @@ src/rudra/
 
 *One place starts a subprocess*, `shell/runner.py::run_gated`. Git and the test runner both go through it, and it asks the permission engine as `execute` with the real command string — which is why `deny = ["execute:git push*"]` covers the git layer without naming it, and why the audit log records `pytest -q` rather than an opaque tool name. A second call site would be a second gate check, and the half that drifts is the security-relevant one.
 
-*Never build a `.rudra/...` path by hand.* Ask `state/paths.py`. `rudra_paths()` is pure; `ensure_layout()` is the only function that creates anything. Agent-facing prompts name these paths as literal strings, so if a path moves the prompt text must move in the same commit — `tests/test_rudra_dir_migration.py` fails if they ever disagree.
+*Never build a `.rudra/...` path by hand.* Ask `state/paths.py`. `rudra_paths()` is pure; `ensure_layout()` is the only function that creates anything. No agent-facing prompt names a `.rudra/` path at all any more: the ledger and the fact store are reached only through tools, so a path that moves cannot leave a prompt pointing at nothing. `tests/test_rudra_dir_migration.py` asserts that absence.
 
 ---
 

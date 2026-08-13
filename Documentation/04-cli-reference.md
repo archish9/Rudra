@@ -20,7 +20,7 @@ Everything `rudra` accepts. It's a short list — that's deliberate.
 rudra "<what you want>"
 ```
 
-No subcommand, no mode to pick. Describe the outcome and Rudra plans the files and writes them.
+No subcommand, no mode to pick. Describe the outcome. Rudra settles what it needs to know, decides how to build it, shows you the plan, and writes the files once you approve.
 
 ```bash
 rudra "write a Python CLI that reverses a string"
@@ -35,11 +35,13 @@ rudra write a hello world script     # works
 rudra "write a hello world script"   # safer
 ```
 
-**Be specific about filenames.** Rudra plans by filename, so naming what you want helps a lot:
+**Say what you want, not which files to create.** Rudra plans in units of *work* — "write a CSV parser that handles quoted commas" is a task; "parser.py" is not — and it decides the layout itself, recording why. Naming a file is still useful when you actually care which one it is:
 
 ```bash
 rudra "write wordcount.py: an argparse CLI counting lines, words, characters"
 ```
+
+**Answer its questions.** When something matters and cannot be inferred, Rudra asks — in one batch, up to `[agent] max_questions` for the whole run — and remembers the answers in `.rudra/facts.json` for next time.
 
 Rudra supports Python, Rust, Node, React/Next.js, and Angular projects, and works in both empty folders and existing repositories.
 

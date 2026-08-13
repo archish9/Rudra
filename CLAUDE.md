@@ -180,20 +180,26 @@ Table below is verified against **installed 0.4.12** (`.venv/.../deepagents/grap
 
 ---
 
-## 5. Provider Lock-in — the #1 architectural blocker
+## 5. Provider Independence — solved in Step 5
 
-Ollama is hardcoded in three places:
-- `config.py:12-22` — `OllamaConfig`, all env vars `OLLAMA_*`
-- `planner_agent.py:75-81` — `ChatOllama(...)` with Ollama-only kwargs `num_predict`, `reasoning=True`
-- `coder_agent.py:61-67` — same
+**This section used to read "Provider Lock-in — the #1 architectural blocker".**
+It is done: `src/rudra/llm/` is the model factory, `langchain-openai` ships as a
+dependency, and `ChatOllama` is constructed in exactly one place nobody outside
+that package imports.
 
-Installed provider packages: `langchain_ollama`, `langchain_anthropic`, `langchain_google_genai`. **`langchain-openai` is NOT installed** — so `openai:`, vLLM, OpenRouter, LM Studio, Together, and every other OpenAI-compatible endpoint fail today.
+| Rule | Enforcement |
+|---|---|
+| No module outside `rudra/llm/` may import a provider package | `tests/test_no_direct_provider_imports.py` parses every module with `ast` and fails if one does |
+| Ask for a model by role, never by provider | `build_model(role)` (`llm/factory.py:64`) — no network call, and every configuration error raises before inference could start |
+| One adapter covers the OpenAI-compatible world | `provider = "openai_compatible"` with a `base_url` reaches vLLM, OpenRouter, LM Studio, Groq and Together through one code path (`llm/providers.py:87`) |
 
-The fix is a **Rudra-side model factory**, not a deepagents change — deepagents already accepts any `BaseChatModel`. One `ChatOpenAI(base_url=...)` adapter covers vLLM/OpenRouter/LM Studio/Groq/Together in a single code path.
+The historical detail — `OllamaConfig`, the `OLLAMA_*` env vars, `ChatOllama`
+built inline in two agent modules — is gone from the code. The `OLLAMA_*`
+variables survive only as a deprecation shim that warns and maps to `RUDRA_*`.
 
 ---
 
-## 6. Configuration Design (decided 2026-08-05, not yet implemented)
+## 6. Configuration Design (decided 2026-08-05, shipped in Step 6)
 
 Owner decisions are recorded in `TODO.md` §0. Summary: TOML config, vendored superpowers, MemPalace Python API, permission mode `ask` by default with an `--auto` escape hatch, minimum local model 32B, `VirtualFileSystem` deleted.
 
