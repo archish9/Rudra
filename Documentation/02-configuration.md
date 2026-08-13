@@ -61,6 +61,7 @@ model = "qwen3-coder:32b"
 [agent]
 verbose = true
 max_fix_attempts = 3
+max_questions = 5
 
 [permissions]
 mode  = "ask"    # ask | auto | plan
@@ -198,11 +199,19 @@ Configuration error: [skills] is not supported yet — arrives in Step 11 (C5.1)
 |---|---|
 | `verbose` | Show detailed tool-call output during a run |
 | `max_fix_attempts` | How many times the fix loop retries one task before giving up. Default 3 |
+| `max_questions` | How many clarifying questions the planner may ask across one whole run. Default 5; `0` never asks |
 
 `max_fix_attempts` is an upper bound, not a target. The loop usually stops
 sooner: two attempts that fail *identically* count as no progress and stop
 immediately, because a third would produce the same result. Raising it helps
 only when attempts are genuinely converging.
+
+`max_questions` is the whole run's budget, counted in questions rather than in
+calls, so batching several related questions into one prompt costs what it
+should. When the budget runs out the planner is told to infer the rest. An
+unattended run (`--auto`, or any run without a terminal) never asks at all —
+the tool is not registered there, so nothing can hang waiting for an answer
+nobody is there to give.
 
 It must be a whole number of 1 or more. Zero would block every task without
 the coder running once, which reads as a broken model rather than a config
@@ -268,11 +277,11 @@ contents in code fences write broken files.
   .gitignore      written by Rudra, covers only this directory
   config.toml     ← durable, safe to commit
   AGENTS.md       ← durable
-  project.json    ← durable
+  facts.json      ← durable
   memory/export/  ← durable
   memory/palace/    volatile, ignored
   run/              volatile, ignored
-    ledger.json, tech_stack.md, checkpoints.db
+    ledger.json, checkpoints.db
     logs/           permissions.jsonl — every gated decision
     artifacts/      oversized tool output, offloaded out of your project
 ```

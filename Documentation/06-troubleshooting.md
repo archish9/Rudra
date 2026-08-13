@@ -328,9 +328,11 @@ cat .rudra/run/ledger.json  # tasks marked done genuinely passed the gate
 ls
 ```
 
-Re-running continues from the unticked items.
+Re-running does **not** continue where it stopped. The ledger is per-run and
+never resumed (C6.10), so a second run re-plans from your request; `--continue`
+is still to come (C7.2). Say what is already done if it matters.
 
-### `2/2 files generated` but a file I asked for is missing
+### The summary says every task is done, but a file I asked for is missing
 
 Every task the planner declared appears in the summary with a status, and anything not `done` says why. If a task is `blocked`, read its reason: `no progress: the same failure twice` means two attempts failed identically, and `attempts exhausted` means it never converged.
 

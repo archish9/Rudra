@@ -94,7 +94,7 @@ Rudra builds a file tree of your project, skipping `.git`, `node_modules`, `targ
 
 **4. It works out your stack**
 
-From the files present — `Cargo.toml` means Rust, `package.json` means Node, and so on — writing the result to `.rudra/run/tech_stack.md`. Recognised stacks: Python, Rust, Node, React/Next.js, Angular.
+From the files present — `Cargo.toml` means Rust, `package.json` means Node, and so on. Recognised stacks: Python, Rust, Node, React/Next.js, Angular. That detection feeds the verification gate, which needs your project's real lint, type-check and test commands. Anything the agent works out for itself — the framework, a version floor, a constraint you stated — is recorded separately as a project fact in `.rudra/facts.json`, together with why it believes it.
 
 **5. The planner plans**
 
@@ -133,10 +133,9 @@ Rudra keeps its state inside your project:
 | File | Written by | Purpose |
 |---|---|---|
 | `run/ledger.json` | planner + Rudra | The tasks, their status, and why anything stopped |
-| `run/tech_stack.md` | Rudra | Detected language and frameworks |
 | `run/logs/verify.log` | Rudra | The gate's full output from the last check |
 | `AGENTS.md` | Rudra | Project notes fed into the planner's prompt |
-| `project.json` | Rudra | Saved project context |
+| `facts.json` | planner | What this project's agents established, and why |
 | `checkpoints.db` | LangGraph | Conversation checkpoints |
 
 Deleting the folder is safe — Rudra recreates what it needs. The ledger is per-run and never resumed, so a new run starts from a clean list either way.
@@ -208,8 +207,8 @@ Rudra adds a few of its own:
 | Tool | What it does |
 |---|---|
 | `add_tasks` / `drop_task` / `read_ledger` | The task ledger in `.rudra/run/ledger.json` |
-| `write_task_assignment` | The planner's brief for the coder |
-| `ask_user` | Asks you a question mid-run |
+| `ask_user` | Asks you a batch of related questions mid-run, and records each answer as a project fact. Absent entirely when nobody can answer |
+| `record_fact` | Records something established about the project — value, why, and whether it was asked, inferred or detected |
 | `run_tests` | Works out your project's test command, runs it, reports counts and the failure tail |
 | `git_diff` | The working-tree diff, capped so a big one can't fill the context window |
 
