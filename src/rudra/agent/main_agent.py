@@ -11,8 +11,15 @@ from rich.console import Console
 from rudra.config import get_config
 from rudra.facts import FactStore, facts_block
 from rudra.git.core import auto_branch
-from rudra.loop import run_loop
+from rudra.loop import plan, work
+from rudra.loop.plan_view import PlanDecision, ask_approval, auto_approve, render_plan
 from rudra.state import ensure_layout
+
+# How many times a user may send the plan back before Rudra stops
+# offering. Someone revising a fourth time wants to change the request,
+# not the plan (S10c.4). Deliberately not configurable: an inert config
+# key is worse than no key.
+MAX_REVISIONS = 3
 
 
 @dataclass
@@ -63,6 +70,8 @@ class RudraAgent:
         planner_callback,
         ledger,
         gate=None,
+        facts=None,
+        approve=None,
     ):
         self.context = context
         self.planner_agent = planner_agent
@@ -77,6 +86,13 @@ class RudraAgent:
         # The permission gate. None streams ungated, which only a caller
         # constructing RudraAgent by hand can produce.
         self.gate = gate
+        # The run's fact store, for presenting the plan. The same object
+        # the stages recorded into.
+        self._facts = facts
+        # How approval is obtained. Injected and defaulting to
+        # auto-approve, so every existing caller and every test runs
+        # without a prompt (S10c.3).
+        self._approve = approve or auto_approve
         self.iterations = 0
 
     async def close(self) -> None:
@@ -165,11 +181,23 @@ class RudraAgent:
             )
 
             self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
-            return await run_loop(
+
+            ledger = await plan(
                 self.context.task,
                 context=self._loop_context,
                 planner=self._planner_callback,
                 ledger=self._ledger,
+            )
+
+            decision = await self._settle_plan(ledger)
+            if decision is not PlanDecision.APPROVE:
+                return self._plan_only_result(ledger, decision)
+
+            return await work(
+                self.context.task,
+                context=self._loop_context,
+                planner=self._planner_callback,
+                ledger=ledger,
             )
 
         except Exception:
@@ -178,6 +206,54 @@ class RudraAgent:
             self._log_always("[bold red]\n!! Agent crashed — full traceback:[/bold red]")
             self._log_always(traceback.format_exc())
             raise
+
+    async def _settle_plan(self, ledger) -> PlanDecision:
+        """Show the plan and find out whether to run it (C6.9).
+
+        `plan` mode never approves: it presents and stops, which is what
+        `--plan` has always claimed to do while denying everything and
+        printing nothing. `--auto` and every programmatic caller get
+        auto_approve, so they never pause.
+        """
+        self.console.print()
+        self.console.print(render_plan(ledger, self._facts))
+
+        if get_config().permissions.mode == "plan":
+            self.console.print("\n[dim]Plan mode — nothing was executed.[/dim]")
+            return PlanDecision.CANCEL
+
+        for attempt in range(MAX_REVISIONS + 1):
+            answer = self._approve(self.console)
+            if answer.decision is not PlanDecision.REVISE:
+                return answer.decision
+            if attempt == MAX_REVISIONS:
+                break
+            await self._planner_callback(
+                ledger,
+                self.context.task,
+                stage="breakdown",
+                reason="revision",
+                feedback=answer.feedback,
+            )
+            self.console.print()
+            self.console.print(render_plan(ledger, self._facts))
+
+        self.console.print(
+            f"\n[yellow]Revised {MAX_REVISIONS} times — change the request instead.[/yellow]"
+        )
+        return PlanDecision.CANCEL
+
+    def _plan_only_result(self, ledger, decision: PlanDecision) -> AgentResult:
+        """A run that planned and stopped. Not a failure -- the user chose."""
+        counts = ledger.counts()
+        return AgentResult(
+            success=True,
+            message=(
+                f"Plan not executed ({decision.value}): {counts['requested']} task(s) declared"
+            ),
+            files_created=[],
+            files_modified=[],
+        )
 
 
 def _maybe_auto_branch(project_path: Path, task: str, *, cfg, gate, console: Console) -> None:
@@ -400,7 +476,11 @@ async def create_main_agent(
         for stage in STAGES
     }
 
-    async def planner_callback(run_ledger, request, *, stage, reason="initial", task=None):
+    async def planner_callback(
+        run_ledger, request, *, stage, reason="initial", task=None, feedback=""
+    ):
+        # `feedback` carries a plan revision's wording (C6.9). Without it
+        # a revision reaches consult_planner empty and raises.
         await consult_planner(
             planners[stage],
             run_ledger,
@@ -408,6 +488,7 @@ async def create_main_agent(
             stage=stage,
             reason=reason,
             task=task,
+            feedback=feedback,
             gate=gate,
             console=console,
             session_id=session_id,
@@ -424,4 +505,8 @@ async def create_main_agent(
         planner_callback=planner_callback,
         ledger=ledger,
         gate=gate,
+        facts=facts,
+        # Only prompt when a human can answer. `interactive` is the same
+        # flag that decides whether ask_user is registered (S10a.5).
+        approve=ask_approval if interactive else auto_approve,
     )

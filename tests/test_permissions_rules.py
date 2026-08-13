@@ -97,10 +97,44 @@ def test_plan_mode_still_allows_reads(tmp_path):
 
 
 def test_control_plane_tools_are_never_gated(tmp_path):
-    """update_plan and friends write only under .rudra/run/ (spec §4.6)."""
-    for tool in ("add_tasks", "drop_task", "ask_user"):
+    """The ledger and fact tools write only under .rudra/ (spec §4.6)."""
+    for tool in ("add_tasks", "drop_task", "ask_user", "record_fact"):
         decision = engine(tmp_path, mode="plan").decide(tool, {})
         assert (decision.effect, decision.source) == ("allow", "control-plane")
+
+
+def test_record_fact_works_in_plan_mode(tmp_path):
+    """A1.75: --plan exists to show what Rudra established.
+
+    Denied here, the clarify and architect stages record nothing, so the
+    plan presents no facts and facts.json is never written -- measured in
+    Step 10c's first acceptance run.
+    """
+    decision = engine(tmp_path, mode="plan").decide(
+        "record_fact", {"key": "language", "value": "Rust"}
+    )
+    assert decision.effect == "allow"
+
+
+def test_every_control_plane_tool_avoids_the_ask_with_no_asker_trap(tmp_path):
+    """A1.53's shape: decided `ask`, with no interrupt able to ask.
+
+    build_interrupt_on registers MUTATING_TOOLS only, so any tool decided
+    `ask` outside that set runs unprompted and unaudited. Control-plane
+    tools escape by being allowed outright; this asserts none of them has
+    drifted out of that set.
+    """
+    from rudra.permissions.interrupts import build_interrupt_on
+    from rudra.permissions.rules import CONTROL_PLANE_TOOLS
+
+    gate_engine = engine(tmp_path, mode="ask")
+    interrupts = build_interrupt_on(gate_engine)
+
+    for tool in CONTROL_PLANE_TOOLS:
+        decision = gate_engine.decide(tool, {})
+        assert decision.effect != "ask" or tool in interrupts, (
+            f"{tool} is decided 'ask' with no interrupt to ask with"
+        )
 
 
 def test_an_allow_rule_beats_the_mode_default(tmp_path):

@@ -353,3 +353,152 @@ def test_the_tester_prompt_tells_the_model_not_to_commit():
 
     assert "git commit" in TESTER.system_prompt
     assert "run_tests" in TESTER.system_prompt
+
+
+# --- Step 10c: the approval gate ---
+
+
+def _fake_plan():
+    async def fake_plan(request, *, context, planner, ledger=None):
+        from rudra.loop.ledger import Ledger
+
+        ledger = ledger if ledger is not None else Ledger()
+        await planner(ledger, request, stage="breakdown", reason="initial")
+        return ledger
+
+    return fake_plan
+
+
+def _record_work(monkeypatch):
+    ran: list[str] = []
+
+    async def fake_work(request, *, context, planner, ledger):
+        from rudra.agent.main_agent import AgentResult
+
+        ran.append("ran")
+        return AgentResult(success=True, message="done")
+
+    monkeypatch.setattr("rudra.agent.main_agent.work", fake_work)
+    return ran
+
+
+def _agent(tmp_path, *, approve=None, tasks=("write it",)):
+    """A RudraAgent with every model and backend faked away."""
+    from rich.console import Console
+
+    from rudra.agent.main_agent import AgentContext, RudraAgent
+    from rudra.facts import FactStore
+    from rudra.loop.ledger import Ledger
+
+    ledger = Ledger()
+
+    async def planner_callback(
+        run_ledger, request, *, stage, reason="initial", task=None, feedback=""
+    ):
+        planner_callback.calls.append((stage, reason, feedback))
+        if stage == "breakdown" and reason == "initial":
+            for description in tasks:
+                run_ledger.add(description)
+
+    planner_callback.calls = []
+
+    context = AgentContext(project_path=tmp_path, task="build it", console=Console(quiet=True))
+    agent = RudraAgent(
+        context=context,
+        planner_agent=object(),
+        session_id="s1",
+        db_conn=None,
+        loop_context=object(),
+        planner_callback=planner_callback,
+        ledger=ledger,
+        facts=FactStore(),
+        approve=approve,
+    )
+    return agent, planner_callback
+
+
+async def test_auto_mode_never_asks_for_approval(monkeypatch, tmp_path):
+    """--auto must not pause. Nobody is there to answer."""
+    import rudra.agent.main_agent as main_agent
+
+    def explode(console):
+        raise AssertionError("--auto must not prompt for plan approval")
+
+    monkeypatch.setattr(main_agent, "ask_approval", explode)
+    monkeypatch.setattr(main_agent, "plan", _fake_plan())
+    worked = _record_work(monkeypatch)
+
+    agent, _ = _agent(tmp_path)
+    await agent.run()
+
+    assert worked == ["ran"], "the work must still run"
+
+
+async def test_cancel_stops_before_any_work(monkeypatch, tmp_path):
+    from rudra.loop.plan_view import PlanAnswer, PlanDecision
+
+    monkeypatch.setattr("rudra.agent.main_agent.plan", _fake_plan())
+    worked = _record_work(monkeypatch)
+
+    agent, _ = _agent(tmp_path, approve=lambda console: PlanAnswer(PlanDecision.CANCEL))
+    result = await agent.run()
+
+    assert worked == []
+    assert result.success is True, "declining a plan is not a failure"
+
+
+async def test_a_revision_re_enters_breakdown_then_executes(monkeypatch, tmp_path):
+    from rudra.loop.plan_view import PlanAnswer, PlanDecision
+
+    answers = [
+        PlanAnswer(PlanDecision.REVISE, "drop the tests task"),
+        PlanAnswer(PlanDecision.APPROVE),
+    ]
+    monkeypatch.setattr("rudra.agent.main_agent.plan", _fake_plan())
+    worked = _record_work(monkeypatch)
+
+    agent, planner = _agent(tmp_path, approve=lambda console: answers.pop(0))
+    await agent.run()
+
+    assert ("breakdown", "revision", "drop the tests task") in planner.calls
+    assert worked == ["ran"]
+
+
+async def test_revisions_are_capped(monkeypatch, tmp_path):
+    from rudra.agent.main_agent import MAX_REVISIONS
+    from rudra.loop.plan_view import PlanAnswer, PlanDecision
+
+    monkeypatch.setattr("rudra.agent.main_agent.plan", _fake_plan())
+    worked = _record_work(monkeypatch)
+
+    agent, planner = _agent(
+        tmp_path, approve=lambda console: PlanAnswer(PlanDecision.REVISE, "again")
+    )
+    await agent.run()
+
+    revisions = [call for call in planner.calls if call[1] == "revision"]
+    assert len(revisions) == MAX_REVISIONS
+    assert worked == [], "an unapproved plan must not execute"
+
+
+async def test_plan_mode_presents_and_stops(monkeypatch, tmp_path):
+    from rudra.config.loader import build_config, reset_config
+
+    monkeypatch.setattr("rudra.agent.main_agent.plan", _fake_plan())
+    worked = _record_work(monkeypatch)
+
+    rudra_dir = tmp_path / ".rudra"
+    rudra_dir.mkdir(parents=True, exist_ok=True)
+    (rudra_dir / "config.toml").write_text('[permissions]\nmode = "plan"\n', encoding="utf-8")
+    reset_config()
+    try:
+        cfg = build_config(tmp_path)
+        monkeypatch.setattr("rudra.agent.main_agent.get_config", lambda *a, **k: cfg)
+
+        agent, _ = _agent(tmp_path)
+        result = await agent.run()
+    finally:
+        reset_config()
+
+    assert worked == [], "--plan must never execute"
+    assert result.success is True

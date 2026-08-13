@@ -473,6 +473,7 @@ async def consult_planner(
     stage: str,
     reason: str = "initial",
     task: Any = None,
+    feedback: str = "",
     gate: Any,
     console: Console,
     session_id: str,
@@ -480,10 +481,15 @@ async def consult_planner(
     """Ask one planning stage to do its job. It mutates state via tools.
 
     Three stages run once each, in order, before any coder runs. Only
-    `breakdown` is ever re-entered -- on a blocked task or an empty ledger
-    (S10b.3). Clarify and architect are not: re-opening the questions
-    after code exists spends a model call churning decisions the coder has
-    already built on.
+    `breakdown` is ever re-entered -- on a blocked task, an empty ledger,
+    or a user revising the plan (S10b.3, C6.9). Clarify and architect are
+    not: re-opening the questions after code exists spends a model call
+    churning decisions the coder has already built on, and after Step 10c
+    it would re-litigate facts the user has already approved.
+
+    A revision carries the user's words **verbatim**, for the reason the
+    gate's blocker goes back unparaphrased: a summary of an instruction is
+    a worse instruction.
 
     Each stage has its own thread, so the only thing that carries between
     them is what was recorded -- which is the point (S10b.1).
@@ -509,6 +515,16 @@ async def consult_planner(
             f"{task.note}\n\n"
             "Add a task taking a DIFFERENT approach, or drop_task it if it is "
             "not worth doing. If neither, reply DONE and stop."
+        )
+    elif reason == "revision":
+        if not feedback.strip():
+            msg = "a revision needs the user's feedback; got an empty string"
+            raise ValueError(msg)
+        message = (
+            "The user reviewed your plan and asked for this change:\n\n"
+            f"{feedback.strip()}\n\n"
+            "Adjust the task list with add_tasks and drop_task to match. "
+            "Change only what they asked about; leave the rest alone."
         )
     else:  # pragma: no cover - guarded by the caller
         raise ValueError(f"unknown consult reason {reason!r}")

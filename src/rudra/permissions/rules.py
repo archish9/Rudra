@@ -23,10 +23,16 @@ from rudra.permissions.floor import floor_hit
 if TYPE_CHECKING:  # pragma: no cover - broken at runtime to avoid a cycle
     from rudra.permissions.grants import SessionGrants
 
-# Rudra's own orchestration tools. They write only under .rudra/run/ and are
+# Rudra's own orchestration tools. They write only under .rudra/ and are
 # how the loop functions; gating them would make mode="ask" prompt for
 # Rudra's own bookkeeping (spec §4.6).
-CONTROL_PLANE_TOOLS = frozenset({"add_tasks", "drop_task", "ask_user"})
+#
+# `record_fact` joined late and the omission had teeth (A1.75): denied in
+# `plan` mode it left `--plan` presenting a plan with no facts, which is
+# the one thing that flag exists to show, and in `ask` mode it fell to a
+# bare "ask" that no interrupt could deliver -- A1.53's shape, since
+# build_interrupt_on covers MUTATING_TOOLS only.
+CONTROL_PLANE_TOOLS = frozenset({"add_tasks", "drop_task", "ask_user", "record_fact"})
 
 # `read_ledger` belongs here, not in the control plane: it only reads
 # .rudra/run/ledger.json. Its predecessor `read_plan` was in neither set

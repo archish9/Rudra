@@ -601,7 +601,7 @@ def main(
         False, "--auto", "--yolo", help="Approve every action without prompting"
     ),
     plan: bool = typer.Option(
-        False, "--plan", help="Plan only: make no project changes, run no commands"
+        False, "--plan", help="Plan only: show the plan and stop, changing nothing"
     ),
     allow_shell: bool = typer.Option(
         False,
