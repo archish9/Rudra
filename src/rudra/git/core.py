@@ -165,14 +165,32 @@ def is_clean(project_path: Path, *, gate: Any, console: Console, cfg: Any) -> bo
     return not any(_is_users_change(entry.path) for entry in _parse_status(result.stdout))
 
 
-def status(project_path: Path, *, gate: Any, console: Console, cfg: Any) -> list[FileStatus]:
+def status(
+    project_path: Path,
+    *,
+    gate: Any,
+    console: Console,
+    cfg: Any,
+    all_untracked: bool = False,
+) -> list[FileStatus]:
     """Parsed `git status --porcelain`, including Rudra's own `.rudra/`.
 
     Unfiltered on purpose: this reports what git reports. `is_clean` is the
     one that asks the narrower question, "does the user have uncommitted
     work", and filters accordingly (A1.55).
+
+    `all_untracked` adds `--untracked-files=all`, which lists untracked
+    *files* instead of collapsing each untracked directory into one entry
+    (A1.66). Off by default because the collapsed form is what a human
+    reads in a status listing, and on for the loop, which diffs two
+    snapshots and needs a write inside an already-seen directory to show
+    up. It can be very large in a project with build output, so callers
+    that enable it are expected to prune -- see loop/engine.py.
     """
-    result = _run(project_path, ["status", "--porcelain"], gate=gate, console=console, cfg=cfg)
+    argv = ["status", "--porcelain"]
+    if all_untracked:
+        argv.append("--untracked-files=all")
+    result = _run(project_path, argv, gate=gate, console=console, cfg=cfg)
     return _parse_status(result.stdout) if result.ok else []
 
 

@@ -9,9 +9,10 @@ tools cannot write DONE and this module is the only thing that can.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from rich.console import Console
@@ -21,7 +22,7 @@ from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
 from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.subagents import SubagentContext, run_subagent
 from rudra.verify import verify_project
-from rudra.verify.stubs import source_files
+from rudra.verify.stubs import SKIP_DIRS, source_files
 
 
 class Outcome(StrEnum):
@@ -48,33 +49,90 @@ class LoopContext:
     paths: Any
 
 
-def git_snapshot(context: LoopContext) -> frozenset[str] | None:
-    """Paths git currently reports as changed, or None outside a repo.
+def _is_build_output(path: str) -> bool:
+    """Is this path inside a directory nothing should ever attribute to the coder?
+
+    One definition, shared with the gate (verify/stubs.py): every stack
+    profile already declares its build-output dirs, and the loop must not
+    keep a second opinion.
+    """
+    return any(part in SKIP_DIRS for part in PurePosixPath(path).parts)
+
+
+def _digest(path: Path) -> str:
+    """A cheap content fingerprint, or "" when the file cannot be read.
+
+    Unreadable and absent both yield "", which is what a deletion should
+    look like to the comparison below.
+    """
+    try:
+        with path.open("rb") as handle:
+            hasher = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(65536), b""):
+                hasher.update(chunk)
+    except OSError:
+        return ""
+    return hasher.hexdigest()
+
+
+def git_snapshot(context: LoopContext) -> dict[str, str] | None:
+    """What git reports as changed, each path with a content fingerprint.
 
     None is a real answer the caller acts on: without git there is no way
     to tell what an attempt touched, so the gate falls back to scanning
     everything -- the same choice `rudra verify` makes.
+
+    Two things here are A1.66, and they compound. **`all_untracked=True`**:
+    plain porcelain collapses an untracked directory into one entry, so
+    once a task has created `src/`, a later task writing `src/main.rs`
+    adds no new entry. **The fingerprint**: a file that is untracked
+    before and after an attempt appears identically in both listings even
+    when its contents were rewritten -- which is exactly what a fix-loop
+    retry does to code written in a greenfield repo. Under either one the
+    diff comes back empty, the empty-diff guard reads that as "the coder
+    wrote nothing", and real work is blocked. Measured on a greenfield
+    Rust run: every task after the first blocked at 3 attempts, with its
+    files on disk the whole time.
+
+    Hashing is bounded by what git already reports and by the build-output
+    pruning below, so this reads the changed files, not the project.
     """
     gate = context.subagents.gate
     if not is_repo(context.project_path, gate=gate, console=context.console, cfg=context.cfg):
         return None
-    entries = status(context.project_path, gate=gate, console=context.console, cfg=context.cfg)
-    return frozenset(entry.path for entry in entries if entry.path)
+    entries = status(
+        context.project_path,
+        gate=gate,
+        console=context.console,
+        cfg=context.cfg,
+        all_untracked=True,
+    )
+    return {
+        entry.path: _digest(context.project_path / entry.path)
+        for entry in entries
+        if entry.path and not _is_build_output(entry.path)
+    }
 
 
-def changed_since(context: LoopContext, before: frozenset[str] | None) -> tuple[str, ...]:
+def changed_since(context: LoopContext, before: dict[str, str] | None) -> tuple[str, ...]:
     """What this attempt touched.
 
     Read from git rather than from the model. Asking the coder what it
     wrote invites a wrong answer at exactly the moment the answer matters,
     because it feeds 9a's stub scan.
+
+    A path counts when it is new, gone, or its fingerprint moved. The last
+    case is what makes a retry that rewrites an untracked file visible
+    (A1.66).
     """
     if before is None:
         return source_files(context.project_path)
     after = git_snapshot(context)
     if after is None:  # pragma: no cover - a repo cannot stop being one mid-run
         return source_files(context.project_path)
-    return tuple(sorted(after - before))
+    touched = {path for path, digest in after.items() if before.get(path) != digest}
+    touched |= {path for path in before if path not in after}
+    return tuple(sorted(touched))
 
 
 def _coder_prompt(task: Task, blocker_text: str = "") -> str:
