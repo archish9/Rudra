@@ -302,8 +302,14 @@ def test_every_wrapped_execute_name_is_actually_registered():
 
 
 def test_the_interaction_tools_survive_the_ledger_switch(monkeypatch, tmp_path):
-    """Step 9c replaced the planning tools; 10a replaced these two."""
-    names = set(_planner_tool_names(monkeypatch, tmp_path))
+    """Step 9c replaced the planning tools; 10a replaced these two.
+
+    Step 10b moved them onto the clarify stage: the planner is three
+    agents now, and only the first of them establishes facts. Asserted
+    against that stage rather than relaxed, because the property is the
+    same one -- it just has an owner now.
+    """
+    names = set(_planner_tool_names(monkeypatch, tmp_path, stage="clarify"))
     assert "record_fact" in names
     assert "ask_user" in names
     assert "save_project_context" not in names
@@ -311,7 +317,7 @@ def test_the_interaction_tools_survive_the_ledger_switch(monkeypatch, tmp_path):
 
 def test_an_unattended_planner_has_no_ask_user(monkeypatch, tmp_path):
     """S10a.5: the tool is absent, not refusing."""
-    names = set(_planner_tool_names(monkeypatch, tmp_path, interactive=False))
+    names = set(_planner_tool_names(monkeypatch, tmp_path, stage="clarify", interactive=False))
     assert "record_fact" in names
     assert "ask_user" not in names
 

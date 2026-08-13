@@ -127,6 +127,57 @@ def build_planner_middleware(
     return middleware
 
 
+# The three stages, in the order run_loop runs them: C6.7's clarify ->
+# architect -> task breakdown.
+STAGES: tuple[str, ...] = ("clarify", "architect", "breakdown")
+
+
+def _tools_for_stage(
+    stage: str,
+    *,
+    ledger: Any,
+    facts: Any,
+    paths: Any,
+    console: Console,
+    cfg: Any,
+    interactive: bool,
+) -> list:
+    """The tools one stage may call, and no others (S10b.1).
+
+    Absence is the enforcement. A prompt telling the model to clarify
+    before planning is a hint -- Step 7's acceptance run watched a model
+    denied on write_file reach for `echo > /abs/path` instead -- so the
+    breakdown stage simply has no way to ask a question, and the clarify
+    stage no way to declare work.
+
+    The single assembly point, for the reason subagents/build.py is one:
+    two paths that decide a tool list will eventually disagree.
+    """
+    if stage not in STAGES:
+        known = ", ".join(STAGES)
+        msg = f"unknown planner stage {stage!r}; valid stages: {known}"
+        raise ValueError(msg)
+
+    if stage == "breakdown":
+        # No record_fact and no ask_user: by now the facts are settled,
+        # and re-opening them mid-plan is what C6.8 exists to prevent.
+        return create_ledger_tools(ledger, paths.ledger_json)
+
+    interaction = create_interaction_tools(
+        console,
+        facts,
+        paths.facts_json,
+        max_questions=cfg.agent.max_questions,
+        interactive=interactive and stage == "clarify",
+    )
+    # The architect reasons; it does not interrogate. Filtering rather
+    # than calling a second factory keeps one construction path, so the
+    # question budget cannot fork.
+    if stage == "architect":
+        return [tool for tool in interaction if tool.name != "ask_user"]
+    return interaction
+
+
 def create_planner_agent(
     task: str,
     project_path: Path,
@@ -138,16 +189,22 @@ def create_planner_agent(
     paths=None,
     facts=None,
     interactive: bool = True,
+    stage: str = "breakdown",
 ):
-    """Create the planner deep agent.
+    """Create one stage of the planner (S10b.1).
 
     `ledger` and `facts` must be the SAME objects the loop reads: the
-    planner's tools mutate them in place, and a copy would leave the
-    engine with no tasks and the coder with no facts.
+    stages mutate them in place, and a copy would leave the engine with no
+    tasks and the coder with no facts. They are also the only channel
+    between stages -- each stage gets its own thread, so nothing carries
+    over except what was recorded.
 
     `interactive` False means nobody can answer, so ask_user is never
     registered (S10a.5). The prompt is built to match, so the model is
     never told to call a tool it does not have.
+
+    `stage` defaults to "breakdown" because that is what every pre-10b
+    caller expected: declare the work.
     """
     from rudra.facts import FactStore
     from rudra.loop.ledger import Ledger
@@ -162,12 +219,15 @@ def create_planner_agent(
     # The ledger replaced PLAN.md and current_task.md (C6.10); the fact
     # store replaced project.json's four fields (C6.8a). git and testing
     # tools are gone from the planner: the loop runs the gate itself, and
-    # the tester subagent writes tests (S9c.5).
-    custom_tools = create_ledger_tools(ledger, paths.ledger_json) + create_interaction_tools(
-        console,
-        facts,
-        paths.facts_json,
-        max_questions=cfg.agent.max_questions,
+    # the tester subagent writes tests (S9c.5). Which of the rest this
+    # stage sees is _tools_for_stage's decision, and only its (S10b.1).
+    custom_tools = _tools_for_stage(
+        stage,
+        ledger=ledger,
+        facts=facts,
+        paths=paths,
+        console=console,
+        cfg=cfg,
         interactive=interactive,
     )
 
@@ -191,7 +251,7 @@ def create_planner_agent(
             task,
             project_path,
             facts,
-            can_ask=interactive and cfg.agent.max_questions > 0,
+            can_ask=interactive and stage == "clarify" and cfg.agent.max_questions > 0,
             max_questions=cfg.agent.max_questions,
         ),
         backend=filesystem_backend,
