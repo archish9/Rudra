@@ -153,3 +153,39 @@ def test_load_drops_entries_that_fail_validation(tmp_path: Path):
     )
     loaded = FactStore.load(path)
     assert [key for key, _ in loaded.items()] == ["language"]
+
+
+def test_concurrent_saves_do_not_race_on_the_temp_file(tmp_path: Path):
+    """A1.71: a fixed temp name makes two writers collide.
+
+    Found live, not here: deepagents runs a turn's tool calls
+    concurrently, the model emitted three record_fact calls in one turn,
+    and the second os.replace raised FileNotFoundError because the first
+    had already consumed the shared facts.json.tmp -- killing the run.
+    """
+    import threading
+
+    store = FactStore()
+    for index in range(20):
+        store.record(f"k{index}", "v", "w", "detected")
+
+    path = tmp_path / "facts.json"
+    errors: list[BaseException] = []
+
+    def _save() -> None:
+        try:
+            for _ in range(25):
+                store.save(path)
+        except BaseException as exc:  # noqa: BLE001 - recorded for the assert
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_save) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, f"concurrent save raised {errors[0]!r}"
+    assert json.loads(path.read_text(encoding="utf-8"))["facts"]
+    # No debris: every temp file must have been replaced or cleaned up.
+    assert [entry.name for entry in tmp_path.iterdir()] == ["facts.json"]

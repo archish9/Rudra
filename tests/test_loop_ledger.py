@@ -125,3 +125,37 @@ def test_add_after_load_keeps_ids_unique(tmp_path):
     reloaded = Ledger.load(path)
     third = reloaded.add("c")
     assert third.id == "t3"
+
+
+def test_concurrent_saves_do_not_race_on_the_temp_file(tmp_path):
+    """A1.71, the same shape FactStore.save had.
+
+    Measured on the fact store, whose tool is called once per fact; this
+    one survived only because add_tasks takes a list and is usually a
+    single call. The bug is identical, so the guard is too.
+    """
+    import threading
+
+    ledger = Ledger()
+    for index in range(20):
+        ledger.add(f"task {index}")
+
+    path = tmp_path / "ledger.json"
+    errors: list[BaseException] = []
+
+    def _save() -> None:
+        try:
+            for _ in range(25):
+                ledger.save(path)
+        except BaseException as exc:  # noqa: BLE001 - recorded for the assert
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_save) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, f"concurrent save raised {errors[0]!r}"
+    assert json.loads(path.read_text(encoding="utf-8"))["tasks"]
+    assert [entry.name for entry in tmp_path.iterdir()] == ["ledger.json"]

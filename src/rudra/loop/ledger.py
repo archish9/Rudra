@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -93,18 +94,29 @@ class Ledger:
         }
 
     def save(self, path: Path) -> None:
-        """Write atomically: temp file, then os.replace.
+        """Write atomically: a private temp file, then os.replace.
 
         A crash mid-write must leave the previous ledger readable rather
         than a truncated one. This file is the only record of how far a run
         got, and it is written after every status change.
+
+        The temp name is unique per writer (A1.71). A fixed `.tmp` is
+        correct for one writer and wrong for two: deepagents runs a turn's
+        tool calls concurrently, so the first os.replace consumes the file
+        and the second raises FileNotFoundError. Measured on the fact
+        store, whose tool is called once per fact; this one has the same
+        shape and survived only because add_tasks takes a list.
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"tasks": [{**asdict(task), "status": task.status.value} for task in self.tasks]}
-        temporary = path.with_name(f"{path.name}.tmp")
-        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        os.replace(temporary, path)
+        temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
 
     @classmethod
     def load(cls, path: Path) -> Ledger:

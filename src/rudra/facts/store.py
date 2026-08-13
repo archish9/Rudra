@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -107,18 +108,29 @@ class FactStore:
         return list(self.facts.items())
 
     def save(self, path: Path) -> None:
-        """Write atomically: temp file, then os.replace.
+        """Write atomically: a private temp file, then os.replace.
 
         A crash mid-write must leave the previous file readable rather
         than a truncated one -- the guarantee Ledger.save gives
         (loop/ledger.py:95-107).
+
+        The temp name is unique per writer, not a fixed `.tmp` (A1.71).
+        deepagents runs one turn's tool calls concurrently, and the model
+        emits one record_fact per fact, so two saves genuinely overlap: on
+        a shared name the first os.replace consumes the file and the
+        second raises FileNotFoundError, killing the run. Unlinking on
+        failure keeps a crashed write from leaving debris beside the file.
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"facts": {key: asdict(fact) for key, fact in self.facts.items()}}
-        temporary = path.with_name(f"{path.name}.tmp")
-        temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        os.replace(temporary, path)
+        temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
 
     @classmethod
     def load(cls, path: Path) -> FactStore:
