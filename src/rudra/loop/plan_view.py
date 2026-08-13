@@ -12,9 +12,13 @@ with the same exposure, escaped at the point of rendering.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
+from rich.console import Console
 from rich.markup import escape
+from rich.prompt import Prompt
 
 from rudra.loop.ledger import Ledger, TaskStatus
 
@@ -45,4 +49,68 @@ def render_plan(ledger: Ledger, facts: Any = None) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["render_plan"]
+class PlanDecision(StrEnum):
+    """What the user decided about the plan."""
+
+    APPROVE = "approve"
+    REVISE = "revise"
+    CANCEL = "cancel"
+
+
+@dataclass(frozen=True)
+class PlanAnswer:
+    """A decision, plus the words behind a revision."""
+
+    decision: PlanDecision
+    feedback: str = ""
+
+
+_CANCEL = PlanAnswer(PlanDecision.CANCEL)
+
+
+def auto_approve(console: Console) -> PlanAnswer:
+    """Approve without asking. The default, so nothing pauses unbidden.
+
+    Every caller that has not opted into a prompt -- `--auto`, the tests,
+    any programmatic use -- gets this, which is why adding the gate
+    changes no existing behaviour.
+    """
+    return PlanAnswer(PlanDecision.APPROVE)
+
+
+def ask_approval(console: Console) -> PlanAnswer:
+    """Ask the user to approve, revise, or cancel the plan.
+
+    EOF and Ctrl-C are cancel, never approve (S10c.5): a plan must not
+    execute because a pipe closed or a user gave up. That asymmetry is
+    the one safety property this function has.
+    """
+    try:
+        choice = Prompt.ask(
+            "[bold]Proceed?[/bold] [dim][a]pprove [r]evise [c]ancel[/dim]",
+            choices=["a", "r", "c"],
+            default="a",
+        )
+    except (EOFError, KeyboardInterrupt):
+        console.print("[dim]No answer — cancelled.[/dim]")
+        return _CANCEL
+
+    if choice == "a":
+        return PlanAnswer(PlanDecision.APPROVE)
+    if choice == "c":
+        return _CANCEL
+
+    # Revise. An empty answer is a slip and costs one re-prompt; a second
+    # empty answer is someone who does not want to revise after all.
+    for _ in range(2):
+        try:
+            feedback = Prompt.ask("[bold]What should change?[/bold]", default="").strip()
+        except (EOFError, KeyboardInterrupt):
+            return _CANCEL
+        if feedback:
+            return PlanAnswer(PlanDecision.REVISE, feedback)
+        console.print("[dim]Say what should change, or press Ctrl-C to cancel.[/dim]")
+    return _CANCEL
+
+
+__all__ = ["PlanAnswer", "PlanDecision", "ask_approval", "auto_approve", "render_plan"]
