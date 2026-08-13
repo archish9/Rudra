@@ -1,5 +1,14 @@
-"""Interaction tools — allow the agent to ask the user clarifying questions
-and persist gathered project context for future sessions."""
+"""Asking the user, and recording what the run establishes.
+
+Both tools replace the static questionnaire TODO.md §0.5 inventories.
+`save_project_context` accepted four field names and silently discarded
+everything else (surface #2); `ask_user` mandated one question at a time
+(surface #3), which is the opposite of what C6.8 needs.
+
+Neither tool raises. A model reads what comes back and tries again, so a
+rejection is a sentence explaining what would be acceptable -- the same
+REJECTED idiom loop/tools.py uses.
+"""
 
 from __future__ import annotations
 
@@ -7,80 +16,134 @@ from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
 
-from rudra.state import ProjectConfigManager
+from rudra.facts import FactRejected, FactStore
 
 
-def create_interaction_tools(console: Console, project_path: Path) -> list[BaseTool]:
-    """Create interaction tools bound to the given console and project path.
+def create_interaction_tools(
+    console: Console,
+    store: FactStore,
+    path: Path,
+    *,
+    max_questions: int = 5,
+    interactive: bool = True,
+) -> list[BaseTool]:
+    """The interaction tools for one run.
 
     Args:
-        console: Rich console for terminal output.
-        project_path: Root directory of the project (used to locate project.json).
+        console: Rich console for the questions.
+        store: The live FactStore the loop also reads -- the same object,
+            not a copy, for the reason the Ledger is shared.
+        path: Where to persist after each successful record.
+        max_questions: The run's whole clarification budget
+            (`[agent] max_questions`). Counted in questions, not calls.
+        interactive: False when nobody can answer. `ask_user` is then not
+            registered at all rather than returning a refusal (S10a.5):
+            the reviewer cannot write because its tools do not exist, and
+            this follows that precedent.
 
     Returns:
-        List of LangChain tools: [ask_user, save_project_context]
+        [record_fact], plus [ask_user] when a user can actually answer.
     """
+    remaining = {"questions": max(0, int(max_questions))}
 
     @tool
-    def ask_user(question: str) -> str:
-        """Ask the user a clarifying question and return their answer.
+    def record_fact(key: str, value: str, why: str, source: str) -> str:
+        """Record one thing you have established about this project.
 
-        Use this when you need information about the project that is not available
-        in the codebase or file tree — for example, the preferred language,
-        framework, or database. Ask ONE focused, specific question at a time.
+        Record everything you rely on, whether the user told you or you
+        worked it out -- the coder, the tester and the reviewer all read
+        these facts, and a fact you keep to yourself is one they do not
+        have.
 
         Args:
-            question: A clear, specific question to ask the user.
+            key: A short lowercase name: "language", "cli_framework",
+                "min_python_version". Invent whatever fits; there is no
+                fixed list.
+            value: What you established, e.g. "Rust".
+            why: Why you believe it, e.g. "the user asked for a Rust CLI".
+            source: "asked" if the user told you, "inferred" if you worked
+                it out from the request, "detected" if you read it off the
+                project.
 
         Returns:
-            The user's text response.
+            Confirmation, or REJECTED and what would be acceptable.
         """
-        console.print(f"\n[bold cyan]?[/bold cyan] {question}")
         try:
-            answer = Prompt.ask("[bold yellow]Answer[/bold yellow]", default="")
-        except EOFError:
-            return "(stdin is not interactive; skipping this question)"
-        return answer.strip() or "(no answer provided)"
+            fact = store.record(key, value, why, source)
+        except FactRejected as exc:
+            return f"REJECTED: {exc}"
+        store.save(path)
+        return f'Recorded {key} = "{fact.value}" ({fact.source}).'
+
+    tools: list[BaseTool] = [record_fact]
+    if not interactive or remaining["questions"] <= 0:
+        return tools
 
     @tool
-    def save_project_context(context: dict) -> str:
-        """Save project tech stack information to .rudra/project.json.
+    def ask_user(questions: list[str], keys: list[str]) -> str:
+        """Ask the user a batch of related questions and record the answers.
 
-        Call this after using ask_user() to gather the project's tech stack.
-        Only supply the fields you have confirmed answers for — existing fields
-        that are not included will be left unchanged.
-
-        Supported fields:
-            primary_language (str): e.g. "Python", "TypeScript", "Go"
-            framework        (str): e.g. "FastAPI", "Next.js", "Django"
-            database         (str): e.g. "PostgreSQL", "SQLite", "MongoDB"
-            additional_context (str): architecture rules or constraints
+        Ask only what you cannot infer from the request or the codebase.
+        Send related questions together in ONE call rather than one per
+        call. Every answer is recorded as a fact automatically, so you do
+        not need to call record_fact for it.
 
         Args:
-            context: Dict containing any subset of the supported fields above.
+            questions: The questions, in the order to ask them.
+            keys: One fact key per question, same order and same length:
+                ["language", "cli_framework"].
 
         Returns:
-            Confirmation string listing what was saved.
+            A numbered question-and-answer block, or REJECTED and why.
         """
-        valid_fields = {"primary_language", "framework", "database", "additional_context"}
-        config_manager = ProjectConfigManager(project_path)
-        existing = config_manager.load()
+        if not questions:
+            return "REJECTED: give at least one question."
+        if len(keys) != len(questions):
+            return (
+                f"REJECTED: give one key per question; got {len(questions)} "
+                f"question(s) and {len(keys)} key(s)."
+            )
+        if remaining["questions"] <= 0:
+            return (
+                f"REJECTED: question budget spent ({max_questions}) — "
+                "infer the rest from the request and record it with record_fact."
+            )
 
-        updates: dict[str, str] = {}
-        for key, value in context.items():
-            if key in valid_fields and isinstance(value, str) and value.strip():
-                updates[key] = value.strip()
+        # Ask what fits rather than refusing the batch: refusing would
+        # punish exactly the batching this tool exists to encourage.
+        askable = list(zip(keys, questions))[: remaining["questions"]]
+        skipped = len(questions) - len(askable)
 
-        for field_name, value in updates.items():
-            setattr(existing, field_name, value)
+        lines: list[str] = []
+        for index, (key, question) in enumerate(askable, start=1):
+            remaining["questions"] -= 1
+            console.print(f"\n[bold cyan]?[/bold cyan] {escape(question)}")
+            try:
+                answer = Prompt.ask("[bold yellow]Answer[/bold yellow]", default="").strip()
+            except EOFError:
+                # stdin closed mid-batch. Everything answered so far is
+                # already recorded; the rest simply did not happen.
+                lines.append(f"{index}. {question} → (no answer)")
+                break
+            if not answer:
+                lines.append(f"{index}. {question} → (no answer)")
+                continue
+            try:
+                store.record(key, answer, f"user answered: {question}", "asked")
+            except FactRejected as exc:
+                lines.append(f"{index}. {question} → {answer}  (NOT recorded: {exc})")
+                continue
+            store.save(path)
+            lines.append(f"{index}. {question} → {answer}  (recorded as {key})")
 
-        if updates:
-            config_manager.save(existing)
-            saved_pairs = ", ".join(f"{k}={v!r}" for k, v in updates.items())
-            return f"Project context saved: {saved_pairs}"
+        if skipped:
+            lines.append(f"({skipped} question(s) not asked: the question budget is spent.)")
+        return "\n".join(lines)
 
-        return "No valid fields provided; nothing was saved."
+    return [record_fact, ask_user]
 
-    return [ask_user, save_project_context]
+
+__all__ = ["create_interaction_tools"]
