@@ -53,13 +53,8 @@ def test_the_planner_prompt_names_no_state_paths(tmp_path: Path) -> None:
 def test_durable_files_did_not_move(tmp_path: Path) -> None:
     paths = rudra_paths(tmp_path)
     assert paths.agents_md == tmp_path / ".rudra" / "AGENTS.md"
-    assert paths.project_json == tmp_path / ".rudra" / "project.json"
-
-
-def test_project_config_manager_still_uses_the_durable_location(tmp_path: Path) -> None:
-    from rudra.state import ProjectConfigManager
-
-    assert ProjectConfigManager(tmp_path).config_file == rudra_paths(tmp_path).project_json
+    # project.json became facts.json at C6.8a and is not migrated (S10a.8).
+    assert paths.facts_json == tmp_path / ".rudra" / "facts.json"
 
 
 def _sources() -> str:

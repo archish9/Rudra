@@ -9,9 +9,10 @@ from typing import Any, Optional
 from rich.console import Console
 
 from rudra.config import get_config
+from rudra.facts import FactStore, facts_block
 from rudra.git.core import auto_branch
 from rudra.loop import run_loop
-from rudra.state import ProjectContext, ensure_layout
+from rudra.state import ensure_layout
 
 
 @dataclass
@@ -21,7 +22,6 @@ class AgentContext:
     project_path: Path
     task: str
     console: Console
-    project_context: Optional[ProjectContext] = None
 
     dry_run: bool = False
     verbose: bool = False
@@ -206,77 +206,32 @@ def _maybe_auto_branch(project_path: Path, task: str, *, cfg, gate, console: Con
         console.print(f"[yellow]No branch created: {outcome.skipped_reason}.[/yellow]")
 
 
-def _ensure_agents_md(rudra_dir: Path, project_context: Optional[ProjectContext]) -> None:
-    """Create a starter AGENTS.md if one does not already exist."""
+def _ensure_agents_md(rudra_dir: Path, facts: Any = None) -> None:
+    """Create a starter AGENTS.md if one does not already exist.
+
+    Renders whatever facts exist rather than four fixed fields (C6.8a).
+    Still create-once: A1.9 -- this file is never written again -- is real
+    and belongs to C7.3, which makes it a living document.
+    """
     agents_md = rudra_dir / "AGENTS.md"
     if agents_md.exists():
         return
 
-    stack_lines = []
-    if project_context:
-        if project_context.primary_language:
-            stack_lines.append(f"- Language: {project_context.primary_language}")
-        if project_context.framework:
-            stack_lines.append(f"- Framework: {project_context.framework}")
-        if project_context.database:
-            stack_lines.append(f"- Database: {project_context.database}")
-        if project_context.additional_context:
-            stack_lines.append(f"- Notes: {project_context.additional_context}")
-
+    block = facts_block(facts).strip()
     stack_section = (
-        "\n".join(stack_lines) if stack_lines else "(not yet determined — agent will fill in)"
+        block if block else "## Project Facts\n(not yet determined — the agent will fill this in)"
     )
 
     agents_md.write_text(
         f"# Project Memory\n\n"
         f"This file is your persistent memory across sessions.\n"
         f"Update it using edit_file after completing any task.\n\n"
-        f"## Tech Stack\n{stack_section}\n\n"
+        f"{stack_section}\n\n"
         f"## Project Structure\n(not yet built)\n\n"
         f"## Architecture Notes\n(none yet)\n\n"
         f"## Session Log\n(no sessions yet)\n",
         encoding="utf-8",
     )
-
-
-def _write_tech_stack_file(
-    run_dir: Path,
-    project_context: Optional[ProjectContext],
-) -> str:
-    """Write project tech stack to .rudra/run/tech_stack.md. Returns the content.
-
-    Volatile: rewritten on every run, so it lives in the run/ subtree (D15).
-    """
-    tech_stack_path = run_dir / "tech_stack.md"
-
-    if project_context and project_context.primary_language:
-        lines = [
-            "# Project Tech Stack\n\n",
-            f"**Primary Language:** {project_context.primary_language}\n\n",
-            f"**Framework:** {project_context.framework or 'Not specified'}\n\n",
-            f"**Database:** {project_context.database or 'Not specified'}\n\n",
-        ]
-        if project_context.additional_context:
-            lines.append(f"## Architecture Rules\n\n{project_context.additional_context}\n")
-        lines.append("\nAll code you write MUST use this exact tech stack.\n")
-    else:
-        lines = [
-            "# Project Tech Stack\n\n",
-            "No tech stack configured. Infer from the task description:\n\n",
-            "- 'Flask ...' → Python + Flask\n",
-            "- 'Django ...' → Python + Django\n",
-            "- 'FastAPI ...' → Python + FastAPI\n",
-            "- 'React ...' → JavaScript / TypeScript + React\n",
-            "- 'Next.js ...' → TypeScript + Next.js\n",
-            "- 'Express ...' → Node.js + Express\n",
-            "- 'Spring ...' → Java + Spring Boot\n",
-            "- 'Rails ...' → Ruby on Rails\n",
-            "\nIf the stack is truly ambiguous, infer the most likely one and proceed.\n",
-        ]
-
-    content = "".join(lines)
-    tech_stack_path.write_text(content, encoding="utf-8")
-    return content
 
 
 def build_backend(cfg, project_path: Path):
@@ -330,7 +285,6 @@ def build_backend(cfg, project_path: Path):
 async def create_main_agent(
     project_path: Path,
     task: str,
-    project_context: Optional[ProjectContext] = None,
     command: str = "build",
     console: Optional[Console] = None,
     dry_run: bool = False,
@@ -346,7 +300,6 @@ async def create_main_agent(
         project_path=project_path,
         task=task,
         console=console,
-        project_context=project_context,
         dry_run=dry_run,
         verbose=verbose,
         command=command,
@@ -361,9 +314,18 @@ async def create_main_agent(
     from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
     from rudra.compat.deepagents_path import install_path_normalizer
-    from rudra.permissions import build_gate
+    from rudra.permissions import build_gate, stdin_is_interactive
 
     paths = ensure_layout(project_path)
+
+    # Durable: what previous runs established about this project is still
+    # true (D15). An absent or corrupt file loads empty rather than raising.
+    facts = FactStore.load(paths.facts_json)
+
+    # A user exists only when a terminal does and the run is not
+    # unattended. `plan` mode keeps asking -- that is the one mode where
+    # clarification is the entire point.
+    interactive = cfg.permissions.mode != "auto" and stdin_is_interactive()
 
     # No plan path: PLAN.md went with the checklist in Step 9c, so the
     # normalizer's planned-filename hint has nothing to read (A1.65).
@@ -376,10 +338,10 @@ async def create_main_agent(
     # without the gate in the same step.
     gate = build_gate(cfg, project_path)
 
-    # AGENTS.md is durable and stays at the .rudra/ root; tech_stack.md is
-    # rewritten every run and lives under run/. See TODO.md D15 / §0.7.
-    _ensure_agents_md(paths.root, project_context)
-    tech_stack_content = _write_tech_stack_file(paths.run, project_context)
+    # AGENTS.md is durable and stays at the .rudra/ root (D15 / §0.7). Its
+    # tech-stack section is rendered from the facts, and tech_stack.md is
+    # gone: facts reach every agent through their prompts now (S10a.7).
+    _ensure_agents_md(paths.root, facts)
 
     checkpoints_db = str(paths.checkpoints_db)
     db_conn = await aiosqlite.connect(checkpoints_db)
@@ -400,6 +362,7 @@ async def create_main_agent(
         cfg=cfg,
         checkpointer=checkpointer,
         session_id=session_id,
+        facts=facts,
     )
     loop_context = LoopContext(
         subagents=subagent_context,
@@ -415,13 +378,14 @@ async def create_main_agent(
     planner = create_planner_agent(
         task=task,
         project_path=project_path,
-        tech_stack_content=tech_stack_content,
         filesystem_backend=filesystem_backend,
         checkpointer=checkpointer,
         console=console,
         gate=gate,
         ledger=ledger,
         paths=paths,
+        facts=facts,
+        interactive=interactive,
     )
 
     async def planner_callback(run_ledger, request, *, reason, task=None):
