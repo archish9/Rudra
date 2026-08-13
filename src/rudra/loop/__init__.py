@@ -10,7 +10,7 @@ can.
 from __future__ import annotations
 
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
-from rudra.loop.engine import LoopContext, Outcome, run_loop, run_task, summarise
+from rudra.loop.engine import LoopContext, Outcome, plan, run_loop, run_task, summarise, work
 from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.loop.tools import create_ledger_tools
 
@@ -22,8 +22,10 @@ __all__ = [
     "TaskStatus",
     "create_ledger_tools",
     "failure_signature",
+    "plan",
     "run_loop",
     "run_task",
     "summarise",
     "tests_produced_no_judgement",
+    "work",
 ]

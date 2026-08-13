@@ -371,35 +371,49 @@ def summarise(ledger: Ledger, console: Console) -> Any:
     )
 
 
-async def run_loop(
+async def plan(
     request: str,
     *,
     context: LoopContext,
     planner: Any,
     ledger: Ledger | None = None,
-) -> Any:
-    """Plan, work, verify, and stop. The whole run.
+) -> Ledger:
+    """Run the three planning stages and return the ledger they filled.
 
-    `planner` is an awaitable called as
-    `planner(ledger, request, stage=..., reason=..., task=...)`; it adds
-    or drops tasks and records facts through its tools and returns
-    nothing. Injected rather than constructed here so the loop is
-    testable without a model.
+    Touches nothing in the project: no coder runs here, which is what
+    makes `--plan` honest and what lets RudraAgent put an approval gate
+    between this and work() (C6.9).
 
     `ledger` must be the SAME object the planner's tools were bound to --
-    otherwise the tasks it adds are invisible here. Defaults to a fresh one
-    only so tests can drive the loop without wiring an agent.
+    otherwise the tasks it adds are invisible. Defaults to a fresh one
+    only so tests can drive planning without wiring an agent.
     """
     ledger = ledger if ledger is not None else Ledger()
     ledger.save(context.paths.ledger_json)
 
-    # Three stages, in order, before any coder runs (C6.7, S10b.1): settle
-    # the facts, decide the shape, then declare the work. Each is a
-    # separate agent with its own tools, so a stage cannot do another
-    # stage's job. Only `breakdown` is ever re-entered below (S10b.3).
+    # Three stages, in order (C6.7, S10b.1): settle the facts, decide the
+    # shape, then declare the work. Each is a separate agent with its own
+    # tools, so a stage cannot do another stage's job. Only `breakdown` is
+    # ever re-entered, and only by work() below (S10b.3).
     for stage in ("clarify", "architect", "breakdown"):
         await planner(ledger, request, stage=stage, reason="initial")
 
+    return ledger
+
+
+async def work(
+    request: str,
+    *,
+    context: LoopContext,
+    planner: Any,
+    ledger: Ledger,
+) -> Any:
+    """Run every pending task to a verdict, review once, and report.
+
+    Consults only the `breakdown` stage, and only on a stall: the facts
+    and the architecture were settled by plan(), and a user may since
+    have approved them.
+    """
     consulted_on_empty = False
 
     while True:
@@ -429,13 +443,44 @@ async def run_loop(
     return summarise(ledger, context.console)
 
 
+async def run_loop(
+    request: str,
+    *,
+    context: LoopContext,
+    planner: Any,
+    ledger: Ledger | None = None,
+) -> Any:
+    """Plan, work, verify, and stop. The whole run.
+
+    Kept as the composition of plan() and work() rather than replaced by
+    them: it is what every 9c and 10b test drives, and a caller with no
+    interest in the seam should not have to know one exists. The seam is
+    used by RudraAgent, which puts the approval gate between the two
+    (C6.9).
+
+    `planner` is an awaitable called as
+    `planner(ledger, request, stage=..., reason=..., task=...)`; it adds
+    or drops tasks and records facts through its tools and returns
+    nothing. Injected rather than constructed here so the loop is
+    testable without a model.
+
+    `ledger` must be the SAME object the planner's tools were bound to --
+    otherwise the tasks it adds are invisible here. Defaults to a fresh
+    one only so tests can drive the loop without wiring an agent.
+    """
+    filled = await plan(request, context=context, planner=planner, ledger=ledger)
+    return await work(request, context=context, planner=planner, ledger=filled)
+
+
 __all__ = [
     "LoopContext",
     "Outcome",
     "changed_since",
     "git_snapshot",
+    "plan",
     "review_once",
     "run_loop",
     "run_task",
     "summarise",
+    "work",
 ]
