@@ -91,3 +91,33 @@ async def test_a_non_breakdown_stage_rejects_a_re_entry_reason(captured):
     """Clarify and architect run once. A blocked clarify is a bug, not a mode."""
     with pytest.raises(ValueError):
         await _consult("clarify", reason="blocked")
+
+
+# --- Step 10c: the user revising the plan ---
+
+
+async def test_a_revision_carries_the_users_words_verbatim(captured):
+    await _consult(
+        "breakdown",
+        reason="revision",
+        feedback="drop the tests task, I have my own",
+    )
+
+    message = captured[0]["message"]
+    assert "drop the tests task, I have my own" in message
+
+
+async def test_a_revision_is_a_breakdown_re_entry_like_the_others(captured):
+    await _consult("breakdown", reason="revision", feedback="split task two")
+    assert captured[0]["thread_id"] == "sess-breakdown"
+
+
+async def test_clarify_cannot_be_revised(captured):
+    """The facts the user just approved are not re-litigated (S10b.3)."""
+    with pytest.raises(ValueError):
+        await _consult("clarify", reason="revision", feedback="anything")
+
+
+async def test_a_revision_without_feedback_is_a_programming_error(captured):
+    with pytest.raises(ValueError, match="feedback"):
+        await _consult("breakdown", reason="revision")
