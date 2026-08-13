@@ -64,13 +64,18 @@ Each run starts a fresh task ledger. If a run stops early — a denied command, 
 
 There is no backoff around model invocation. A rate limit or a dropped connection stops the run where it is. Tasks already marked `done` genuinely passed the gate; the rest are reported as never attempted.
 
-### Planning is staged, but you do not approve it
+### Overlapping tasks can block work that is already done
 
-Rudra clarifies, architects, then breaks the work down, each as its own stage,
-and records every fact and decision with the reason behind it. What is missing
-is the last step: you do not get to see the plan and approve it before the coder
-starts. `--plan` today writes nothing and runs nothing, but it does not present
-anything either. That is the next step (`C6.9`).
+Rudra clarifies, architects, breaks the work down, and shows you the plan before
+any code is written — you approve, revise, or cancel it. What is still rough is
+the planner occasionally declaring two tasks for one edit. The coder finishes
+both under the first, the second legitimately changes nothing, and Rudra's
+empty-diff guard treats that as a failed attempt: the run can end with a
+non-zero exit and a `blocked` task while the feature works and its tests pass.
+
+In `ask` mode you can see the overlap in the plan and revise it away before it
+costs you anything. Under `--auto` you cannot, and re-running usually produces a
+cleaner breakdown.
 
 ### Little memory between runs
 

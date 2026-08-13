@@ -108,12 +108,13 @@ and never gated.
 
 ### Control flow (`loop/engine.py`)
 1. **Planning runs in three stages before any code** (Step 10b, C6.7): `clarify` settles the facts, `architect` records layout and boundaries, `breakdown` calls `add_tasks` with units of **work**, not filenames. Each stage is a separate agent with its own tool set — clarify cannot `add_tasks`, breakdown cannot `ask_user` or `record_fact` — so a stage cannot do another stage's job. The fact store is the only channel between them, and no stage has a tool that can mark anything done.
-2. `run_loop` takes the next pending task and calls `run_task`.
-3. `run_task`: coder subagent writes → `verify_project` gates → on failure the blocker goes back **verbatim** and it retries, up to `[agent] max_fix_attempts`.
-4. Success = **`VerifyReport.passed`**. Only `engine.py` writes `DONE`, and only there.
-5. Two identical failure signatures in a row → `BLOCKED` (C6.5a). A gate `escalate` → the whole run stops.
-6. The planner is consulted again **only** on a block or an empty ledger — never after an ordinary success, and only the `breakdown` stage is re-entered (S10b.3). Clarify and architect run once: re-opening the questions after code exists churns decisions the coder already built on.
-7. Reviewer runs once at the end, advisory, printed, gating nothing.
+2. **The plan is presented and approved** (Step 10c, C6.9): facts with their source, then the tasks. In `ask` mode the user approves, revises — which re-enters `breakdown` with their words **verbatim**, up to `MAX_REVISIONS` (3) times — or cancels. `--plan` presents and stops. `--auto` skips the gate. **EOF and Ctrl-C are cancel, never approve.** The gate lives in `RudraAgent`, between `plan()` and `work()`; the loop does not know what a terminal is.
+3. `work()` takes the next pending task and calls `run_task`.
+4. `run_task`: coder subagent writes → `verify_project` gates → on failure the blocker goes back **verbatim** and it retries, up to `[agent] max_fix_attempts`.
+5. Success = **`VerifyReport.passed`**. Only `engine.py` writes `DONE`, and only there.
+6. Two identical failure signatures in a row → `BLOCKED` (C6.5a). A gate `escalate` → the whole run stops.
+7. The planner is consulted again **only** on a block or an empty ledger — never after an ordinary success, and only the `breakdown` stage is re-entered (S10b.3). Clarify and architect run once: re-opening the questions after code exists churns decisions the coder already built on.
+8. Reviewer runs once at the end, advisory, printed, gating nothing.
 
 **The split that makes this work (S9c.1):** the model decides what work exists;
 Python decides when a task is done and when to stop. `C6.1` wanted an agent that
@@ -302,7 +303,7 @@ git config core.hooksPath .githooks  # once per clone: run all three gates on pu
 .venv/bin/rudra "build a flask app"  # single-shot; prompts before each write and command
 .venv/bin/rudra --auto "..."         # unattended: files yes, commands no (A1.49)
 .venv/bin/rudra --auto --allow-shell "..."   # ...and commands too, opted in explicitly
-.venv/bin/rudra --plan "..."         # plan only: no project writes, no commands
+.venv/bin/rudra --plan "..."         # show the plan and stop — writes nothing
 .venv/bin/rudra                      # REPL
 ```
 

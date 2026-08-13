@@ -115,6 +115,22 @@ facts are the only thing passed between them, which is also how the coder, the
 tester and the reviewer come to know the architecture: every one of them gets
 those facts in its prompt.
 
+**6. You approve the plan**
+
+Rudra prints what it established and what it intends to do — each fact with
+whether you told it, it inferred it, or it read it off your project — and waits:
+
+```
+[a]pprove  [r]evise  [c]ancel
+```
+
+Revise takes a sentence ("drop the tests task, I have my own") and re-plans the
+task list around it, up to three times. Cancel stops without touching anything.
+Pressing Ctrl-D or Ctrl-C counts as cancel, never as approval.
+
+`rudra --plan "..."` stops here every time: it shows the plan and exits. `--auto`
+skips the gate entirely, because nobody is there to answer.
+
 If a task later blocks, only the **breakdown** stage is consulted again — the
 architecture is not rewritten under a coder that already built on it.
 

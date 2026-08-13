@@ -220,7 +220,7 @@ per-stack install matrix.
 | `--dry-run` | | **Not functional yet** — see below. Use `--plan` |
 | `--auto` / `--yolo` | | Approve every file operation without prompting |
 | `--allow-shell` | | Let `--auto` run commands too. Off by default |
-| `--plan` | | Plan only: no project files written, no commands run |
+| `--plan` | | Show the plan — the facts Rudra established and the tasks it declared — then stop. Writes nothing, runs nothing |
 | `--help` | | Show help |
 
 ```bash
