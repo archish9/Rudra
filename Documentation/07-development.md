@@ -135,8 +135,7 @@ src/rudra/
 │   ├── runner.py     run_tests() → TestResult, the fix loop's input
 │   └── parse.py      Per-runner count parsing from real summary lines
 ├── tools/            EVERY tool the model can call, and nothing else
-│   ├── planning_tools.py     update_plan, read_plan, write_task_assignment
-│   ├── interaction_tools.py  ask_user
+│   ├── interaction_tools.py  ask_user, record_fact
 │   ├── git_tools.py          git_diff — thin wrapper over git/core.py
 │   └── testing_tools.py      run_tests — thin wrapper over testing/runner.py
 ├── stacks/           Language/framework detection

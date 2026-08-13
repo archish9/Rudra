@@ -34,8 +34,14 @@ _SCANNED_SUFFIXES = _PYTHON_SUFFIXES | _RUST_SUFFIXES | _JS_SUFFIXES
 
 # Directories nothing is ever scanned in, on top of every stack's own
 # build-output dirs. ALL_SKIP_DIRS is the registry's union (registry.py:71).
+#
+# Public because the loop needs the same answer: once `git status` reports
+# untracked files individually, a Rust `target/` would otherwise arrive as
+# thousands of files the coder did not write (A1.66). One definition, so
+# the gate and the ledger cannot disagree about what is build output.
 _EXTRA_SKIP_DIRS = frozenset({".git", ".rudra", ".idea", ".vscode"})
-_SKIP_DIRS = ALL_SKIP_DIRS | _EXTRA_SKIP_DIRS
+SKIP_DIRS = ALL_SKIP_DIRS | _EXTRA_SKIP_DIRS
+_SKIP_DIRS = SKIP_DIRS
 
 
 def _read(path: Path) -> str | None:
@@ -166,4 +172,4 @@ def source_files(project_path: Path) -> tuple[str, ...]:
     return tuple(sorted(found))
 
 
-__all__ = ["scan_stubs", "source_files"]
+__all__ = ["SKIP_DIRS", "scan_stubs", "source_files"]

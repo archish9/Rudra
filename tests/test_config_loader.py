@@ -251,3 +251,40 @@ def test_config_is_frozen(tmp_path: Path) -> None:
     with pytest.raises(Exception):
         cfg.agent = None  # type: ignore[misc]
     assert isinstance(cfg, Config)
+
+
+# --- Step 10a: the clarification budget (C6.8) ---
+
+
+def test_max_questions_defaults_to_five(tmp_path: Path) -> None:
+    assert get_config(tmp_path).agent.max_questions == 5
+
+
+def test_max_questions_can_be_zero_to_disable_asking(tmp_path: Path) -> None:
+    """0 is legal here and illegal for max_fix_attempts, deliberately.
+
+    A run that asks nothing is a normal unattended run, while 0 attempts
+    would block every task without the coder running once.
+    """
+    project = tmp_path / "proj"
+    _write_project_toml(project, "[agent]\nmax_questions = 0\n")
+    cfg = get_config(project)
+    assert cfg.agent.max_questions == 0
+    assert cfg.provenance["agent.max_questions"] == "project"
+
+
+@pytest.mark.parametrize("bad", ["-1", "true", '"five"', "2.5"])
+def test_a_bad_max_questions_is_a_config_error(tmp_path: Path, bad: str) -> None:
+    project = tmp_path / "proj"
+    _write_project_toml(project, f"[agent]\nmax_questions = {bad}\n")
+    with pytest.raises(ConfigError) as caught:
+        get_config(project)
+    assert "max_questions" in str(caught.value)
+
+
+def test_config_list_reports_max_questions(tmp_path: Path) -> None:
+    """A key that is honoured and never printed is A1.54 exactly."""
+    from rudra.cli import _flatten
+
+    keys = [key for key, _ in _flatten(get_config(tmp_path))]
+    assert "agent.max_questions" in keys

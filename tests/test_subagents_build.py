@@ -50,6 +50,7 @@ class FakeContext:
     cfg: Any
     checkpointer: Any = None
     session_id: str = "test"
+    facts: Any = None
 
 
 class FakeModel:
@@ -284,3 +285,88 @@ def test_an_explicit_checkpointer_wins(tmp_path, monkeypatch):
     )
 
     assert build_agent(REGISTRY["reviewer"], context).checkpointer is mine
+
+
+# --- Step 10a: the facts block reaches every subagent ---
+
+
+def _stocked_store():
+    from rudra.facts import FactStore
+
+    store = FactStore()
+    store.record("language", "Rust", "user said 'CLI in Rust'", "inferred")
+    return store
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_the_facts_block_is_appended_to_every_subagent_prompt(name, context):
+    """The coder has never seen the project facts before Step 10a."""
+    from rudra.subagents.build import _prompt_for
+
+    context.facts = _stocked_store()
+    prompt = _prompt_for(REGISTRY[name], context)
+
+    assert REGISTRY[name].system_prompt in prompt
+    assert "## PROJECT FACTS" in prompt
+    assert "Rust" in prompt
+
+
+def test_a_prompt_is_unchanged_when_there_are_no_facts(context):
+    from rudra.facts import FactStore
+    from rudra.subagents.build import _prompt_for
+
+    context.facts = FactStore()
+    assert _prompt_for(REGISTRY["coder"], context) == REGISTRY["coder"].system_prompt
+
+
+def test_a_context_without_facts_still_builds(context):
+    """SubagentContext.facts defaults to None; nothing may require it."""
+    from rudra.subagents.build import _prompt_for
+
+    assert _prompt_for(REGISTRY["coder"], context) == REGISTRY["coder"].system_prompt
+
+
+def test_a_fact_recorded_after_construction_reaches_the_next_build(context):
+    """build_agent runs per invocation (runner.py:124) -- that is the point."""
+    from rudra.facts import FactStore
+    from rudra.subagents.build import _prompt_for
+
+    store = FactStore()
+    context.facts = store
+    assert "clap" not in _prompt_for(REGISTRY["coder"], context)
+
+    store.record("cli_framework", "clap", "the user answered", "asked")
+    assert "clap" in _prompt_for(REGISTRY["coder"], context)
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_both_paths_agree_on_the_prompt(name, context):
+    """The delegating path must not drift from the direct one.
+
+    Same rule _tools_for and _middleware_for already follow: a subagent
+    reached through `task` and one invoked directly are one thing.
+    """
+    from rudra.subagents.build import _prompt_for, to_subagent_spec
+
+    context.facts = _stocked_store()
+    spec = REGISTRY[name]
+    assert to_subagent_spec(spec, context)["system_prompt"] == _prompt_for(spec, context)
+
+
+def test_build_agent_passes_the_facts_prompt_to_create_deep_agent(context, monkeypatch):
+    """Asserted against the call, not the helper: a helper nobody uses is
+    the A1.8 shape -- a fix that exists and is not wired."""
+    import rudra.subagents.build as build
+
+    captured = {}
+
+    def _fake_create_deep_agent(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(build, "create_deep_agent", _fake_create_deep_agent)
+    context.facts = _stocked_store()
+    build.build_agent(REGISTRY["coder"], context)
+
+    assert "## PROJECT FACTS" in captured["system_prompt"]
+    assert "Rust" in captured["system_prompt"]

@@ -19,7 +19,6 @@ from rudra import __version__
 from rudra.agent import AgentResult, create_main_agent
 from rudra.config import get_config
 from rudra.filesystem import project_tree
-from rudra.state import ProjectConfigManager, ProjectContext
 
 
 class TaskOrCommandGroup(TyperGroup):
@@ -207,11 +206,6 @@ def get_project_path(project_dir: Optional[Path]) -> Path:
     if project_dir:
         return project_dir.resolve()
     return Path.cwd()
-
-
-def load_project_context(project_path: Path) -> ProjectContext:
-    """Load saved project context from .rudra/project.json."""
-    return ProjectConfigManager(project_path).load()
 
 
 # ---------------------------------------------------------------------------
@@ -658,7 +652,7 @@ def main(
 
     from rudra.permissions import disabled_floor_notice, stdin_is_interactive
 
-    # Before load_project_context, before ensure_layout, before any model.
+    # Before ensure_layout, before any model.
     # In ask mode every write is gated and writing files is Rudra's whole
     # job, so a non-TTY ask run hits a prompt within seconds — failing at
     # second zero is the honest version of failing at second thirty, and it
@@ -682,8 +676,6 @@ def main(
     if verbose is None:
         verbose = cfg.agent.verbose
 
-    project_context = load_project_context(project_path)
-
     if prompt:
         # ── Single-shot task mode ──────────────────────────────────────────
         print_banner()
@@ -703,7 +695,6 @@ def main(
             agent = await create_main_agent(
                 project_path=project_path,
                 task=prompt,
-                project_context=project_context,
                 command="auto",
                 console=console,
                 dry_run=dry_run,
@@ -787,7 +778,6 @@ def main(
                     agent = await create_main_agent(
                         project_path=project_path,
                         task=user_input,
-                        project_context=project_context,
                         command="auto",
                         console=console,
                         dry_run=dry_run,

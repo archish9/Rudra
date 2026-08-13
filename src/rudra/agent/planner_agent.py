@@ -15,6 +15,7 @@ from deepagents import create_deep_agent
 from rich.console import Console
 
 from rudra.config import get_config
+from rudra.facts import facts_block
 from rudra.filesystem import project_tree
 from rudra.llm import build_model
 from rudra.loop.tools import create_ledger_tools
@@ -29,7 +30,10 @@ from rudra.tools.interaction_tools import create_interaction_tools
 def build_planner_prompt(
     task: str,
     project_path: Path,
-    tech_stack_content: str = "",
+    facts: Any = None,
+    *,
+    can_ask: bool = True,
+    max_questions: int = 5,
 ) -> str:
     base = f"""You are a senior software architect and planning agent for Rudra.
 
@@ -38,8 +42,9 @@ Your ONLY job: decide WHAT WORK the request needs. You never write project code.
 ## PROJECT STRUCTURE
 {project_tree(project_path)}
 """
-    if tech_stack_content:
-        base += f"\n## Tech Stack\n{tech_stack_content}\n"
+    block = facts_block(facts)
+    if block:
+        base += f"\n{block}"
 
     base += f"""
 ## REQUEST
@@ -57,11 +62,33 @@ A task is a unit of WORK, described in plain language. Not a filename.
 
 One task may touch several files. Work that needs tests gets its own task.
 
+## ESTABLISHING FACTS
+"""
+
+    if can_ask:
+        base += f"""
+Ask only what you cannot infer from the request or the codebase. Batch
+related questions into a SINGLE ask_user() call — one key per question.
+You have {max_questions} questions for this whole run.
+"""
+    else:
+        base += """
+This run is unattended: there is nobody to ask. Infer what you need from
+the request and the codebase.
+"""
+
+    base += """
+Record every fact you establish — whether you inferred it or the user
+answered it — with record_fact(), and say WHY you believe it. The coder,
+the tester and the reviewer all read those facts; one you keep to
+yourself is one they do not have.
+
 ## WORKFLOW
 
 1. Call read_file() on anything you need to understand the project
-2. Call add_tasks() ONCE with every task you can foresee
-3. STOP
+2. Establish and record the facts the work depends on
+3. Call add_tasks() ONCE with every task you can foresee
+4. STOP
 
 You will be consulted again if a task fails or if the work runs out. When
 that happens, add a task taking a DIFFERENT approach, or drop_task() one
@@ -75,7 +102,6 @@ placeholders. Do not claim a task is complete, and do not add a task whose
 description is "verify" or "check": that already happens on its own.
 
 - NEVER call write_file() on project source files — the coder handles that
-- Do NOT call ask_user() if the request already specifies a framework or language
 """
     return base
 
@@ -104,32 +130,45 @@ def build_planner_middleware(
 def create_planner_agent(
     task: str,
     project_path: Path,
-    tech_stack_content: str,
     filesystem_backend,
     checkpointer,
     console: Console,
     gate=None,
     ledger=None,
     paths=None,
+    facts=None,
+    interactive: bool = True,
 ):
     """Create the planner deep agent.
 
-    `ledger` must be the SAME object the loop reads: the planner's tools
-    mutate it in place, and a copy would leave the engine with no tasks.
+    `ledger` and `facts` must be the SAME objects the loop reads: the
+    planner's tools mutate them in place, and a copy would leave the
+    engine with no tasks and the coder with no facts.
+
+    `interactive` False means nobody can answer, so ask_user is never
+    registered (S10a.5). The prompt is built to match, so the model is
+    never told to call a tool it does not have.
     """
+    from rudra.facts import FactStore
     from rudra.loop.ledger import Ledger
     from rudra.state.paths import rudra_paths
 
     model = build_model("planner")
     cfg = get_config()
     ledger = ledger if ledger is not None else Ledger()
+    facts = facts if facts is not None else FactStore()
     paths = paths if paths is not None else rudra_paths(project_path)
 
-    # The ledger replaced PLAN.md and current_task.md (C6.10). git and
-    # testing tools are gone from the planner: the loop runs the gate
-    # itself, and the tester subagent writes tests (S9c.5).
+    # The ledger replaced PLAN.md and current_task.md (C6.10); the fact
+    # store replaced project.json's four fields (C6.8a). git and testing
+    # tools are gone from the planner: the loop runs the gate itself, and
+    # the tester subagent writes tests (S9c.5).
     custom_tools = create_ledger_tools(ledger, paths.ledger_json) + create_interaction_tools(
-        console, project_path
+        console,
+        facts,
+        paths.facts_json,
+        max_questions=cfg.agent.max_questions,
+        interactive=interactive,
     )
 
     middleware = build_planner_middleware(
@@ -148,7 +187,13 @@ def create_planner_agent(
     return create_deep_agent(
         model=model,
         tools=custom_tools,
-        system_prompt=build_planner_prompt(task, project_path, tech_stack_content),
+        system_prompt=build_planner_prompt(
+            task,
+            project_path,
+            facts,
+            can_ask=interactive and cfg.agent.max_questions > 0,
+            max_questions=cfg.agent.max_questions,
+        ),
         backend=filesystem_backend,
         checkpointer=checkpointer,
         memory=[".rudra/AGENTS.md"],

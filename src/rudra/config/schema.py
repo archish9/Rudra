@@ -77,6 +77,11 @@ class AgentConfig:
     # orchestrator used. The loop usually stops sooner than this, on
     # no-progress detection -- see loop/bounds.py.
     max_fix_attempts: int = 3
+    # How many clarifying questions the planner may ask across one whole
+    # run (C6.8). 0 disables asking outright -- unlike max_fix_attempts,
+    # where 0 would block every task without the coder running once, a
+    # run that asks nothing is a legitimate unattended run.
+    max_questions: int = 5
 
 
 @dataclass(frozen=True)
@@ -147,7 +152,7 @@ DEFAULTS: dict[str, Any] = {
             "timeout": 300,
         }
     },
-    "agent": {"verbose": True, "max_fix_attempts": 3},
+    "agent": {"verbose": True, "max_fix_attempts": 3, "max_questions": 5},
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},
     "tools": {

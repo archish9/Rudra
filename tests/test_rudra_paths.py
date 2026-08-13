@@ -16,7 +16,7 @@ def test_durable_files_sit_at_the_root(tmp_path: Path) -> None:
     paths = rudra_paths(tmp_path)
     assert paths.config_toml == tmp_path / ".rudra" / "config.toml"
     assert paths.agents_md == tmp_path / ".rudra" / "AGENTS.md"
-    assert paths.project_json == tmp_path / ".rudra" / "project.json"
+    assert paths.facts_json == tmp_path / ".rudra" / "facts.json"
     assert paths.memory_export == tmp_path / ".rudra" / "memory" / "export"
 
 
@@ -26,7 +26,6 @@ def test_volatile_files_sit_under_run(tmp_path: Path) -> None:
     assert paths.run == run
     assert paths.checkpoints_db == run / "checkpoints.db"
     assert paths.ledger_json == run / "ledger.json"
-    assert paths.tech_stack_md == run / "tech_stack.md"
     assert paths.session_id_txt == run / "session_id.txt"
     assert paths.logs == run / "logs"
     assert paths.memory_palace == tmp_path / ".rudra" / "memory" / "palace"

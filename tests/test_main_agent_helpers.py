@@ -12,48 +12,42 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rudra.agent.main_agent import (
-    _ensure_agents_md,
-    _write_tech_stack_file,
-)
-from rudra.state import ProjectContext
+from rudra.agent.main_agent import _ensure_agents_md
+from rudra.facts import FactStore
+
+
+def _store() -> FactStore:
+    store = FactStore()
+    store.record("language", "Rust", "user said 'CLI in Rust'", "inferred")
+    return store
 
 
 def test_ensure_agents_md_creates_the_file_once(tmp_path: Path):
-    _ensure_agents_md(tmp_path, ProjectContext(primary_language="Rust"))
+    _ensure_agents_md(tmp_path, _store())
     agents = tmp_path / "AGENTS.md"
     assert agents.is_file()
 
     agents.write_text("hand-edited by the user\n", encoding="utf-8")
-    _ensure_agents_md(tmp_path, ProjectContext(primary_language="Rust"))
+    _ensure_agents_md(tmp_path, _store())
 
     assert agents.read_text(encoding="utf-8") == "hand-edited by the user\n"
 
 
-def test_ensure_agents_md_handles_no_project_context(tmp_path: Path):
-    _ensure_agents_md(tmp_path, None)
+def test_ensure_agents_md_renders_whatever_facts_exist(tmp_path: Path):
+    """D18: a Rust project must not be rendered as a Python one."""
+    _ensure_agents_md(tmp_path, _store())
+    content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Rust" in content
+
+
+def test_ensure_agents_md_handles_an_empty_store(tmp_path: Path):
+    _ensure_agents_md(tmp_path, FactStore())
     assert (tmp_path / "AGENTS.md").is_file()
 
 
-def test_write_tech_stack_file_writes_and_returns_the_same_content(tmp_path: Path):
-    returned = _write_tech_stack_file(tmp_path, ProjectContext(primary_language="Rust"))
-    on_disk = (tmp_path / "tech_stack.md").read_text(encoding="utf-8")
-    assert returned == on_disk
-
-
-def test_write_tech_stack_file_records_a_non_python_stack(tmp_path: Path):
-    """D18: a Rust project must not be rendered as a Python one."""
-    content = _write_tech_stack_file(
-        tmp_path, ProjectContext(primary_language="Rust", framework="clap")
-    )
-    assert "Rust" in content
-    assert "clap" in content
-
-
-def test_write_tech_stack_file_handles_no_project_context(tmp_path: Path):
-    content = _write_tech_stack_file(tmp_path, None)
-    assert isinstance(content, str)
-    assert (tmp_path / "tech_stack.md").is_file()
+def test_ensure_agents_md_handles_no_facts_at_all(tmp_path: Path):
+    _ensure_agents_md(tmp_path, None)
+    assert (tmp_path / "AGENTS.md").is_file()
 
 
 # --- Step 8: the auto_branch hook ---

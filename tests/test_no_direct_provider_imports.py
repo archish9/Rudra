@@ -107,7 +107,6 @@ def test_the_planner_agent_can_be_constructed(tmp_path: Path, coded_defaults) ->
     agent = create_planner_agent(
         task="write a hello world script",
         project_path=tmp_path,
-        tech_stack_content="",
         filesystem_backend=None,
         checkpointer=None,
         console=Console(),

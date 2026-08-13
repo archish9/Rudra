@@ -226,10 +226,13 @@ rudra "write wordcount.py: an argparse CLI that counts lines, words and characte
 You'll see the banner, the task, and then live progress as Rudra plans and writes:
 
 ```
- ✓ [1] update_plan: Plan saved. Now write each file yourself with write_file().
- ✓ [3] read_file:  1  # Task Assignment
+ ✓ [1] record_fact: Recorded language = "Python" (inferred).
+ ✓ [3] add_tasks: Added 1 task(s): t1 (write an argparse CLI that counts lines, words and characters)
  ✓ [5] write_file: Updated file /wordcount.py
-🏁 Complete: 1/1 files generated
+
+Tasks: 1 requested · 1 done · 0 blocked · 0 dropped
+
+  ✓ t1  write an argparse CLI that counts lines, words and characters
 ```
 
 Try what it made:
@@ -302,7 +305,7 @@ Rudra keeps its working state in a `.rudra/` folder inside your project, split b
 |---|---|
 | `config.toml` | Your project settings, written by `rudra init` |
 | `AGENTS.md` | Long-lived project notes fed back into the planner's prompt |
-| `project.json` | Saved project context |
+| `facts.json` | What this project's agents have established, and why they believe it |
 
 **Volatile — regenerated every run, and gitignored for you:**
 
@@ -310,7 +313,6 @@ Rudra keeps its working state in a `.rudra/` folder inside your project, split b
 |---|---|
 | `run/ledger.json` | The tasks, their status, and why anything stopped |
 | `run/logs/verify.log` | The verification gate's full output from the last check |
-| `run/tech_stack.md` | The detected or configured stack for this project |
 | `run/checkpoints.db` | Conversation checkpoints |
 | `run/logs/permissions.jsonl` | One line per gated decision — what was allowed, denied, or approved |
 | `run/logs/tests.log` | The full output of the last test run, in case the summary cut something you need |

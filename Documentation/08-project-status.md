@@ -68,13 +68,26 @@ There is no backoff around model invocation. A rate limit or a dropped connectio
 
 The advisory review reads the git diff, which shows changes to *tracked* files. On a fresh repository every file is new and untracked, so the reviewer reports nothing — and the summary does not point that out. The gate's verdict is unaffected; only the quality commentary is missing.
 
-### No clarifying questions
+### Clarifying questions are not yet staged
 
-Rudra won't ask what you meant. Ambiguous requests get a guess. Be specific, and name the files you want.
+Rudra does ask now: the planner can send a batch of related questions in one
+prompt, and every answer is recorded in `.rudra/facts.json` with why it is
+believed, so the coder and the reviewer see it too. The budget is
+`[agent] max_questions` (default 5), and an unattended run never asks — it
+infers and records what it inferred.
 
-### No memory between runs
+What is missing is the *staging*: the questions come as part of planning rather
+than from a distinct clarify → architect → breakdown sequence, so a run can
+still start writing code before every ambiguity is settled. That sequencing is
+Step 10b (`C6.7`).
 
-Each invocation starts fresh apart from what's on disk. It doesn't remember previous sessions or accumulate knowledge about your codebase.
+### Little memory between runs
+
+Each invocation starts fresh apart from what's on disk. Project facts do
+persist — `.rudra/facts.json` is durable, so a stack established last week is
+still known — but conversations, plans and progress are not: the ledger is
+per-run and checkpoints are never resumed (`C7.2`), and `AGENTS.md` is written
+once and never updated (`A1.9`, `C7.3`).
 
 ### No MCP, no skills, no plugins
 

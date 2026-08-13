@@ -61,6 +61,11 @@ class SubagentContext:
     cfg: Any
     checkpointer: Any = None
     session_id: str = ""
+    # The run's FactStore, shared by reference so a fact recorded during
+    # one task reaches the next dispatch's prompt (Step 10a). Optional
+    # because the subagent machinery must stay constructible without a
+    # run -- 9b's tests build a context with no facts at all.
+    facts: Any = None
 
 
 @dataclass(frozen=True)

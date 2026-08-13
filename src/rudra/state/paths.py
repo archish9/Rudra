@@ -2,7 +2,7 @@
 
 Two subtrees with different lifetimes:
 
-* **durable** — `config.toml`, `AGENTS.md`, `project.json`, `memory/export/`.
+* **durable** — `config.toml`, `AGENTS.md`, `facts.json`, `memory/export/`.
   Text, worth committing, safe to commit.
 * **volatile** — everything under `run/`, plus `memory/palace/`. Binary or
   regenerated on every run. Never worth committing.
@@ -28,7 +28,7 @@ GITIGNORE_BODY = """\
 # .gitignore is never modified.
 #
 # Everything below is regenerated on every run or is a binary store.
-# The durable files beside it (config.toml, AGENTS.md, project.json,
+# The durable files beside it (config.toml, AGENTS.md, facts.json,
 # memory/export/) are deliberately NOT ignored: committing them is safe,
 # and whether you do is your call. See TODO.md D15.
 run/
@@ -44,14 +44,13 @@ class RudraPaths:
     # durable
     config_toml: Path
     agents_md: Path
-    project_json: Path
+    facts_json: Path
     memory_export: Path
     # volatile
     memory_palace: Path
     run: Path
     checkpoints_db: Path
     ledger_json: Path
-    tech_stack_md: Path
     session_id_txt: Path
     logs: Path
     artifacts: Path
@@ -66,7 +65,9 @@ def rudra_paths(project_root: Path) -> RudraPaths:
         root=root,
         config_toml=root / "config.toml",
         agents_md=root / "AGENTS.md",
-        project_json=root / "project.json",
+        # The open fact store (Step 10a, C6.8a). Durable: what a previous
+        # run established about this project is still true.
+        facts_json=root / "facts.json",
         memory_export=memory / "export",
         memory_palace=memory / "palace",
         run=run,
@@ -75,7 +76,6 @@ def rudra_paths(project_root: Path) -> RudraPaths:
         # meaningless to the next run's request, so it is never resumed --
         # that is C7.2's --continue.
         ledger_json=run / "ledger.json",
-        tech_stack_md=run / "tech_stack.md",
         session_id_txt=run / "session_id.txt",
         logs=run / "logs",
         # deepagents evicts oversized tool results and offloads conversation

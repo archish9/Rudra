@@ -38,7 +38,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ---
 
-## 3. Current Architecture (as of 2026-08-12, Step 9c)
+## 3. Current Architecture (as of 2026-08-13, Step 10a)
 
 ```
 src/rudra/
@@ -67,6 +67,13 @@ src/rudra/
 │                           inherits interrupt_on but NOT middleware.
 │                           The reviewer cannot write because the tools are
 │                           never registered, not because a prompt says so
+├── facts/                  The open fact store (Step 10a, C6.8a). store.py
+│                           imports nothing from Rudra. A fact is
+│                           {value, why, source}; keys are enumerated
+│                           nowhere in code — validation covers types and
+│                           size, never names. render.py puts them in every
+│                           agent's prompt: the planner at construction,
+│                           each subagent at its own build_agent call
 ├── loop/                   The agentic loop (Step 9c). ledger · bounds · tools ·
 │                           engine. ledger.py and bounds.py import nothing from
 │                           Rudra. No agent-facing tool can write DONE — only
@@ -74,15 +81,17 @@ src/rudra/
 ├── agent/
 │   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
-│   └── planner_agent.py    deep agent; ledger tools; consult_planner + the
+│   └── planner_agent.py    deep agent; ledger + fact tools; consult_planner + the
 │                           lifted _stream_planner_turn
 ├── middleware/             2 survivors of D4, both opt-in behind [compat]
 ├── tools/                  EVERY tool the model can call, and nothing else:
-│                           planning · interaction · git_tools · testing_tools.
+│                           interaction (record_fact · ask_user) · git_tools ·
+│                           testing_tools.
 │                           The last two are thin wrappers over git/ and
 │                           testing/, whose APIs the orchestrator calls directly
 ├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
-├── state/                  paths.py (D15 layout), ProjectConfigManager, session id (unused)
+├── state/                  paths.py (D15 layout), session id (unused).
+│                           ProjectConfigManager died with C6.8a
 └── compat/                 monkeypatches + version guard into deepagents internals
 ```
 
@@ -93,7 +102,7 @@ objects. `PermissionEngine.decide(tool, args)` is pure and is the only thing
 that interprets policy. Precedence, top down: **deny floor** (every mode,
 `floor_disable` per rule) → `permissions.deny` → session grants →
 `permissions.allow` → mode default. Deny beats allow; reads are never gated;
-Rudra's own `update_plan`/`write_task_assignment`/`ask_user` are control plane
+Rudra's own `add_tasks`/`drop_task`/`ask_user` are control plane
 and never gated.
 
 ### Control flow (`loop/engine.py`)
@@ -124,11 +133,10 @@ only function that creates anything.
 | File | Durable? | Written by | Read by | Notes |
 |---|---|---|---|---|
 | `config.toml` | durable | `rudra init` | config loader | Layer 3 of five |
-| `AGENTS.md` | durable | `_ensure_agents_md` | planner via `memory=` | **Created once, never updated** (A1.9) |
-| `project.json` | durable | `save_project_context` | `ProjectConfigManager` | Becomes `facts.json` at C6.8a |
+| `AGENTS.md` | durable | `_ensure_agents_md` | planner via `memory=` | **Created once, never updated** (A1.9). Its stack section renders the facts |
+| `facts.json` | durable | `record_fact` / `ask_user` (agent) | every agent's prompt | Open key/value: `{key: {value, why, source}}`. Keys are enumerated nowhere in code. Replaced `project.json`, which is **ignored, not migrated** (S10a.8) — the old file is left on disk, unreferenced |
 | `.gitignore` | durable | `ensure_layout` | git | Written by Rudra, scopes **only** `.rudra/` |
 | `run/ledger.json` | volatile | `add_tasks`/`drop_task` (agent) + `engine.py` (status) | `run_loop`, `summarise` | Tasks are **work**, not filenames. Written atomically after every status change; never resumed |
-| `run/tech_stack.md` | volatile | `_write_tech_stack_file` | both | Rewritten every run |
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
@@ -222,6 +230,10 @@ provider = "ollama"
 base_url = "http://localhost:11434"
 model    = "qwen3-coder:30b"
 
+[agent]
+max_fix_attempts = 3                    # fix-loop retries per task (C6.5a)
+max_questions = 5                       # clarification budget for the run; 0 never asks
+
 [tools]
 shell = true                            # false removes the execute tool
 shell_in_auto = false                   # may --auto run commands? (A1.49)
@@ -276,7 +288,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-uv run pytest -q                     # 880 passed, 2 skipped at Step 9c; must never go down
+uv run pytest -q                     # 955 passed, 2 skipped at Step 10a; must never go down
 git config core.hooksPath .githooks  # once per clone: run all three gates on push (A3.7)
 .venv/bin/rudra --version            # Rudra v0.2.0
 
