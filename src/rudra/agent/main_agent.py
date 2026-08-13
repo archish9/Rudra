@@ -350,7 +350,7 @@ async def create_main_agent(
 
     session_id = uuid.uuid4().hex[:12]
 
-    from rudra.agent.planner_agent import consult_planner, create_planner_agent
+    from rudra.agent.planner_agent import STAGES, consult_planner, create_planner_agent
     from rudra.loop import Ledger, LoopContext
     from rudra.subagents import SubagentContext
 
@@ -375,24 +375,37 @@ async def create_main_agent(
     # One Ledger, shared by reference: the planner's tools mutate it and the
     # loop reads it back. Two objects would leave the loop with no tasks.
     ledger = Ledger()
-    planner = create_planner_agent(
-        task=task,
-        project_path=project_path,
-        filesystem_backend=filesystem_backend,
-        checkpointer=checkpointer,
-        console=console,
-        gate=gate,
-        ledger=ledger,
-        paths=paths,
-        facts=facts,
-        interactive=interactive,
-    )
+    # One agent per stage (S10b.1). Construction is cheap -- build_model
+    # makes no network call (llm/factory.py:64-68) and create_deep_agent
+    # only compiles a graph -- and building all three up front keeps the
+    # callback a lookup rather than a factory.
+    #
+    # Every stage shares the SAME ledger and fact store: those are the
+    # only channel between stages, and a copy would leave the coder with
+    # an architecture nobody recorded.
+    planners = {
+        stage: create_planner_agent(
+            task=task,
+            project_path=project_path,
+            filesystem_backend=filesystem_backend,
+            checkpointer=checkpointer,
+            console=console,
+            gate=gate,
+            ledger=ledger,
+            paths=paths,
+            facts=facts,
+            interactive=interactive,
+            stage=stage,
+        )
+        for stage in STAGES
+    }
 
-    async def planner_callback(run_ledger, request, *, reason, task=None):
+    async def planner_callback(run_ledger, request, *, stage, reason="initial", task=None):
         await consult_planner(
-            planner,
+            planners[stage],
             run_ledger,
             request,
+            stage=stage,
             reason=reason,
             task=task,
             gate=gate,
@@ -402,7 +415,9 @@ async def create_main_agent(
 
     return RudraAgent(
         context=context,
-        planner_agent=planner,
+        # The breakdown stage: the one that outlives planning, since it is
+        # the only stage re-entered on a block (S10b.3).
+        planner_agent=planners["breakdown"],
         session_id=session_id,
         db_conn=db_conn,
         loop_context=loop_context,
