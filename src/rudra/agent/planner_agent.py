@@ -451,24 +451,53 @@ async def _stream_planner_turn(
     return not _halt
 
 
+_STAGE_MESSAGES = {
+    "clarify": (
+        "Establish what this work depends on, and record each fact with "
+        "why you believe it. The request is:\n\n{request}"
+    ),
+    "architect": (
+        "Decide how this will be built — layout, boundaries, error "
+        "handling, tests — and record each decision with its reason. The "
+        "request is:\n\n{request}"
+    ),
+    "breakdown": "Break this request into tasks: {request}",
+}
+
+
 async def consult_planner(
     agent: Any,
     ledger: Any,
     request: str,
     *,
-    reason: str,
+    stage: str,
+    reason: str = "initial",
     task: Any = None,
     gate: Any,
     console: Console,
     session_id: str,
 ) -> None:
-    """Ask the planner to add or drop tasks. It mutates the ledger via tools.
+    """Ask one planning stage to do its job. It mutates state via tools.
 
-    Three reasons, three messages. There is deliberately no consult after
-    an ordinary success -- that is what bounds the loop's model-call cost.
+    Three stages run once each, in order, before any coder runs. Only
+    `breakdown` is ever re-entered -- on a blocked task or an empty ledger
+    (S10b.3). Clarify and architect are not: re-opening the questions
+    after code exists spends a model call churning decisions the coder has
+    already built on.
+
+    Each stage has its own thread, so the only thing that carries between
+    them is what was recorded -- which is the point (S10b.1).
     """
+    if stage not in STAGES:
+        known = ", ".join(STAGES)
+        msg = f"unknown planner stage {stage!r}; valid stages: {known}"
+        raise ValueError(msg)
+    if reason != "initial" and stage != "breakdown":
+        msg = f"stage {stage!r} runs once and cannot be re-entered (reason {reason!r})"
+        raise ValueError(msg)
+
     if reason == "initial":
-        message = f"Break this request into tasks: {request}"
+        message = _STAGE_MESSAGES[stage].format(request=request)
     elif reason == "ledger_empty":
         message = (
             "Every task is finished. Is anything missing before we stop? "
@@ -485,5 +514,5 @@ async def consult_planner(
         raise ValueError(f"unknown consult reason {reason!r}")
 
     await _stream_planner_turn(
-        agent, message, thread_id=f"{session_id}-planner", gate=gate, console=console
+        agent, message, thread_id=f"{session_id}-{stage}", gate=gate, console=console
     )
