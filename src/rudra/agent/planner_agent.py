@@ -26,31 +26,66 @@ from rudra.middleware import (
 from rudra.permissions import run_with_approvals
 from rudra.tools.interaction_tools import create_interaction_tools
 
+_COMMON_HEADER = """You are a senior software architect and planning agent for Rudra.
 
-def build_planner_prompt(
-    task: str,
-    project_path: Path,
-    facts: Any = None,
-    *,
-    can_ask: bool = True,
-    max_questions: int = 5,
-) -> str:
-    base = f"""You are a senior software architect and planning agent for Rudra.
-
-Your ONLY job: decide WHAT WORK the request needs. You never write project code.
-
-## PROJECT STRUCTURE
-{project_tree(project_path)}
+You never write project code. A separate coder does that.
 """
-    block = facts_block(facts)
-    if block:
-        base += f"\n{block}"
 
-    base += f"""
-## REQUEST
-{task}
+_CANNOT_FINISH = """
+## WHAT YOU CANNOT DO
 
-## WHAT A TASK IS
+You cannot mark anything done. A deterministic verification gate decides
+that — it parses the code, type checks it, runs the tests, and scans for
+placeholders. Do not claim anything is complete.
+"""
+
+_CLARIFY_BODY = """
+## YOUR STAGE: ESTABLISH THE FACTS
+
+This is the first of three stages. Yours is to settle what the work
+depends on, before anyone decides how to build it or what to build.
+
+Record every fact you establish with record_fact(), and say WHY you
+believe it. The architect, the coder, the tester and the reviewer all
+read those facts; one you keep to yourself is one they do not have.
+"""
+
+_CLARIFY_CAN_ASK = """
+Ask only what you cannot infer from the request or the codebase. Batch
+related questions into a SINGLE ask_user() call — one key per question.
+You have {max_questions} questions for this whole run.
+"""
+
+_CLARIFY_UNATTENDED = """
+This run is unattended: there is nobody to ask. Infer what you need from
+the request and the codebase, and record each inference.
+"""
+
+_ARCHITECT_BODY = """
+## YOUR STAGE: DECIDE HOW IT WILL BE BUILT
+
+The facts above are settled. Yours is to decide the shape of the work,
+before it is broken into tasks.
+
+Decide and record, each with record_fact() and a WHY:
+  - layout: which file holds what, and why that split
+  - boundaries: what each module is responsible for
+  - error handling: how failures are surfaced
+  - tests: what is worth testing and at which level
+
+Read the existing code first if there is any — a decision that fights the
+project it lands in is worse than no decision.
+
+Keep each one short and concrete. "src/parser.rs holds parsing, src/main.rs
+holds the CLI" is a decision; three paragraphs about separation of concerns
+is not. You cannot ask the user anything at this stage.
+"""
+
+_BREAKDOWN_BODY = """
+## YOUR STAGE: BREAK IT INTO WORK
+
+The facts above are settled, including the layout. Yours is to turn them
+into tasks.
 
 A task is a unit of WORK, described in plain language. Not a filename.
 
@@ -62,48 +97,62 @@ A task is a unit of WORK, described in plain language. Not a filename.
 
 One task may touch several files. Work that needs tests gets its own task.
 
-## ESTABLISHING FACTS
-"""
-
-    if can_ask:
-        base += f"""
-Ask only what you cannot infer from the request or the codebase. Batch
-related questions into a SINGLE ask_user() call — one key per question.
-You have {max_questions} questions for this whole run.
-"""
-    else:
-        base += """
-This run is unattended: there is nobody to ask. Infer what you need from
-the request and the codebase.
-"""
-
-    base += """
-Record every fact you establish — whether you inferred it or the user
-answered it — with record_fact(), and say WHY you believe it. The coder,
-the tester and the reviewer all read those facts; one you keep to
-yourself is one they do not have.
-
-## WORKFLOW
-
-1. Call read_file() on anything you need to understand the project
-2. Establish and record the facts the work depends on
-3. Call add_tasks() ONCE with every task you can foresee
-4. STOP
+Call add_tasks() ONCE with every task you can foresee, then STOP. Do not
+add a task whose description is "verify" or "check": the gate does that on
+its own.
 
 You will be consulted again if a task fails or if the work runs out. When
 that happens, add a task taking a DIFFERENT approach, or drop_task() one
 that turned out to be unnecessary.
-
-## WHAT YOU CANNOT DO
-
-You cannot mark anything done. A deterministic verification gate decides
-that — it parses the code, type checks it, runs the tests, and scans for
-placeholders. Do not claim a task is complete, and do not add a task whose
-description is "verify" or "check": that already happens on its own.
-
-- NEVER call write_file() on project source files — the coder handles that
 """
-    return base
+
+
+def build_planner_prompt(
+    task: str,
+    project_path: Path,
+    facts: Any = None,
+    *,
+    stage: str = "breakdown",
+    can_ask: bool = True,
+    max_questions: int = 5,
+) -> str:
+    """The system prompt for one planning stage (S10b.1).
+
+    Each stage's prompt names only the tools that stage actually has.
+    Naming a tool the model cannot call buys a dead call and a confused
+    retry -- the same reasoning _tools_for follows when it raises on an
+    unknown tool rather than dropping it (subagents/build.py:64-70).
+    """
+    if stage not in STAGES:
+        known = ", ".join(STAGES)
+        msg = f"unknown planner stage {stage!r}; valid stages: {known}"
+        raise ValueError(msg)
+
+    prompt = f"""{_COMMON_HEADER}
+## PROJECT STRUCTURE
+{project_tree(project_path)}
+"""
+    block = facts_block(facts)
+    if block:
+        prompt += f"\n{block}"
+
+    prompt += f"""
+## REQUEST
+{task}
+"""
+
+    if stage == "clarify":
+        prompt += _CLARIFY_BODY
+        prompt += (
+            _CLARIFY_CAN_ASK.format(max_questions=max_questions) if can_ask else _CLARIFY_UNATTENDED
+        )
+    elif stage == "architect":
+        prompt += _ARCHITECT_BODY
+    else:
+        prompt += _BREAKDOWN_BODY
+
+    prompt += _CANNOT_FINISH
+    return prompt
 
 
 def build_planner_middleware(

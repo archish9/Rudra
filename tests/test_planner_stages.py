@@ -126,3 +126,58 @@ def test_a_fact_recorded_in_clarify_reaches_the_architect(monkeypatch, tmp_path:
     captured = _capture(monkeypatch, tmp_path, "architect", facts=store)
 
     assert "Rust" in captured["system_prompt"]
+
+
+# --- each stage's prompt states its own job and no other ---
+
+
+def _prompt(tmp_path: Path, stage: str, **kwargs) -> str:
+    from rudra.agent.planner_agent import build_planner_prompt
+
+    return build_planner_prompt("build a web API", tmp_path, stage=stage, **kwargs)
+
+
+def test_the_clarify_prompt_asks_for_facts_not_tasks(tmp_path: Path):
+    prompt = _prompt(tmp_path, "clarify")
+    assert "record_fact" in prompt
+    assert "ask_user" in prompt
+    assert "add_tasks" not in prompt, "clarify has no such tool; naming it invites a dead call"
+
+
+def test_the_architect_prompt_asks_for_decisions_with_reasons(tmp_path: Path):
+    prompt = _prompt(tmp_path, "architect")
+    assert "record_fact" in prompt
+    assert "ask_user" not in prompt
+    assert "add_tasks" not in prompt
+    for word in ("layout", "why"):
+        assert word in prompt.lower()
+
+
+def test_the_breakdown_prompt_is_the_task_one(tmp_path: Path):
+    prompt = _prompt(tmp_path, "breakdown")
+    assert "add_tasks" in prompt
+    assert "record_fact" not in prompt
+    assert "ask_user" not in prompt
+
+
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_no_stage_prompt_claims_it_can_finish_anything(tmp_path: Path, stage: str):
+    """S9c.1: the gate decides done, and every stage must say so."""
+    prompt = _prompt(tmp_path, stage).lower()
+    assert "cannot mark" in prompt or "gate" in prompt
+
+
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_no_stage_prompt_names_a_rudra_path(tmp_path: Path, stage: str):
+    assert ".rudra" not in _prompt(tmp_path, stage)
+
+
+def test_an_unattended_clarify_prompt_says_nobody_can_answer(tmp_path: Path):
+    prompt = _prompt(tmp_path, "clarify", can_ask=False)
+    assert "unattended" in prompt
+    assert "ask_user" not in prompt
+
+
+def test_an_unknown_stage_prompt_raises(tmp_path: Path):
+    with pytest.raises(ValueError, match="architcet"):
+        _prompt(tmp_path, "architcet")
