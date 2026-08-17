@@ -87,8 +87,9 @@ def test_shell_must_be_a_bool(tmp_path):
         build_config(root)
 
 
-def test_skills_and_memory_stay_reserved(tmp_path):
-    for section, step in (("skills", "Step 11"), ("memory", "Step 14")):
+def test_memory_and_mcp_stay_reserved(tmp_path):
+    # [skills] was reserved here until Step 11b implemented it.
+    for section, step in (("memory", "Step 14"), ("mcp", "Step 13")):
         root = write_config(tmp_path, f"[{section}]\nx = 1\n")
         with pytest.raises(ConfigError, match=step):
             build_config(root)
@@ -121,9 +122,9 @@ def test_a_reserved_section_error_names_the_section_on_screen(tmp_path):
 
     from rudra.cli import app
 
-    write_config(tmp_path, "[skills]\nx = 1\n")
+    write_config(tmp_path, "[memory]\nx = 1\n")
     result = CliRunner().invoke(app, ["config", "list", "-d", str(tmp_path)])
-    assert "[skills]" in result.output
+    assert "[memory]" in result.output
 
 
 def test_every_new_key_is_visible_to_config_list(tmp_path):

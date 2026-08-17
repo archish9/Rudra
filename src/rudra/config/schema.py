@@ -38,10 +38,10 @@ FLOOR_RULE_NAMES = ("outside-root", "git-dir", "catastrophic-command")
 # rejecting it. See TODO.md A1.50.
 DISABLEABLE_FLOOR_RULES = ("git-dir", "catastrophic-command")
 
-# `tools` was reserved here naming Step 7 as its implementing step. Step 7
-# implements it, so it is a real section now — see ToolsConfig.
+# `tools` and `skills` were both reserved here naming their implementing
+# steps. Step 7 implemented `tools` and Step 11b implemented `skills`, so
+# both are real sections now — see ToolsConfig and SkillsConfig.
 RESERVED_SECTIONS = {
-    "skills": "not supported yet — arrives in Step 11 (C5.1)",
     "memory": "not supported yet — arrives in Step 14 (C8.1)",
     "mcp": "MCP is configured in a separate .mcp.json, not here — arrives in Step 13 (C4.2)",
 }
@@ -137,6 +137,22 @@ class ToolsConfig:
     test_timeout: int
 
 
+@dataclass(frozen=True)
+class SkillsConfig:
+    """Which skills enter an agent's prompt index. Un-reserved in Step 11b.
+
+    One key, deliberately. `enabled = []` is the off switch, so a separate
+    `enable = false` would be a second way to say the same thing.
+
+    Names are validated against the vendored bundles at load time: an
+    unknown name is a typo, and `SkillsMiddleware` *silently skips* a skill
+    it cannot find, so accepting one would mean a skill that never loads
+    and never explains itself.
+    """
+
+    enabled: tuple[str, ...]
+
+
 MODEL_KEYS = frozenset(f.name for f in fields(ModelConfig))
 
 DEFAULTS: dict[str, Any] = {
@@ -161,6 +177,9 @@ DEFAULTS: dict[str, Any] = {
         "auto_branch": False,
         "test_timeout": 600,
     },
+    # The nine DEFAULT_ENABLED ships as data in rudra.skills.registry, not
+    # duplicated here -- loader.py fills it in when the key is absent.
+    "skills": {},
 }
 
 __all__ = [
@@ -170,6 +189,7 @@ __all__ = [
     "FLOOR_RULE_NAMES",
     "MODEL_KEYS",
     "RESERVED_SECTIONS",
+    "SkillsConfig",
     "VALID_MODES",
     "VALID_PROVIDERS",
     "AgentConfig",
