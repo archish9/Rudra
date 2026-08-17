@@ -1,6 +1,6 @@
 # 8. Project Status
 
-An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-11** (after Step 8 — git tools and the test runner).
+An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-17** (after Step 11a — the vendored skill corpus).
 
 - [In one sentence](#in-one-sentence)
 - [What works](#what-works)
@@ -14,7 +14,7 @@ An honest account of what Rudra does today, what it doesn't, and what's next. La
 
 ## In one sentence
 
-Rudra can plan a set of files, write them with your approval, run your test suite and read the result — against any model you point it at. What it can't do yet is act on that result by itself.
+Rudra asks what it can't work out, shows you a plan, writes code with your approval, checks its own work against a deterministic gate, and fixes what the gate rejects — against any model you point it at. What it can't do yet is survive an interruption, or draw on the methodology library it now ships.
 
 ---
 
@@ -28,7 +28,19 @@ Rudra can plan a set of files, write them with your approval, run your test suit
 
 **Layered TOML configuration.** `.rudra/config.toml` for the project, `~/.config/rudra/config.toml` for you, environment variables and CLI flags on top. `rudra config list` shows every effective value **and which layer set it**, so a surprising setting is traceable rather than mysterious.
 
-**Planning and writing.** Rudra produces a file checklist, then writes each file with a fresh agent, retrying up to three times per file.
+**Planning in three stages, then your approval.** Rudra settles what the work depends on — asking you only what it cannot infer — decides how it should be built, then breaks it into units of *work*, not filenames. It shows you the result with each fact's source marked `asked` or `inferred`, and waits. You approve, revise it in a sentence (up to three times), or cancel. `--plan` stops there and writes nothing.
+
+Each stage is a separate agent with its own tools, so a stage cannot do another stage's job: the clarify stage has no way to declare work, and the breakdown stage has no way to ask a question.
+
+**Subagents with structural limits.** A `coder`, a `tester`, a `reviewer` and a `general-purpose` agent, each with its own model if you want. The differences are enforced by which tools exist for them rather than by instructions — the coder has no shell, and the reviewer has no write tools at all. See [Tools](11-tools.md).
+
+**A completion gate that means something.** A task is done when `rudra verify` passes it: the code parses, lint and types hold, the tests run, and no stubs or placeholders are left behind. Six outcomes, not two. You can run the same gate yourself with `rudra verify`, with no model involved.
+
+**It fixes what the gate rejects.** A failing gate sends the exact errors back to the coder for another attempt, up to `[agent] max_fix_attempts` (default 3). Two identical failures in a row stop that task rather than burning the budget, and the summary says which tasks were blocked and why.
+
+**Only Python decides a task is done.** No tool the model can call is able to mark work complete — there is no `finish_task` and no status argument. The model decides what work exists; the gate decides when it is finished.
+
+**Project facts that persist.** What Rudra establishes about your project is written to `.rudra/facts.json` with its value, *why* it believes it, and whether you said so or it inferred it. Every agent reads them, so the coder knows what the planner learned, and next week's run starts knowing your stack instead of asking again.
 
 **Multi-language.** Python, Rust, Node, React/Next.js, and Angular projects are detected, in both empty folders and existing repositories.
 
@@ -113,7 +125,8 @@ Things that work, but not the way you'd hope.
 | **`--dry-run` does nothing** | Exits immediately with no plan and no preview | Use `--plan`, which really does write a plan and touch nothing else |
 | **Ollama truncates silently** | Default 4096-token window, no warning, and the agent forgets its plan | Set `RUDRA_CONTEXT_TOKENS` |
 | **Free hosted models are unreliable** | `429` daily caps and transient `502`s mid-run | Retry, or use a paid or local model |
-| **Coder may write the wrong file** | Nothing enforces that the file written matches the file assigned | Review output; keep tasks small |
+| **Review is advisory only** | The reviewer runs once at the end and prints its findings; nothing gates on them, by design — an LLM verdict doesn't decide completion here | Read the findings yourself. The deterministic gate is what blocks |
+| **A stray task can block a working feature** | Two plan tasks covering one edit: the coder finishes both under the first, the second changes nothing, and an empty diff counts as a failed attempt | Revise the plan when you see the overlap. Under `--auto`, re-run — the breakdown is usually cleaner |
 
 ---
 
@@ -121,7 +134,9 @@ Things that work, but not the way you'd hope.
 
 Older versions of the README described commands that never existed or were removed. To be explicit:
 
-**`build`, `chat`, `fix`, `edit`, `review`, `suggest`, `resume`, `watch` do not exist.** The only commands are a bare prompt, interactive mode, and `models test`. See [CLI Reference](04-cli-reference.md#commands-that-no-longer-exist).
+**`build`, `chat`, `fix`, `edit`, `review`, `suggest`, `resume`, `watch` do not exist.** What does: a bare prompt, interactive mode, and `init`, `doctor`, `verify`, `models test`, `config list`, `config get`. See [CLI Reference](04-cli-reference.md#commands-that-no-longer-exist).
+
+**There is no `rudra skills` command yet**, and no `config set` — configuration is read-only from the CLI, so you edit the TOML.
 
 **These settings are ignored:** `MAX_AGENTS`, `MAX_ITERATIONS`, `CHECKPOINT_INTERVAL`, `TAVILY_API_KEY`, `USE_DUCKDUCKGO`.
 
@@ -135,15 +150,15 @@ Older versions of the README described commands that never existed or were remov
 
 Built in order, because each depends on the last.
 
+**Shipped since this page last named them as "next":** the real agent loop — subagents, a tester, an advisory reviewer, and a completion gate that means *the tests pass* rather than *the file exists* — and better planning, which turned out to mean three staged agents, dynamic clarifying questions, and a plan you approve before any code is written. Both are described under [What works](#what-works).
+
 | Next | What it brings |
 |---|---|
-| **The real agent loop** | Subagents, a reviewer, a tester, and a completion gate that means *tests pass* rather than *file exists*. This is the one that matters, and the test runner it consumes is now in place |
-| **Better planning** | Clarifying questions when a request is ambiguous, and a plan mode |
-| **Skills** | Connecting the vendored superpowers library to the agents — the corpus is already shipped, so this is wiring rather than new material |
-| **Context management** | Checkpoints, living project notes, token budgets |
+| **Skills** | Connecting the vendored superpowers library to the agents. The corpus already ships, so this is wiring rather than new material |
+| **Context management** | Checkpoints that resume, living project notes, token budgets |
 | **MCP support** | Model Context Protocol servers |
 | **Long-term memory** | Knowledge that persists across sessions |
-| **Release polish** | Streaming, cost reporting, PyPI |
+| **Release polish** | Streaming, cancellation, cost reporting, PyPI |
 
 `TODO.md` in the repository root is the live ledger — every item, its status, and the evidence behind it.
 
@@ -159,14 +174,22 @@ Built in order, because each depends on the last.
 - Trying out a local-first coding agent
 - Contributing to Rudra itself
 
+**Also a good fit now**
+
+- Work you want checked rather than merely generated — the gate is real, and `rudra verify` runs it without a model
+- Tasks where you'd rather be asked than guessed at
+- Loop-engineering runs with `--auto --allow-shell`, on a branch, in a repo you can throw away
+
 **Not yet**
 
 - Anything where generated code might go unreviewed
-- Workflows needing tests to actually pass
+- Long runs you can't afford to restart — an interruption loses the ledger
 - Unattended runs with `--allow-shell` against anything you care about
 - Machines with no model available and no budget for one
 
-The honest summary: Rudra is a capable file generator that asks permission, runs commands, and can now run your tests and tell you what happened — on a solid provider-agnostic foundation. It is not yet the autonomous test-and-fix agent it's aiming to be, because nothing makes it *act* on a failing suite. Treat its output as a first draft from a fast junior developer who will run the tests if you ask, and will still hand you the branch when they fail.
+The honest summary: Rudra now closes its own loop. It plans, asks, writes, verifies against a deterministic gate, and repairs what the gate rejects — stopping rather than thrashing when two attempts fail the same way. The foundation is provider-agnostic and the safety model is real, if not sandboxed.
+
+What it is not is durable. A dropped connection or a denied command ends the run, and there is no `--continue`; the completed work stays on disk and the rest is reported as never attempted. It also ships a methodology library it cannot yet read. Treat its output as a reviewed first draft from a fast junior developer who runs the tests, fixes what they can, and tells you plainly which tasks they gave up on.
 
 ---
 

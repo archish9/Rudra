@@ -218,3 +218,5 @@ coding-files/*
 
 # Subagent-driven development scratch (superpowers)
 .superpowers/
+
+docs/*
