@@ -67,6 +67,9 @@ app.add_typer(models_app, name="models")
 config_app = typer.Typer(help="Inspect effective configuration (read-only).")
 app.add_typer(config_app, name="config")
 
+skills_app = typer.Typer(help="Inspect and validate the skill library.")
+app.add_typer(skills_app, name="skills")
+
 console = Console()
 
 
@@ -385,6 +388,126 @@ def config_get(
             return
     console.print(f"[red]Unknown key '{key}'.[/red] Run `rudra config list` to see valid keys.")
     raise typer.Exit(code=1)
+
+
+@skills_app.command("list")
+def skills_list(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Show every skill Rudra can see, and whether it is in the prompt.
+
+    Three columns carry the whole model: where a skill came from, whether
+    it reaches the model, and — the question that would otherwise generate
+    bug reports — why one exists and does nothing.
+    """
+    from rudra.skills.cache import ensure_cache
+    from rudra.skills.registry import BUNDLES
+    from rudra.skills.sources import resolve_sources
+    from rudra.skills.validate import validate_tree
+
+    cfg = _load_config_or_exit(project_dir)
+    root = Path(project_dir) if project_dir else Path.cwd()
+    enabled = frozenset(cfg.skills.enabled)
+    cache = ensure_cache(BUNDLES, enabled) if enabled else None
+    sources = resolve_sources(root, cache)
+
+    # Walk in precedence order and let the last source own the name, which
+    # is the rule SkillsMiddleware applies (skills.py:955).
+    owner: dict[str, str] = {}
+    rows: list[tuple[str, str, str]] = []
+    for source in sources:
+        if source.label == "bundled":
+            trees = sorted((source.local_path / "library").iterdir())
+        else:
+            trees = [source.local_path]
+        for tree in trees:
+            for finding in validate_tree(tree):
+                # An invalid skill is NOT in the prompt, whatever `enabled`
+                # says: SkillsMiddleware skips it silently. Reporting "yes"
+                # here would make this command lie in exactly the case it
+                # exists to explain.
+                if not finding.ok:
+                    state = "invalid"
+                elif source.label != "bundled" and finding.name not in enabled:
+                    state = "yes"
+                else:
+                    state = "yes" if finding.name in enabled else "—"
+                rows.append((finding.name, source.label, state))
+                owner[finding.name] = source.label
+
+    table = Table(title="Skills", header_style="bold")
+    for column in ("Skill", "Source", "In prompt", "Note"):
+        table.add_column(column, overflow="fold")
+    for name, label, state in rows:
+        shadowed = owner[name] != label
+        table.add_row(
+            escape(name),
+            label,
+            "" if shadowed else state,
+            f"shadowed by {owner[name]}" if shadowed else "",
+        )
+    console.print(table)
+
+
+@skills_app.command("validate")
+def skills_validate(
+    path: Optional[Path] = typer.Argument(None, help="A directory of skills to check"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Check whether skills would actually load, and say why not.
+
+    Exists because SkillsMiddleware skips an unparseable skill in silence,
+    so without this a typo means a skill that never loads and never
+    explains itself (S11b.3).
+    """
+    from rudra.skills.sources import resolve_sources
+    from rudra.skills.validate import validate_tree
+
+    if path is not None:
+        trees = [Path(path)]
+    else:
+        root = Path(project_dir) if project_dir else Path.cwd()
+        trees = [source.local_path for source in resolve_sources(root, None)]
+
+    problems = 0
+    checked = 0
+    for tree in trees:
+        for finding in validate_tree(tree):
+            checked += 1
+            if finding.ok:
+                console.print(f"[green]ok[/green]      {escape(finding.name)}")
+            else:
+                problems += 1
+                console.print(
+                    f"[red]invalid[/red] {escape(finding.name)}: {escape(finding.reason)}"
+                )
+
+    if problems:
+        console.print(f"\n[red]{problems} skill(s) would not load.[/red]")
+        raise typer.Exit(1)
+    console.print(f"\n[green]All {checked} skill(s) valid.[/green]")
+
+
+@skills_app.command("rebuild")
+def skills_rebuild(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Re-render the bundled skill cache and drop stale copies."""
+    from rudra.skills.cache import cache_key, ensure_cache, prune_stale
+    from rudra.skills.registry import BUNDLES
+
+    cfg = _load_config_or_exit(project_dir)
+    enabled = frozenset(cfg.skills.enabled)
+    if not enabled:
+        console.print("Skills are disabled ([skills] enabled = []); nothing to build.")
+        return
+
+    key = cache_key(BUNDLES, enabled)
+    removed = prune_stale(None, key)
+    cache = ensure_cache(BUNDLES, enabled)
+    console.print(f"Skill cache: {cache.root}")
+    if removed:
+        console.print(f"Removed {len(removed)} stale cache(s).")
 
 
 @app.command("doctor")

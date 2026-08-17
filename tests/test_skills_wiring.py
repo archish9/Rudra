@@ -11,6 +11,7 @@ from rich.console import Console
 from rudra.config.loader import get_config, reset_config
 from rudra.skills.cache import ensure_cache
 from rudra.skills.registry import BUNDLES, DEFAULT_ENABLED
+from rudra.skills.sources import SkillSource
 
 
 @pytest.fixture(autouse=True)
@@ -44,8 +45,9 @@ def test_build_backend_mounts_the_skills_route(tmp_path: Path, cache_root: Path)
     from rudra.agent.main_agent import build_backend
 
     cfg = _project(tmp_path)
+    bundled = SkillSource("bundled", "/skills/", cache_root)
 
-    backend = build_backend(cfg, tmp_path, skills_root=cache_root)
+    backend = build_backend(cfg, tmp_path, (bundled,))
 
     assert "/skills/" in backend.routes
 
@@ -75,9 +77,10 @@ def test_the_normalizer_is_told_about_every_route_the_backend_mounts(
     from rudra.agent import main_agent
 
     cfg = _project(tmp_path)
-    mounted = set(main_agent.build_backend(cfg, tmp_path, skills_root=cache_root).routes)
+    bundled = SkillSource("bundled", "/skills/", cache_root)
+    mounted = set(main_agent.build_backend(cfg, tmp_path, (bundled,)).routes)
 
-    assert mounted == set(main_agent.ROUTE_PREFIXES)
+    assert mounted == set(main_agent.route_prefixes((bundled,)))
 
 
 def test_planner_is_constructed_with_skills(tmp_path: Path) -> None:
@@ -310,3 +313,63 @@ def _subagent_context(tmp_path: Path, *, skills_sources):
         cfg=_project(tmp_path),
         skills_sources=skills_sources,
     )
+
+
+def _project_with_skill(tmp_path: Path) -> Path:
+    project = tmp_path / "proj"
+    skill = project / ".rudra" / "skills" / "deploy-checklist"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: deploy-checklist\ndescription: Use when shipping\n---\n\n# Deploy\n",
+        encoding="utf-8",
+    )
+    return project
+
+
+def test_user_and_project_skills_are_mounted_and_indexed(tmp_path: Path, cache_root: Path) -> None:
+    """C5.1's remaining half: a user's own skills reach the agent."""
+    from rudra.agent.main_agent import build_backend
+    from rudra.skills.sources import resolve_sources
+
+    project = _project_with_skill(tmp_path)
+    cfg = _project(project)
+
+    class _Cache:
+        root = cache_root
+
+    sources = resolve_sources(project, _Cache(), home=tmp_path / "home")
+    backend = build_backend(cfg, project, sources)
+
+    assert "/skills/project/" in backend.routes
+    assert "/skills/" in backend.routes
+
+
+def test_the_normalizer_still_knows_every_mounted_route(tmp_path: Path, cache_root: Path) -> None:
+    """A1.79's guard, extended to the routes this step adds."""
+    from rudra.agent import main_agent
+    from rudra.skills.sources import resolve_sources
+
+    project = _project_with_skill(tmp_path)
+    cfg = _project(project)
+
+    class _Cache:
+        root = cache_root
+
+    sources = resolve_sources(project, _Cache(), home=tmp_path / "home")
+    mounted = set(main_agent.build_backend(cfg, project, sources).routes)
+
+    assert mounted == set(main_agent.route_prefixes(sources))
+
+
+def test_index_paths_are_ordered_lowest_precedence_first(tmp_path: Path, cache_root: Path) -> None:
+    """The order handed to create_deep_agent decides who shadows whom."""
+    from rudra.skills.sources import resolve_sources
+
+    project = _project_with_skill(tmp_path)
+
+    class _Cache:
+        root = cache_root
+
+    paths = [s.index_path for s in resolve_sources(project, _Cache(), home=tmp_path / "home")]
+
+    assert paths == ["/skills/active/", "/skills/project/"]

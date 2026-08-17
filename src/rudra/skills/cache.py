@@ -127,4 +127,24 @@ def ensure_cache(
     return SkillCache(root=target)
 
 
-__all__ = ["SENTINEL", "SkillCache", "cache_key", "ensure_cache"]
+def prune_stale(cache_home: Path | None, keep: str) -> list[str]:
+    """Remove every rendered cache except `keep`. Returns what went.
+
+    Old keys accumulate silently -- a new one appears whenever Rudra's
+    version, the corpus or the enabled set changes -- and nothing else ever
+    removes them. 11a deferred this deliberately until there was a command
+    to hang it on (`rudra skills rebuild`).
+    """
+    root = _cache_home(cache_home)
+    if not root.is_dir():
+        return []
+
+    removed = []
+    for child in sorted(root.iterdir()):
+        if child.is_dir() and child.name != keep:
+            shutil.rmtree(child, ignore_errors=True)
+            removed.append(child.name)
+    return removed
+
+
+__all__ = ["SENTINEL", "SkillCache", "cache_key", "ensure_cache", "prune_stale"]

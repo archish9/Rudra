@@ -6,7 +6,7 @@ Rudra ships a methodology library — [superpowers](https://github.com/obra/supe
 >
 > The three planning stages, the coder and the tester carry the skill index and can read any of the fourteen skills by path. The reviewer and the general-purpose agent do not — neither is choosing a method, and both would pay tokens for descriptions they cannot act on.
 >
-> Select a different set with `[skills] enabled` in `config.toml`, or turn skills off entirely with `enabled = []`. You cannot add your own yet — see [Adding your own](#adding-your-own).
+> Select a different set with `[skills] enabled` in `config.toml`, or turn skills off entirely with `enabled = []`. You can also write your own — see [Adding your own](#adding-your-own).
 
 ---
 
@@ -133,9 +133,61 @@ Changing `enabled` changes the cache key, so you land in a different rendered di
 
 ## Adding your own
 
-Not yet supported. The bundled corpus is live, but user-authored skill directories — `~/.rudra/skills/` and `<project>/.rudra/skills/` — are not read yet, and there is no `rudra skills` command.
+Put a skill in your project and Rudra picks it up:
 
-Both arrive together, deliberately. A malformed `SKILL.md` is silently skipped by the loader, so a directory you can write to without a `rudra skills validate` to check it would turn a typo into a skill that never loads and never explains why.
+```
+<project>/.rudra/skills/deploy-checklist/SKILL.md
+```
+
+```markdown
+---
+name: deploy-checklist
+description: Use when shipping this project to production
+---
+
+# Deploy checklist
+
+1. Run the full suite.
+2. Check the migration ran.
+```
+
+Two rules the loader enforces: **`name` must equal the directory name**, and
+`description` must be non-empty — it is the only thing the model sees when
+deciding whether to reach for the skill.
+
+`~/.rudra/skills/` works the same way and applies to every project.
+
+### Check it before trusting it
+
+```bash
+rudra skills validate
+```
+
+This is worth running. A malformed `SKILL.md` is **skipped in silence** — no
+error, the skill simply never appears and the model never uses it. `validate`
+is the only place that failure becomes visible. It exits non-zero and names
+each problem.
+
+One case it catches that looks fine: writing `description:` with nothing after
+it. YAML reads that as null, and the description becomes the literal string
+`"None"`. The skill loads, indexes, and tells the model nothing.
+
+```bash
+rudra skills list       # every skill, its source, whether it is in the prompt
+rudra skills rebuild    # re-render the bundled cache, drop stale copies
+```
+
+### Which one wins
+
+Same name in two places? Later source wins:
+
+```
+bundled  →  ~/.rudra/skills/  →  <project>/.rudra/skills/
+```
+
+So a project skill overrides a bundled one of the same name. `rudra skills
+list` marks the loser as `shadowed by project`, so this is visible rather than
+mysterious.
 
 ---
 
