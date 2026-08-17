@@ -20,7 +20,7 @@ Rudra asks what it can't work out, shows you a plan, writes code with your appro
 
 ## What works
 
-**Any model, any provider.** Ollama, OpenAI-compatible endpoints (OpenRouter, vLLM, LM Studio, Groq, Together), Anthropic, OpenAI, and Google. Switching is a configuration edit, not a code change. Verified end to end against both a local Ollama model and a hosted one.
+**Any model, any provider.** Ollama, OpenAI-compatible endpoints (OpenRouter, vLLM, LM Studio, Groq, Together, NVIDIA), Anthropic, OpenAI, and Google. Switching is a configuration edit, not a code change. Verified end to end against both a local Ollama model and a hosted one.
 
 **Different models per role.** The planner and coder can use different models, different providers, different settings.
 

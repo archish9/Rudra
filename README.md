@@ -81,7 +81,7 @@ base_url = "http://localhost:11434"
 model    = "qwen3:32b"
 ```
 
-**Using a hosted model** — OpenRouter, vLLM, LM Studio, Groq, Together all work the same way:
+**Using a hosted model** — OpenRouter, vLLM, LM Studio, Groq, Together, NVIDIA all work the same way:
 
 ```toml
 [model.default]

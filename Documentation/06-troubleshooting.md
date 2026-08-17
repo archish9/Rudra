@@ -100,7 +100,7 @@ pipx install -e . --force
 
 Typo in `RUDRA_PROVIDER`. It must be exactly one of those five.
 
-Note that most services speaking OpenAI's API — OpenRouter, vLLM, LM Studio, Groq, Together — want `openai_compatible`, not `openai`. Only OpenAI itself uses `openai`.
+Note that most services speaking OpenAI's API — OpenRouter, vLLM, LM Studio, Groq, Together, NVIDIA — want `openai_compatible`, not `openai`. Only OpenAI itself uses `openai`.
 
 ### `Role 'planner' needs an API key, but environment variable 'OPENROUTER_API_KEY' is not set.`
 

@@ -5,7 +5,7 @@ Rudra talks to five kinds of backend. Pick one, copy the block, run `rudra model
 - [Which should I use?](#which-should-i-use)
 - [What a model must be able to do](#what-a-model-must-be-able-to-do)
 - [Ollama — local](#ollama--local)
-- [OpenAI-compatible — OpenRouter, vLLM, LM Studio, Groq, Together](#openai-compatible--openrouter-vllm-lm-studio-groq-together)
+- [OpenAI-compatible — OpenRouter, vLLM, LM Studio, Groq, Together, NVIDIA](#openai-compatible--openrouter-vllm-lm-studio-groq-together-nvidia)
 - [Anthropic](#anthropic)
 - [OpenAI](#openai)
 - [Google](#google)
@@ -100,7 +100,7 @@ base_url = "http://192.168.1.50:11434"
 
 ---
 
-## OpenAI-compatible — OpenRouter, vLLM, LM Studio, Groq, Together
+## OpenAI-compatible — OpenRouter, vLLM, LM Studio, Groq, Together, NVIDIA
 
 One provider covers every service speaking the OpenAI chat API. Only `base_url` and the model name change.
 
@@ -193,6 +193,31 @@ api_key_env = "TOGETHER_API_KEY"
 # .env  (gitignored — the key itself never goes in config.toml)
 TOGETHER_API_KEY=...
 ```
+
+### NVIDIA NIM
+
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "openai_compatible"
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "nvidia/nemotron-3-ultra-550b-a55b"
+api_key_env = "NVIDIA_API_KEY"
+temperature = 1.0
+max_output_tokens = 16384
+```
+
+```bash
+# .env  (gitignored — the key itself never goes in config.toml)
+NVIDIA_API_KEY=nvapi-...
+```
+
+> **Reasoning mode is not enabled.** NVIDIA's own examples switch it on with an
+> `extra_body` payload — `{"chat_template_kwargs": {"enable_thinking": true},
+> "reasoning_budget": 16384}` — and Rudra has no configuration key for arbitrary
+> request-body extras, so the model answers without its thinking pass. Nothing
+> breaks; you get a capable non-reasoning model. The same gap means `top_p` is
+> not configurable either.
 
 > **Use `openai_compatible`, not `openai`, for all of these** — even though they speak OpenAI's API. The `openai` provider enables OpenAI's Responses API, which these servers don't implement. `openai_compatible` deliberately turns it off.
 
