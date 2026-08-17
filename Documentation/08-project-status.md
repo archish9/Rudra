@@ -1,6 +1,6 @@
 # 8. Project Status
 
-An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-17** (after Step 11b — skills wired to the agents).
+An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-17** (after Step 11c — the skills command, user skills, and the selection measurement).
 
 - [In one sentence](#in-one-sentence)
 - [What works](#what-works)
@@ -60,7 +60,11 @@ Each stage is a separate agent with its own tools, so a stage cannot do another 
 
 **Keys stay out of config.** `RUDRA_API_KEY_ENV` names a variable; the value lives in the environment. A test asserts a built model's `repr()` cannot leak it.
 
-**A methodology library the agents can draw on.** The [superpowers](https://github.com/obra/superpowers) corpus (14 skills, MIT) ships inside the package, frozen and hash-verified. Nine are indexed by default for the three planning stages, the coder and the tester — `brainstorming` before designing, `test-driven-development` before implementing, `systematic-debugging` before guessing at a fix. Only names and descriptions sit in the prompt; the full text is read on demand. Narrow the set with `[skills] enabled`, or switch it off with `enabled = []`. The reviewer and general-purpose agent get none, by design. See [Skills](12-skills.md).
+**A methodology library the agents can draw on.** The [superpowers](https://github.com/obra/superpowers) corpus (14 skills, MIT) ships inside the package, frozen and hash-verified. Nine are indexed by default for the three planning stages, the coder and the tester — `brainstorming` before designing, `test-driven-development` before implementing, `systematic-debugging` before guessing at a fix. Only names and descriptions sit in the prompt; the full text is read on demand. Narrow the set with `[skills] enabled`, or switch it off with `enabled = []`. The reviewer and general-purpose agent get none, by design.
+
+**You can add your own**, in `<project>/.rudra/skills/` or `~/.rudra/skills/`, and a project skill overrides a bundled one of the same name. `rudra skills list` shows what exists and what is shadowed; `rudra skills validate` catches a malformed skill, which the loader otherwise skips in silence. See [Skills](12-skills.md).
+
+**Nine skills ship enabled, and that is now measured rather than guessed.** Eight runs across two arms found that a thirteen-skill index made a 550B model erratic — enumerating the whole library for a trivial task, producing empty plans, and once regressing a test it had already fixed — where nine did not. The same measurement has not been run at the 32B floor.
 
 ---
 
@@ -102,10 +106,6 @@ once and never updated (`A1.9`, `C7.3`).
 ### No MCP, no plugins
 
 Designed, not implemented.
-
-### You cannot add your own skills
-
-The bundled corpus is live, but user-authored skill directories are not read yet and there is no `rudra skills` command to list or validate one. They arrive together: a malformed `SKILL.md` is silently skipped by the loader, so a writable directory without a validator turns a typo into a skill that never loads and never says why. See [Skills](12-skills.md).
 
 ### No command sandbox
 

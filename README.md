@@ -288,6 +288,8 @@ They cost almost nothing to carry. Only each skill's name and one-line descripti
 
 The planner, coder and tester draw on it; the reviewer doesn't. Narrow the set with `[skills] enabled` in your config, or switch it off with `enabled = []`.
 
+**You can write your own too** — drop a `SKILL.md` in `.rudra/skills/<name>/` and it joins the library, overriding a bundled skill of the same name. `rudra skills validate` tells you whether it will actually load, which matters because the loader skips a malformed one in silence.
+
 Details, the full skill list, and what Rudra adapts: **[Skills](Documentation/12-skills.md)**.
 
 ---

@@ -256,6 +256,27 @@ Be aware of one rough edge: if a model call fails partway through a run, Rudra e
 
 ---
 
+## `rudra skills`
+
+Inspect and validate the skill library. See [Skills](12-skills.md) for what
+skills are and how to write one.
+
+```bash
+rudra skills list          # every skill, its source, whether it is in the prompt
+rudra skills validate      # would these skills actually load?
+rudra skills validate PATH # check one directory
+rudra skills rebuild       # re-render the bundled cache, drop stale copies
+```
+
+`validate` exits **1** if any skill would fail to load, naming each one. That
+matters because the loader skips a malformed skill *silently* — without this
+command, a typo means a skill that never loads and never explains itself.
+
+`list` marks a skill `invalid` rather than claiming it is in the prompt, and
+marks `shadowed by project` when a project skill overrides a bundled one.
+
+---
+
 ## Commands that no longer exist
 
 Earlier versions documented `build`, `chat`, `fix`, `edit`, `review`, `suggest`, `resume`, and `watch`. **None of them exist.** Use a plain prompt instead:
