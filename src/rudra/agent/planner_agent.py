@@ -239,6 +239,7 @@ def create_planner_agent(
     facts=None,
     interactive: bool = True,
     stage: str = "breakdown",
+    skills_sources: tuple[str, ...] | None = None,
 ):
     """Create one stage of the planner (S10b.1).
 
@@ -308,6 +309,10 @@ def create_planner_agent(
         memory=[".rudra/AGENTS.md"],
         middleware=middleware,
         interrupt_on=gate.interrupt_on if gate is not None else None,
+        # None, not [], when skills are off: an empty list still installs
+        # SkillsMiddleware and spends its ~464 tokens of boilerplate on an
+        # index with nothing in it.
+        skills=list(skills_sources) if skills_sources else None,
     )
 
 
