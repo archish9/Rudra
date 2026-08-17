@@ -140,6 +140,10 @@ CODER = RudraSubagent(
     system_prompt=_CODER_PROMPT,
     role="coder",
     fs_tools=_WRITER_FS,
+    # Chooses *how* to write the code: TDD and systematic-debugging are
+    # its methods. The reviewer and general-purpose agent are left out --
+    # neither is picking an approach (S11b.1).
+    wants_skills=True,
 )
 
 TESTER = RudraSubagent(
@@ -149,6 +153,7 @@ TESTER = RudraSubagent(
     role="tester",
     fs_tools=(*_WRITER_FS, "execute"),
     rudra_tools=("run_tests",),
+    wants_skills=True,
 )
 
 REVIEWER = RudraSubagent(

@@ -70,6 +70,12 @@ def _check_no_duplicate_active_names(bundles: Sequence[Bundle], enabled: frozens
 
 _REWRITABLE_SUFFIXES = frozenset({".md"})
 
+# Bumped whenever the rendering rules change. The cache key hashes the
+# transform's *inputs*, which cannot detect a change to the transform
+# itself -- without this, a Rudra upgrade that rewrote cross-references
+# differently would silently reuse the old rendering.
+TRANSFORM_VERSION = 1
+
 
 def _rewrite_cross_refs(skill_root: Path, bundle: Bundle) -> int:
     """Turn `<prefix><skill>` references into read_file-able library paths.

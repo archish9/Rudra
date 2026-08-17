@@ -15,6 +15,7 @@ from rudra.config import (
     Config,
     ModelConfig,
     PermissionsConfig,
+    SkillsConfig,
     ToolsConfig,
 )
 from rudra.llm import build_model
@@ -47,6 +48,7 @@ def make_config(**overrides) -> Config:
         permissions=PermissionsConfig(mode="ask", allow=(), deny=(), floor_disable=()),
         compat=CompatConfig(task_anchor=False, sandbox_paths=False),
         tools=ToolsConfig(shell=True, shell_in_auto=False, auto_branch=False, test_timeout=600),
+        skills=SkillsConfig(enabled=()),
         models={"default": settings, "planner": settings, "coder": settings},
     )
 

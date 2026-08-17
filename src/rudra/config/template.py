@@ -107,8 +107,15 @@ test_timeout = 600
 task_anchor   = false
 sandbox_paths = false
 
+# [skills]
+# Which of the bundled superpowers skills enter an agent's prompt index.
+# Leave the section out for the shipped set; `enabled = []` turns skills off
+# for every agent. A name that is not a vendored skill is an error, not a
+# silent skip. See Documentation/12-skills.md.
+# enabled = ["brainstorming", "test-driven-development", "systematic-debugging"]
+
 # Not supported yet, listed so you know where they will go:
-#   [skills]  Step 11    [memory]  Step 14
+#   [memory]  Step 14
 # MCP servers are configured in a separate .mcp.json (Step 13).
 """
 

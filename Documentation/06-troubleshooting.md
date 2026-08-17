@@ -170,7 +170,8 @@ Rudra refuses to run on a config it can't trust, and names the problem:
 | `invalid TOML — Expected ']' (at line 2...)` | Syntax error; the line number is real |
 | `Unknown key 'tempreature' ... Did you mean 'temperature'?` | Typo. Unknown keys are fatal on purpose — silently ignoring one means your setting never applies and nothing says so |
 | `Unknown provider 'banana'` | Check the spelling against the five valid names it lists |
-| `[skills] is not supported yet — arrives in Step 11` | A section that's designed but not built. Remove it for now |
+| `[memory] is not supported yet — arrives in Step 14` | A section that's designed but not built. Remove it for now |
+| `Unknown skill 'brainstorm' in [skills] enabled` | A skill name that isn't vendored. It's fatal rather than ignored because the loader silently skips a skill it can't find — see [Skills](12-skills.md) |
 
 ### Settings from an old guide do nothing
 

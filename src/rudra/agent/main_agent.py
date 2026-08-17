@@ -21,6 +21,13 @@ from rudra.state import ensure_layout
 # key is worse than no key.
 MAX_REVISIONS = 3
 
+# The CompositeBackend route prefixes, in one place because two things
+# need them and must not disagree: build_backend mounts them, and the
+# path normalizer must be told to leave them alone (A1.79). A route the
+# normalizer does not know about gets its path trimmed to the last two
+# segments, so the model can list the files and never read one.
+ROUTE_PREFIXES = ("/artifacts/", "/skills/")
+
 
 @dataclass
 class AgentContext:
@@ -310,12 +317,17 @@ def _ensure_agents_md(rudra_dir: Path, facts: Any = None) -> None:
     )
 
 
-def build_backend(cfg, project_path: Path):
-    """The backend for one run: shell on the default, artifacts on a route.
+def build_backend(cfg, project_path: Path, skills_root: Path | None = None):
+    """The backend for one run: shell on the default, artifacts and skills on routes.
 
-    A composite from the start per D13 — Step 11 adds a "/skills/" route to
-    `routes` and changes nothing else. Retrofitting the composite later
-    would rewire every agent constructor.
+    A composite from the start per D13, and Step 11b proved that decision
+    out: mounting the rendered skill corpus cost one entry in `routes` and
+    changed nothing else. Retrofitting the composite later would have
+    rewired every agent constructor.
+
+    `skills_root` is None when skills are switched off (`[skills] enabled
+    = []`), in which case no route is mounted at all rather than an empty
+    one being served for nothing.
 
     `artifacts_root` matters more than it looks. It defaults to "/", i.e.
     the backend root, i.e. the user's project — so deepagents' oversized
@@ -349,11 +361,21 @@ def build_backend(cfg, project_path: Path):
     else:
         default = FilesystemBackend(root_dir=str(project_path), virtual_mode=True)
 
+    artifacts_prefix, skills_prefix = ROUTE_PREFIXES
+    routes = {
+        artifacts_prefix: FilesystemBackend(root_dir=str(paths.artifacts), virtual_mode=True),
+    }
+    if skills_root is not None:
+        # Read-only in practice: nothing writes here, and the agents given
+        # skills have no reason to. virtual_mode is what lets the composite
+        # strip the "/skills/" prefix (filesystem.py:132), and execute still
+        # delegates to `default` (composite.py:774), so shell stays rooted
+        # at the project.
+        routes[skills_prefix] = FilesystemBackend(root_dir=str(skills_root), virtual_mode=True)
+
     return CompositeBackend(
         default=default,
-        routes={
-            "/artifacts/": FilesystemBackend(root_dir=str(paths.artifacts), virtual_mode=True),
-        },
+        routes=routes,
         artifacts_root="/artifacts",
     )
 
@@ -405,9 +427,30 @@ async def create_main_agent(
 
     # No plan path: PLAN.md went with the checklist in Step 9c, so the
     # normalizer's planned-filename hint has nothing to read (A1.65).
-    install_path_normalizer(project_path)
+    # Route prefixes are passed so the normalizer leaves them alone: they
+    # are real mount points, not hallucinated absolute paths (A1.79).
+    install_path_normalizer(project_path, route_prefixes=ROUTE_PREFIXES)
 
-    filesystem_backend = build_backend(cfg, project_path)
+    # Skills are optional by configuration: `enabled = []` means no cache is
+    # built at all, rather than an empty one rendered and mounted for
+    # nothing. An unwritable cache root falls back to a per-run temp copy
+    # (S11b.2) so the agent reasons the same way on a locked-down box as on
+    # a laptop -- the run is told, and nothing else changes.
+    skill_cache = None
+    if cfg.skills.enabled:
+        from rudra.skills.cache import ensure_cache
+        from rudra.skills.registry import BUNDLES
+
+        skill_cache = ensure_cache(BUNDLES, frozenset(cfg.skills.enabled))
+        if skill_cache.fell_back:
+            console.print(
+                "[dim]Skills cache is not writable; using a temporary copy for this run.[/dim]"
+            )
+
+    skills_sources = (skill_cache.active_path,) if skill_cache else None
+    filesystem_backend = build_backend(
+        cfg, project_path, skills_root=skill_cache.root if skill_cache else None
+    )
 
     # Shell and the permission layer are constructed together, and neither
     # is optional. Section E hard gate 2: LocalShellBackend must never ship
@@ -439,6 +482,7 @@ async def create_main_agent(
         checkpointer=checkpointer,
         session_id=session_id,
         facts=facts,
+        skills_sources=skills_sources,
     )
     loop_context = LoopContext(
         subagents=subagent_context,
@@ -472,6 +516,8 @@ async def create_main_agent(
             facts=facts,
             interactive=interactive,
             stage=stage,
+            skills_sources=skills_sources,
+            skills_cache_root=skill_cache.root if skill_cache else None,
         )
         for stage in STAGES
     }

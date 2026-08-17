@@ -19,6 +19,7 @@ from rudra.config.schema import (
     CompatConfig,
     ModelConfig,
     PermissionsConfig,
+    SkillsConfig,
     ToolsConfig,
 )
 
@@ -29,6 +30,7 @@ __all__ = [
     "ConfigError",
     "ModelConfig",
     "PermissionsConfig",
+    "SkillsConfig",
     "ToolsConfig",
     "build_config",
     "get_config",

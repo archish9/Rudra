@@ -66,6 +66,10 @@ class SubagentContext:
     # because the subagent machinery must stay constructible without a
     # run -- 9b's tests build a context with no facts at all.
     facts: Any = None
+    # The run's skill sources, or None when skills are off. Shared by
+    # reference for the same reason the gate and FactStore are: one run,
+    # one cache. Only specs with wants_skills actually receive them.
+    skills_sources: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

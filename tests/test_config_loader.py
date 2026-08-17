@@ -134,10 +134,11 @@ def test_unknown_key_is_a_hard_error_naming_the_nearest_match(tmp_path: Path) ->
 def test_reserved_section_names_the_step_that_implements_it(tmp_path: Path) -> None:
     project = tmp_path / "proj"
     project.mkdir()
-    _write_project_toml(project, "[skills]\nsuperpowers = true\n")
+    # [skills] was the example here until Step 11b implemented it.
+    _write_project_toml(project, "[memory]\npalace = true\n")
     with pytest.raises(ConfigError) as excinfo:
         get_config(project)
-    assert "Step 11" in str(excinfo.value)
+    assert "Step 14" in str(excinfo.value)
 
 
 def test_unknown_section_is_rejected(tmp_path: Path) -> None:

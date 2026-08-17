@@ -286,7 +286,7 @@ They cost almost nothing to carry. Only each skill's name and one-line descripti
 
 **The copy is frozen.** No version check, no update fetch, no network call at run time — ever. A methodology library that changed under you would change how your agent behaves between two runs of the same command, with nothing in your project explaining why. The freeze is enforced rather than promised: a hash manifest covers all 52 vendored files and a test verifies it on every run.
 
-> **Vendored, not yet wired.** As of v0.2.0 the corpus ships, renders and is tested, but no agent reads it yet — that lands next. It changes nothing about how Rudra behaves today.
+The planner, coder and tester draw on it; the reviewer doesn't. Narrow the set with `[skills] enabled` in your config, or switch it off with `enabled = []`.
 
 Details, the full skill list, and what Rudra adapts: **[Skills](Documentation/12-skills.md)**.
 

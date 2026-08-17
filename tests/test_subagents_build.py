@@ -51,6 +51,9 @@ class FakeContext:
     checkpointer: Any = None
     session_id: str = "test"
     facts: Any = None
+    # Mirrors SubagentContext (Step 11b). A fake that drifts from the real
+    # dataclass is how tests stay green against code that would break.
+    skills_sources: tuple[str, ...] | None = None
 
 
 class FakeModel:

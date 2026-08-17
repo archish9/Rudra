@@ -64,6 +64,7 @@ def _load_planned_files(plan_path: Optional[Path]) -> set[str]:
 def install_path_normalizer(
     project_root: Path,
     plan_path: Optional[Path] = None,
+    route_prefixes: Sequence[str] = (),
 ) -> None:
     """Patch deepagents to accept absolute paths from LLMs on any OS.
 
@@ -133,6 +134,20 @@ def install_path_normalizer(
         return None
 
     def _normalize(path: str, *, allowed_prefixes: Sequence[str] | None = None) -> str:
+        # --- Step 0: real backend routes are not hallucinations (A1.79) ---
+        #
+        # Everything below exists to rescue absolute paths the model
+        # invented. A CompositeBackend route is the opposite: a real mount
+        # point the model was *told* about, and one it reads back out of an
+        # `ls` listing. Step 2d would keep only the last two segments of
+        # "/skills/active/brainstorming/SKILL.md" and hand back
+        # "/brainstorming/SKILL.md", so a live run could list the skills and
+        # never read one. `/artifacts/` escaped that only by being three
+        # segments deep -- luck, not design.
+        for prefix in route_prefixes:
+            if path.startswith(prefix):
+                return path
+
         # --- Step 1: Windows absolute paths ---
         wp = PureWindowsPath(path)
         if wp.drive:

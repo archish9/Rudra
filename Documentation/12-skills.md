@@ -2,11 +2,11 @@
 
 Rudra ships a methodology library — [superpowers](https://github.com/obra/superpowers) by Jesse Vincent — vendored into the package so it works offline and never changes under you.
 
-> ### Status: vendored, not yet active
+> ### Status: live, for some agents
 >
-> As of v0.2.0 the corpus is **on disk, frozen, transformable and tested — and no agent reads it yet.** The wiring that puts skills into an agent's prompt is Step 11b and has not landed.
+> The three planning stages, the coder and the tester carry the skill index and can read any of the fourteen skills by path. The reviewer and the general-purpose agent do not — neither is choosing a method, and both would pay tokens for descriptions they cannot act on.
 >
-> Nothing on this page changes how Rudra behaves today. It documents what is shipped and what it is for, so that when the wiring lands you already know what turned on. [Project Status](08-project-status.md) tracks the line between the two.
+> Select a different set with `[skills] enabled` in `config.toml`, or turn skills off entirely with `enabled = []`. You cannot add your own yet — see [Adding your own](#adding-your-own).
 
 ---
 
@@ -118,9 +118,24 @@ MIT requires that the copyright and permission notice survive in copies. It does
 
 ---
 
+## Choosing which skills are active
+
+```toml
+[skills]
+enabled = ["brainstorming", "test-driven-development", "systematic-debugging"]
+```
+
+Leave the section out to get the shipped nine. Name a subset to narrow it — including any of the five that are off by default, since all fourteen are vendored and enabling one is a config change, not a rebuild. Set `enabled = []` and no agent receives skills at all.
+
+A name that is not a vendored skill is an **error**, not a warning. The skill loader silently skips a skill it cannot find, so accepting a typo would leave you believing a skill is active when it never loads and nothing ever says so.
+
+Changing `enabled` changes the cache key, so you land in a different rendered directory rather than a stale one.
+
 ## Adding your own
 
-Not yet supported. `[skills]` is reserved in `config.toml` and writing one is a hard error naming the step that implements it. User-authored skills and the `rudra skills` command arrive with the wiring.
+Not yet supported. The bundled corpus is live, but user-authored skill directories — `~/.rudra/skills/` and `<project>/.rudra/skills/` — are not read yet, and there is no `rudra skills` command.
+
+Both arrive together, deliberately. A malformed `SKILL.md` is silently skipped by the loader, so a directory you can write to without a `rudra skills validate` to check it would turn a typo into a skill that never loads and never explains why.
 
 ---
 

@@ -37,14 +37,16 @@ from rudra.config.schema import (
     CompatConfig,
     ModelConfig,
     PermissionsConfig,
+    SkillsConfig,
     ToolsConfig,
 )
 from rudra.state.paths import rudra_paths
 
-_TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools")
+_TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills")
 _AGENT_KEYS = frozenset({"verbose", "max_fix_attempts", "max_questions"})
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
+_SKILLS_KEYS = frozenset({"enabled"})
 _TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch"})
 _TOOLS_INT_KEYS = frozenset({"test_timeout"})
 _TOOLS_KEYS = _TOOLS_BOOL_KEYS | _TOOLS_INT_KEYS
@@ -222,6 +224,57 @@ def validate(
         if value <= 0:
             raise ConfigError(f"[tools] {key} must be greater than 0, got {value!r}.")
 
+    _validate_skills(merged.get("skills", {}))
+
+
+def _build_skills(merged: dict[str, Any]) -> SkillsConfig:
+    """The enabled set, defaulting to what the bundles ship.
+
+    The default lives in `rudra.skills.registry`, not in DEFAULTS, so the
+    shipped set is declared once beside the corpus it describes. Imported
+    here rather than at module scope for the circular-import reason
+    `_validate_skills` explains.
+    """
+    from rudra.skills.registry import DEFAULT_ENABLED
+
+    section = merged.get("skills", {})
+    if "enabled" not in section:
+        return SkillsConfig(enabled=tuple(sorted(DEFAULT_ENABLED)))
+    return SkillsConfig(enabled=tuple(section["enabled"]))
+
+
+def _validate_skills(section: dict) -> None:
+    """Check [skills] against the skills that are actually vendored.
+
+    An unknown name is fatal rather than ignored for the same reason a
+    floor-rule typo is: SkillsMiddleware *silently skips* a skill it cannot
+    find, so accepting a typo would leave the user believing a skill is
+    active when it never loads and nothing ever says so.
+
+    Imported here rather than at module scope: schema.py imports nothing
+    from Rudra by design, and Step 6 deadlocked on exactly this shape of
+    circular import.
+    """
+    from rudra.skills.registry import BUNDLES
+
+    for key in section:
+        if key not in _SKILLS_KEYS:
+            raise ConfigError(f"Unknown key '{key}' in [skills].{_suggest(key, _SKILLS_KEYS)}")
+
+    enabled = section.get("enabled")
+    if enabled is None:
+        return
+    if not isinstance(enabled, list) or not all(isinstance(name, str) for name in enabled):
+        raise ConfigError(
+            f'[skills] enabled must be a list of skill names, e.g. ["brainstorming"], '
+            f"got {enabled!r}."
+        )
+
+    known = tuple(sorted({name for bundle in BUNDLES for name in bundle.skill_names()}))
+    for name in enabled:
+        if name not in known:
+            raise ConfigError(f"Unknown skill '{name}' in [skills] enabled.{_suggest(name, known)}")
+
 
 @dataclass(frozen=True)
 class Config:
@@ -231,6 +284,7 @@ class Config:
     permissions: PermissionsConfig
     compat: CompatConfig
     tools: ToolsConfig
+    skills: SkillsConfig
     models: dict[str, ModelConfig]
     provenance: dict[str, str] = field(default_factory=dict)
     sources: dict[str, Path | None] = field(default_factory=dict)
@@ -322,6 +376,7 @@ def build_config(
         ),
         compat=CompatConfig(**merged.get("compat", {})),
         tools=ToolsConfig(**merged.get("tools", {})),
+        skills=_build_skills(merged),
         models=_build_models(merged),
         provenance=provenance,
         sources=sources,

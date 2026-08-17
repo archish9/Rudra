@@ -190,13 +190,29 @@ says so.
 Sections that aren't supported yet say when they will be:
 
 ```
-Configuration error: [skills] is not supported yet — arrives in Step 11 (C5.1).
+Configuration error: [memory] is not supported yet — arrives in Step 14 (C8.1).
 ```
 
-`[skills]` is worth a note, because the library it would configure is already
-in the package: the superpowers corpus ships vendored and frozen, but no agent
-reads it yet, so there is nothing for the section to switch on. It stays a hard
-error until that changes — see [Skills](12-skills.md).
+## The skills section
+
+| Key | Means |
+|---|---|
+| `enabled` | Which bundled skills enter an agent's prompt index |
+
+```toml
+[skills]
+enabled = ["brainstorming", "test-driven-development", "systematic-debugging"]
+```
+
+Leave the section out for the shipped set of nine. Name a subset to narrow it —
+including any of the five that ship disabled, since all fourteen are vendored.
+Set `enabled = []` to switch skills off for every agent.
+
+An unknown name is an error, not a warning. The skill loader silently skips a
+skill it cannot find, so accepting a typo would mean a skill that never loads
+and never explains why.
+
+See [Skills](12-skills.md) for what each one does and which agents get them.
 
 ## The agent section
 

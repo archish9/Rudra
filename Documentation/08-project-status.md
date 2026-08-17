@@ -1,6 +1,6 @@
 # 8. Project Status
 
-An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-17** (after Step 11a — the vendored skill corpus).
+An honest account of what Rudra does today, what it doesn't, and what's next. Last updated **2026-08-17** (after Step 11b — skills wired to the agents).
 
 - [In one sentence](#in-one-sentence)
 - [What works](#what-works)
@@ -14,7 +14,7 @@ An honest account of what Rudra does today, what it doesn't, and what's next. La
 
 ## In one sentence
 
-Rudra asks what it can't work out, shows you a plan, writes code with your approval, checks its own work against a deterministic gate, and fixes what the gate rejects — against any model you point it at. What it can't do yet is survive an interruption, or draw on the methodology library it now ships.
+Rudra asks what it can't work out, shows you a plan, writes code with your approval, checks its own work against a deterministic gate, and fixes what the gate rejects — drawing on a bundled methodology library, against any model you point it at. What it can't do yet is survive an interruption.
 
 ---
 
@@ -60,7 +60,7 @@ Each stage is a separate agent with its own tools, so a stage cannot do another 
 
 **Keys stay out of config.** `RUDRA_API_KEY_ENV` names a variable; the value lives in the environment. A test asserts a built model's `repr()` cannot leak it.
 
-**A vendored methodology library — on disk, not yet in use.** The [superpowers](https://github.com/obra/superpowers) corpus (14 skills, MIT) ships inside the package, frozen and hash-verified, along with the transform that renders it and a Rudra tool mapping. **No agent reads it yet**; the wiring is the next step. Listed here rather than under "what doesn't work" because the corpus, its transform and its attribution are complete and tested — what is missing is the connection, and nothing about today's behaviour depends on it. See [Skills](12-skills.md).
+**A methodology library the agents can draw on.** The [superpowers](https://github.com/obra/superpowers) corpus (14 skills, MIT) ships inside the package, frozen and hash-verified. Nine are indexed by default for the three planning stages, the coder and the tester — `brainstorming` before designing, `test-driven-development` before implementing, `systematic-debugging` before guessing at a fix. Only names and descriptions sit in the prompt; the full text is read on demand. Narrow the set with `[skills] enabled`, or switch it off with `enabled = []`. The reviewer and general-purpose agent get none, by design. See [Skills](12-skills.md).
 
 ---
 
@@ -103,9 +103,9 @@ once and never updated (`A1.9`, `C7.3`).
 
 Designed, not implemented.
 
-### Skills ship but aren't connected
+### You cannot add your own skills
 
-The superpowers corpus is vendored, frozen, hash-verified and renderable, and Rudra's own tool mapping is written. What is missing is the wiring that puts skill names into an agent's prompt — so today the library is inert. You cannot add your own yet either: `[skills]` in `config.toml` is reserved and writing one is a hard error. See [Skills](12-skills.md).
+The bundled corpus is live, but user-authored skill directories are not read yet and there is no `rudra skills` command to list or validate one. They arrive together: a malformed `SKILL.md` is silently skipped by the loader, so a writable directory without a validator turns a typo into a skill that never loads and never says why. See [Skills](12-skills.md).
 
 ### No command sandbox
 
@@ -154,7 +154,7 @@ Built in order, because each depends on the last.
 
 | Next | What it brings |
 |---|---|
-| **Skills** | Connecting the vendored superpowers library to the agents. The corpus already ships, so this is wiring rather than new material |
+| **Skills, the rest** | User-authored skills, `rudra skills list/validate`, a session-start hook, and a measurement of how well a 32B model picks from the index. The library itself is already wired |
 | **Context management** | Checkpoints that resume, living project notes, token budgets |
 | **MCP support** | Model Context Protocol servers |
 | **Long-term memory** | Knowledge that persists across sessions |
