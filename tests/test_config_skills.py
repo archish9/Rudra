@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from rudra.config.loader import ConfigError, build_config, reset_config
+from rudra.config.loader import ConfigError, get_config, reset_config
 from rudra.skills.registry import DEFAULT_ENABLED
 
 
@@ -28,20 +28,20 @@ def write_config(tmp_path, body: str):
 
 
 def test_skills_defaults_to_the_shipped_set(tmp_path):
-    cfg = build_config(write_config(tmp_path, "[agent]\nmax_questions = 2\n"))
+    cfg = get_config(write_config(tmp_path, "[agent]\nmax_questions = 2\n"))
 
     assert set(cfg.skills.enabled) == set(DEFAULT_ENABLED)
 
 
 def test_skills_section_is_no_longer_reserved(tmp_path):
-    cfg = build_config(write_config(tmp_path, '[skills]\nenabled = ["brainstorming"]\n'))
+    cfg = get_config(write_config(tmp_path, '[skills]\nenabled = ["brainstorming"]\n'))
 
     assert cfg.skills.enabled == ("brainstorming",)
 
 
 def test_an_empty_enabled_list_is_allowed(tmp_path):
     """The off switch. S11b.5: one key does both jobs."""
-    cfg = build_config(write_config(tmp_path, "[skills]\nenabled = []\n"))
+    cfg = get_config(write_config(tmp_path, "[skills]\nenabled = []\n"))
 
     assert cfg.skills.enabled == ()
 
@@ -49,7 +49,7 @@ def test_an_empty_enabled_list_is_allowed(tmp_path):
 def test_an_unknown_skill_name_is_a_hard_error(tmp_path):
     """A typo must not mean a skill that silently never loads."""
     with pytest.raises(ConfigError) as excinfo:
-        build_config(write_config(tmp_path, '[skills]\nenabled = ["brainstorm"]\n'))
+        get_config(write_config(tmp_path, '[skills]\nenabled = ["brainstorm"]\n'))
 
     message = str(excinfo.value)
     assert "brainstorm" in message
@@ -58,18 +58,18 @@ def test_an_unknown_skill_name_is_a_hard_error(tmp_path):
 
 def test_an_unknown_key_in_skills_is_a_hard_error(tmp_path):
     with pytest.raises(ConfigError) as excinfo:
-        build_config(write_config(tmp_path, "[skills]\nenable = true\n"))
+        get_config(write_config(tmp_path, "[skills]\nenable = true\n"))
 
     assert "enable" in str(excinfo.value)
 
 
 def test_enabled_must_be_a_list(tmp_path):
     with pytest.raises(ConfigError):
-        build_config(write_config(tmp_path, '[skills]\nenabled = "brainstorming"\n'))
+        get_config(write_config(tmp_path, '[skills]\nenabled = "brainstorming"\n'))
 
 
 def test_an_off_by_default_skill_may_be_enabled(tmp_path):
     """All 14 are vendored; enabling one is a config change, not a rebuild."""
-    cfg = build_config(write_config(tmp_path, '[skills]\nenabled = ["using-git-worktrees"]\n'))
+    cfg = get_config(write_config(tmp_path, '[skills]\nenabled = ["using-git-worktrees"]\n'))
 
     assert cfg.skills.enabled == ("using-git-worktrees",)

@@ -6,6 +6,11 @@ C1.7.
 
 No error message may contain an API key value (C1.5). Messages name the
 environment variable; the value is never read into a message.
+
+That holds for the *value* field by construction. It did not hold for the
+*name* field until A1.81: a user who set `api_key_env` to their key rather
+than to a variable name had it printed straight back at them. Names that do
+not look like names are now masked -- see `_looks_like_a_secret`.
 """
 
 from __future__ import annotations
@@ -25,15 +30,47 @@ class UnknownProviderError(ModelConfigError):
         self.provider = provider
 
 
+def _looks_like_a_secret(value: str) -> bool:
+    """Is this a key someone pasted where a variable *name* belongs?
+
+    Two signals, either sufficient. A known key prefix is the strong one.
+    Failing `isidentifier()` is the general one: environment variable names
+    are identifiers, and keys are not -- they carry dashes, dots or slashes.
+
+    Deliberately not a length test. A short key is still a key, and a long
+    name is still a name.
+    """
+    known_prefixes = ("sk-", "sk_", "ghp_", "gho_", "github_pat_", "AKIA", "ASIA", "xoxb-", "AIza")
+    return value.startswith(known_prefixes) or not value.isidentifier()
+
+
 class MissingApiKeyError(ModelConfigError):
-    """A provider needs a key and the named environment variable is unset."""
+    """A provider needs a key and the named environment variable is unset.
+
+    `api_key_env` holds the *name* of a variable. Setting it to the key
+    itself is the obvious mistake -- every other tool in this space takes
+    the key directly -- and it used to render that key into this message
+    and onto the user's terminal (A1.81). A name that does not look like a
+    name is therefore masked and explained rather than echoed.
+    """
 
     def __init__(self, role: str, env_var: str) -> None:
-        super().__init__(
-            f"Role {role!r} needs an API key, but environment variable {env_var!r} is not set. "
-            f"Export it, or point the role's api_key_env at a different variable. "
-            f"Rudra never reads key values from configuration files."
-        )
+        if _looks_like_a_secret(env_var):
+            message = (
+                f"Role {role!r} needs an API key, and its api_key_env appears to hold the key "
+                f"itself rather than the *name* of an environment variable. "
+                f"Set api_key_env to a variable name, for example "
+                f'api_key_env = "OPENROUTER_API_KEY", and export the key into that variable. '
+                f"The value has been withheld from this message; treat it as exposed and rotate "
+                f"it if it reached a log or a shared terminal."
+            )
+        else:
+            message = (
+                f"Role {role!r} needs an API key, but environment variable {env_var!r} is not "
+                f"set. Export it, or point the role's api_key_env at a different variable. "
+                f"Rudra never reads key values from configuration files."
+            )
+        super().__init__(message)
         self.role = role
         self.env_var = env_var
 

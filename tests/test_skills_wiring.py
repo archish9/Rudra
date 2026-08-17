@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 from rich.console import Console
 
-from rudra.config.loader import build_config, reset_config
+from rudra.config.loader import get_config, reset_config
 from rudra.skills.cache import ensure_cache
 from rudra.skills.registry import BUNDLES, DEFAULT_ENABLED
 
@@ -34,7 +34,10 @@ def _project(tmp_path: Path, body: str = ""):
     rudra = tmp_path / ".rudra"
     rudra.mkdir(parents=True, exist_ok=True)
     (rudra / "config.toml").write_text(body, encoding="utf-8")
-    return build_config(tmp_path)
+    # get_config, not build_config: it installs the process-wide Config, so
+    # the get_config() inside create_planner_agent resolves to this project
+    # rather than rebuilding from Path.cwd() and importing the repo's .env.
+    return get_config(tmp_path)
 
 
 def test_build_backend_mounts_the_skills_route(tmp_path: Path, cache_root: Path) -> None:
