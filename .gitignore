@@ -213,10 +213,15 @@ coding-files/*
 .rudra/
 .venv-probe/
 
-# docs/ and tests/ are tracked — see TODO.md A4.8.
-# Sphinx build output is already ignored above (docs/_build/).
+# tests/ is tracked — see TODO.md A4.8. docs/ is NOT: `docs/*` below is
+# deliberate (owner, 2026-08-17). Specs and plans under docs/superpowers/
+# are working notes kept locally, not shipped artifacts. The ~30 files
+# committed before that rule existed stay tracked, because git keeps
+# tracking what it already tracks; new ones are local-only.
+# Sphinx build output is separately ignored above (docs/_build/).
 
 # Subagent-driven development scratch (superpowers)
 .superpowers/
+
 
 docs/*
