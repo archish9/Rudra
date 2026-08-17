@@ -1,0 +1,32 @@
+# Metadata for one vendored upstream corpus. Every bundle ships this file,
+# so adding a second upstream is a directory plus one line in registry.py
+# and nothing else (spec S11a.5).
+
+name = "superpowers"
+upstream = "https://github.com/obra/superpowers"
+version = "6.3.0"
+copied_on = "2026-08-17"
+source = "~/.claude/plugins/cache/claude-plugins-official/superpowers/6.3.0"
+
+license = "MIT"
+license_file = "LICENSE"
+copyright = "Copyright (c) 2025 Jesse Vincent"
+
+# Frozen: no version check, no update fetch, no network at runtime, ever.
+# The owner updates this corpus by hand and re-runs the suite (S11a.3).
+frozen = true
+
+skills_root = "src/skills"
+
+# Per-bundle transform declarations. A bundle needing neither declares neither.
+#
+# cross_ref_prefix: skills reference each other as "superpowers:<name>", a
+#   plugin namespace Rudra does not have. The transform rewrites those to
+#   /skills/library/superpowers/<name>/SKILL.md so the agent can read_file them.
+# bootstrap_skill + platform_ref_section: upstream 6.3.0 speaks in actions and
+#   resolves them per harness via references/<harness>-tools.md, listed under
+#   "## Platform Adaptation". Rudra adds its own file and list entry rather
+#   than forking 14 skills (spec section 1).
+cross_ref_prefix = "superpowers:"
+bootstrap_skill = "using-superpowers"
+platform_ref_section = "## Platform Adaptation"

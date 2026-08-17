@@ -84,6 +84,10 @@ packages = ["src/rudra"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# Vendored third-party corpora are frozen and byte-identical to upstream
+# (spec S11a.3). They ship no Python today; this keeps a future bundle that
+# does from silently entering Rudra's lint gate.
+exclude = ["src/rudra/skills/bundles"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
