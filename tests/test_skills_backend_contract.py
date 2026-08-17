@@ -92,3 +92,50 @@ def test_execute_still_reaches_the_project(tmp_path: Path, rendered: Path) -> No
     result = _composite(project, rendered).execute("cat marker.txt")
 
     assert "hello" in str(result)
+
+
+def test_route_paths_survive_the_path_normalizer(tmp_path: Path, rendered: Path) -> None:
+    """A1.79: the normalizer used to eat every route path deeper than three.
+
+    `install_path_normalizer` rescues hallucinated absolute paths by
+    keeping the last two segments of anything it cannot place. That turned
+    /skills/active/brainstorming/SKILL.md into /brainstorming/SKILL.md, so
+    a live model could `ls` the skills and never read one -- `ls` on a
+    three-segment directory survived untouched, which is what made the
+    failure look like the model's fault.
+
+    This test exists because the contract tests above pass without the
+    normalizer installed: it is a monkeypatch applied only during a real
+    run, so the gap between them is exactly where A1.79 hid.
+    """
+    from deepagents.backends import utils
+
+    from rudra.compat.deepagents_path import install_path_normalizer
+
+    project = tmp_path / "proj"
+    (project / "art").mkdir(parents=True)
+    install_path_normalizer(project, route_prefixes=("/skills/", "/artifacts/"))
+
+    for path in (
+        "/skills/active/brainstorming/SKILL.md",
+        "/skills/library/superpowers/writing-plans/SKILL.md",
+        "/artifacts/large_tool_results/deeply/nested/file.md",
+    ):
+        assert utils.validate_path(path) == path
+
+    # Reading one through the real composite still works end to end.
+    backend = _composite(project, rendered)
+    assert backend.download_files(["/skills/active/brainstorming/SKILL.md"])[0] is not None
+
+
+def test_the_normalizer_still_rescues_hallucinated_paths(tmp_path: Path) -> None:
+    """The route exemption must not switch off what the normalizer is for."""
+    from deepagents.backends import utils
+
+    from rudra.compat.deepagents_path import install_path_normalizer
+
+    project = tmp_path / "proj"
+    project.mkdir(parents=True)
+    install_path_normalizer(project, route_prefixes=("/skills/", "/artifacts/"))
+
+    assert utils.validate_path("/testbed/app/main.py") != "/testbed/app/main.py"

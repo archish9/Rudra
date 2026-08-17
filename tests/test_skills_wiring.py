@@ -59,6 +59,24 @@ def test_build_backend_without_a_cache_has_no_skills_route(tmp_path: Path) -> No
     assert "/artifacts/" in backend.routes
 
 
+def test_the_normalizer_is_told_about_every_route_the_backend_mounts(
+    tmp_path: Path, cache_root: Path
+) -> None:
+    """A1.79: a route the normalizer does not know about gets mangled.
+
+    The prefixes are passed to install_path_normalizer literally, because
+    it runs before the backend is built. This asserts the two lists agree,
+    so adding a third route without telling the normalizer fails here
+    rather than in a live run.
+    """
+    from rudra.agent import main_agent
+
+    cfg = _project(tmp_path)
+    mounted = set(main_agent.build_backend(cfg, tmp_path, skills_root=cache_root).routes)
+
+    assert mounted == set(main_agent.ROUTE_PREFIXES)
+
+
 def test_planner_is_constructed_with_skills(tmp_path: Path) -> None:
     from rudra.agent import planner_agent
 

@@ -21,6 +21,13 @@ from rudra.state import ensure_layout
 # key is worse than no key.
 MAX_REVISIONS = 3
 
+# The CompositeBackend route prefixes, in one place because two things
+# need them and must not disagree: build_backend mounts them, and the
+# path normalizer must be told to leave them alone (A1.79). A route the
+# normalizer does not know about gets its path trimmed to the last two
+# segments, so the model can list the files and never read one.
+ROUTE_PREFIXES = ("/artifacts/", "/skills/")
+
 
 @dataclass
 class AgentContext:
@@ -354,8 +361,9 @@ def build_backend(cfg, project_path: Path, skills_root: Path | None = None):
     else:
         default = FilesystemBackend(root_dir=str(project_path), virtual_mode=True)
 
+    artifacts_prefix, skills_prefix = ROUTE_PREFIXES
     routes = {
-        "/artifacts/": FilesystemBackend(root_dir=str(paths.artifacts), virtual_mode=True),
+        artifacts_prefix: FilesystemBackend(root_dir=str(paths.artifacts), virtual_mode=True),
     }
     if skills_root is not None:
         # Read-only in practice: nothing writes here, and the agents given
@@ -363,7 +371,7 @@ def build_backend(cfg, project_path: Path, skills_root: Path | None = None):
         # strip the "/skills/" prefix (filesystem.py:132), and execute still
         # delegates to `default` (composite.py:774), so shell stays rooted
         # at the project.
-        routes["/skills/"] = FilesystemBackend(root_dir=str(skills_root), virtual_mode=True)
+        routes[skills_prefix] = FilesystemBackend(root_dir=str(skills_root), virtual_mode=True)
 
     return CompositeBackend(
         default=default,
@@ -419,7 +427,9 @@ async def create_main_agent(
 
     # No plan path: PLAN.md went with the checklist in Step 9c, so the
     # normalizer's planned-filename hint has nothing to read (A1.65).
-    install_path_normalizer(project_path)
+    # Route prefixes are passed so the normalizer leaves them alone: they
+    # are real mount points, not hallucinated absolute paths (A1.79).
+    install_path_normalizer(project_path, route_prefixes=ROUTE_PREFIXES)
 
     # Skills are optional by configuration: `enabled = []` means no cache is
     # built at all, rather than an empty one rendered and mounted for
