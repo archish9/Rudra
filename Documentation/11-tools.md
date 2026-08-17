@@ -319,6 +319,8 @@ The ledger tools cannot express `DONE`, so an over-eager model cannot declare vi
 
 Read the planner columns left to right and the three-stage plan falls out of the tool grants alone: **clarify** can ask and record but cannot declare work; **architect** can record but not ask, because re-interrogating you mid-plan is what the staging exists to prevent; **breakdown** can only add tasks, and by then the facts are settled.
 
+The planner stages, the coder and the tester also carry a **skill index** — a short list of methodology documents they can read on demand. The reviewer and general-purpose agent do not. See [Skills](12-skills.md).
+
 A stage cannot do another stage's job because it has no tool for it. Absence is the enforcement — a prompt saying "clarify before planning" is a hint, and Step 7 measured what a model does with hints it finds inconvenient.
 
 ---
