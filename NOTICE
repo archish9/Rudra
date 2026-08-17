@@ -1,0 +1,37 @@
+Rudra
+Copyright 2026 Archish Patel.
+
+Licensed under the Apache License, Version 2.0. See LICENSE for the full text.
+
+================================================================================
+Third-party components
+================================================================================
+
+Rudra ships vendored copies of the third-party projects below. Each copy is
+byte-identical to the upstream release named, and is frozen: Rudra performs
+no version check and no update fetch at runtime.
+
+Rudra renders a modified copy of these files into the user's cache directory
+when it runs. The distributed copy in this repository is unmodified. The
+rendered copy differs in exactly two ways:
+
+  1. Cross-references between documents are rewritten from the upstream
+     plugin-namespace form to filesystem paths Rudra's agents can read.
+  2. One reference file describing Rudra's own tools is added, and listed in
+     the upstream document that indexes such files.
+
+No other content is altered, added, or removed.
+
+--------------------------------------------------------------------------------
+superpowers 6.3.0
+--------------------------------------------------------------------------------
+
+Upstream:  https://github.com/obra/superpowers
+Version:   6.3.0
+Vendored:  2026-08-17
+License:   MIT
+Copyright (c) 2025 Jesse Vincent
+
+Full license text: src/rudra/skills/bundles/superpowers/LICENSE
+Vendored files:    src/rudra/skills/bundles/superpowers/src/skills/
+Content manifest:  src/rudra/skills/bundles/superpowers/MANIFEST.sha256
