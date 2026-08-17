@@ -21,12 +21,23 @@ from rudra.state import ensure_layout
 # key is worse than no key.
 MAX_REVISIONS = 3
 
-# The CompositeBackend route prefixes, in one place because two things
-# need them and must not disagree: build_backend mounts them, and the
-# path normalizer must be told to leave them alone (A1.79). A route the
-# normalizer does not know about gets its path trimmed to the last two
-# segments, so the model can list the files and never read one.
-ROUTE_PREFIXES = ("/artifacts/", "/skills/")
+# The artifacts route is fixed; skill routes depend on which sources a run
+# resolves (Step 11c), so the full set is computed by route_prefixes().
+ARTIFACTS_PREFIX = "/artifacts/"
+
+
+def route_prefixes(sources=()) -> tuple[str, ...]:
+    """Every prefix the backend mounts, for the path normalizer.
+
+    One function because two things need this and must not disagree:
+    build_backend mounts these, and install_path_normalizer must be told to
+    leave them alone. A route the normalizer does not know about gets its
+    path trimmed to the last two segments, so the model can list the files
+    and never read one (A1.79). A test asserts the two agree.
+    """
+    from rudra.skills.sources import routes_for
+
+    return (ARTIFACTS_PREFIX, *routes_for(sources))
 
 
 @dataclass
@@ -317,7 +328,7 @@ def _ensure_agents_md(rudra_dir: Path, facts: Any = None) -> None:
     )
 
 
-def build_backend(cfg, project_path: Path, skills_root: Path | None = None):
+def build_backend(cfg, project_path: Path, sources=()):
     """The backend for one run: shell on the default, artifacts and skills on routes.
 
     A composite from the start per D13, and Step 11b proved that decision
@@ -361,17 +372,15 @@ def build_backend(cfg, project_path: Path, skills_root: Path | None = None):
     else:
         default = FilesystemBackend(root_dir=str(project_path), virtual_mode=True)
 
-    artifacts_prefix, skills_prefix = ROUTE_PREFIXES
     routes = {
-        artifacts_prefix: FilesystemBackend(root_dir=str(paths.artifacts), virtual_mode=True),
+        ARTIFACTS_PREFIX: FilesystemBackend(root_dir=str(paths.artifacts), virtual_mode=True),
     }
-    if skills_root is not None:
-        # Read-only in practice: nothing writes here, and the agents given
-        # skills have no reason to. virtual_mode is what lets the composite
-        # strip the "/skills/" prefix (filesystem.py:132), and execute still
-        # delegates to `default` (composite.py:774), so shell stays rooted
-        # at the project.
-        routes[skills_prefix] = FilesystemBackend(root_dir=str(skills_root), virtual_mode=True)
+    # Read-only in practice: nothing writes to a skill route, and the agents
+    # given skills have no reason to. virtual_mode is what lets the composite
+    # strip the prefix (filesystem.py:132), and execute still delegates to
+    # `default` (composite.py:774), so shell stays rooted at the project.
+    for source in sources:
+        routes[source.route] = FilesystemBackend(root_dir=str(source.local_path), virtual_mode=True)
 
     return CompositeBackend(
         default=default,
@@ -413,6 +422,7 @@ async def create_main_agent(
 
     from rudra.compat.deepagents_path import install_path_normalizer
     from rudra.permissions import build_gate, stdin_is_interactive
+    from rudra.skills.sources import resolve_sources
 
     paths = ensure_layout(project_path)
 
@@ -424,12 +434,6 @@ async def create_main_agent(
     # unattended. `plan` mode keeps asking -- that is the one mode where
     # clarification is the entire point.
     interactive = cfg.permissions.mode != "auto" and stdin_is_interactive()
-
-    # No plan path: PLAN.md went with the checklist in Step 9c, so the
-    # normalizer's planned-filename hint has nothing to read (A1.65).
-    # Route prefixes are passed so the normalizer leaves them alone: they
-    # are real mount points, not hallucinated absolute paths (A1.79).
-    install_path_normalizer(project_path, route_prefixes=ROUTE_PREFIXES)
 
     # Skills are optional by configuration: `enabled = []` means no cache is
     # built at all, rather than an empty one rendered and mounted for
@@ -447,10 +451,19 @@ async def create_main_agent(
                 "[dim]Skills cache is not writable; using a temporary copy for this run.[/dim]"
             )
 
-    skills_sources = (skill_cache.active_path,) if skill_cache else None
-    filesystem_backend = build_backend(
-        cfg, project_path, skills_root=skill_cache.root if skill_cache else None
-    )
+    # Resolved once per run and used three times: to mount the routes, to
+    # tell the normalizer which prefixes are real, and to order the skill
+    # index. One source of truth means they cannot disagree (A1.79).
+    sources = resolve_sources(project_path, skill_cache)
+    skills_sources = tuple(source.index_path for source in sources) or None
+
+    # After the sources are known, because the prefixes it must leave alone
+    # depend on them. No plan path: PLAN.md went with the checklist in Step
+    # 9c, so the normalizer's planned-filename hint has nothing to read
+    # (A1.65). Route prefixes are real mount points, not hallucinated
+    # absolute paths (A1.79).
+    install_path_normalizer(project_path, route_prefixes=route_prefixes(sources))
+    filesystem_backend = build_backend(cfg, project_path, sources)
 
     # Shell and the permission layer are constructed together, and neither
     # is optional. Section E hard gate 2: LocalShellBackend must never ship
