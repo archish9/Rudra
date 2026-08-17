@@ -126,6 +126,49 @@ def decide_action_requests(
     return decisions
 
 
+async def _stream_with_retry(
+    agent: Any, payload: Any, config: dict[str, Any]
+) -> AsyncIterator[Any]:
+    """`agent.astream`, surviving a transient provider failure (A1.39).
+
+    Retries only while **nothing has been yielded**. Once a chunk is out,
+    the caller's parse loop has already seen it and a retry would re-emit
+    the run from the start -- so a mid-stream failure is surfaced instead.
+    Rescuing that case needs resume (C7.2), not a retry.
+
+    That limit costs less than it sounds: every failure measured on
+    2026-08-17 -- a 429 on the first planner call, a 502, a 500, an
+    APIConnectionError -- struck before or at the first chunk.
+
+    This is the one funnel for model invocation: the planner streams
+    through it, and so does every subagent (subagents/runner.py:150).
+    """
+    import asyncio
+
+    from rudra.llm.retry import ProviderUnavailable, is_transient, retry_delays
+
+    delays = retry_delays()
+    last: BaseException | None = None
+
+    for attempt in range(len(delays) + 1):
+        yielded = False
+        try:
+            async for chunk in agent.astream(payload, config, stream_mode="values", subgraphs=True):
+                yielded = True
+                yield chunk
+            return
+        except Exception as error:  # noqa: BLE001 -- re-raised below
+            if yielded or not is_transient(error) or attempt == len(delays):
+                if is_transient(error) and not yielded:
+                    raise ProviderUnavailable("the model provider", attempt + 1, error) from error
+                raise
+            last = error
+            await asyncio.sleep(delays[attempt])
+
+    if last is not None:  # pragma: no cover -- loop always returns or raises
+        raise ProviderUnavailable("the model provider", len(delays) + 1, last) from last
+
+
 async def run_with_approvals(
     agent: Any,
     inputs: Any,
@@ -146,12 +189,12 @@ async def run_with_approvals(
     payload: Any = inputs
 
     if gate is None:
-        async for chunk in agent.astream(payload, config, stream_mode="values", subgraphs=True):
+        async for chunk in _stream_with_retry(agent, payload, config):
             yield chunk
         return
 
     for _ in range(MAX_APPROVAL_ROUNDS):
-        async for chunk in agent.astream(payload, config, stream_mode="values", subgraphs=True):
+        async for chunk in _stream_with_retry(agent, payload, config):
             yield chunk
 
         # aget_state, not get_state: Rudra's checkpointer is AsyncSqliteSaver,
