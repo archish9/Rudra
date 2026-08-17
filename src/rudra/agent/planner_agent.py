@@ -227,6 +227,49 @@ def _tools_for_stage(
     return interaction
 
 
+BOOTSTRAP_SKILL = "using-superpowers"
+
+
+def bootstrap_text(cache_root: Path | None) -> str | None:
+    """The rendered bootstrap skill, or None when it is not there.
+
+    Read from the *cache*, never from the package: the rendered copy has
+    its cross-references rewritten to readable paths and its Platform
+    Adaptation list pointing at references/rudra-tools.md. A packaged copy
+    would send the model after a plugin namespace Rudra does not have.
+
+    Skills are inert without this (C5.3). The index gives the model nine
+    names and descriptions; this is what tells it to act on them.
+
+    Planner stages only. `using-superpowers/SKILL.md:5-7` opens with
+    <SUBAGENT-STOP> -- "if you were dispatched as a subagent to execute a
+    specific task, ignore this skill" -- so injecting it into the coder
+    would spend ~780 tokens telling it to disregard what it just read.
+    """
+    if cache_root is None:
+        return None
+    path = cache_root / "library" / "superpowers" / BOOTSTRAP_SKILL / "SKILL.md"
+    try:
+        return _strip_frontmatter(path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Drop the leading YAML block a SKILL.md carries.
+
+    Frontmatter is metadata for the skill loader -- `name` and
+    `description` are what SkillsMiddleware puts in the index. Injecting it
+    verbatim would drop a YAML document into the middle of a system prompt
+    and tell the model its own instructions are "Use when starting any
+    conversation", which is addressed to the index reader, not to it.
+    """
+    if not text.startswith("---"):
+        return text
+    parts = text.split("---", 2)
+    return parts[2].lstrip("\n") if len(parts) == 3 else text
+
+
 def create_planner_agent(
     task: str,
     project_path: Path,
@@ -240,6 +283,7 @@ def create_planner_agent(
     interactive: bool = True,
     stage: str = "breakdown",
     skills_sources: tuple[str, ...] | None = None,
+    skills_cache_root: Path | None = None,
 ):
     """Create one stage of the planner (S10b.1).
 
@@ -294,16 +338,30 @@ def create_planner_agent(
     # permissions= is deliberately absent. It raises NotImplementedError on
     # any execute-capable backend, which is every backend Rudra now builds.
     # See TODO.md U.7.
+    system_prompt = build_planner_prompt(
+        task,
+        project_path,
+        facts,
+        # A1.78: omitted until 2026-08-17, so every stage silently took the
+        # default and ran on the breakdown prompt. Tools stayed correctly
+        # scoped, which is what hid it -- the clarify stage was *told* to
+        # call add_tasks while holding only record_fact and ask_user.
+        stage=stage,
+        can_ask=interactive and stage == "clarify" and cfg.agent.max_questions > 0,
+        max_questions=cfg.agent.max_questions,
+    )
+    # C5.3: the index alone is inert. This is the instruction block that
+    # makes the model reach for a skill, and it chains onward -- it tells
+    # the model to read its harness's reference file, which is Rudra's
+    # tool mapping, which explains that no tool can mark work done.
+    bootstrap = bootstrap_text(skills_cache_root)
+    if bootstrap:
+        system_prompt = f"{system_prompt}\n\n---\n\n{bootstrap}"
+
     return create_deep_agent(
         model=model,
         tools=custom_tools,
-        system_prompt=build_planner_prompt(
-            task,
-            project_path,
-            facts,
-            can_ask=interactive and stage == "clarify" and cfg.agent.max_questions > 0,
-            max_questions=cfg.agent.max_questions,
-        ),
+        system_prompt=system_prompt,
         backend=filesystem_backend,
         checkpointer=checkpointer,
         memory=[".rudra/AGENTS.md"],

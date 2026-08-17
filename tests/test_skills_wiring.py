@@ -142,6 +142,142 @@ def test_no_subagent_gets_skills_when_the_run_has_none(tmp_path: Path) -> None:
     assert spy.call_args.kwargs.get("skills") is None
 
 
+def test_bootstrap_is_read_from_the_rendered_cache(cache_root: Path) -> None:
+    """It must be the rendered copy, not the packaged one.
+
+    The rendered copy carries both 11a adaptations: cross-references
+    rewritten to paths, and the Platform Adaptation list naming
+    rudra-tools.md. A copy imported from src/ would send the model looking
+    for a plugin namespace that does not exist.
+    """
+    from rudra.agent.planner_agent import bootstrap_text
+
+    text = bootstrap_text(cache_root)
+
+    assert text is not None
+    assert "references/rudra-tools.md" in text
+    assert "superpowers:" not in text
+
+
+def test_bootstrap_drops_its_yaml_frontmatter(cache_root: Path) -> None:
+    """Frontmatter is loader metadata, not instruction.
+
+    Injected verbatim it drops a YAML document into the middle of a system
+    prompt and tells the model its own instructions are "Use when starting
+    any conversation" -- text addressed to whoever reads the skill index,
+    not to the agent being prompted.
+    """
+    from rudra.agent.planner_agent import bootstrap_text
+
+    text = bootstrap_text(cache_root)
+
+    assert text is not None
+    assert not text.startswith("---")
+    assert "description: Use when starting any conversation" not in text
+    # The instructions themselves survive intact.
+    assert "Platform Adaptation" in text
+    assert "ABSOLUTELY MUST invoke the skill" in text
+
+
+def test_bootstrap_is_none_when_it_is_not_in_the_cache(tmp_path: Path) -> None:
+    from rudra.agent.planner_agent import bootstrap_text
+
+    assert bootstrap_text(tmp_path) is None
+
+
+def test_bootstrap_is_none_without_a_cache_at_all() -> None:
+    from rudra.agent.planner_agent import bootstrap_text
+
+    assert bootstrap_text(None) is None
+
+
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_every_planner_stage_carries_the_bootstrap(
+    stage: str, tmp_path: Path, cache_root: Path
+) -> None:
+    from rudra.agent import planner_agent
+
+    _project(tmp_path)
+    with patch.object(planner_agent, "create_deep_agent") as spy:
+        planner_agent.create_planner_agent(
+            task="x",
+            project_path=tmp_path,
+            filesystem_backend=None,
+            checkpointer=None,
+            console=_console(),
+            stage=stage,
+            skills_sources=("/skills/active/",),
+            skills_cache_root=cache_root,
+        )
+
+    assert "Platform Adaptation" in spy.call_args.kwargs["system_prompt"]
+
+
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_each_stage_is_constructed_with_its_own_prompt(stage: str, tmp_path: Path) -> None:
+    """A1.78: `stage` was never forwarded, so all three got `breakdown`.
+
+    The tools were scoped correctly the whole time, which is what hid it:
+    the clarify stage was told to call add_tasks while holding only
+    record_fact and ask_user. This asserts the seam that 10b's tests
+    straddled -- they covered _tools_for_stage and build_planner_prompt
+    separately, and never the call between them.
+    """
+    from rudra.agent import planner_agent
+
+    cfg = _project(tmp_path)
+    expected = planner_agent.build_planner_prompt(
+        "x",
+        tmp_path,
+        None,
+        stage=stage,
+        can_ask=stage == "clarify" and cfg.agent.max_questions > 0,
+        max_questions=cfg.agent.max_questions,
+    )
+
+    with patch.object(planner_agent, "create_deep_agent") as spy:
+        planner_agent.create_planner_agent(
+            task="x",
+            project_path=tmp_path,
+            filesystem_backend=None,
+            checkpointer=None,
+            console=_console(),
+            stage=stage,
+        )
+
+    assert spy.call_args.kwargs["system_prompt"] == expected
+
+
+def test_the_planner_prompt_has_no_bootstrap_without_a_cache(tmp_path: Path) -> None:
+    from rudra.agent import planner_agent
+
+    _project(tmp_path)
+    with patch.object(planner_agent, "create_deep_agent") as spy:
+        planner_agent.create_planner_agent(
+            task="x",
+            project_path=tmp_path,
+            filesystem_backend=None,
+            checkpointer=None,
+            console=_console(),
+            stage="clarify",
+        )
+
+    assert "Platform Adaptation" not in spy.call_args.kwargs["system_prompt"]
+
+
+def test_subagent_prompts_never_carry_the_bootstrap(tmp_path: Path) -> None:
+    """SUBAGENT-STOP: upstream tells dispatched subagents to ignore it."""
+    from rudra.subagents import build
+    from rudra.subagents.registry import REGISTRY
+
+    context = _subagent_context(tmp_path, skills_sources=("/skills/active/",))
+
+    with patch.object(build, "create_deep_agent") as spy:
+        build.build_agent(REGISTRY["coder"], context)
+
+    assert "Platform Adaptation" not in spy.call_args.kwargs["system_prompt"]
+
+
 def _subagent_context(tmp_path: Path, *, skills_sources):
     from rudra.subagents.runner import SubagentContext
 

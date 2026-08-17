@@ -507,6 +507,7 @@ async def create_main_agent(
             interactive=interactive,
             stage=stage,
             skills_sources=skills_sources,
+            skills_cache_root=skill_cache.root if skill_cache else None,
         )
         for stage in STAGES
     }
