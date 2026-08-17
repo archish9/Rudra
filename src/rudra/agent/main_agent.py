@@ -11,6 +11,7 @@ from rich.console import Console
 from rudra.config import get_config
 from rudra.facts import FactStore, facts_block
 from rudra.git.core import auto_branch
+from rudra.llm.retry import ProviderUnavailable
 from rudra.loop import plan, work
 from rudra.loop.plan_view import PlanDecision, ask_approval, auto_approve, render_plan
 from rudra.state import ensure_layout
@@ -216,6 +217,19 @@ class RudraAgent:
                 context=self._loop_context,
                 planner=self._planner_callback,
                 ledger=ledger,
+            )
+
+        except ProviderUnavailable as error:
+            # A1.39: the provider failed, not Rudra. A stack dump through
+            # the vendor's client internals tells the user nothing they can
+            # act on, and this is the *expected* failure for anyone on a
+            # free tier -- Documentation/08-project-status.md says so.
+            self._log_always(f"[bold red]\n{error}[/bold red]")
+            return AgentResult(
+                success=False,
+                message=str(error),
+                files_created=[],
+                files_modified=[],
             )
 
         except Exception:
