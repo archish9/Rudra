@@ -472,6 +472,7 @@ async def create_main_agent(
         checkpointer=checkpointer,
         session_id=session_id,
         facts=facts,
+        skills_sources=skills_sources,
     )
     loop_context = LoopContext(
         subagents=subagent_context,

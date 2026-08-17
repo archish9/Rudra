@@ -93,3 +93,63 @@ def test_planner_without_sources_passes_no_skills_argument(tmp_path: Path) -> No
         )
 
     assert spy.call_args.kwargs.get("skills") is None
+
+
+def test_only_the_writing_subagents_want_skills() -> None:
+    """S11b.1. The reviewer reads a diff; it is not choosing a method."""
+    from rudra.subagents.registry import REGISTRY
+
+    wanting = {name for name, spec in REGISTRY.items() if spec.wants_skills}
+
+    assert wanting == {"coder", "tester"}
+
+
+@pytest.mark.parametrize("name", ["coder", "tester"])
+def test_wanting_subagents_are_built_with_skills(name: str, tmp_path: Path) -> None:
+    from rudra.subagents import build
+    from rudra.subagents.registry import REGISTRY
+
+    context = _subagent_context(tmp_path, skills_sources=("/skills/active/",))
+
+    with patch.object(build, "create_deep_agent") as spy:
+        build.build_agent(REGISTRY[name], context)
+
+    assert spy.call_args.kwargs["skills"] == ["/skills/active/"]
+
+
+@pytest.mark.parametrize("name", ["reviewer", "general-purpose"])
+def test_other_subagents_are_built_without_skills(name: str, tmp_path: Path) -> None:
+    from rudra.subagents import build
+    from rudra.subagents.registry import REGISTRY
+
+    context = _subagent_context(tmp_path, skills_sources=("/skills/active/",))
+
+    with patch.object(build, "create_deep_agent") as spy:
+        build.build_agent(REGISTRY[name], context)
+
+    assert spy.call_args.kwargs.get("skills") is None
+
+
+def test_no_subagent_gets_skills_when_the_run_has_none(tmp_path: Path) -> None:
+    from rudra.subagents import build
+    from rudra.subagents.registry import REGISTRY
+
+    context = _subagent_context(tmp_path, skills_sources=None)
+
+    with patch.object(build, "create_deep_agent") as spy:
+        build.build_agent(REGISTRY["coder"], context)
+
+    assert spy.call_args.kwargs.get("skills") is None
+
+
+def _subagent_context(tmp_path: Path, *, skills_sources):
+    from rudra.subagents.runner import SubagentContext
+
+    return SubagentContext(
+        project_path=tmp_path,
+        backend=None,
+        gate=None,
+        console=_console(),
+        cfg=_project(tmp_path),
+        skills_sources=skills_sources,
+    )

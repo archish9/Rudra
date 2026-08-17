@@ -127,6 +127,24 @@ def _middleware_for(spec: RudraSubagent, context: Any) -> list:
     return middleware
 
 
+def _skills_for(spec: RudraSubagent, context: Any) -> list[str] | None:
+    """The skill sources this subagent may index, or None for no skills.
+
+    None rather than []: an empty list still installs SkillsMiddleware and
+    spends its ~464 tokens of boilerplate on an index with nothing in it.
+
+    Absence is the enforcement here as it is for tools -- the reviewer is
+    not told to ignore the library, it simply never sees one.
+
+    Read with getattr for the reason `facts` is (line 90): the context is
+    duck-typed `Any`, and callers outside a full run build minimal stand-ins.
+    """
+    sources = getattr(context, "skills_sources", None)
+    if not spec.wants_skills or not sources:
+        return None
+    return list(sources)
+
+
 def build_agent(spec: RudraSubagent, context: Any) -> Any:
     """A compiled deep agent for this spec, ready to invoke directly.
 
@@ -158,6 +176,7 @@ def build_agent(spec: RudraSubagent, context: Any) -> Any:
         checkpointer=context.checkpointer or InMemorySaver(),
         middleware=_middleware_for(spec, context),
         interrupt_on=context.gate.interrupt_on if context.gate is not None else None,
+        skills=_skills_for(spec, context),
     )
 
 
@@ -180,6 +199,10 @@ def to_subagent_spec(spec: RudraSubagent, context: Any) -> dict:
         "tools": _tools_for(spec, context),
         "middleware": _middleware_for(spec, context),
         "interrupt_on": context.gate.interrupt_on if context.gate is not None else None,
+        # Only when the spec wants them: create_sub_agent reads this key
+        # (graph.py:676-678), and the delegated path must grant exactly
+        # what the direct one does.
+        **({"skills": skills} if (skills := _skills_for(spec, context)) else {}),
     }
 
 

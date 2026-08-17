@@ -39,6 +39,10 @@ class RudraSubagent:
             was never registered (U.17).
         rudra_tools: Rudra tool names, not callables: the factories need
             per-run arguments a frozen spec cannot hold.
+        wants_skills: Does this subagent get the run's skill index? A
+            methodology library helps an agent choosing *how* to work. The
+            reviewer reads a diff and reports, and would pay ~916 tokens
+            for descriptions it cannot act on (S11b.1).
     """
 
     name: str
@@ -47,6 +51,7 @@ class RudraSubagent:
     role: str
     fs_tools: tuple[str, ...] = ()
     rudra_tools: tuple[str, ...] = ()
+    wants_skills: bool = False
 
     @property
     def can_write(self) -> bool:
