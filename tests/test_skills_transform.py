@@ -218,3 +218,73 @@ def test_every_rewritten_target_exists_on_disk(tmp_path: Path) -> None:
     assert targets
     for bundle_name, skill_name in sorted(targets):
         assert (dest / "library" / bundle_name / skill_name / "SKILL.md").is_file()
+
+
+def test_platform_reference_file_is_written_into_the_bootstrap_skill(tmp_path: Path) -> None:
+    dest = tmp_path / "out"
+    report = render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    ref = dest / "library" / "superpowers" / "using-superpowers" / "references" / "rudra-tools.md"
+    assert ref.is_file()
+    assert report.platform_refs_injected == ("superpowers/using-superpowers",)
+
+
+def test_platform_adaptation_list_names_rudra(tmp_path: Path) -> None:
+    dest = tmp_path / "out"
+    render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    body = (dest / "library" / "superpowers" / "using-superpowers" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    section = body.split("## Platform Adaptation", 1)[1].split("\n## ", 1)[0]
+
+    assert "Rudra: `references/rudra-tools.md`" in section
+    # Upstream's own entries survive -- this is an addition, not a replacement.
+    assert "Codex:" in section
+
+
+def test_the_active_bootstrap_carries_the_reference_too(tmp_path: Path) -> None:
+    dest = tmp_path / "out"
+    render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    assert (dest / "active" / "using-superpowers" / "references" / "rudra-tools.md").is_file()
+    body = (dest / "active" / "using-superpowers" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Rudra: `references/rudra-tools.md`" in body
+
+
+def test_reference_states_that_no_tool_can_mark_work_done(tmp_path: Path) -> None:
+    """The reconciliation that justifies the file existing.
+
+    verification-before-completion and executing-plans both instruct the
+    agent to mark work complete. Only loop/engine.py writes DONE, and only
+    on VerifyReport.passed (S9c.1). Unreconciled, the corpus argues with
+    the architecture inside the model's context.
+    """
+    dest = tmp_path / "out"
+    render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    ref = (
+        dest / "library" / "superpowers" / "using-superpowers" / "references" / "rudra-tools.md"
+    ).read_text(encoding="utf-8")
+
+    assert "add_tasks" in ref
+    assert "cannot mark" in ref
+    assert "rudra verify" in ref
+    assert "read_file" in ref
+
+
+def test_injection_is_skipped_for_a_bundle_that_declares_none(tmp_path: Path) -> None:
+    bundle = _fake_bundle(tmp_path / "b", "demo", {"alpha": "A"})
+
+    report = render([bundle], frozenset({"alpha"}), tmp_path / "out")
+
+    assert report.platform_refs_injected == ()
+
+
+def test_a_missing_platform_section_raises(tmp_path: Path) -> None:
+    """A silent skip here would ship a corpus that never mentions Rudra."""
+    bundle = _fake_bundle(tmp_path / "b", "demo", {"boot": "no section here"})
+    bundle = replace(bundle, bootstrap_skill="boot", platform_ref_section="## Platform Adaptation")
+
+    with pytest.raises(ValueError, match="Platform Adaptation"):
+        render([bundle], frozenset({"boot"}), tmp_path / "out")

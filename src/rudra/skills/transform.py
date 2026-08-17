@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rudra.skills.bundle import Bundle
+from rudra.skills.rudra_tools import PLATFORM_REF_LINE, REFERENCE_FILENAME, RUDRA_TOOLS_MD
 
 
 class DuplicateSkillError(ValueError):
@@ -111,6 +112,44 @@ def _rewrite_cross_refs(skill_root: Path, bundle: Bundle) -> int:
     return rewritten
 
 
+def _inject_platform_reference(skill_root: Path, bundle: Bundle) -> bool:
+    """Add Rudra's mapping file and list it in the Platform Adaptation section.
+
+    Returns True when the bundle declared the hook and it was applied.
+
+    A bundle that declares `bootstrap_skill` but whose skill has no
+    `platform_ref_section` raises rather than skipping: a silent skip ships
+    a corpus that never tells the model Rudra exists, and the failure would
+    only show up as poor tool use during a live run.
+    """
+    if bundle.bootstrap_skill is None or bundle.platform_ref_section is None:
+        return False
+
+    reference = skill_root / REFERENCE_FILENAME
+    reference.parent.mkdir(parents=True, exist_ok=True)
+    reference.write_text(RUDRA_TOOLS_MD, encoding="utf-8")
+
+    skill_md = skill_root / "SKILL.md"
+    body = skill_md.read_text(encoding="utf-8")
+    if bundle.platform_ref_section not in body:
+        msg = (
+            f"bundle '{bundle.name}' declares platform_ref_section "
+            f"'{bundle.platform_ref_section}', which is absent from "
+            f"{bundle.bootstrap_skill}/SKILL.md"
+        )
+        raise ValueError(msg)
+
+    head, _, tail = body.partition(bundle.platform_ref_section)
+    lines = tail.split("\n")
+    last_entry = max(
+        (index for index, line in enumerate(lines) if line.startswith("- ")),
+        default=0,
+    )
+    lines.insert(last_entry + 1, PLATFORM_REF_LINE)
+    skill_md.write_text(head + bundle.platform_ref_section + "\n".join(lines), encoding="utf-8")
+    return True
+
+
 def render(
     bundles: Sequence[Bundle],
     enabled: frozenset[str],
@@ -128,11 +167,14 @@ def render(
 
     library_skills: list[str] = []
     cross_refs = 0
+    injected: list[str] = []
     for bundle in bundles:
         for name in bundle.skill_names():
             target = library / bundle.name / name
             shutil.copytree(bundle.skills_path / name, target)
             cross_refs += _rewrite_cross_refs(target, bundle)
+            if name == bundle.bootstrap_skill and _inject_platform_reference(target, bundle):
+                injected.append(f"{bundle.name}/{name}")
             library_skills.append(f"{bundle.name}/{name}")
 
     active_skills: list[str] = []
@@ -146,5 +188,5 @@ def render(
         library_skills=tuple(sorted(library_skills)),
         active_skills=tuple(sorted(active_skills)),
         cross_refs_rewritten=cross_refs,
-        platform_refs_injected=(),
+        platform_refs_injected=tuple(sorted(injected)),
     )
