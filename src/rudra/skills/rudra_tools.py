@@ -29,15 +29,20 @@ todo"). On Rudra these resolve to the tools below.
 | Read a file | `read_file(file_path=..., limit=1000)` |
 | Write a new file | `write_file` |
 | Change an existing file | `edit_file` |
+| Remove a file | `delete` |
 | List or search files | `ls`, `glob`, `grep` |
 | Run a command | `execute` |
-| Dispatch a subagent | `task`, with `subagent_type` |
-| Create or track todos | `add_tasks`, `drop_task` |
+| Dispatch a subagent | `task` -- pass a subagent_type, listed below |
+| Create or track todos | `add_tasks`, `drop_task`, `read_ledger` |
 | Run the tests | `run_tests` |
-| Git operations | `git_status`, `git_diff`, `git_log` |
+| Inspect your own changes | `git_diff` -- the only git tool there is |
 | Record a decision | `record_fact` |
 | Ask the human a question | `ask_user` |
 | Invoke a skill | no such tool -- see below |
+
+Not every agent gets every tool, and a tool you were not granted does not
+exist for you rather than refusing when called. The coder has no `execute`;
+the reviewer has no way to write at all. Ask for what you have.
 
 ## Invoking a skill
 

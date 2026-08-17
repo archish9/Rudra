@@ -273,6 +273,44 @@ def test_reference_states_that_no_tool_can_mark_work_done(tmp_path: Path) -> Non
     assert "read_file" in ref
 
 
+def test_every_tool_named_in_the_reference_actually_exists() -> None:
+    """A1.77: the file whose job is naming tools must not invent them.
+
+    It shipped claiming `git_status` and `git_log`, which have never
+    existed -- git_tools.py grants exactly one tool. An agent believing
+    that calls a missing tool and burns a turn recovering, and the wrong
+    names landed on the reviewer, the only subagent granted a git tool.
+    """
+    from rudra.skills.rudra_tools import RUDRA_TOOLS_MD
+    from rudra.subagents.spec import FS_TOOL_NAMES
+
+    # Every tool an agent can be granted anywhere in Rudra.
+    real = set(FS_TOOL_NAMES) | {
+        "task",
+        "add_tasks",
+        "drop_task",
+        "record_fact",
+        "ask_user",
+        "run_tests",
+        "git_diff",
+        "read_ledger",
+    }
+
+    # Scope the check to the action table -- the part that *promises* a
+    # tool exists. Prose elsewhere legitimately backticks parameter names
+    # (`limit`, `subagent_type`) and subagent types, which are not tools.
+    table = [
+        line for line in RUDRA_TOOLS_MD.splitlines() if line.startswith("| ") and "|" in line[2:]
+    ]
+    named: set[str] = set()
+    for line in table:
+        promised = line.rsplit("|", 2)[-2]
+        named |= set(re.findall(r"`([a-z_][a-z0-9_]*)(?:\([^`]*\))?`", promised))
+
+    assert named, "the action table names no tools at all -- the parser stopped matching"
+    assert named <= real, f"names tools that do not exist: {sorted(named - real)}"
+
+
 def test_injection_is_skipped_for_a_bundle_that_declares_none(tmp_path: Path) -> None:
     bundle = _fake_bundle(tmp_path / "b", "demo", {"alpha": "A"})
 

@@ -14,6 +14,8 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 | 8 | **[Project Status](08-project-status.md)** | Know what genuinely works and what doesn't |
 | 9 | **[Permissions](09-permissions.md)** | Approval prompts, allow/deny rules, the deny floor, the audit log |
 | 10 | **[Verification](10-verification.md)** | Run the deterministic gate, read its verdict, install the per-stack tools |
+| 11 | **[Tools](11-tools.md)** | Look up what the agent can actually do — every tool, with examples and per-subagent grants |
+| 12 | **[Skills](12-skills.md)** | Understand the vendored superpowers library, why it's frozen, and what Rudra adapts |
 
 ---
 
@@ -21,7 +23,9 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 
 **Never used Rudra** → [Getting Started](01-getting-started.md) → [Choosing a Model](03-providers.md) → [Project Status](08-project-status.md)
 
-**About to run it unattended** → [Permissions](09-permissions.md)
+**About to run it unattended** → [Permissions](09-permissions.md) → [Tools](11-tools.md)
+
+**Wondering what the agent can actually do to your machine** → [Tools](11-tools.md)
 
 **Something's broken** → [Troubleshooting](06-troubleshooting.md), or run `rudra models test` first — it usually names the problem for you
 

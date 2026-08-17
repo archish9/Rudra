@@ -193,6 +193,11 @@ Sections that aren't supported yet say when they will be:
 Configuration error: [skills] is not supported yet — arrives in Step 11 (C5.1).
 ```
 
+`[skills]` is worth a note, because the library it would configure is already
+in the package: the superpowers corpus ships vendored and frozen, but no agent
+reads it yet, so there is nothing for the section to switch on. It stays a hard
+error until that changes — see [Skills](12-skills.md).
+
 ## The agent section
 
 | Key | Means |

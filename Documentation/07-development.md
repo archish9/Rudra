@@ -155,6 +155,16 @@ src/rudra/
 │   ├── interaction_tools.py  ask_user, record_fact
 │   ├── git_tools.py          git_diff — thin wrapper over git/core.py
 │   └── testing_tools.py      run_tests — thin wrapper over testing/runner.py
+├── skills/           Vendored methodology corpora. Nothing here is wired to
+│   │                 an agent yet — that is the next step
+│   ├── registry.py   BUNDLES · DEFAULT_ENABLED — the one list of what ships
+│   ├── bundle.py     Bundle + load_bundle(), one BUNDLE.toml at a time
+│   ├── transform.py  render(bundles, enabled, dest) — pure; library/ + active/
+│   ├── manifest.py   sha256 manifests. Verifying one IS the freeze rule
+│   ├── rudra_tools.py  Rudra's entry in superpowers' platform-adaptation scheme
+│   ├── notice.py     Generates the repo-root NOTICE from the registry
+│   └── bundles/superpowers/  6.3.0, byte-identical, MIT. Never edit — a test
+│                     hashes all 52 files and fails if anyone does
 ├── stacks/           Language/framework detection
 ├── filesystem/       Project tree walking
 ├── compat/           deepagents version guards and monkeypatches

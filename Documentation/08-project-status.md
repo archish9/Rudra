@@ -48,6 +48,8 @@ Rudra can plan a set of files, write them with your approval, run your test suit
 
 **Keys stay out of config.** `RUDRA_API_KEY_ENV` names a variable; the value lives in the environment. A test asserts a built model's `repr()` cannot leak it.
 
+**A vendored methodology library — on disk, not yet in use.** The [superpowers](https://github.com/obra/superpowers) corpus (14 skills, MIT) ships inside the package, frozen and hash-verified, along with the transform that renders it and a Rudra tool mapping. **No agent reads it yet**; the wiring is the next step. Listed here rather than under "what doesn't work" because the corpus, its transform and its attribution are complete and tested — what is missing is the connection, and nothing about today's behaviour depends on it. See [Skills](12-skills.md).
+
 ---
 
 ## What doesn't work yet
@@ -85,9 +87,13 @@ still known — but conversations, plans and progress are not: the ledger is
 per-run and checkpoints are never resumed (`C7.2`), and `AGENTS.md` is written
 once and never updated (`A1.9`, `C7.3`).
 
-### No MCP, no skills, no plugins
+### No MCP, no plugins
 
 Designed, not implemented.
+
+### Skills ship but aren't connected
+
+The superpowers corpus is vendored, frozen, hash-verified and renderable, and Rudra's own tool mapping is written. What is missing is the wiring that puts skill names into an agent's prompt — so today the library is inert. You cannot add your own yet either: `[skills]` in `config.toml` is reserved and writing one is a hard error. See [Skills](12-skills.md).
 
 ### No command sandbox
 
@@ -133,7 +139,7 @@ Built in order, because each depends on the last.
 |---|---|
 | **The real agent loop** | Subagents, a reviewer, a tester, and a completion gate that means *tests pass* rather than *file exists*. This is the one that matters, and the test runner it consumes is now in place |
 | **Better planning** | Clarifying questions when a request is ambiguous, and a plan mode |
-| **Skills** | A methodology layer the agent can draw on |
+| **Skills** | Connecting the vendored superpowers library to the agents — the corpus is already shipped, so this is wiring rather than new material |
 | **Context management** | Checkpoints, living project notes, token budgets |
 | **MCP support** | Model Context Protocol servers |
 | **Long-term memory** | Knowledge that persists across sessions |

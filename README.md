@@ -257,6 +257,41 @@ Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committ
 
 ---
 
+## What the agent can actually do
+
+Everything Rudra does to your machine goes through a small, fixed set of tools. Worth knowing before an unattended run:
+
+| | |
+|---|---|
+| **Reads** | `read_file` · `ls` · `glob` · `grep` — never gated. Prompting on every read teaches you to stop reading the prompts |
+| **Writes** | `write_file` · `edit_file` · `delete` — always gated, and confined to your project by the backend |
+| **Commands** | `execute` — always gated, and **denied under `--auto`** unless you pass `--allow-shell`. A write is confined; a shell command is not |
+| **Delegation** | `task` — hands work to `coder`, `tester`, `reviewer` or `general-purpose` |
+| **Checking** | `run_tests` · `git_diff` — these shell out, so they are judged as the command they really run |
+| **Bookkeeping** | `record_fact` · `ask_user` · `add_tasks` · `drop_task` · `read_ledger` — these touch `.rudra/` only |
+
+The differences between subagents are structural, not instructional: the **coder has no `execute`**, and the **reviewer has no write tools at all** — they are never registered, so there is nothing to deny and no prompt to talk it out of.
+
+**Nothing in that list can mark a task complete.** There is no `finish_task` and no status argument anywhere. The model decides what work exists; Python decides when it is done, and only when the deterministic gate passes.
+
+Every tool, with signatures, examples and the per-agent grant table: **[Tools](Documentation/11-tools.md)**.
+
+---
+
+## Batteries included: superpowers
+
+Rudra vendors [**superpowers**](https://github.com/obra/superpowers) by Jesse Vincent (MIT) — a library of written procedures the model can consult: `brainstorming` before designing, `test-driven-development` before implementing, `systematic-debugging` before guessing at a fix, `verification-before-completion` before claiming something works, and ten more.
+
+They cost almost nothing to carry. Only each skill's name and one-line description sit in the prompt; the full text is fetched on demand when one actually matches the task.
+
+**The copy is frozen.** No version check, no update fetch, no network call at run time — ever. A methodology library that changed under you would change how your agent behaves between two runs of the same command, with nothing in your project explaining why. The freeze is enforced rather than promised: a hash manifest covers all 52 vendored files and a test verifies it on every run.
+
+> **Vendored, not yet wired.** As of v0.2.0 the corpus ships, renders and is tested, but no agent reads it yet — that lands next. It changes nothing about how Rudra behaves today.
+
+Details, the full skill list, and what Rudra adapts: **[Skills](Documentation/12-skills.md)**.
+
+---
+
 ## Documentation
 
 | Guide | What's inside |
@@ -271,8 +306,10 @@ Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committ
 | **[8. Project Status](Documentation/08-project-status.md)** | What works today, what doesn't, what's coming |
 | **[9. Permissions](Documentation/09-permissions.md)** | Approval prompts, allow/deny rules, the deny floor, the audit log |
 | **[10. Verification](Documentation/10-verification.md)** | `rudra verify`: the gate that decides a task is done, and how to run it yourself |
+| **[11. Tools](Documentation/11-tools.md)** | Every tool the agent can call — what each does, examples, and which subagent gets it |
+| **[12. Skills](Documentation/12-skills.md)** | The vendored superpowers library: what ships, why it's frozen, what Rudra adapts |
 
-New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)**.
+New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**.
 
 ---
 
@@ -281,6 +318,8 @@ New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then 
 Apache License 2.0 — see [LICENSE](LICENSE).
 
 Copyright 2026 Archish Patel.
+
+Rudra vendors third-party code under its own terms — currently [superpowers](https://github.com/obra/superpowers) (MIT, Copyright © 2025 Jesse Vincent). Attribution for everything bundled is in [NOTICE](NOTICE).
 
 <p align="center">
   <i>Built with fire by the storm that purifies code</i>
