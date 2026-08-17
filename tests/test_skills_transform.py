@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -121,3 +123,98 @@ def test_renders_the_real_corpus(tmp_path: Path) -> None:
     assert len(report.active_skills) == 9
     assert (tmp_path / "out" / "active" / "brainstorming" / "SKILL.md").is_file()
     assert (tmp_path / "out" / "library" / "superpowers" / "writing-skills" / "SKILL.md").is_file()
+
+
+def test_cross_refs_become_library_paths(tmp_path: Path) -> None:
+    bundle = _fake_bundle(
+        tmp_path / "b",
+        "demo",
+        {"alpha": "See demo:beta for details.", "beta": "B"},
+    )
+    bundle = replace(bundle, cross_ref_prefix="demo:")
+
+    report = render([bundle], frozenset({"alpha"}), tmp_path / "out")
+
+    body = (tmp_path / "out" / "library" / "demo" / "alpha" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "/skills/library/demo/beta/SKILL.md" in body
+    assert "demo:beta" not in body
+    assert report.cross_refs_rewritten == 1
+
+
+def test_active_copies_inherit_the_rewrite(tmp_path: Path) -> None:
+    bundle = _fake_bundle(tmp_path / "b", "demo", {"alpha": "See demo:beta.", "beta": "B"})
+    bundle = replace(bundle, cross_ref_prefix="demo:")
+
+    render([bundle], frozenset({"alpha"}), tmp_path / "out")
+
+    body = (tmp_path / "out" / "active" / "alpha" / "SKILL.md").read_text(encoding="utf-8")
+    assert "/skills/library/demo/beta/SKILL.md" in body
+
+
+def test_unknown_names_after_the_prefix_are_left_alone(tmp_path: Path) -> None:
+    """Only real skill names are rewritten.
+
+    Prose like "demo:whatever" is not a cross-reference, and turning it into
+    a path to a file that does not exist would be worse than leaving it.
+    """
+    bundle = _fake_bundle(tmp_path / "b", "demo", {"alpha": "See demo:nosuchskill."})
+    bundle = replace(bundle, cross_ref_prefix="demo:")
+
+    report = render([bundle], frozenset({"alpha"}), tmp_path / "out")
+
+    body = (tmp_path / "out" / "library" / "demo" / "alpha" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    assert "demo:nosuchskill" in body
+    assert report.cross_refs_rewritten == 0
+
+
+def test_a_bundle_without_a_prefix_is_not_rewritten(tmp_path: Path) -> None:
+    bundle = _fake_bundle(tmp_path / "b", "demo", {"alpha": "See demo:beta.", "beta": "B"})
+
+    report = render([bundle], frozenset({"alpha"}), tmp_path / "out")
+
+    assert report.cross_refs_rewritten == 0
+
+
+def test_supporting_markdown_is_rewritten_too(tmp_path: Path) -> None:
+    bundle = _fake_bundle(tmp_path / "b", "demo", {"alpha": "A", "beta": "B"})
+    bundle = replace(bundle, cross_ref_prefix="demo:")
+    (bundle.skills_path / "alpha" / "notes.md").write_text("see demo:beta", encoding="utf-8")
+
+    render([bundle], frozenset({"alpha"}), tmp_path / "out")
+
+    body = (tmp_path / "out" / "library" / "demo" / "alpha" / "notes.md").read_text(
+        encoding="utf-8"
+    )
+    assert "/skills/library/demo/beta/SKILL.md" in body
+
+
+def test_real_corpus_has_no_surviving_namespace_refs(tmp_path: Path) -> None:
+    report = render(BUNDLES, DEFAULT_ENABLED, tmp_path / "out")
+
+    assert report.cross_refs_rewritten == 26
+
+    survivors = [
+        path
+        for path in (tmp_path / "out").rglob("*.md")
+        if "superpowers:" in path.read_text(encoding="utf-8")
+    ]
+    assert survivors == []
+
+
+def test_every_rewritten_target_exists_on_disk(tmp_path: Path) -> None:
+    dest = tmp_path / "out"
+    render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    targets = set()
+    pattern = re.compile(r"/skills/library/([a-z0-9-]+)/([a-z0-9-]+)/SKILL\.md")
+    for path in dest.rglob("*.md"):
+        for match in pattern.finditer(path.read_text(encoding="utf-8")):
+            targets.add((match.group(1), match.group(2)))
+
+    assert targets
+    for bundle_name, skill_name in sorted(targets):
+        assert (dest / "library" / bundle_name / skill_name / "SKILL.md").is_file()

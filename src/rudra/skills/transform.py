@@ -21,6 +21,7 @@ inherits every rewrite for free and the two trees cannot drift.
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -66,6 +67,50 @@ def _check_no_duplicate_active_names(bundles: Sequence[Bundle], enabled: frozens
             owner[name] = bundle.name
 
 
+_REWRITABLE_SUFFIXES = frozenset({".md"})
+
+
+def _rewrite_cross_refs(skill_root: Path, bundle: Bundle) -> int:
+    """Turn `<prefix><skill>` references into read_file-able library paths.
+
+    Upstream skills reference each other through a plugin namespace
+    ("superpowers:test-driven-development"). Rudra has no plugin namespace
+    and no skill-invoke tool, so a reference has to become a path the model
+    can read_file -- which is exactly what deepagents' own skills prompt
+    tells it to do (middleware/skills.py:721).
+
+    Only known skill names are rewritten. Prose that happens to follow the
+    prefix is not a cross-reference, and pointing it at a file that does not
+    exist would be worse than leaving it alone.
+
+    Targets are library paths, never active ones: library/ holds every
+    skill regardless of enablement, so a reference stays valid when the
+    enabled set changes and C5.9 rewrites nothing (spec S11a.4).
+    """
+    if bundle.cross_ref_prefix is None:
+        return 0
+
+    known = set(bundle.skill_names())
+    pattern = re.compile(re.escape(bundle.cross_ref_prefix) + r"([a-z0-9][a-z0-9-]*)")
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name not in known:
+            return match.group(0)
+        return f"/skills/library/{bundle.name}/{name}/SKILL.md"
+
+    rewritten = 0
+    for path in sorted(skill_root.rglob("*")):
+        if not path.is_file() or path.suffix not in _REWRITABLE_SUFFIXES:
+            continue
+        original = path.read_text(encoding="utf-8")
+        updated, count = pattern.subn(_replace, original)
+        if count:
+            path.write_text(updated, encoding="utf-8")
+        rewritten += sum(1 for m in pattern.finditer(original) if m.group(1) in known)
+    return rewritten
+
+
 def render(
     bundles: Sequence[Bundle],
     enabled: frozenset[str],
@@ -82,9 +127,12 @@ def render(
     active.mkdir(parents=True)
 
     library_skills: list[str] = []
+    cross_refs = 0
     for bundle in bundles:
         for name in bundle.skill_names():
-            shutil.copytree(bundle.skills_path / name, library / bundle.name / name)
+            target = library / bundle.name / name
+            shutil.copytree(bundle.skills_path / name, target)
+            cross_refs += _rewrite_cross_refs(target, bundle)
             library_skills.append(f"{bundle.name}/{name}")
 
     active_skills: list[str] = []
@@ -97,6 +145,6 @@ def render(
     return RenderReport(
         library_skills=tuple(sorted(library_skills)),
         active_skills=tuple(sorted(active_skills)),
-        cross_refs_rewritten=0,
+        cross_refs_rewritten=cross_refs,
         platform_refs_injected=(),
     )
