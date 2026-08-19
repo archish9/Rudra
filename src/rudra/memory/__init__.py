@@ -12,5 +12,6 @@ S14.2's lazy-import rule exists to prevent.
 from __future__ import annotations
 
 from rudra.memory.entry import EntryRejected, MemoryEntry
+from rudra.memory.taxonomy import ROOMS, TaxonomyError, wing_for
 
-__all__ = ["EntryRejected", "MemoryEntry"]
+__all__ = ["ROOMS", "EntryRejected", "MemoryEntry", "TaxonomyError", "wing_for"]
