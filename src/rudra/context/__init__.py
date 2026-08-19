@@ -7,5 +7,12 @@ rather than a junk drawer.
 """
 
 from rudra.context.budget import evict_kwargs, evict_limit
+from rudra.context.usage import RoleUsage, RunUsage, render_usage
 
-__all__ = ["evict_kwargs", "evict_limit"]
+__all__ = [
+    "RoleUsage",
+    "RunUsage",
+    "evict_kwargs",
+    "evict_limit",
+    "render_usage",
+]
