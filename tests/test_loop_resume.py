@@ -183,3 +183,44 @@ def test_a_resume_with_only_blocked_tasks_says_so(tmp_path):
         check_resumable(path, None)
 
     assert "blocked" in str(caught.value)
+
+
+def test_plan_records_the_request_in_the_ledger(tmp_path):
+    """The gap a live run found: nothing wrote the request.
+
+    Task 1 gave the ledger a `request` field and check_resumable compares
+    against it, but plan() saved without one -- so every real ledger had
+    `"request": ""` and the mismatch refusal could never fire. Passing it
+    at the one save that knows the request closes that.
+    """
+    import asyncio
+    from dataclasses import dataclass
+    from pathlib import Path
+    from typing import Any
+
+    from rich.console import Console
+
+    from rudra.loop.engine import plan
+
+    @dataclass
+    class Paths:
+        ledger_json: Path
+
+    @dataclass
+    class Ctx:
+        paths: Any
+        console: Console
+        cfg: Any = None
+        subagents: Any = None
+        project_path: Any = None
+        usage: Any = None
+
+    ledger_path = tmp_path / "ledger.json"
+    context = Ctx(paths=Paths(ledger_json=ledger_path), console=Console(quiet=True))
+
+    async def planner(ledger, request, *, stage, reason="initial", task=None, feedback=""):
+        return None
+
+    asyncio.run(plan("build a JSON parser", context=context, planner=planner))
+
+    assert Ledger.load(ledger_path).request == "build a JSON parser"

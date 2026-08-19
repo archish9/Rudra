@@ -514,7 +514,11 @@ async def plan(
     only so tests can drive planning without wiring an agent.
     """
     ledger = ledger if ledger is not None else Ledger()
-    ledger.save(context.paths.ledger_json)
+    # The one save that knows the request, so record it here (C7.2).
+    # Every later save passes nothing and keeps it. Without this the field
+    # existed and was always "", which a live run found and no unit test
+    # could -- they called save(request=...) directly.
+    ledger.save(context.paths.ledger_json, request=request)
 
     # Three stages, in order (C6.7, S10b.1): settle the facts, decide the
     # shape, then declare the work. Each is a separate agent with its own
