@@ -16,6 +16,7 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 | 10 | **[Verification](10-verification.md)** | Run the deterministic gate, read its verdict, install the per-stack tools |
 | 11 | **[Tools](11-tools.md)** | Look up what the agent can actually do — every tool, with examples and per-subagent grants |
 | 12 | **[Skills](12-skills.md)** | Understand the vendored superpowers library, why it's frozen, and what Rudra adapts |
+| 14 | **[MCP](14-mcp.md)** | Add an MCP server, control what it may do, and see a real one working |
 
 ---
 
@@ -23,7 +24,9 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 
 **Never used Rudra** → [Getting Started](01-getting-started.md) → [Choosing a Model](03-providers.md) → [Project Status](08-project-status.md)
 
-**About to run it unattended** → [Permissions](09-permissions.md) → [Tools](11-tools.md)
+**About to run it unattended** → [Permissions](09-permissions.md) → [Tools](11-tools.md) → [MCP](14-mcp.md) if you configured a server
+
+**Giving the agent tools Rudra doesn't ship** → [MCP](14-mcp.md)
 
 **Wondering what the agent can actually do to your machine** → [Tools](11-tools.md)
 

@@ -47,8 +47,14 @@ CONTROL_PLANE_TOOLS = frozenset(
 # until Step 8, which made it the one instance of A1.53 reachable today --
 # decided "ask", no interrupt registered, so it ran unprompted and
 # unaudited.
-READ_ONLY_TOOLS = frozenset({"read_file", "ls", "glob", "grep", "read_ledger"})
-MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete", "execute"})
+# `list_mcp_tools` and `describe_mcp_tool` only read a server's own
+# advertisement of itself. `call_mcp_tool` is where anything happens, so it
+# is the one that is gated -- one entry rather than one per MCP tool, which
+# is what makes the meta-tool design gateable at all (Step 13, §0.8).
+READ_ONLY_TOOLS = frozenset(
+    {"read_file", "ls", "glob", "grep", "read_ledger", "list_mcp_tools", "describe_mcp_tool"}
+)
+MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete", "execute", "call_mcp_tool"})
 
 # Tools that are a shell command wearing a different name. Their own
 # implementation calls decide("execute", ...) with the real command string,
@@ -64,9 +70,16 @@ ALL_GATED_TOOLS = (
     READ_ONLY_TOOLS | MUTATING_TOOLS | _OTHER_TOOLS | CONTROL_PLANE_TOOLS | WRAPPED_EXECUTE_TOOLS
 )
 
+# Tools whose gated argument is not a path. `execute` carries a command,
+# `call_mcp_tool` a `server__tool` id; resolving either against the project
+# root would fabricate a spelling that a rule could match by accident.
+_UNRESOLVED_TOOLS = frozenset({"execute", "call_mcp_tool", "describe_mcp_tool"})
+
 # Which argument carries the thing a pattern matches against.
 _ARG_KEYS = {
     "execute": "command",
+    "call_mcp_tool": "tool_id",
+    "describe_mcp_tool": "tool_id",
     "write_file": "file_path",
     "edit_file": "file_path",
     "delete": "file_path",
@@ -179,9 +192,11 @@ class PermissionEngine:
         project_root: Path,
         grants: SessionGrants | None = None,
         shell_in_auto: bool = False,
+        mcp_in_auto: bool = False,
     ) -> None:
         self.mode = mode
         self.shell_in_auto = shell_in_auto
+        self.mcp_in_auto = mcp_in_auto
         self.allow = tuple(parse_rule(entry) for entry in allow)
         self.deny = tuple(parse_rule(entry) for entry in deny)
         self.floor_disable = frozenset(floor_disable)
@@ -197,7 +212,7 @@ class PermissionEngine:
         floor always uses `resolved` alone -- it must not be foolable. Rules
         see both spellings, for the reason `rule_matches` documents.
         """
-        if tool == "execute" or arg is None:
+        if tool in _UNRESOLVED_TOOLS or arg is None:
             return None, (), ()
 
         candidate = Path(arg)
@@ -224,7 +239,7 @@ class PermissionEngine:
 
         arg = gated_arg(tool, args)
         resolved, absolute, relative = self._resolve(tool, arg)
-        if tool == "execute" and arg is not None:
+        if tool in _UNRESOLVED_TOOLS and arg is not None:
             absolute = (arg,)
 
         # 1. floor -- always against the resolved path, never a spelling
@@ -270,6 +285,12 @@ class PermissionEngine:
             # which is opting in for that command.
             if tool == "execute" and not self.shell_in_auto:
                 return Decision("deny", "<auto:shell-not-opted-in>", "auto-shell")
+            # Same measured argument, one layer out: an MCP server is a
+            # separate process Rudra does not confine, and under --auto
+            # nobody reads the call before it runs. After the allow rules
+            # for the same reason -- naming an id there is consent for it.
+            if tool == "call_mcp_tool" and not self.mcp_in_auto:
+                return Decision("deny", "<auto:mcp-not-opted-in>", "auto-mcp")
             return _final("allow", None, "mode-default")
         if self.mode == "plan":
             return Decision("deny", None, "mode-default")

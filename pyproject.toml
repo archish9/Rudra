@@ -46,6 +46,10 @@ dependencies = [
     # Together — goes through ChatOpenAI with a base_url. See TODO.md C1.2.
     "langchain-openai>=1.4.1",
     "langsmith>=0.10.9",
+    # MCP (Step 13, C4.1). Servers are reached through three meta-tools, so
+    # this is the only new runtime dependency MCP support adds; it pulls
+    # mcp>=1.24.0 itself.
+    "langchain-mcp-adapters>=0.3.1",
     "wcmatch>=11.0",
     "packaging>=23.2",
     # CLI Interface & Terminal UI

@@ -11,6 +11,7 @@ rewrite scrolls the decision off screen and trains users to approve blind.
 from __future__ import annotations
 
 import difflib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -132,6 +133,13 @@ def render(
     if tool == "execute":
         command = str(args.get("command", ""))
         return DiffPreview("execute", f"  {command}\n  cwd: {project_root}", False)
+    if tool == "call_mcp_tool":
+        # No diff: an MCP call has no previewable patch. What the user needs
+        # is which server, which tool, and with what -- so show exactly that.
+        raw_id = str(args.get("tool_id", ""))
+        server, _, name = raw_id.partition("__")
+        body = json.dumps(args.get("arguments") or {}, indent=2, default=str)
+        return DiffPreview(f"MCP  {server} → {name}", f"  {body}", False)
     return DiffPreview(tool, "", False)
 
 

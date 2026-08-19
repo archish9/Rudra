@@ -38,12 +38,11 @@ FLOOR_RULE_NAMES = ("outside-root", "git-dir", "catastrophic-command")
 # rejecting it. See TODO.md A1.50.
 DISABLEABLE_FLOOR_RULES = ("git-dir", "catastrophic-command")
 
-# `tools` and `skills` were both reserved here naming their implementing
-# steps. Step 7 implemented `tools` and Step 11b implemented `skills`, so
-# both are real sections now — see ToolsConfig and SkillsConfig.
+# `tools`, `skills` and `mcp` were all reserved here naming their implementing
+# steps. Step 7 implemented `tools`, Step 11b `skills`, and Step 13 `mcp`, so
+# all three are real sections now — see ToolsConfig, SkillsConfig, McpConfig.
 RESERVED_SECTIONS = {
     "memory": "not supported yet — arrives in Step 14 (C8.1)",
-    "mcp": "MCP is configured in a separate .mcp.json, not here — arrives in Step 13 (C4.2)",
 }
 
 
@@ -153,6 +152,32 @@ class SkillsConfig:
     enabled: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class McpConfig:
+    """MCP policy. Servers themselves live in .mcp.json (C4.2).
+
+    The split is deliberate: `.mcp.json` must stay byte-compatible with a
+    Claude Code config so users paste theirs in unchanged, so every
+    Rudra-specific knob lives here instead.
+
+    `mcp_in_auto` is off for the reason `[tools] shell_in_auto` is: an MCP
+    server is an arbitrary subprocess and nobody reads the call before it
+    runs (A1.49). `ask` mode is unaffected.
+
+    `allow`/`deny` are `server__tool` glob patterns. `readonly` is the set a
+    read-only subagent (the reviewer) may *see*; it never decides whether a
+    call is permitted -- the permission engine alone decides that.
+    """
+
+    enabled: bool
+    mcp_in_auto: bool
+    disabled_servers: tuple[str, ...]
+    allow: tuple[str, ...]
+    deny: tuple[str, ...]
+    timeout: int
+    readonly: tuple[str, ...]
+
+
 MODEL_KEYS = frozenset(f.name for f in fields(ModelConfig))
 
 DEFAULTS: dict[str, Any] = {
@@ -180,6 +205,18 @@ DEFAULTS: dict[str, Any] = {
     # The nine DEFAULT_ENABLED ships as data in rudra.skills.registry, not
     # duplicated here -- loader.py fills it in when the key is absent.
     "skills": {},
+    # No server ships enabled (S13.4): every candidate duplicates something
+    # Rudra already gates natively, and a default server is an unrequested
+    # subprocess. Servers live in .mcp.json; this is policy only.
+    "mcp": {
+        "enabled": True,
+        "mcp_in_auto": False,
+        "disabled_servers": [],
+        "allow": [],
+        "deny": [],
+        "timeout": 60,
+        "readonly": [],
+    },
 }
 
 __all__ = [
@@ -189,6 +226,7 @@ __all__ = [
     "FLOOR_RULE_NAMES",
     "MODEL_KEYS",
     "RESERVED_SECTIONS",
+    "McpConfig",
     "SkillsConfig",
     "VALID_MODES",
     "VALID_PROVIDERS",

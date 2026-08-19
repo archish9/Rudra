@@ -75,6 +75,10 @@ class SubagentContext:
     # subagent machinery must stay constructible without a run -- 9b's
     # tests build a context with no facts either.
     usage: Any = None
+    # The run's McpClient, or None when MCP is off or nothing is configured.
+    # Shared by reference for the reason the gate and FactStore are: one run,
+    # one set of server processes and one cached catalog.
+    mcp: Any = None
 
 
 @dataclass(frozen=True)

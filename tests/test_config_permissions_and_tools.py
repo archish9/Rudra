@@ -87,13 +87,20 @@ def test_shell_must_be_a_bool(tmp_path):
         build_config(root)
 
 
-def test_memory_and_mcp_stay_reserved(tmp_path):
-    # [skills] was reserved here until Step 11b implemented it.
-    for section, step in (("memory", "Step 14"), ("mcp", "Step 13")):
-        root = write_config(tmp_path, f"[{section}]\nx = 1\n")
-        with pytest.raises(ConfigError, match=step):
-            build_config(root)
-        reset_config()
+def test_memory_stays_reserved(tmp_path):
+    # [skills] was reserved here until Step 11b implemented it, and [mcp]
+    # until Step 13 did. Reserved-to-real is the transition worth covering,
+    # so the row moves to the test below rather than being deleted.
+    root = write_config(tmp_path, "[memory]\nx = 1\n")
+    with pytest.raises(ConfigError, match="Step 14"):
+        build_config(root)
+    reset_config()
+
+
+def test_mcp_is_no_longer_reserved(tmp_path):
+    root = write_config(tmp_path, "[mcp]\nenabled = false\n")
+    assert build_config(root).mcp.enabled is False
+    reset_config()
 
 
 def test_env_layer_sets_shell(tmp_path, monkeypatch):

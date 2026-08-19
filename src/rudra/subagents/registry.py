@@ -145,6 +145,9 @@ CODER = RudraSubagent(
     # neither is picking an approach (S11b.1).
     wants_skills=True,
     wants_compaction=True,
+    # The one agent that both writes code and might need an outside service
+    # while writing it (Step 13, S13.5).
+    wants_mcp=True,
 )
 
 TESTER = RudraSubagent(
@@ -165,6 +168,11 @@ REVIEWER = RudraSubagent(
     role="reviewer",
     fs_tools=_READ_ONLY_FS,
     rudra_tools=("git_diff",),
+    # Restricted to `[mcp] readonly`: a reviewer holding an unfiltered
+    # call_mcp_tool could reach a writing MCP tool, which would undo the
+    # invariant its missing filesystem tools exist to hold (U.17).
+    wants_mcp=True,
+    mcp_readonly=True,
 )
 
 # The name is load-bearing. deepagents adds its own `general-purpose`
@@ -177,6 +185,7 @@ GENERAL_PURPOSE = RudraSubagent(
     system_prompt=_GENERAL_PURPOSE_PROMPT,
     role="default",
     fs_tools=_READ_ONLY_FS,
+    wants_mcp=True,
 )
 
 REGISTRY: dict[str, RudraSubagent] = {

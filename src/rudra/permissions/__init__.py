@@ -93,6 +93,7 @@ def build_gate(cfg: Config, project_path: Path) -> Gate:
         project_root=project_path,
         grants=grants,
         shell_in_auto=cfg.tools.shell_in_auto,
+        mcp_in_auto=cfg.mcp.mcp_in_auto,
     )
     audit = AuditLog(rudra_paths(project_path).logs / "permissions.jsonl")
     # Built before the middleware, which needs to know which names actually

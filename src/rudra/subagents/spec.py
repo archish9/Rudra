@@ -43,6 +43,15 @@ class RudraSubagent:
             methodology library helps an agent choosing *how* to work. The
             reviewer reads a diff and reports, and would pay ~916 tokens
             for descriptions it cannot act on (S11b.1).
+        wants_mcp: Does this subagent get the MCP meta-tools? The tester and
+            the planner stages do not: the tester runs one command, and the
+            planner stages must not reach a network service while deciding
+            what to build.
+        mcp_readonly: Restrict it to `[mcp] readonly` ids. The reviewer
+            cannot write because its writing tools are never registered
+            (U.17); an unfiltered `call_mcp_tool` would hand that back, since
+            an MCP server can write. The patterns live in the project's
+            config rather than here so no shipped spec names a real server.
         wants_compaction: Does this subagent get `compact_conversation`?
             The coder and tester retry and read pytest transcripts; the
             planner stages are short and the reviewer runs once, so they
@@ -57,6 +66,8 @@ class RudraSubagent:
     rudra_tools: tuple[str, ...] = ()
     wants_skills: bool = False
     wants_compaction: bool = False
+    wants_mcp: bool = False
+    mcp_readonly: bool = False
 
     @property
     def can_write(self) -> bool:
