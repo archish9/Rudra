@@ -669,8 +669,8 @@ def doctor_command(
 
     console.print(table)
     console.print(
-        "[dim]MCP servers, skills, and memory are not checked — they arrive in "
-        "Steps 13, 11, and 14.[/dim]"
+        "[dim]Memory is not checked — it arrives in Step 14. MCP servers are "
+        "checked here; `rudra mcp test` actually starts them.[/dim]"
     )
 
 
