@@ -39,6 +39,10 @@ def test_sync_hook_records_the_reported_counts():
         "input_tokens": 100,
         "output_tokens": 10,
         "compactions": 0,
+        # Added in Step 14b: the recall block's cost, isolated because it
+        # otherwise rides invisibly inside input_tokens (spec 4.6).
+        "recall_chars": 0,
+        "recall_injections": 0,
     }
     assert result.result[0].content == "hi"
 

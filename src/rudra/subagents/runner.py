@@ -79,6 +79,11 @@ class SubagentContext:
     # Shared by reference for the reason the gate and FactStore are: one run,
     # one set of server processes and one cached catalog.
     mcp: Any = None
+    # The run's MemoryStore, or None when it could not be built. Shared by
+    # reference for the reason the gate and FactStore are: one run, one
+    # palace handle and one cached collection. Optional because the
+    # subagent machinery must stay constructible without a run.
+    memory: Any = None
 
 
 @dataclass(frozen=True)

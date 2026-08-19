@@ -143,8 +143,12 @@ CODER = RudraSubagent(
     # Chooses *how* to write the code: TDD and systematic-debugging are
     # its methods. The reviewer and general-purpose agent are left out --
     # neither is picking an approach (S11b.1).
+    # It learns things while writing that nothing else will record, and it
+    # benefits most from what earlier runs settled (Step 14b, S14.3/S14.4).
+    rudra_tools=("remember", "search_memory"),
     wants_skills=True,
     wants_compaction=True,
+    wants_memory=True,
     # The one agent that both writes code and might need an outside service
     # while writing it (Step 13, S13.5).
     wants_mcp=True,
@@ -156,9 +160,10 @@ TESTER = RudraSubagent(
     system_prompt=_TESTER_PROMPT,
     role="tester",
     fs_tools=(*_WRITER_FS, "execute"),
-    rudra_tools=("run_tests",),
+    rudra_tools=("run_tests", "remember", "search_memory"),
     wants_skills=True,
     wants_compaction=True,
+    wants_memory=True,
 )
 
 REVIEWER = RudraSubagent(
@@ -185,6 +190,12 @@ GENERAL_PURPOSE = RudraSubagent(
     system_prompt=_GENERAL_PURPOSE_PROMPT,
     role="default",
     fs_tools=_READ_ONLY_FS,
+    # It answers questions about the codebase, and what earlier runs
+    # established is part of the answer. Read-only stays read-only: its
+    # filesystem tools are unchanged, and `remember` writes under .rudra/
+    # only, never into the project.
+    rudra_tools=("remember", "search_memory"),
+    wants_memory=True,
     wants_mcp=True,
 )
 

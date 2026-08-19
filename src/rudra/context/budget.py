@@ -1,4 +1,4 @@
-"""How large a single tool result may be before it leaves the context window.
+"""Two budgets derived from one number: tool-result eviction, and recall.
 
 deepagents evicts an oversized tool result to `<artifacts_root>/large_tool_results/`
 and replaces it with a head+tail preview plus a `read_file` hint. The
@@ -67,3 +67,44 @@ def evict_kwargs(cfg: Any, role: str) -> dict[str, int]:
     """
     limit = evict_limit(cfg, role)
     return {} if limit is None else {"tool_token_limit_before_evict": limit}
+
+
+# The whole recall block may take a fiftieth of the window. Set against
+# TOOL_RESULT_FRACTION deliberately: one oversized tool result may cost a
+# tenth, because it is transient and evictable, while this block is paid on
+# every model call for the whole run and nothing sheds it.
+#
+# 0.02 is a starting number, not a measured one, and deliberately not a
+# config key -- an unmeasured knob is worse than a constant somebody can
+# change with evidence (S12.4, and MemoryConfig's docstring says the same).
+# It becomes [memory] recall_fraction when a measurement says what it
+# should be. At 32k this is 640 tokens, which lands independently on
+# MemPalace's own wake_up() design point of 600-900 (layers.py:407).
+RECALL_FRACTION = 0.02
+
+# ...but never so little that no whole entry fits. Two percent of a 4k
+# window is 80 tokens; a block that can only ever be truncated to nothing
+# costs prompt space and delivers no memory.
+MIN_RECALL_TOKENS = 300
+
+
+def recall_limit(cfg: Any, role: str) -> int | None:
+    """Tokens the injected recall block may occupy, for one role.
+
+    Args:
+        cfg: Anything exposing `model_for(role)` -- Rudra's Config does
+            (config/loader.py:293), and so falls back to the `default`
+            role for an unknown one, which this function inherits rather
+            than re-implements.
+        role: A BUILTIN_ROLES member, or any string.
+
+    Returns:
+        A token count, or None when the role declares no context window.
+        None means "inject nothing": guessing a budget for a model whose
+        size we do not know is how a recall block crowds out the task
+        itself, and that is S12.9's rule for evict_limit applied unchanged.
+    """
+    declared = cfg.model_for(role).context_tokens
+    if declared is None:
+        return None
+    return max(int(declared * RECALL_FRACTION), MIN_RECALL_TOKENS)

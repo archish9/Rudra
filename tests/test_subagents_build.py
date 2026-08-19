@@ -163,12 +163,22 @@ def test_rudra_tools_resolve_by_name(context):
     tools = _tools_for(REGISTRY["reviewer"], context)
     assert [t.name for t in tools] == ["git_diff"]
 
+    # Declaration order, not alphabetical -- the tester declares run_tests
+    # first and gained the two memory tools in Step 14b.
     tools = _tools_for(REGISTRY["tester"], context)
-    assert [t.name for t in tools] == ["run_tests"]
+    assert [t.name for t in tools] == ["run_tests", "remember", "search_memory"]
 
 
 def test_a_spec_with_no_rudra_tools_gets_none(context):
-    assert _tools_for(REGISTRY["coder"], context) == []
+    """Built rather than borrowed from the registry.
+
+    This used to point at the coder, which happened to declare none until
+    Step 14b gave it the memory tools -- so the test broke on a change that
+    had nothing to do with the property it checks. A spec constructed here
+    cannot drift out from under it.
+    """
+    bare = replace(REGISTRY["coder"], rudra_tools=())
+    assert _tools_for(bare, context) == []
 
 
 def test_an_unknown_rudra_tool_is_a_construction_error(context):

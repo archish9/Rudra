@@ -30,6 +30,15 @@ class RoleUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     compactions: int = 0
+    # What the injected recall block cost this role, in characters, summed
+    # over every agent build (Step 14b, spec 4.6). Characters rather than
+    # tokens because that is what render.py actually budgets in, and a
+    # second approximation would only add error. It rides inside
+    # input_tokens on every call, so nothing else can isolate it -- and
+    # RECALL_FRACTION is a constant somebody should be able to revise with
+    # evidence rather than argument.
+    recall_chars: int = 0
+    recall_injections: int = 0
 
 
 def _add(total: int | None, reported: int | None) -> int | None:
@@ -57,6 +66,12 @@ class RunUsage:
         slot.input_tokens = _add(slot.input_tokens, input_tokens)
         slot.output_tokens = _add(slot.output_tokens, output_tokens)
 
+    def record_recall(self, role: str, chars: int) -> None:
+        """One recall block injected into `role`'s prompt."""
+        slot = self._slot(role)
+        slot.recall_chars += int(chars)
+        slot.recall_injections += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -78,6 +93,8 @@ class RunUsage:
                 "input_tokens": tally.input_tokens,
                 "output_tokens": tally.output_tokens,
                 "compactions": tally.compactions,
+                "recall_chars": tally.recall_chars,
+                "recall_injections": tally.recall_injections,
             }
             for role, tally in self.per_role.items()
         }

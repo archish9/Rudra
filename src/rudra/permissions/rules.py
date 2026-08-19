@@ -38,8 +38,13 @@ if TYPE_CHECKING:  # pragma: no cover - broken at runtime to avoid a cycle
 # middleware denies rather than runs (tests/test_permissions_unknown_tool.py)
 # -- so the tool would be offered to the model and refused every time. That
 # is A1.75's shape, found the same way.
+# `remember` joins for exactly `record_fact`'s reason, and A1.75 is why this
+# was not left to look obvious: it writes only under .rudra/, so gating it
+# would prompt for Rudra's own bookkeeping -- and leaving it out would have
+# it decided `ask` with no interrupt registered, which the middleware denies
+# rather than runs. Denied on every call, in every mode, silently.
 CONTROL_PLANE_TOOLS = frozenset(
-    {"add_tasks", "drop_task", "ask_user", "record_fact", "compact_conversation"}
+    {"add_tasks", "drop_task", "ask_user", "record_fact", "compact_conversation", "remember"}
 )
 
 # `read_ledger` belongs here, not in the control plane: it only reads
@@ -51,8 +56,19 @@ CONTROL_PLANE_TOOLS = frozenset(
 # advertisement of itself. `call_mcp_tool` is where anything happens, so it
 # is the one that is gated -- one entry rather than one per MCP tool, which
 # is what makes the meta-tool design gateable at all (Step 13, §0.8).
+# `search_memory` belongs here beside `read_ledger`: it reads .rudra/memory/
+# and nothing else, and reads are never gated.
 READ_ONLY_TOOLS = frozenset(
-    {"read_file", "ls", "glob", "grep", "read_ledger", "list_mcp_tools", "describe_mcp_tool"}
+    {
+        "read_file",
+        "ls",
+        "glob",
+        "grep",
+        "read_ledger",
+        "list_mcp_tools",
+        "describe_mcp_tool",
+        "search_memory",
+    }
 )
 MUTATING_TOOLS = frozenset({"write_file", "edit_file", "delete", "execute", "call_mcp_tool"})
 

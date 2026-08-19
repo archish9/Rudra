@@ -28,12 +28,13 @@ from rudra.llm import build_model
 from rudra.middleware import FixWriteParamsMiddleware
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
 from rudra.tools.git_tools import create_git_tools
+from rudra.tools.memory_tools import create_memory_tools
 from rudra.tools.testing_tools import create_testing_tools
 
 # Every factory that can supply a Rudra tool. Called once each per build;
 # the spec then selects by tool name. Names rather than callables because
 # the factories need per-run arguments a frozen spec cannot hold.
-_TOOL_FACTORIES = (create_git_tools, create_testing_tools)
+_TOOL_FACTORIES = (create_git_tools, create_testing_tools, create_memory_tools)
 
 
 def _model_for(spec: RudraSubagent, cfg: Any = None) -> Any:
@@ -120,6 +121,27 @@ def _prompt_for(spec: RudraSubagent, context: Any) -> str:
     # A model never told a server exists will never call list_mcp_tools, so
     # this block is what makes the meta-tool design reachable. Fixed size,
     # and only for the specs that actually hold the tools.
+    # Recalled memories, budgeted off the same context_tokens that drives
+    # summarization and eviction. Built here rather than baked into the
+    # spec for the reason the facts block is: build_agent runs per
+    # invocation, so a memory recorded during task 1 reaches task 2's
+    # coder with no plumbing.
+    store = getattr(context, "memory", None)
+    if store is not None and spec.wants_memory:
+        from rudra.context.budget import recall_limit
+        from rudra.memory.render import recall_block
+
+        query = getattr(context, "task", "") or spec.name
+        block = recall_block(store.search(query, limit=8), recall_limit(context.cfg, spec.role))
+        if block:
+            parts.append(block)
+            # What it cost, so RECALL_FRACTION can be revised with evidence
+            # rather than argument (spec 4.6). It rides inside input_tokens
+            # on every call, so nothing else can isolate it.
+            usage = getattr(context, "usage", None)
+            if usage is not None:
+                usage.record_recall(spec.role, len(block))
+
     client = getattr(context, "mcp", None)
     if client is not None and spec.wants_mcp:
         from rudra.mcp import mcp_catalog_block
