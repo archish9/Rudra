@@ -52,6 +52,13 @@ class RudraSubagent:
             (U.17); an unfiltered `call_mcp_tool` would hand that back, since
             an MCP server can write. The patterns live in the project's
             config rather than here so no shipped spec names a real server.
+        wants_memory: Does this subagent get the recalled-memories block in
+            its prompt? The reviewer does not: it reads a diff and reports,
+            project history does not change what the diff says, and it
+            would pay for the block on every review -- S11b.1's reasoning
+            applied to a second payload. The two memory *tools* are gated
+            separately, by `rudra_tools`, because that is how every other
+            Rudra tool reaches a spec.
         wants_compaction: Does this subagent get `compact_conversation`?
             The coder and tester retry and read pytest transcripts; the
             planner stages are short and the reviewer runs once, so they
@@ -66,6 +73,7 @@ class RudraSubagent:
     rudra_tools: tuple[str, ...] = ()
     wants_skills: bool = False
     wants_compaction: bool = False
+    wants_memory: bool = False
     wants_mcp: bool = False
     mcp_readonly: bool = False
 

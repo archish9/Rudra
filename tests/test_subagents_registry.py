@@ -47,7 +47,9 @@ def test_the_coder_writes_but_does_not_execute():
     spec = REGISTRY["coder"]
     assert spec.can_write is True
     assert "execute" not in spec.fs_tools
-    assert spec.rudra_tools == ()
+    # Memory only. It writes source through its filesystem tools and
+    # records what it learned through .rudra/ -- neither is a shell.
+    assert spec.rudra_tools == ("remember", "search_memory")
 
 
 def test_the_reviewer_reads_the_diff():
@@ -58,7 +60,7 @@ def test_the_tester_gets_both_run_tests_and_execute():
     # Both deliberately: run_tests caps output for a 32B window, execute
     # covers what it cannot express. Spec §3.
     spec = REGISTRY["tester"]
-    assert spec.rudra_tools == ("run_tests",)
+    assert spec.rudra_tools == ("run_tests", "remember", "search_memory")
     assert "execute" in spec.fs_tools
 
 

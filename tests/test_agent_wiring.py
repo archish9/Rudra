@@ -333,11 +333,15 @@ def test_an_unattended_planner_has_no_ask_user(monkeypatch, tmp_path):
     assert "ask_user" not in names
 
 
-def test_the_coder_still_has_no_rudra_tools(monkeypatch, tmp_path):
+def test_the_coder_runs_no_tests_and_reads_no_diffs(monkeypatch, tmp_path):
     """The coder writes files; it does not run tests or read diffs.
 
     Step 9c keeps that split: the loop runs the gate, the tester writes
     tests, the reviewer reads the diff.
+
+    Renamed in Step 14b, which gave the coder the two memory tools. The
+    property was never "no rudra tools" -- it is which ones, and the
+    assertion now says so rather than relying on the list being empty.
     """
     from rudra.config.loader import build_config, reset_config
     from rudra.subagents.build import build_agent
@@ -348,7 +352,10 @@ def test_the_coder_still_has_no_rudra_tools(monkeypatch, tmp_path):
         cfg = build_config(tmp_path)
         captured = _record_create_deep_agent(monkeypatch, "rudra.subagents.build")
         build_agent(REGISTRY["coder"], _subagent_context(tmp_path, cfg, None))
-        assert captured["tools"] == []
+        names = {t.name for t in captured["tools"]}
+        assert names == {"remember", "search_memory"}
+        assert "run_tests" not in names
+        assert "git_diff" not in names
     finally:
         reset_config()
 
