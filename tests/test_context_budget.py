@@ -10,10 +10,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rudra.context.budget import (
+    MIN_RECALL_TOKENS,
     MIN_TOOL_RESULT_TOKENS,
+    RECALL_FRACTION,
     TOOL_RESULT_FRACTION,
     evict_kwargs,
     evict_limit,
+    recall_limit,
 )
 
 
@@ -125,3 +128,33 @@ def test_none_really_does_disable_eviction_upstream():
 
     assert omitted._tool_token_limit_before_evict == 20000
     assert explicit_none._tool_token_limit_before_evict is None
+
+
+def test_recall_limit_is_two_percent_of_a_declared_window() -> None:
+    assert recall_limit(_cfg(planner=32_000), "planner") == int(32_000 * RECALL_FRACTION)
+
+
+def test_recall_limit_never_drops_below_the_floor() -> None:
+    """Two percent of a 4k window is 80 tokens, which cannot hold one
+    decision. A block that can only ever be truncated is worse than none."""
+    assert recall_limit(_cfg(planner=4_000), "planner") == MIN_RECALL_TOKENS
+
+
+def test_recall_limit_is_none_when_no_window_is_declared() -> None:
+    """Same rule evict_limit follows (S12.9): guessing for a model whose
+    size we do not know is worse than leaving the feature off."""
+    assert recall_limit(_cfg(planner=None), "planner") is None
+
+
+def test_recall_limit_is_much_smaller_than_the_eviction_threshold() -> None:
+    """Both come off the same context_tokens, and the relationship is the
+    point: one tool result may take a tenth of the window, the whole recall
+    block may take a fiftieth."""
+    cfg = _cfg(planner=32_000)
+    assert recall_limit(cfg, "planner") < evict_limit(cfg, "planner")
+
+
+def test_recall_limit_falls_back_to_default_for_an_unknown_role() -> None:
+    """Inherited from cfg.model_for, not re-implemented here -- the same
+    property evict_limit relies on (config/loader.py:293)."""
+    assert recall_limit(_cfg(default=32_000), "nonesuch") == int(32_000 * RECALL_FRACTION)
