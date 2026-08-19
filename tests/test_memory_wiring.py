@@ -100,3 +100,30 @@ def test_the_reviewer_still_has_its_diff_tool(ctx: _Ctx) -> None:
     """Absence of memory must not be absence of everything -- the spec's
     own tools are untouched."""
     assert "git_diff" in {t.name for t in _tools_for(_spec("reviewer"), ctx)}
+
+
+def test_the_planner_prompt_carries_recalled_memories(tmp_path: Path) -> None:
+    """C8.4 names "before planning" as a retrieval trigger by name.
+
+    The planner decides what work exists, so what earlier runs decided is
+    worth more there than anywhere -- and the spec's §4.6 said "subagents"
+    while C8.4's own row said "before planning". This closes that gap.
+    """
+    from rudra.agent.planner_agent import build_planner_prompt
+
+    project = tmp_path / "demo"
+    project.mkdir()
+    store = MemoryStore(project)
+    store.write(MemoryEntry(content="we chose uv over pip", room="decisions", added_by="rudra"))
+
+    prompt = build_planner_prompt(
+        "add a feature", project, memory=store, recall_tokens=655, stage="breakdown"
+    )
+    assert "uv over pip" in prompt
+
+
+def test_the_planner_prompt_builds_without_a_store(tmp_path: Path) -> None:
+    """Memory is optional at every prompt site, as facts are."""
+    from rudra.agent.planner_agent import build_planner_prompt
+
+    assert build_planner_prompt("add a feature", tmp_path, stage="breakdown")

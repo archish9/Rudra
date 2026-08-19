@@ -701,6 +701,9 @@ async def create_main_agent(
             skills_sources=skills_sources,
             skills_cache_root=skill_cache.root if skill_cache else None,
             usage=usage,
+            # C8.4 names "before planning" as a retrieval trigger. The same
+            # store the loop and the subagents hold -- one run, one palace.
+            memory=memory_store,
         )
         for stage in STAGES
     }

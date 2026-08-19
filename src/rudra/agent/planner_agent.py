@@ -16,7 +16,7 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from rich.console import Console
 
 from rudra.config import get_config
-from rudra.context.budget import evict_limit
+from rudra.context.budget import evict_limit, recall_limit
 from rudra.context.middleware import UsageMiddleware
 from rudra.facts import facts_block
 from rudra.filesystem import project_tree
@@ -118,6 +118,8 @@ def build_planner_prompt(
     stage: str = "breakdown",
     can_ask: bool = True,
     max_questions: int = 5,
+    memory: Any = None,
+    recall_tokens: int | None = None,
 ) -> str:
     """The system prompt for one planning stage (S10b.1).
 
@@ -138,6 +140,17 @@ def build_planner_prompt(
     block = facts_block(facts)
     if block:
         prompt += f"\n{block}"
+
+    # C8.4 names "before planning" as a retrieval trigger by name, and the
+    # planner is where prior decisions are worth most: it decides what work
+    # exists. Beside the facts block, because the two answer the same kind
+    # of question -- what is already settled here.
+    if memory is not None:
+        from rudra.memory.render import recall_block
+
+        recalled = recall_block(memory.search(task, limit=8), recall_tokens)
+        if recalled:
+            prompt += f"\n{recalled}"
 
     prompt += f"""
 ## REQUEST
@@ -316,6 +329,7 @@ def create_planner_agent(
     skills_sources: tuple[str, ...] | None = None,
     skills_cache_root: Path | None = None,
     usage: Any = None,
+    memory: Any = None,
 ):
     """Create one stage of the planner (S10b.1).
 
@@ -384,6 +398,8 @@ def create_planner_agent(
         stage=stage,
         can_ask=interactive and stage == "clarify" and cfg.agent.max_questions > 0,
         max_questions=cfg.agent.max_questions,
+        memory=memory,
+        recall_tokens=recall_limit(cfg, "planner"),
     )
     # C5.3: the index alone is inert. This is the instruction block that
     # makes the model reach for a skill, and it chains onward -- it tells
