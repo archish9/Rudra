@@ -147,3 +147,57 @@ def test_the_coder_agent_can_be_constructed(coded_defaults, tmp_path) -> None:
     )
 
     assert agent is not None
+
+
+# mempalace follows the same rule as a provider package and for the same
+# reason: one import site means one place that knows the vendor's API, so
+# a 3.7 -> 3.8 change is one file's problem. store.py is that site.
+MEMORY_PACKAGE = "mempalace"
+MEMORY_MODULE_PREFIX = "memory/store.py"
+
+
+def test_only_the_memory_store_imports_mempalace() -> None:
+    """The C8.1 boundary, as a test rather than a claim.
+
+    Deliberately stricter than the provider rule above: those forbid the
+    import outside a *package*, this pins it to one *file*. A second
+    importer inside rudra/memory/ would be just as much a second place
+    that knows mempalace's API.
+    """
+    offenders = []
+    for path in python_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            hit = any(
+                name == MEMORY_PACKAGE or name.startswith(f"{MEMORY_PACKAGE}.") for name in names
+            )
+            if hit and not str(path).endswith(MEMORY_MODULE_PREFIX):
+                offenders.append(f"{path}:{node.lineno}")
+    assert not offenders, f"mempalace may only be imported by memory/store.py, found: {offenders}"
+
+
+def test_the_memory_store_imports_mempalace_lazily() -> None:
+    """No module-scope mempalace import, anywhere -- including store.py.
+
+    chromadb's import chain pulls onnxruntime, grpcio and opentelemetry.
+    At module scope that lands on `rudra --version`, against D16's
+    measured 0.59 s startup which C9.8 already wants to cut.
+    """
+    store = SRC / "memory" / "store.py"
+    tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
+    for node in tree.body:  # module scope only, not ast.walk
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        else:
+            continue
+        assert not any(name.startswith(MEMORY_PACKAGE) for name in names), (
+            f"module-scope mempalace import at store.py:{node.lineno}"
+        )
