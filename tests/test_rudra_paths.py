@@ -76,3 +76,25 @@ def test_ensure_layout_does_not_touch_durable_files(tmp_path: Path) -> None:
     ensure_layout(tmp_path)
     assert (rudra / "project.json").read_text(encoding="utf-8") == '{"language": "rust"}'
     assert (rudra / "AGENTS.md").read_text(encoding="utf-8") == "# notes"
+
+
+def test_the_session_id_helper_is_gone():
+    """A1.3 closed by deletion; A1.2 is WONTFIX by design (S12.2).
+
+    A stable per-project thread_id would make every run in a project
+    inherit every prior run's transcript -- a context defect introduced by
+    the context step. What a crash costs is completed work, and --continue
+    restores that from the ledger instead.
+
+    The checkpointer itself stays: interrupt-and-resume approval needs it
+    (permissions/approval.py, the aget_state call).
+    """
+    import importlib
+
+    import pytest
+
+    with pytest.raises(ImportError):
+        from rudra.state import get_or_create_session_id  # noqa: F401
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("rudra.state.checkpoint")
