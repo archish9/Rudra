@@ -27,6 +27,7 @@ from rudra.config.layers import (
 )
 from rudra.config.schema import (
     BUILTIN_ROLES,
+    DEFAULTS,
     DISABLEABLE_FLOOR_RULES,
     FLOOR_RULE_NAMES,
     MODEL_KEYS,
@@ -35,6 +36,7 @@ from rudra.config.schema import (
     VALID_PROVIDERS,
     AgentConfig,
     CompatConfig,
+    McpConfig,
     ModelConfig,
     PermissionsConfig,
     SkillsConfig,
@@ -42,7 +44,7 @@ from rudra.config.schema import (
 )
 from rudra.state.paths import rudra_paths
 
-_TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills")
+_TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills", "mcp")
 _AGENT_KEYS = frozenset({"verbose", "max_fix_attempts", "max_questions"})
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
@@ -50,6 +52,9 @@ _SKILLS_KEYS = frozenset({"enabled"})
 _TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch"})
 _TOOLS_INT_KEYS = frozenset({"test_timeout"})
 _TOOLS_KEYS = _TOOLS_BOOL_KEYS | _TOOLS_INT_KEYS
+_MCP_BOOL_KEYS = frozenset({"enabled", "mcp_in_auto"})
+_MCP_LIST_KEYS = frozenset({"disabled_servers", "allow", "deny", "readonly"})
+_MCP_KEYS = _MCP_BOOL_KEYS | _MCP_LIST_KEYS | frozenset({"timeout"})
 _POSITIVE_INT_KEYS = ("context_tokens", "max_output_tokens", "timeout")
 
 
@@ -224,6 +229,23 @@ def validate(
         if value <= 0:
             raise ConfigError(f"[tools] {key} must be greater than 0, got {value!r}.")
 
+    for key, value in merged.get("mcp", {}).items():
+        if key not in _MCP_KEYS:
+            raise ConfigError(f"Unknown key '{key}' in [mcp].{_suggest(key, _MCP_KEYS)}")
+        if key in _MCP_BOOL_KEYS:
+            if not isinstance(value, bool):
+                raise ConfigError(f"[mcp] {key} must be true or false, got {value!r}.")
+        elif key in _MCP_LIST_KEYS:
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ConfigError(f"[mcp] {key} must be a list of strings, got {value!r}.")
+        else:
+            # bool is a subclass of int, so `timeout = true` would otherwise
+            # pass isinstance and quietly become a one-second timeout.
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ConfigError(f"[mcp] {key} must be a whole number of seconds, got {value!r}.")
+            if value <= 0:
+                raise ConfigError(f"[mcp] {key} must be greater than 0, got {value!r}.")
+
     _validate_skills(merged.get("skills", {}))
 
 
@@ -241,6 +263,24 @@ def _build_skills(merged: dict[str, Any]) -> SkillsConfig:
     if "enabled" not in section:
         return SkillsConfig(enabled=tuple(sorted(DEFAULT_ENABLED)))
     return SkillsConfig(enabled=tuple(section["enabled"]))
+
+
+def _build_mcp(merged: dict[str, Any]) -> McpConfig:
+    """The [mcp] policy, with list keys frozen into tuples.
+
+    Built here rather than by splatting the merged dict, because DEFAULTS
+    carries lists and every other config tuple in Rudra is immutable.
+    """
+    section = {**DEFAULTS["mcp"], **merged.get("mcp", {})}
+    return McpConfig(
+        enabled=bool(section["enabled"]),
+        mcp_in_auto=bool(section["mcp_in_auto"]),
+        disabled_servers=tuple(section["disabled_servers"]),
+        allow=tuple(section["allow"]),
+        deny=tuple(section["deny"]),
+        timeout=int(section["timeout"]),
+        readonly=tuple(section["readonly"]),
+    )
 
 
 def _validate_skills(section: dict) -> None:
@@ -285,6 +325,7 @@ class Config:
     compat: CompatConfig
     tools: ToolsConfig
     skills: SkillsConfig
+    mcp: McpConfig
     models: dict[str, ModelConfig]
     provenance: dict[str, str] = field(default_factory=dict)
     sources: dict[str, Path | None] = field(default_factory=dict)
@@ -326,6 +367,7 @@ def build_config(
     verbose: bool | None = None,
     permission_mode: str | None = None,
     allow_shell: bool | None = None,
+    allow_mcp: bool | None = None,
 ) -> Config:
     """Read all five layers, merge, validate, construct."""
     root = Path(project_root) if project_root is not None else Path.cwd()
@@ -346,7 +388,7 @@ def build_config(
         ("user", user),
         ("project", project),
         ("env", env_layer(declared)),
-        ("cli", cli_layer(verbose, permission_mode, allow_shell)),
+        ("cli", cli_layer(verbose, permission_mode, allow_shell, allow_mcp=allow_mcp)),
     ]
     merged, provenance = deep_merge(ordered)
 
@@ -377,6 +419,7 @@ def build_config(
         compat=CompatConfig(**merged.get("compat", {})),
         tools=ToolsConfig(**merged.get("tools", {})),
         skills=_build_skills(merged),
+        mcp=_build_mcp(merged),
         models=_build_models(merged),
         provenance=provenance,
         sources=sources,
@@ -393,6 +436,7 @@ def get_config(
     verbose: bool | None = None,
     permission_mode: str | None = None,
     allow_shell: bool | None = None,
+    allow_mcp: bool | None = None,
 ) -> Config:
     """Return the process-wide Config, loading it on first use.
 
@@ -407,6 +451,7 @@ def get_config(
             verbose=verbose,
             permission_mode=permission_mode,
             allow_shell=allow_shell,
+            allow_mcp=allow_mcp,
         )
     return _config
 

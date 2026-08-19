@@ -36,8 +36,9 @@ def test_valid_modes_are_exactly_the_d5_set() -> None:
 
 
 def test_reserved_sections_name_the_step_that_implements_them() -> None:
-    # `skills` left this set in Step 11b, which implements it.
-    assert set(RESERVED_SECTIONS) == {"memory", "mcp"}
+    # `skills` left this set in Step 11b and `mcp` in Step 13, each when the
+    # step implementing it landed.
+    assert set(RESERVED_SECTIONS) == {"memory"}
     for section, note in RESERVED_SECTIONS.items():
         assert "Step" in note, f"{section} must tell the user when it arrives"
 

@@ -223,6 +223,8 @@ def cli_layer(
     verbose: bool | None,
     permission_mode: str | None,
     allow_shell: bool | None = None,
+    *,
+    allow_mcp: bool | None = None,
 ) -> dict[str, Any]:
     """Layer 5. Only flags the user actually passed appear."""
     layer: dict[str, Any] = {}
@@ -232,6 +234,8 @@ def cli_layer(
         layer["permissions"] = {"mode": permission_mode}
     if allow_shell is not None:
         layer["tools"] = {"shell_in_auto": allow_shell}
+    if allow_mcp is not None:
+        layer["mcp"] = {"mcp_in_auto": allow_mcp}
     return layer
 
 

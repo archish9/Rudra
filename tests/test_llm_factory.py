@@ -13,6 +13,7 @@ from rudra.config import (
     AgentConfig,
     CompatConfig,
     Config,
+    McpConfig,
     ModelConfig,
     PermissionsConfig,
     SkillsConfig,
@@ -49,6 +50,15 @@ def make_config(**overrides) -> Config:
         compat=CompatConfig(task_anchor=False, sandbox_paths=False),
         tools=ToolsConfig(shell=True, shell_in_auto=False, auto_branch=False, test_timeout=600),
         skills=SkillsConfig(enabled=()),
+        mcp=McpConfig(
+            enabled=True,
+            mcp_in_auto=False,
+            disabled_servers=(),
+            allow=(),
+            deny=(),
+            timeout=60,
+            readonly=(),
+        ),
         models={"default": settings, "planner": settings, "coder": settings},
     )
 

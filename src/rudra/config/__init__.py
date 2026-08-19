@@ -17,6 +17,7 @@ from rudra.config.loader import Config, build_config, get_config, reset_config
 from rudra.config.schema import (
     AgentConfig,
     CompatConfig,
+    McpConfig,
     ModelConfig,
     PermissionsConfig,
     SkillsConfig,
@@ -26,6 +27,7 @@ from rudra.config.schema import (
 __all__ = [
     "AgentConfig",
     "CompatConfig",
+    "McpConfig",
     "Config",
     "ConfigError",
     "ModelConfig",

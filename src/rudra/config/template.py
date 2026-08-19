@@ -114,9 +114,23 @@ sandbox_paths = false
 # silent skip. See Documentation/12-skills.md.
 # enabled = ["brainstorming", "test-driven-development", "systematic-debugging"]
 
+[mcp]
+enabled     = true       # false disables MCP entirely
+mcp_in_auto = false      # may an unattended run call MCP tools? (--allow-mcp)
+timeout     = 60         # seconds per MCP call
+# allow / deny are server__tool glob patterns; deny beats allow.
+# allow = ["kala__*"]
+# deny  = ["*__system_bootstrap"]
+# Ids a read-only subagent (the reviewer) may see. Visibility only —
+# the permission engine still decides every call.
+# readonly = ["kala__verify", "kala__system_status"]
+# disabled_servers = []  # names from .mcp.json to leave unloaded
+
+# Servers themselves live in .mcp.json, in Claude Code's schema, so an
+# existing config can be pasted in unchanged. `rudra mcp add` writes it.
+
 # Not supported yet, listed so you know where they will go:
 #   [memory]  Step 14
-# MCP servers are configured in a separate .mcp.json (Step 13).
 """
 
 __all__ = ["CONFIG_TEMPLATE"]
