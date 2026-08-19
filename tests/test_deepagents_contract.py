@@ -463,3 +463,56 @@ def test_an_ollama_model_level_profile_key_cannot_be_registered(tmp_path, monkey
 
     with pytest.raises(ValueError, match="more than one ':'"):
         register_harness_profile("ollama:qwen3:32b", HarnessProfile())
+
+
+def test_custom_filesystem_middleware_replaces_the_default(monkeypatch, tmp_path):
+    """A custom FilesystemMiddleware replaces the default, it does not join it.
+
+    Step 12a's entire approach to A1.47 rests on this: the eviction
+    threshold has no create_deep_agent parameter, so the only public route
+    to it is passing a configured instance in middleware=. That works
+    because _apply_custom_middleware matches on `.name` and substitutes in
+    place (graph.py:215-232).
+
+    If this fails with a count of 2, upstream started appending. Rudra then
+    has two filesystem middlewares and A1.47 reopens -- its original
+    proposal, a Rudra wrap_tool_call middleware, becomes the right fix.
+
+    The final middleware list is only visible by intercepting the call
+    create_deep_agent makes into create_agent: a compiled graph exposes no
+    `.middleware` attribute.
+    """
+    import deepagents.graph as graph
+    from deepagents.backends.filesystem import FilesystemBackend
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+
+    captured = {}
+    real_create_agent = graph.create_agent
+
+    def spy(*args, **kwargs):
+        captured["middleware"] = kwargs.get("middleware")
+        return real_create_agent(*args, **kwargs)
+
+    monkeypatch.setattr(graph, "create_agent", spy)
+
+    backend = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+    ours = FilesystemMiddleware(
+        backend=backend, tools=["read_file"], tool_token_limit_before_evict=3000
+    )
+    graph.create_deep_agent(model=ScriptedToolModel(), backend=backend, middleware=[ours])
+
+    filesystem = [m for m in captured["middleware"] if type(m).__name__ == "FilesystemMiddleware"]
+    assert len(filesystem) == 1, (
+        f"expected 1 FilesystemMiddleware, got {len(filesystem)} — upstream stopped "
+        "replacing by name; TODO.md A1.47 reopens"
+    )
+    assert filesystem[0] is ours
+    assert filesystem[0]._tool_token_limit_before_evict == 3000
+
+
+def test_eviction_threshold_has_no_create_deep_agent_parameter():
+    """The reason a middleware instance is the route at all (A1.47)."""
+    from deepagents import create_deep_agent
+
+    names = list(inspect.signature(create_deep_agent).parameters)
+    assert not [n for n in names if "token" in n or "evict" in n]
