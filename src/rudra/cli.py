@@ -75,6 +75,9 @@ app.add_typer(skills_app, name="skills")
 mcp_app = typer.Typer(help="Configure and check MCP servers.")
 app.add_typer(mcp_app, name="mcp")
 
+memory_app = typer.Typer(help="Inspect and prune this project's long-term memory.")
+app.add_typer(memory_app, name="memory")
+
 console = Console()
 
 
@@ -1210,3 +1213,152 @@ def _print_help() -> None:
 # Entry point
 if __name__ == "__main__":
     app()
+
+
+def _memory_store(project_dir: Optional[Path]):
+    """The store for one CLI invocation, or exit 1 with the reason.
+
+    TaxonomyError is the constructor's, so it cannot degrade -- there is no
+    store yet. Everything after construction degrades on its own.
+    """
+    from rudra.memory.store import MemoryStore
+    from rudra.memory.taxonomy import TaxonomyError
+
+    project_path = get_project_path(project_dir)
+    cfg = _load_config_or_exit(project_dir)
+    try:
+        return MemoryStore(project_path, backend=cfg.memory.backend)
+    except TaxonomyError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+def _memory_table(title: str, rows) -> Table:
+    table = Table(title=title, header_style="bold")
+    for column in ("Room", "By", "Recorded", "Memory"):
+        table.add_column(column, overflow="fold")
+    for row in rows:
+        table.add_row(
+            escape(row.room),
+            escape(row.added_by),
+            escape(row.filed_at[:10]),
+            escape(row.content),
+        )
+    return table
+
+
+@memory_app.command("list")
+def memory_list(
+    room: Optional[str] = typer.Option(
+        None, "--room", help="decisions | tasks | blockers | preferences"
+    ),
+    added_by: Optional[str] = typer.Option(None, "--added-by", help="rudra | agent"),
+    limit: int = typer.Option(50, "--limit"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Show what this project has remembered."""
+    store = _memory_store(project_dir)
+    rows = store.list_entries(room=room, added_by=added_by, limit=limit)
+    if not rows:
+        console.print("Nothing recorded for this project yet.")
+        return
+    console.print(_memory_table(f"Memory — {store.wing}", rows))
+
+
+@memory_app.command("search")
+def memory_search(
+    query: str = typer.Argument(..., help="What to look for"),
+    room: Optional[str] = typer.Option(None, "--room"),
+    limit: int = typer.Option(5, "--limit"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Search this project's memory by meaning."""
+    store = _memory_store(project_dir)
+    hits = store.search(query, room=room, limit=limit)
+    if not hits:
+        console.print("Nothing recorded on this project matches that.")
+        return
+    table = Table(title=f"Memory search — {query}", header_style="bold")
+    for column in ("Room", "By", "Score", "Memory"):
+        table.add_column(column, overflow="fold")
+    for hit in hits:
+        table.add_row(
+            escape(hit.room), escape(hit.added_by), f"{hit.score:.3f}", escape(hit.content)
+        )
+    console.print(table)
+
+
+@memory_app.command("forget")
+def memory_forget(
+    room: Optional[str] = typer.Option(None, "--room"),
+    added_by: Optional[str] = typer.Option(None, "--added-by", help="rudra | agent"),
+    all_: bool = typer.Option(False, "--all", help="Every memory for this project"),
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Delete memories. Irreversible."""
+    from rudra.permissions import stdin_is_interactive
+
+    if not (all_ or room or added_by):
+        console.print("[red]Error:[/red] name what to forget — --room, --added-by, or --all.")
+        raise typer.Exit(1)
+
+    store = _memory_store(project_dir)
+    rows = store.list_entries(room=room, added_by=added_by, limit=10_000)
+    if not rows:
+        console.print("Nothing matches — nothing deleted.")
+        return
+
+    console.print(_memory_table(f"About to delete {len(rows)}", rows[:20]))
+    if len(rows) > 20:
+        console.print(f"[dim]…and {len(rows) - 20} more.[/dim]")
+
+    # Refuse rather than hang: a piped stdin cannot answer a prompt, and this
+    # deletion cannot be undone. Same rule mode="ask" follows, and the same
+    # helper -- stdin_is_interactive survives a stdin with no isatty, which
+    # is what CliRunner substitutes.
+    if not yes:
+        if not stdin_is_interactive():
+            console.print(
+                "[red]Refusing:[/red] this deletes data and stdin is not a terminal. Pass --yes."
+            )
+            raise typer.Exit(2)
+        if not typer.confirm(f"Delete {len(rows)} memories? This cannot be undone"):
+            console.print("Nothing deleted.")
+            return
+
+    console.print(f"[green]Deleted[/green] {store.delete([row.id for row in rows])} memories.")
+
+
+@memory_app.command("export")
+def memory_export(
+    out: Optional[Path] = typer.Option(None, "--out", help="Defaults to .rudra/memory/export/"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Write memory to markdown — the durable, committable copy."""
+    from rudra.memory.export import export_memory
+    from rudra.state.paths import rudra_paths
+
+    store = _memory_store(project_dir)
+    target = out or rudra_paths(get_project_path(project_dir)).memory_export
+    stats = export_memory(store, target)
+    if not stats["drawers"]:
+        console.print("Nothing recorded for this project yet — nothing exported.")
+        return
+    console.print(f"[green]Exported[/green] {stats['drawers']} memories to {target}")
+
+
+@memory_app.command("import")
+def memory_import(
+    source: Path = typer.Argument(..., help="A directory written by `rudra memory export`"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Restore memory from an exported markdown tree."""
+    from rudra.memory.export import import_memory
+
+    store = _memory_store(project_dir)
+    stats = import_memory(store, source)
+    if not stats["drawers"]:
+        console.print(f"Nothing to import from {source}.")
+        return
+    console.print(f"[green]Imported[/green] {stats['drawers']} memories from {source}")
