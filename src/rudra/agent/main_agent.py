@@ -73,6 +73,52 @@ class AgentResult:
     usage: Any = None
 
 
+class ResumeRefused(Exception):
+    """`--continue` cannot proceed, and the message says why.
+
+    Refusing beats guessing here: every failure mode is one where doing
+    the work anyway produces something the user did not ask for.
+    """
+
+
+def check_resumable(ledger_path: Path, prompt: str | None):
+    """Load the ledger a resume would work, or refuse with a reason.
+
+    Pure apart from the read, so the CLI can call it before building an
+    agent and before any model is constructed.
+    """
+    from rudra.loop.ledger import Ledger
+
+    if not ledger_path.exists():
+        raise ResumeRefused("no previous run to continue — .rudra/run/ledger.json does not exist.")
+
+    ledger = Ledger.load(ledger_path)
+
+    if prompt and ledger.request and prompt.strip() != ledger.request.strip():
+        raise ResumeRefused(
+            "that is a different request from the one this plan was built for.\n"
+            f"  planned for: {ledger.request}\n"
+            f"  you asked:   {prompt}\n"
+            "Run it without --continue to plan afresh, or drop the prompt to "
+            "continue the original."
+        )
+
+    if not ledger.resumable():
+        counts = ledger.counts()
+        if counts["blocked"]:
+            raise ResumeRefused(
+                f"nothing pending — {counts['done']} done, {counts['blocked']} blocked. "
+                "A blocked task failed the same way twice, so continuing would "
+                "repeat it; change the request instead."
+            )
+        raise ResumeRefused(
+            f"nothing pending — {counts['done']} of {counts['requested']} task(s) "
+            "finished. There is nothing left to continue."
+        )
+
+    return ledger
+
+
 class RudraAgent:
     """Owns one run's setup and hands the work to the loop (Step 9c).
 
@@ -94,6 +140,7 @@ class RudraAgent:
         gate=None,
         facts=None,
         approve=None,
+        resume: bool = False,
     ):
         self.context = context
         self.planner_agent = planner_agent
@@ -115,6 +162,8 @@ class RudraAgent:
         # auto-approve, so every existing caller and every test runs
         # without a prompt (S10c.3).
         self._approve = approve or auto_approve
+        # A resume works the ledger already on disk and never plans (C7.2).
+        self.resume = resume
         self.iterations = 0
 
     async def close(self) -> None:
@@ -203,6 +252,25 @@ class RudraAgent:
             )
 
             self._log_always("\n[bold]Agent Live Trace[/bold]", "cyan")
+
+            if self.resume:
+                # plan() saves an empty ledger at engine.py:420, so resuming
+                # must skip it entirely rather than filter afterwards.
+                counts = self._ledger.counts()
+                self._log_always(
+                    f"[dim]Resuming: {counts['done']} done · "
+                    f"{len(self._ledger.resumable())} pending · "
+                    f"{counts['blocked']} blocked[/dim]"
+                )
+                decision = await self._settle_plan(self._ledger)
+                if decision is not PlanDecision.APPROVE:
+                    return self._plan_only_result(self._ledger, decision)
+                return await work(
+                    self.context.task,
+                    context=self._loop_context,
+                    planner=self._planner_callback,
+                    ledger=self._ledger,
+                )
 
             ledger = await plan(
                 self.context.task,
@@ -413,6 +481,7 @@ async def create_main_agent(
     console: Optional[Console] = None,
     dry_run: bool = False,
     verbose: bool = False,
+    resume: bool = False,
     **kwargs,
 ) -> RudraAgent:
     """Factory function — creates the planner + stores coder config for orchestration."""
@@ -531,7 +600,12 @@ async def create_main_agent(
 
     # One Ledger, shared by reference: the planner's tools mutate it and the
     # loop reads it back. Two objects would leave the loop with no tasks.
-    ledger = Ledger()
+    #
+    # A resume loads what the last run left (C7.2). The CLI has already
+    # called check_resumable, so this file exists and has pending work --
+    # loading again here rather than passing the object in keeps
+    # create_main_agent constructible without one.
+    ledger = Ledger.load(paths.ledger_json) if resume else Ledger()
     # One agent per stage (S10b.1). Construction is cheap -- build_model
     # makes no network call (llm/factory.py:64-68) and create_deep_agent
     # only compiles a graph -- and building all three up front keeps the
@@ -593,4 +667,5 @@ async def create_main_agent(
         # Only prompt when a human can answer. `interactive` is the same
         # flag that decides whether ask_user is registered (S10a.5).
         approve=ask_approval if interactive else auto_approve,
+        resume=resume,
     )

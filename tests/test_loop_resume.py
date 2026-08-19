@@ -96,3 +96,90 @@ def test_attempts_survive_the_seam(tmp_path):
     ledger.save(path, request="r")
 
     assert Ledger.load(path).tasks[0].attempts == 2
+
+
+def test_a_resume_with_a_different_request_is_refused(tmp_path):
+    """Working an old plan against a new intent is worse than refusing."""
+    import pytest
+
+    from rudra.agent.main_agent import ResumeRefused, check_resumable
+
+    path = tmp_path / "ledger.json"
+    ledger = Ledger()
+    ledger.add("write the parser")
+    ledger.save(path, request="build a JSON parser")
+
+    with pytest.raises(ResumeRefused) as caught:
+        check_resumable(path, "build a YAML parser")
+
+    assert "different request" in str(caught.value)
+
+
+def test_a_resume_with_no_prompt_reuses_the_recorded_request(tmp_path):
+    """`rudra --continue` alone is the normal form."""
+    from rudra.agent.main_agent import check_resumable
+
+    path = tmp_path / "ledger.json"
+    ledger = Ledger()
+    ledger.add("write the parser")
+    ledger.save(path, request="build a JSON parser")
+
+    loaded = check_resumable(path, None)
+    assert loaded.request == "build a JSON parser"
+
+
+def test_a_resume_with_the_same_request_is_allowed(tmp_path):
+    from rudra.agent.main_agent import check_resumable
+
+    path = tmp_path / "ledger.json"
+    ledger = Ledger()
+    ledger.add("write the parser")
+    ledger.save(path, request="build a JSON parser")
+
+    assert check_resumable(path, "build a JSON parser").request == "build a JSON parser"
+
+
+def test_a_resume_with_no_ledger_on_disk_is_refused(tmp_path):
+    import pytest
+
+    from rudra.agent.main_agent import ResumeRefused, check_resumable
+
+    with pytest.raises(ResumeRefused) as caught:
+        check_resumable(tmp_path / "nothing.json", None)
+
+    assert "no previous run" in str(caught.value)
+
+
+def test_a_resume_with_nothing_pending_is_refused(tmp_path):
+    import pytest
+
+    from rudra.agent.main_agent import ResumeRefused, check_resumable
+
+    path = tmp_path / "ledger.json"
+    ledger = Ledger()
+    task = ledger.add("done already")
+    task.status = TaskStatus.DONE
+    ledger.save(path, request="r")
+
+    with pytest.raises(ResumeRefused) as caught:
+        check_resumable(path, None)
+
+    assert "nothing pending" in str(caught.value)
+
+
+def test_a_resume_with_only_blocked_tasks_says_so(tmp_path):
+    """The message must not read as "nothing to do" when work was blocked."""
+    import pytest
+
+    from rudra.agent.main_agent import ResumeRefused, check_resumable
+
+    path = tmp_path / "ledger.json"
+    ledger = Ledger()
+    task = ledger.add("gave up")
+    task.status = TaskStatus.BLOCKED
+    ledger.save(path, request="r")
+
+    with pytest.raises(ResumeRefused) as caught:
+        check_resumable(path, None)
+
+    assert "blocked" in str(caught.value)
