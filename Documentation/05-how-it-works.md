@@ -166,13 +166,17 @@ Rudra keeps its state inside your project:
 
 | File | Written by | Purpose |
 |---|---|---|
-| `run/ledger.json` | planner + Rudra | The tasks, their status, and why anything stopped |
+| `run/ledger.json` | planner + Rudra | The tasks, their status, and why anything stopped. **`rudra --continue` reads this** |
 | `run/logs/verify.log` | Rudra | The gate's full output from the last check |
-| `AGENTS.md` | Rudra | Project notes fed into the planner's prompt |
+| `run/logs/usage.json` | Rudra | What the last run cost, per role |
+| `AGENTS.md` | Rudra | Project notes fed into the planner's prompt — a line per completed task, plus an architecture summary rewritten each run |
 | `facts.json` | planner | What this project's agents established, and why |
-| `checkpoints.db` | LangGraph | Conversation checkpoints |
+| `checkpoints.db` | LangGraph | Conversation checkpoints. Written, but never replayed — see [Context and Memory](13-context-and-memory.md) |
 
-Deleting the folder is safe — Rudra recreates what it needs. The ledger is per-run and never resumed, so a new run starts from a clean list either way.
+Deleting the folder is safe — Rudra recreates what it needs. You do lose the two
+things that carry forward: the facts it established about your project, and the
+notes in `AGENTS.md`. You also lose the task list, so a run interrupted before
+you delete it can no longer be continued.
 
 **Committing it is your call.** Rudra never touches your `.gitignore`. Add `.rudra/` if you'd rather keep it local.
 

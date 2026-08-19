@@ -48,8 +48,14 @@ temperature = 0.3
 # The NAME of an environment variable holding your key — never the key itself.
 # api_key_env = "OPENROUTER_API_KEY"
 
-# Your model's real context window. Without it, history compaction never
-# triggers on local models, and Ollama silently truncates at 4096.
+# Your model's real context window. Rudra uses it for two things: it
+# summarises the conversation at 85% of it, and offloads any single tool
+# result bigger than 10% of it. Without it both fall back to defaults built
+# for very large hosted models, so on a 32k model summarisation never fires
+# at all and one pytest transcript can eat a third of the window. Ollama
+# also silently truncates at 4096 without it.
+# `rudra doctor` tells you which roles are missing it.
+# See Documentation/13-context-and-memory.md.
 # context_tokens = 32768
 
 [model.planner]

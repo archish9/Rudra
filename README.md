@@ -14,7 +14,7 @@ Point it at **any model you like** — a local Ollama model on your own machine,
 
 > ### 🚧 Early days — please read
 >
-> Rudra is **alpha software under active development**. It asks what it cannot infer, decides how the work should be built, shows you the plan, and only then writes anything. A task is done when a deterministic gate passes it: the code parses, type checks, its tests run, and no placeholders are left behind. If the gate fails, Rudra feeds the exact errors back and tries again, and stops rather than looping when two attempts fail identically. What it does **not** do yet is resume an interrupted run or retry a flaky provider. Review everything it produces.
+> Rudra is **alpha software under active development**. It asks what it cannot infer, decides how the work should be built, shows you the plan, and only then writes anything. A task is done when a deterministic gate passes it: the code parses, type checks, its tests run, and no placeholders are left behind. If the gate fails, Rudra feeds the exact errors back and tries again, and stops rather than looping when two attempts fail identically. A transient provider error is retried with backoff, and if a run dies anyway, `rudra --continue` picks up the tasks it hadn't reached. Review everything it produces.
 >
 > **It asks twice: once about the plan, then about every file.** You approve the task list before any code is written, and by default each write, edit, delete and command stops for approval with a diff. `--auto` skips both for unattended runs; `--plan` stops after showing you the plan.
 >
@@ -236,22 +236,86 @@ auto_branch = true      # each run gets rudra/<slug>
 
 Only fires from a clean tree with a branch checked out; otherwise it says why and carries on where you are, without failing the run.
 
+### If a run stops early
+
+Runs die: a provider rate-limits you, a connection drops, you hit Ctrl-C. The
+work already on disk stays, and so does the task list.
+
+```bash
+rudra --continue
+```
+
+That picks up the tasks Rudra never reached — no re-planning, no re-asking, no
+replaying the old conversation. It reuses the request from last time, so you
+don't retype it, shows you what's left, and waits for the same approval a fresh
+plan gets.
+
+```
+Resuming: 4 done · 3 pending · 0 blocked
+```
+
+Two things it deliberately won't do. Give it a **different** request and it
+refuses rather than working an old plan against a new intention:
+
+```
+Cannot continue: that is a different request from the one this plan was built for.
+  planned for: build a small JSON config loader with tests
+  you asked:   build a YAML parser instead
+```
+
+And it won't retry a **blocked** task — one that failed the same way twice
+already. Repeating it would just spend your tokens reaching the same place, so
+those are listed and left alone; change the request instead.
+
+`--resume` is the same flag under a different name.
+
+### What a run cost you
+
+Every run reports its own token usage, per role:
+
+```
+✅ Complete
+Files created:  3
+Files modified: 1
+Tokens: planner  41,204 in / 3,118 out   (7 calls)
+        coder    88,930 in / 12,455 out  (19 calls, 2 compactions)
+        tester   14,002 in /  1,203 out  (4 calls)
+```
+
+The same numbers land in `.rudra/run/logs/usage.json` if you want to track them
+over time. If your provider doesn't report usage — some local endpoints don't —
+you'll see `not reported` rather than a `0`, because a zero would look like a
+free run.
+
+*Compactions* are the coder or tester deciding its own context is getting long
+and summarising it mid-task, so a long fix loop doesn't run out of room.
+
 ### What Rudra leaves in your project
 
 ```
 .rudra/
   config.toml     your settings                     ← worth committing
   facts.json      what Rudra established, and why   ← worth committing
-  AGENTS.md       project notes                     ← worth committing
+  AGENTS.md       project notes, updated as it works ← worth committing
   run/            ledger.json, checkpoints, artifacts,
                   logs/permissions.jsonl,
-                  logs/tests.log                      (regenerated every run)
+                  logs/tests.log,
+                  logs/usage.json                     (regenerated every run)
 ```
 
-`facts.json` is the durable one worth knowing about: it holds what Rudra
-established about your project and *why* it believes each thing — so the next
-run starts knowing your stack instead of asking again, and you can correct a
-wrong assumption by editing one line.
+Two of those are worth knowing about:
+
+**`facts.json`** holds what Rudra established about your project and *why* it
+believes each thing — so the next run starts knowing your stack instead of
+asking again, and you can correct a wrong assumption by editing one line.
+
+**`AGENTS.md`** is the project's running notebook. Every completed task adds a
+line naming what was done and which files changed (taken from git, not from the
+model), and at the end of each run Rudra rewrites the *Architecture Notes*
+section into a short description of how the project is built. The planner reads
+it at the start of every run, so it is how yesterday's decisions reach
+tomorrow's. The log keeps the most recent 20 entries — it is re-read on every
+planner call, so it is not allowed to grow forever.
 
 Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committing `.rudra/` is safe by default. It never touches your project's own `.gitignore` — whether you commit any of it is your call.
 
@@ -310,8 +374,9 @@ Details, the full skill list, and what Rudra adapts: **[Skills](Documentation/12
 | **[10. Verification](Documentation/10-verification.md)** | `rudra verify`: the gate that decides a task is done, and how to run it yourself |
 | **[11. Tools](Documentation/11-tools.md)** | Every tool the agent can call — what each does, examples, and which subagent gets it |
 | **[12. Skills](Documentation/12-skills.md)** | The vendored superpowers library: what ships, why it's frozen, what Rudra adapts |
+| **[13. Context and Memory](Documentation/13-context-and-memory.md)** | The one setting that matters (`context_tokens`), what a run costs, and what Rudra remembers between runs |
 
-New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**.
+New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**. If the agent seems to lose track of what it was doing, read **[Context and Memory](Documentation/13-context-and-memory.md)** — it is almost always one unset setting.
 
 ---
 

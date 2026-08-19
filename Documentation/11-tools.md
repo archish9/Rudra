@@ -223,7 +223,7 @@ The reviewer cannot edit your code because the write tools are never registered 
 
 ## Rudra's bookkeeping
 
-These four never touch your project — they write to `.rudra/` — and are never gated.
+These never touch your project — they write to `.rudra/`, or to the agent's own context — and are never gated.
 
 ### `record_fact`
 
@@ -302,6 +302,33 @@ That is deliberate and it is the load-bearing design decision of Rudra's loop. T
 
 The ledger tools cannot express `DONE`, so an over-eager model cannot declare victory. It is not a prompt asking nicely.
 
+### `compact_conversation`
+
+Summarises the agent's own conversation so far and offloads the detail, freeing
+room in the context window.
+
+```
+compact_conversation()
+```
+
+**Only the coder and tester get it.** They are the agents that retry, re-read
+failing test output, and can run long enough to fill a window; the planner
+stages are short and the reviewer runs once.
+
+It is never gated — it writes no file and runs no command, and a prompt asking
+you to approve an agent tidying its own notes is a prompt with no decision in
+it. A call shows up in your run's usage summary as a *compaction*.
+
+You will rarely see it fire. Rudra also compacts automatically at 85% of the
+window, and the tool refuses to run below roughly half that threshold, so an
+eager model cannot compact a nearly-empty conversation.
+
+> This is separate from Rudra's other context defence: any single tool result
+> larger than a tenth of your window is written to `.rudra/run/artifacts/`
+> and replaced with a preview plus a pointer, so one enormous `pytest`
+> transcript cannot swallow the conversation. Both thresholds come from
+> `context_tokens` — see [Context and Memory](13-context-and-memory.md).
+
 ---
 
 ## Which agent gets which tool
@@ -316,6 +343,7 @@ The ledger tools cannot express `DONE`, so an over-eager model cannot declare vi
 | `ask_user` | ✅ | — | — | — | — | — | — |
 | `record_fact` | ✅ | ✅ | — | — | — | — | — |
 | `add_tasks` `drop_task` | — | — | ✅ | — | — | — | — |
+| `compact_conversation` | — | — | — | ✅ | ✅ | — | — |
 
 Read the planner columns left to right and the three-stage plan falls out of the tool grants alone: **clarify** can ask and record but cannot declare work; **architect** can record but not ask, because re-interrogating you mid-plan is what the staging exists to prevent; **breakdown** can only add tasks, and by then the facts are settled.
 

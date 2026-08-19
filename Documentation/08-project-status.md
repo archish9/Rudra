@@ -72,15 +72,31 @@ Each stage is a separate agent with its own tools, so a stage cannot do another 
 
 Ordered roughly by how much you'll miss them.
 
-### The run can't resume
+### Resuming works, but only for the task list
 
-Each run starts a fresh task ledger. If a run stops early — a denied command, a dropped connection — the work already on disk stays, but there is no `--continue` to pick up the remaining tasks. Re-run and the planner starts over.
+`rudra --continue` picks up the tasks a stopped run never reached, without
+re-planning or retyping the request. What it does *not* restore is the
+conversation: the previous transcript is gone, so the coder starts a task with
+the project on disk and the recorded facts, not with everything the last run
+had discussed. That is deliberate — replaying transcripts would crowd out the
+context window — but it means a task whose reasoning lived only in that
+conversation may need re-explaining.
+
+Blocked tasks are not retried, by design. If a run ended with everything
+blocked, `--continue` refuses and tells you to change the request instead.
 
 **One consequence to know now:** the gate's lint, typecheck and test stages are shell commands underneath and are gated like them, so **`--auto` on its own verifies nothing** — the gate escalates and the run stops on the first task. Pair it with `--allow-shell`. See [Permissions](09-permissions.md).
 
-### A failed model call is not retried
+### A mid-stream provider failure still ends the run
 
-There is no backoff around model invocation. A rate limit or a dropped connection stops the run where it is. Tasks already marked `done` genuinely passed the gate; the rest are reported as never attempted.
+Transient failures — `429`, `5xx`, dropped connections, timeouts — are retried
+three times with backoff, which absorbs most of what free hosted tiers throw at
+you. The gap is timing: retry only happens while nothing has been streamed back
+yet. Once the model has begun answering, retrying would re-emit the whole turn,
+so that failure ends the run.
+
+Tasks already marked `done` genuinely passed the gate, and `rudra --continue`
+works the rest, so this costs you a command rather than the run.
 
 ### Overlapping tasks can block work that is already done
 
@@ -95,13 +111,20 @@ In `ask` mode you can see the overlap in the plan and revise it away before it
 costs you anything. Under `--auto` you cannot, and re-running usually produces a
 cleaner breakdown.
 
-### Little memory between runs
+### Memory between runs is real, but narrow
 
-Each invocation starts fresh apart from what's on disk. Project facts do
-persist — `.rudra/facts.json` is durable, so a stack established last week is
-still known — but conversations, plans and progress are not: the ledger is
-per-run and checkpoints are never resumed (`C7.2`), and `AGENTS.md` is written
-once and never updated (`A1.9`, `C7.3`).
+What persists on disk: **`.rudra/facts.json`**, so a stack established last week
+is still known; **`.rudra/AGENTS.md`**, which now gains a line per completed
+task and a rewritten architecture summary at the end of each run; and the
+**task ledger**, which `rudra --continue` reads.
+
+What does not persist is the **conversation**. Checkpoints are written but never
+replayed, on purpose — a stable per-project thread would have every run inherit
+every earlier run's history. So Rudra remembers *what your project is and what
+was done to it*, not *what it was thinking at the time*.
+
+The `AGENTS.md` session log keeps its most recent 20 entries. It is re-read on
+every planner call, so an unbounded one would be a tax that grows forever.
 
 ### No MCP, no plugins
 
@@ -121,10 +144,10 @@ Things that work, but not the way you'd hope.
 
 | Issue | What happens | Workaround |
 |---|---|---|
-| **A failed model call ends everything** | Rate limit or dropped connection stops the run, even if earlier tasks finished | Check `.rudra/run/ledger.json` — tasks marked `done` genuinely passed the gate. Re-run to continue |
+| **A mid-stream model failure ends the run** | Transient errors are retried three times with backoff, but only before the model starts answering; after that the run stops | Check `.rudra/run/ledger.json` — tasks marked `done` genuinely passed the gate — then `rudra --continue` |
 | **`--dry-run` does nothing** | Exits immediately with no plan and no preview | Use `--plan`, which really does write a plan and touch nothing else |
-| **Ollama truncates silently** | Default 4096-token window, no warning, and the agent forgets its plan | Set `RUDRA_CONTEXT_TOKENS` |
-| **Free hosted models are unreliable** | `429` daily caps and transient `502`s mid-run | Retry, or use a paid or local model |
+| **Ollama truncates silently** | Default 4096-token window, no warning, and the agent forgets its plan | Set `context_tokens` for the role. `rudra doctor` warns when it is missing |
+| **Free hosted models are unreliable** | `429` daily caps and transient `502`s mid-run | Rudra retries these automatically; if one lands mid-answer, `rudra --continue`. Or use a paid or local model |
 | **Review is advisory only** | The reviewer runs once at the end and prints its findings; nothing gates on them, by design — an LLM verdict doesn't decide completion here | Read the findings yourself. The deterministic gate is what blocks |
 | **A stray task can block a working feature** | Two plan tasks covering one edit: the coder finishes both under the first, the second changes nothing, and an empty diff counts as a failed attempt | Revise the plan when you see the overlap. Under `--auto`, re-run — the breakdown is usually cleaner |
 
@@ -183,13 +206,13 @@ Built in order, because each depends on the last.
 **Not yet**
 
 - Anything where generated code might go unreviewed
-- Long runs you can't afford to restart — an interruption loses the ledger
+- Long runs where losing the *conversation* matters — `--continue` restores the task list, not the reasoning
 - Unattended runs with `--allow-shell` against anything you care about
 - Machines with no model available and no budget for one
 
 The honest summary: Rudra now closes its own loop. It plans, asks, writes, verifies against a deterministic gate, and repairs what the gate rejects — stopping rather than thrashing when two attempts fail the same way. The foundation is provider-agnostic and the safety model is real, if not sandboxed.
 
-What it is not is durable. A dropped connection or a denied command ends the run, and there is no `--continue`; the completed work stays on disk and the rest is reported as never attempted. It also ships a methodology library it cannot yet read. Treat its output as a reviewed first draft from a fast junior developer who runs the tests, fixes what they can, and tells you plainly which tasks they gave up on.
+It is durable in the way that matters and not in the way it doesn't. A dropped connection is retried, and if a run dies anyway the completed work stays on disk and `rudra --continue` takes the rest. What is *not* carried over is the conversation, deliberately. The vendored methodology library is wired in and the agents read from it. Treat its output as a reviewed first draft from a fast junior developer who runs the tests, fixes what they can, and tells you plainly which tasks they gave up on.
 
 ---
 

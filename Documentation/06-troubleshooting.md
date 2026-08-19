@@ -320,7 +320,7 @@ Confirm it took effect in the `Ctx` column of `rudra models test`.
 
 ### A traceback appears and Rudra exits, but files were written
 
-A model call failed partway through — rate limit, dropped connection, upstream error. Rudra has no retry yet, so any such error ends the run and exits `1` even though earlier work succeeded.
+A model call failed and could not be recovered — rate limit, dropped connection, upstream error. Rudra retries transient failures three times with backoff, but only while nothing has been streamed back yet; once the model has started answering, a retry would re-emit the whole turn, so the run ends there and exits `1` even though earlier work succeeded.
 
 Check before assuming nothing happened:
 
@@ -329,9 +329,15 @@ cat .rudra/run/ledger.json  # tasks marked done genuinely passed the gate
 ls
 ```
 
-Re-running does **not** continue where it stopped. The ledger is per-run and
-never resumed (C6.10), so a second run re-plans from your request; `--continue`
-is still to come (C7.2). Say what is already done if it matters.
+Then pick up where it stopped:
+
+```bash
+rudra --continue
+```
+
+That works the remaining tasks without re-planning and without retyping the
+request. Running it *without* `--continue` starts a fresh plan instead, which is
+what you want if the request itself has changed.
 
 ### The summary says every task is done, but a file I asked for is missing
 

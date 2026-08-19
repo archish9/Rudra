@@ -223,6 +223,7 @@ per-stack install matrix.
 | `--auto` / `--yolo` | | Approve every file operation without prompting |
 | `--allow-shell` | | Let `--auto` run commands too. Off by default |
 | `--plan` | | Show the plan — the facts Rudra established and the tasks it declared — then stop. Writes nothing, runs nothing |
+| `--continue` / `--resume` | | Work the remaining tasks from the last run instead of planning afresh |
 | `--help` | | Show help |
 
 ```bash
@@ -238,6 +239,65 @@ rudra "refactor the parser" --verbose
 
 > **The default mode needs a terminal.** `mode = "ask"` prompts before each write, so piped or redirected stdin exits `2` immediately rather than hanging. Use `--auto` for scripts.
 
+### `--continue`
+
+```bash
+rudra --continue
+```
+
+Picks up where the last run in this directory stopped. It reads
+`.rudra/run/ledger.json`, skips planning entirely, and hands the remaining
+tasks straight to the coder — no clarifying questions, no re-architecting, no
+replay of the previous conversation.
+
+```
+Resuming: 4 done · 3 pending · 0 blocked
+```
+
+**You don't need to retype the request.** The ledger records what it was
+planned for, and `--continue` on its own reuses it.
+
+**What resumes and what doesn't:**
+
+| Task state | On `--continue` |
+|---|---|
+| `pending` | Worked. This is the point of the flag |
+| `in_progress` | Not resumed — the process died mid-task, and the coder's partial work is already on disk for the next attempt to see |
+| `blocked` | Not retried. It failed the same way twice already, so repeating it spends tokens to reach the same place |
+| `done` · `dropped` | Finished. Left alone |
+
+Attempt counts carry across, so `[agent] max_fix_attempts` still means what it
+says either side of the interruption.
+
+**It refuses rather than guessing.** Four cases, each exiting `2` with a
+sentence:
+
+```
+Cannot continue: no previous run to continue — .rudra/run/ledger.json does not exist.
+
+Cannot continue: that is a different request from the one this plan was built for.
+  planned for: build a small JSON config loader with tests
+  you asked:   build a YAML parser instead
+  Run it without --continue to plan afresh, or drop the prompt to continue the original.
+
+Cannot continue: nothing pending — 7 of 7 task(s) finished. There is nothing left to continue.
+
+Cannot continue: nothing pending — 3 done, 2 blocked. A blocked task failed the
+same way twice, so continuing would repeat it; change the request instead.
+```
+
+Every one of those lands *before* Rudra builds an agent or reads your API key,
+so a mistaken `--continue` costs nothing.
+
+`--resume` is an alias. There is only one thing to resume, so there is only one
+behaviour behind both spellings.
+
+> **What is resumed is the task list, not the conversation.** Rudra deliberately
+> does not replay the previous transcript: a stable per-project thread would
+> make every run inherit every earlier run's history and steadily crowd out the
+> context window. What an interruption actually costs you is finished work, and
+> the ledger is the record of that.
+
 > **`--dry-run` does not preview anything.** It exits immediately, reporting `Dry run completed (no files written)`, without planning or writing. It is a placeholder. Don't rely on it to inspect what Rudra *would* do.
 
 ---
@@ -248,9 +308,9 @@ rudra "refactor the parser" --verbose
 |---|---|
 | `0` | Success |
 | `1` | Something failed |
-| `2` | `mode = "ask"` was set but stdin is not a terminal — nothing ran. For `rudra verify`, also a denied command, a missing tool, or an internal error |
+| `2` | `mode = "ask"` was set but stdin is not a terminal — nothing ran. Also a `--continue` that cannot proceed. For `rudra verify`, also a denied command, a missing tool, or an internal error |
 
-Be aware of one rough edge: if a model call fails partway through a run, Rudra exits `1` even if files were already written successfully. Check `.rudra/run/ledger.json` and your working directory before assuming nothing happened — tasks marked `done` genuinely passed the gate.
+If a model call fails and cannot be retried, Rudra exits `1` even though earlier files were written successfully. Nothing is lost: tasks marked `done` in `.rudra/run/ledger.json` genuinely passed the gate, and **`rudra --continue` works the rest**.
 
 `rudra models test` and `rudra doctor` exit `1` when a check fails, which makes them usable in a setup script.
 
