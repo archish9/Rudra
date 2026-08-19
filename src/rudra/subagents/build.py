@@ -22,6 +22,7 @@ from typing import Any
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
 
+from rudra.context.budget import evict_kwargs
 from rudra.facts import facts_block
 from rudra.llm import build_model
 from rudra.middleware import FixWriteParamsMiddleware
@@ -118,7 +119,16 @@ def _middleware_for(spec: RudraSubagent, context: Any) -> list:
 
     middleware: list[Any] = [
         FixWriteParamsMiddleware(strip_sandbox_prefixes=context.cfg.compat.sandbox_paths),
-        FilesystemMiddleware(backend=context.backend, tools=list(spec.fs_tools)),
+        FilesystemMiddleware(
+            backend=context.backend,
+            tools=list(spec.fs_tools),
+            # A1.47: without this every subagent takes deepagents' 20 000
+            # default, which is a third of a 32B window (D6) for one
+            # failing-pytest transcript. Splatted, not passed as a value:
+            # an explicit None disables eviction outright rather than
+            # restoring the default (see evict_kwargs).
+            **evict_kwargs(context.cfg, spec.role),
+        ),
     ]
     if context.gate is not None:
         # First: a denied call must be stopped before anything rewrites its

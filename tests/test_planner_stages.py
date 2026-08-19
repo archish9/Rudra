@@ -181,3 +181,38 @@ def test_an_unattended_clarify_prompt_says_nobody_can_answer(tmp_path: Path):
 def test_an_unknown_stage_prompt_raises(tmp_path: Path):
     with pytest.raises(ValueError, match="architcet"):
         _prompt(tmp_path, "architcet")
+
+
+def test_planner_middleware_carries_a_filesystem_middleware_with_a_limit():
+    """A1.47: before Step 12a the planner had none, so it took 20000."""
+    from deepagents.backends.filesystem import FilesystemBackend
+
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    backend = FilesystemBackend(root_dir="/tmp", virtual_mode=True)
+    middleware = build_planner_middleware("a task", backend=backend, evict_tokens=13107)
+
+    filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"]
+    assert len(filesystem) == 1
+    assert filesystem[0]._tool_token_limit_before_evict == 13107
+
+
+def test_planner_middleware_without_a_backend_is_unchanged():
+    """Every existing caller and test passes no backend and must still work."""
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    middleware = build_planner_middleware("a task")
+    assert [type(m).__name__ for m in middleware] == ["FixWriteParamsMiddleware"]
+
+
+def test_planner_with_no_declared_window_keeps_the_upstream_default():
+    """Same omit-vs-None hazard as the subagents (see evict_kwargs)."""
+    from deepagents.backends.filesystem import FilesystemBackend
+
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    backend = FilesystemBackend(root_dir="/tmp", virtual_mode=True)
+    middleware = build_planner_middleware("a task", backend=backend, evict_tokens=None)
+
+    filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"][0]
+    assert filesystem._tool_token_limit_before_evict == 20000

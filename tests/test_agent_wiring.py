@@ -126,16 +126,22 @@ def test_planner_passes_its_built_stack_to_create_deep_agent(monkeypatch, tmp_pa
     from rudra.agent.planner_agent import build_planner_middleware, create_planner_agent
 
     captured = _record_create_deep_agent(monkeypatch, "rudra.agent.planner_agent")
+    backend = object()
     create_planner_agent(
         task="t",
         project_path=tmp_path,
-        filesystem_backend=object(),
+        filesystem_backend=backend,
         checkpointer=None,
         console=Console(quiet=True),
     )
 
-    expected = [type(m).__name__ for m in build_planner_middleware("t")]
+    # The builder is called with the same backend the agent got: since Step
+    # 12a it emits a FilesystemMiddleware only when there is one, so an
+    # expectation built without it would compare two different stacks and
+    # pass for the wrong reason.
+    expected = [type(m).__name__ for m in build_planner_middleware("t", backend=backend)]
     assert [type(m).__name__ for m in captured["middleware"]] == expected
+    assert "FilesystemMiddleware" in expected
 
 
 def test_planner_puts_the_permission_gate_first(monkeypatch, tmp_path):

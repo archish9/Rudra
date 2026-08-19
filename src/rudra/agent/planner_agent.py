@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
+from deepagents.middleware.filesystem import FilesystemMiddleware
 from rich.console import Console
 
 from rudra.config import get_config
+from rudra.context.budget import evict_limit
 from rudra.facts import facts_block
 from rudra.filesystem import project_tree
 from rudra.llm import build_model
@@ -159,6 +161,8 @@ def build_planner_middleware(
     task: str,
     compat_task_anchor: bool = False,
     compat_sandbox_paths: bool = False,
+    backend: Any = None,
+    evict_tokens: int | None = None,
 ) -> list:
     """The planner's middleware stack, with both D4 workarounds gated.
 
@@ -169,8 +173,31 @@ def build_planner_middleware(
     TaskAnchorMiddleware is opt-in per D4 (`[compat] task_anchor`): it was
     built for qwen3:14b losing the task mid-run, and the minimum model is
     now 32B (D6).
+
+    `backend` is what makes the FilesystemMiddleware constructible here, and
+    constructing it here is the only way to set the eviction threshold:
+    create_deep_agent exposes no parameter for it and builds its own
+    instance otherwise (graph.py:820), so before Step 12a the planner took
+    the 20 000 default unconditionally (A1.47). Passing our own replaces
+    that instance by name rather than duplicating it (graph.py:215-232) --
+    asserted in tests/test_deepagents_contract.py.
+
+    No `tools=` argument: it defaults to None, meaning every tool, which is
+    exactly what the planner has today. This function changes one number.
+
+    `evict_tokens=None` **omits** the argument rather than passing None,
+    because the two differ: the constructor defaults to 20 000, but every
+    consumer guards with `if not self._tool_token_limit_before_evict`
+    (filesystem.py:2738, :3147, :3464), so an explicit None would switch
+    eviction off entirely.
+
+    `backend=None` keeps the old shape for every caller that has no backend
+    to give — the compat tests among them.
     """
     middleware: list = [FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths)]
+    if backend is not None:
+        evict = {} if evict_tokens is None else {"tool_token_limit_before_evict": evict_tokens}
+        middleware.append(FilesystemMiddleware(backend=backend, **evict))
     if compat_task_anchor:
         middleware.append(TaskAnchorMiddleware(task))
     return middleware
@@ -329,6 +356,8 @@ def create_planner_agent(
         task,
         compat_task_anchor=cfg.compat.task_anchor,
         compat_sandbox_paths=cfg.compat.sandbox_paths,
+        backend=filesystem_backend,
+        evict_tokens=evict_limit(cfg, "planner"),
     )
     if gate is not None:
         # First in the list: a denied call must be stopped before any other

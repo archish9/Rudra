@@ -35,10 +35,19 @@ class FakeTools:
 
 
 @dataclass
+class FakeModelConfig:
+    context_tokens: int | None = 131072
+
+
+@dataclass
 class FakeCfg:
     compat: FakeCompat
     tools: FakeTools
     models: dict
+
+    def model_for(self, role: str):
+        """Mirrors Config.model_for (config/loader.py:293), fallback and all."""
+        return self.models.get(role, self.models.get("default", FakeModelConfig()))
 
 
 @dataclass
@@ -83,7 +92,11 @@ def context(tmp_path):
         backend=object(),
         gate=FakeGate(middleware=FakeMiddleware(), interrupt_on={"write_file": True}),
         console=Console(quiet=True),
-        cfg=FakeCfg(compat=FakeCompat(), tools=FakeTools(), models={}),
+        cfg=FakeCfg(
+            compat=FakeCompat(),
+            tools=FakeTools(),
+            models={"default": FakeModelConfig(context_tokens=131072)},
+        ),
     )
 
 
@@ -373,3 +386,25 @@ def test_build_agent_passes_the_facts_prompt_to_create_deep_agent(context, monke
 
     assert "## PROJECT FACTS" in captured["system_prompt"]
     assert "Rust" in captured["system_prompt"]
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_carries_a_derived_evict_limit(name, context):
+    """No agent may quietly take deepagents' 20000 default (A1.47).
+
+    13107 == int(131072 * 0.10), written out so this test fails if the
+    fraction changes rather than following it.
+    """
+    middleware = _middleware_for(REGISTRY[name], context)
+    filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"]
+    assert len(filesystem) == 1, f"{name} has {len(filesystem)} FilesystemMiddleware"
+    assert filesystem[0]._tool_token_limit_before_evict == 13107, name
+
+
+def test_an_undeclared_window_leaves_the_upstream_default(context):
+    """S12.9: None must not become 0 or a guess on the way through."""
+    cfg = replace(context.cfg, models={"default": FakeModelConfig(context_tokens=None)})
+    spec = REGISTRY[sorted(REGISTRY)[0]]
+    middleware = _middleware_for(spec, replace(context, cfg=cfg))
+    filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"][0]
+    assert filesystem._tool_token_limit_before_evict == 20000
