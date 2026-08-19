@@ -358,6 +358,55 @@ Details, the full skill list, and what Rudra adapts: **[Skills](Documentation/12
 
 ---
 
+## Plugging in outside tools: MCP
+
+Rudra's own tools read files, write files, run commands and run your tests. **MCP** lets
+you add tools it doesn't ship with — a design-system checker, a database browser, your
+company's internal API — by pointing it at a program that offers them.
+
+Rudra reads **`.mcp.json`, the same file Claude Code uses**, so a server config you
+already have works here unchanged:
+
+```bash
+rudra mcp add kala -- npx -y -p kala-mcp@0.3.0 kala-mcp
+rudra mcp test
+```
+
+```
+┏━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Server ┃ Status ┃ Detail                                                     ┃
+┡━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ kala   │ ok     │ 8 tools: system_status, verify, explain, surface_brief,    │
+│        │        │ guide, inspect, critique, system_bootstrap                 │
+└────────┴────────┴────────────────────────────────────────────────────────────┘
+```
+
+Then just ask for what you want — you never name a tool yourself:
+
+```bash
+rudra "set up a design system for a calm invoicing tool, then build a settings page that follows it"
+```
+
+**Adding servers doesn't bloat the prompt.** Most clients load every tool from every
+server into the model's context, used or not. Rudra gives the model three tools instead
+— *what's available*, *how do I call this one*, *run it* — so ten servers cost the same
+as one. Tools are named `server__tool`, and a server's process starts only when it is
+actually used.
+
+**An MCP server is a separate program, so it's gated like a shell command.** By default
+you approve each call, seeing the server, the tool and its arguments. `--auto` refuses
+MCP outright unless you add `--allow-mcp`; `--plan` never calls one. Rules use the tool
+name, so `deny = ["call_mcp_tool:*__system_bootstrap"]` blocks a tool that writes while
+leaving the read-only ones available — and the reviewer subagent only ever sees the
+tools you list in `[mcp] readonly`, so it cannot change what it is reviewing.
+
+Nothing ships enabled, and with no `.mcp.json` Rudra behaves exactly as it does today.
+
+Setup, settings, a full worked example, and what to do when a server misbehaves:
+**[MCP](Documentation/14-mcp.md)**.
+
+---
+
 ## Documentation
 
 | Guide | What's inside |
@@ -375,8 +424,9 @@ Details, the full skill list, and what Rudra adapts: **[Skills](Documentation/12
 | **[11. Tools](Documentation/11-tools.md)** | Every tool the agent can call — what each does, examples, and which subagent gets it |
 | **[12. Skills](Documentation/12-skills.md)** | The vendored superpowers library: what ships, why it's frozen, what Rudra adapts |
 | **[13. Context and Memory](Documentation/13-context-and-memory.md)** | The one setting that matters (`context_tokens`), what a run costs, and what Rudra remembers between runs |
+| **[14. MCP](Documentation/14-mcp.md)** | Attach an outside tool server, control what it may do, and see a real one working |
 
-New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**. If the agent seems to lose track of what it was doing, read **[Context and Memory](Documentation/13-context-and-memory.md)** — it is almost always one unset setting.
+New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**. If the agent seems to lose track of what it was doing, read **[Context and Memory](Documentation/13-context-and-memory.md)** — it is almost always one unset setting. Want it to reach tools Rudra doesn't ship? **[MCP](Documentation/14-mcp.md)**.
 
 ---
 

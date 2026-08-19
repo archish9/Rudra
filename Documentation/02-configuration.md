@@ -220,6 +220,37 @@ and never explains why.
 
 See [Skills](12-skills.md) for what each one does and which agents get them.
 
+## The MCP section
+
+Controls outside tool servers. The servers themselves live in a separate
+`.mcp.json` — see [MCP](14-mcp.md).
+
+| Key | Means |
+|---|---|
+| `enabled` | `false` switches MCP off entirely. Default `true` |
+| `mcp_in_auto` | May an unattended run call MCP tools? Default `false` |
+| `timeout` | Seconds to wait for one MCP call. Default 60 |
+| `allow` | `server__tool` patterns an agent may see and use. Empty means all |
+| `deny` | Patterns it may not. Beats `allow` |
+| `readonly` | Which tools the reviewer subagent may see |
+| `disabled_servers` | Names from `.mcp.json` to leave unloaded |
+
+```toml
+[mcp]
+mcp_in_auto = false
+timeout     = 120
+deny        = ["*__system_bootstrap"]
+readonly    = ["kala__verify", "kala__system_status"]
+```
+
+**Why servers are in a different file.** `.mcp.json` uses Claude Code's schema
+so an existing config pastes in unchanged; putting Rudra-specific settings in
+it would break that. Policy here, servers there.
+
+**`[mcp] allow` is not a permission.** It decides what an agent can *see and
+name*. Whether a call may run is decided by `[permissions]`, always, on top of
+this.
+
 ## The agent section
 
 | Key | Means |
@@ -298,6 +329,10 @@ on. They are not compatibility shims — without them, models that wrap file
 contents in code fences write broken files.
 
 ## The `.rudra/` directory
+
+Note that `.mcp.json` sits in your **project root**, not in `.rudra/` — that is
+where every MCP client looks for it, so a config written for one tool works in
+another.
 
 ```
 .rudra/

@@ -115,7 +115,7 @@ An entry is either a bare tool name, meaning every call to it, or
 `tool:pattern`.
 
 **Tool names are the real ones:** `read_file`, `ls`, `glob`, `grep`,
-`write_file`, `edit_file`, `delete`, `execute`, `task`.
+`write_file`, `edit_file`, `delete`, `execute`, `task`, `call_mcp_tool`.
 
 **Patterns** are globs:
 
@@ -125,6 +125,11 @@ An entry is either a bare tool name, meaning every call to it, or
   that name.
 - For `execute`, the pattern matches the command string. A command is not a
   path, so `execute:pytest*` does match `pytest -q tests/x`.
+- For `call_mcp_tool`, the pattern matches the MCP tool's id — `server__tool`,
+  from your `.mcp.json`. So `deny = ["call_mcp_tool:*__system_bootstrap"]`
+  blocks that tool on every server, and
+  `allow = ["call_mcp_tool:kala__*"]` permits one server's whole tool set.
+  Like a command, an id is not a path and is never resolved as one.
 
 Paths are resolved before matching, so `src/../.env` is recognised as `.env`.
 
@@ -228,6 +233,53 @@ because you named it.
 
 `ask` mode is unaffected by any of this. You read each command before it
 runs.
+
+### MCP servers work the same way
+
+If you have configured an [MCP server](14-mcp.md), the agent can call its tools —
+and an MCP server is a separate program Rudra does not confine, exactly like a
+shell command. So it gets its own opt-in:
+
+```bash
+rudra --auto --allow-mcp "check this page against our design system"
+```
+
+```toml
+[mcp]
+mcp_in_auto = true      # the same thing, persisted
+```
+
+Without it, an unattended run refuses MCP calls and tells the model why, rather
+than failing the run. In `ask` mode you approve each call, seeing the server, the
+tool and the arguments:
+
+```
+╭─ approval required ────────────────────────────────╮
+│ MCP  kala → system_bootstrap                       │
+╰────────────────────────────────────────────────────╯
+  {
+    "dir": "/home/you/project",
+    "brief": "a calm invoicing tool",
+    "choice": 1
+  }
+```
+
+Naming one tool counts as opting in for that tool, the same way naming a command
+does:
+
+```toml
+[permissions]
+allow = ["call_mcp_tool:kala__system_status"]   # this one, even unattended
+deny  = ["call_mcp_tool:*__system_bootstrap"]   # this one, never
+```
+
+Looking up what a server offers — `list_mcp_tools`, `describe_mcp_tool` — is never
+gated. Those read a server's description of itself and change nothing.
+
+There is a second, narrower control in `[mcp]`: `allow`, `deny` and `readonly` there
+decide which tools an agent can *see at all*. That is how the reviewer is kept to
+read-only MCP tools. It never grants permission — the rules on this page still
+decide every call.
 
 ---
 

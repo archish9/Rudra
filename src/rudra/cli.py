@@ -797,7 +797,8 @@ def mcp_list(
 
     if not entries:
         console.print(f"No MCP servers configured ({path} is absent or empty).")
-        console.print("Add one with `rudra mcp add <name> -- <command> [args...]`.")
+        # Escaped: Rich reads [args...] as a markup tag and eats it.
+        console.print(escape("Add one with `rudra mcp add <name> -- <command> [args...]`."))
         return
 
     table = Table(title="MCP servers", header_style="bold")

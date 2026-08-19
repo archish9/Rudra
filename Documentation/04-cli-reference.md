@@ -222,6 +222,7 @@ per-stack install matrix.
 | `--dry-run` | | **Not functional yet** — see below. Use `--plan` |
 | `--auto` / `--yolo` | | Approve every file operation without prompting |
 | `--allow-shell` | | Let `--auto` run commands too. Off by default |
+| `--allow-mcp` | | Let `--auto` call MCP tools too. Off by default |
 | `--plan` | | Show the plan — the facts Rudra established and the tasks it declared — then stop. Writes nothing, runs nothing |
 | `--continue` / `--resume` | | Work the remaining tasks from the last run instead of planning afresh |
 | `--help` | | Show help |
@@ -236,6 +237,8 @@ rudra "refactor the parser" --verbose
 > **`--auto` skips the approval prompts; `--allow-shell` is separate on purpose.** File operations are confined to your project whatever the model asks; a shell command is not. In an unattended run nobody reads the command first, so commands stay off until you say otherwise. See [Permissions](09-permissions.md#running-unattended).
 >
 > **This also means `--auto` alone runs no tests.** Rudra's `run_tests` is a shell command underneath and is gated the same way, so an unattended run without `--allow-shell` writes code it cannot check. Pair the flags when you want it to verify its own work.
+
+> **`--allow-mcp` is the same idea for MCP servers.** An MCP server is a separate program Rudra does not confine, so unattended runs refuse MCP calls until you opt in — with the flag, or `[mcp] mcp_in_auto = true`. Naming one tool in `[permissions] allow` (`call_mcp_tool:kala__system_status`) is also consent, for that tool only. See [MCP](14-mcp.md#5-controlling-what-a-server-may-do).
 
 > **The default mode needs a terminal.** `mode = "ask"` prompts before each write, so piped or redirected stdin exits `2` immediately rather than hanging. Use `--auto` for scripts.
 
@@ -334,6 +337,37 @@ command, a typo means a skill that never loads and never explains itself.
 
 `list` marks a skill `invalid` rather than claiming it is in the prompt, and
 marks `shadowed by project` when a project skill overrides a bundled one.
+
+---
+
+## `rudra mcp`
+
+Attach outside tool servers. See [MCP](14-mcp.md) for what they are and how to use one.
+
+```bash
+rudra mcp add kala -- npx -y -p kala-mcp@0.3.0 kala-mcp   # a local program
+rudra mcp add api --url https://mcp.example.com/mcp       # a hosted one
+rudra mcp list                                            # what's configured
+rudra mcp test                                            # start each one, list its tools
+rudra mcp remove kala
+```
+
+Everything after `--` in `add` is the command that starts the server. The name you give
+(`kala`) becomes the prefix on that server's tools: `kala__verify`.
+
+`add` and `remove` edit `.mcp.json` in your project root — the same schema Claude Code
+uses, so an existing config pastes in unchanged. Edit it by hand if you prefer.
+
+`test` actually starts each server and asks what it offers:
+
+```
+│ kala   │ ok     │ 8 tools: system_status, verify, explain, …  │
+│ ghost  │ fail   │ FileNotFoundError: 'ghost-server'           │
+```
+
+It exits **1** if any server fails, so it works in a setup script. `rudra doctor` reports
+the same servers without starting them — it only checks that each command exists on
+`PATH`.
 
 ---
 

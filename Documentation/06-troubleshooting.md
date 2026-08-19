@@ -212,11 +212,98 @@ Every denial is logged with the rule that fired:
 grep '"decision":"deny"' .rudra/run/logs/permissions.jsonl
 ```
 
-`source` tells you where it came from — `floor` for the built-in rules, `deny` for one of yours, `auto-shell` for the unattended-command rule, `mode-default` for plan mode.
+`source` tells you where it came from — `floor` for the built-in rules, `deny` for one of yours, `auto-shell` for the unattended-command rule, `auto-mcp` for the unattended-MCP one, `mode-default` for plan mode.
 
 ### `floor_disable` won't accept `outside-root`
 
 That is deliberate. Writes are confined to your project by the file-access layer, not by that rule, so switching it off would change nothing and quietly redirect the write back inside your project. Rejecting the setting is more honest than accepting one that does nothing. `git-dir` and `catastrophic-command` can be disabled.
+
+---
+
+## MCP problems
+
+All of these assume you have configured a server — see [MCP](14-mcp.md). With no
+`.mcp.json`, none of this applies and Rudra behaves as it always has.
+
+### `No MCP servers configured`
+
+There is no `.mcp.json` in your project root, or its `mcpServers` object is empty.
+
+```bash
+rudra mcp add kala -- npx -y -p kala-mcp@0.3.0 kala-mcp
+rudra mcp list
+```
+
+Note the file lives in the **project root**, not in `.rudra/`.
+
+### `rudra mcp test` says `fail` / `FileNotFoundError`
+
+The program that starts the server isn't installed, or isn't on your `PATH`. The
+detail column names it:
+
+```
+│ kala │ fail │ FileNotFoundError: ... 'npx'
+```
+
+Install it — for anything `npx`-based that means Node 20 or newer — then re-run
+`rudra mcp test`. `rudra doctor` reports the same thing without starting anything:
+
+```
+│ mcp: kala │ missing │ 'npx' is not on PATH │
+```
+
+### `Permission denied: MCP tools are disabled in unattended ('auto') mode`
+
+Expected. An MCP server is a separate program Rudra does not confine, so `--auto`
+refuses MCP until you opt in:
+
+```bash
+rudra --auto --allow-mcp "..."
+```
+
+Or persist it with `[mcp] mcp_in_auto = true`, or allow one specific tool with
+`[permissions] allow = ["call_mcp_tool:kala__system_status"]`.
+
+### `'kala__system_bootstrap' is not available to you`
+
+That tool is filtered out for the agent that asked. Check `[mcp] allow`, `[mcp]
+deny`, and — if the message came from the reviewer — `[mcp] readonly`, which is the
+only list the reviewer can see.
+
+This is visibility, not permission. Widening it does not bypass `[permissions]`.
+
+### `MCP call 'x__y' exceeded the 60s [mcp] timeout`
+
+The server took too long. Raise it:
+
+```toml
+[mcp]
+timeout = 180
+```
+
+Servers that launch a browser or fetch a package on first use are the usual cause.
+
+### `Warning: MCP disabled — ... could not be read as JSON`
+
+`.mcp.json` has a syntax error. The run continues without MCP rather than failing.
+Check for a trailing comma or an unquoted key:
+
+```bash
+python3 -m json.tool .mcp.json
+```
+
+### The agent never uses my server
+
+Ask for the outcome, not the tool — *"check this page against our design system"*
+rather than *"call kala__verify"*. If it still doesn't, confirm the tools are
+reachable with `rudra mcp test`, then check the agent that would need them has
+access: the tester and the planner stages get no MCP at all
+([Tools](11-tools.md#which-agent-gets-which-tool)).
+
+### One server is down and I want the rest to keep working
+
+They already do. A server that fails is reported once, remembered for the rest of
+the run so it isn't retried, and every other server keeps answering.
 
 ---
 

@@ -22,6 +22,9 @@ You do not call these yourself. You read this page for three reasons: to underst
 | [`execute`](#execute) | Run a shell command | **yes** |
 | [`task`](#task) | Hand work to a subagent | no — the subagent's own calls are gated |
 | [`run_tests`](#run_tests) | Run your test suite | **yes**, as the command it runs |
+| [`list_mcp_tools`](#list_mcp_tools) | See what MCP servers offer | never |
+| [`describe_mcp_tool`](#describe_mcp_tool) | One MCP tool's arguments | never |
+| [`call_mcp_tool`](#call_mcp_tool) | Run an MCP tool | **yes**, by tool id |
 | [`git_diff`](#git_diff) | Show working-tree changes | **yes**, as the command it runs |
 | [`record_fact`](#record_fact) | Record something established | never — control plane |
 | [`ask_user`](#ask_user) | Ask you a question | never — control plane |
@@ -196,6 +199,78 @@ Not a git repository? It says so rather than failing.
 
 ---
 
+## MCP: tools Rudra doesn't ship
+
+These three appear only when you have configured an MCP server. With no
+`.mcp.json`, they do not exist. See [MCP](14-mcp.md) for setup.
+
+Three tools carry **every** MCP call, however many servers you configure. That is
+deliberate: registering each server's tools individually would put every server's
+argument schemas in the prompt on every call, and ten servers would fill a 32B
+context before the task started.
+
+MCP tools are named `server__tool` — your server name from `.mcp.json`, two
+underscores, the tool's own name.
+
+### `list_mcp_tools`
+
+```
+list_mcp_tools(server="")
+```
+
+Lists tool ids and one-line descriptions. Leave `server` empty for everything.
+
+```
+kala__system_status — Report this project design system: spacing scale, type scale, …
+kala__verify — Check frontend source files against the project design system. …
+```
+
+**No argument schemas.** That is what keeps the listing cheap; the model asks for
+one schema at a time with `describe_mcp_tool`.
+
+Never gated — it only reads a server's description of itself.
+
+### `describe_mcp_tool`
+
+```
+describe_mcp_tool(tool_id="kala__system_bootstrap")
+```
+
+Returns that one tool's description and its full JSON argument schema. Never gated.
+
+### `call_mcp_tool`
+
+```
+call_mcp_tool(tool_id="kala__verify", arguments={"dir": "/p", "paths": ["src/app.tsx"]})
+```
+
+Runs the tool and returns its output as text.
+
+**Always gated, on the tool id.** An MCP server is a separate program Rudra does not
+confine, so this is treated exactly like `execute`:
+
+| Mode | Result |
+|---|---|
+| `ask` | prompts, showing server, tool and arguments |
+| `--auto` | **denied** unless `--allow-mcp` or `[mcp] mcp_in_auto = true` |
+| `--plan` | denied |
+
+Rules name the id:
+
+```toml
+[permissions]
+allow = ["call_mcp_tool:kala__system_status"]
+deny  = ["call_mcp_tool:*__system_bootstrap"]
+```
+
+The parameter is `arguments`, not `args` — the tool layer mangles a parameter
+literally named `args`.
+
+A failing or missing server returns a readable sentence rather than raising, and the
+run continues.
+
+---
+
 ## Delegating
 
 ### `task`
@@ -344,6 +419,12 @@ eager model cannot compact a nearly-empty conversation.
 | `record_fact` | ✅ | ✅ | — | — | — | — | — |
 | `add_tasks` `drop_task` | — | — | ✅ | — | — | — | — |
 | `compact_conversation` | — | — | — | ✅ | ✅ | — | — |
+| `list_mcp_tools` `describe_mcp_tool` `call_mcp_tool` | — | — | — | ✅ | — | ⚠️ | ✅ |
+
+⚠️ The reviewer gets the MCP tools **filtered to `[mcp] readonly`**: a tool outside that
+list is not merely denied to it, it is never listed and cannot be named. An MCP server
+can write files, so an unfiltered `call_mcp_tool` would undo the invariant its missing
+`write_file` exists to hold. The tester and planner stages get no MCP at all.
 
 Read the planner columns left to right and the three-stage plan falls out of the tool grants alone: **clarify** can ask and record but cannot declare work; **architect** can record but not ask, because re-interrogating you mid-plan is what the staging exists to prevent; **breakdown** can only add tasks, and by then the facts are settled.
 
@@ -379,4 +460,5 @@ Full rule syntax and precedence: [Permissions](09-permissions.md).
 - **[Verification](10-verification.md)** — the gate that decides a task is done
 - **[How It Works](05-how-it-works.md)** — the loop these tools run inside
 - **[Skills](12-skills.md)** — the vendored superpowers methodology and how it maps onto these tools
+- **[MCP](14-mcp.md)** — attaching outside tool servers, and controlling what they may do
 - **[CLI Reference](04-cli-reference.md)** — the commands *you* type
