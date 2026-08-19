@@ -143,7 +143,7 @@ only function that creates anything.
 | File | Durable? | Written by | Read by | Notes |
 |---|---|---|---|---|
 | `config.toml` | durable | `rudra init` | config loader | Layer 3 of five |
-| `AGENTS.md` | durable | `_ensure_agents_md` | planner via `memory=` | **Created once, never updated** (A1.9). Its stack section renders the facts |
+| `AGENTS.md` | durable | `_ensure_agents_md` creates it; `record_task_in_memory` and `summarise_architecture` update it | planner via `memory=` | **A living document since C7.3** (closes A1.9): one Session Log entry per completed task, with `files_touched` from git, and one model call per run folding them into Architecture Notes. **The log is capped at 20 entries** — this file is paid for on every planner call, so an uncapped one is a tax that grows without bound (S12.4) |
 | `facts.json` | durable | `record_fact` / `ask_user` (agent) | every agent's prompt | Open key/value: `{key: {value, why, source}}`. Keys are enumerated nowhere in code. Replaced `project.json`, which is **ignored, not migrated** (S10a.8) — the old file is left on disk, unreferenced |
 | `.gitignore` | durable | `ensure_layout` | git | Written by Rudra, scopes **only** `.rudra/` |
 | `run/ledger.json` | volatile | `add_tasks`/`drop_task` (agent) + `engine.py` (status) | `run_loop`, `summarise` | Tasks are **work**, not filenames. Written atomically after every status change; never resumed |
@@ -221,7 +221,7 @@ inert before Step 12.
 | `compact_conversation` | inherited | Registered for the coder and tester only (S12.8). It is control plane, and that is load-bearing: outside `CONTROL_PLANE_TOOLS` the gate denies it |
 | Artifacts kept out of the user's repo | **designed** | `artifacts_root="/artifacts"`, or deepagents writes `large_tool_results/` and `conversation_history/` into the project (A1.45) |
 | Per-run token accounting | **designed** | `src/rudra/context/usage.py`. Nothing upstream reports what a run cost |
-| Per-task memory in `AGENTS.md` | **designed** | Step 12c |
+| Per-task memory in `AGENTS.md` | **designed** | `src/rudra/context/agents_md.py` + the two writers in `loop/engine.py`. Session Log capped at 20 entries (C7.3) |
 
 **One number, two consumers.** `[model.<role>] context_tokens` feeds both
 the summarization trigger and the eviction threshold. That is deliberate:
@@ -237,6 +237,13 @@ every call, and no mechanism here trims them. Summarization compacts the
 summarization fires without passing through any Rudra middleware, so
 `usage.json`'s `compactions` must not be read as "every time context was
 shed".
+
+**Continuity is the ledger, not the transcript.** `rudra --continue` works
+the remaining tasks from `.rudra/run/ledger.json` and never replays a
+conversation (S12.2, C7.2). A stable per-project `thread_id` — the literal
+reading of A1.2 — would have every run inherit every prior run's history,
+which is a context defect in the context step. The checkpointer stays
+regardless: interrupt-and-resume approval depends on it.
 
 **`/compact` is not a REPL command**, and that is not an oversight. The
 REPL builds a fresh agent per input (`cli.py`, inside `_repl_session`), so

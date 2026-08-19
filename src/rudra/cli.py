@@ -265,6 +265,9 @@ def models_test(
 
 
 EXIT_NO_TTY = 2
+# A --continue that cannot proceed. Same code as the TTY refusal: both
+# are "the run did not start, and here is the sentence why".
+EXIT_RESUME_REFUSED = 2
 
 _MODE_DESCRIPTIONS = {
     "ask": "prompting before each write, edit, delete, or command",
@@ -749,6 +752,12 @@ def main(
     plan: bool = typer.Option(
         False, "--plan", help="Plan only: show the plan and stop, changing nothing"
     ),
+    continue_: bool = typer.Option(
+        False,
+        "--continue",
+        "--resume",
+        help="Work the remaining tasks from the last run instead of planning afresh",
+    ),
     allow_shell: bool = typer.Option(
         False,
         "--allow-shell",
@@ -822,6 +831,22 @@ def main(
     if verbose is None:
         verbose = cfg.agent.verbose
 
+    # Before any agent is built, so a bad --continue never constructs a
+    # model, reads a key, or touches the network.
+    if continue_:
+        from rudra.agent.main_agent import ResumeRefused, check_resumable
+        from rudra.state.paths import rudra_paths
+
+        try:
+            resumed = check_resumable(rudra_paths(project_path).ledger_json, prompt)
+        except ResumeRefused as refusal:
+            console.print(f"[red]Cannot continue:[/red] {refusal}")
+            raise typer.Exit(EXIT_RESUME_REFUSED) from None
+
+        # The recorded request is the run's task when none was typed --
+        # `rudra --continue` alone is the normal form.
+        prompt = prompt or resumed.request
+
     if prompt:
         # ── Single-shot task mode ──────────────────────────────────────────
         print_banner()
@@ -845,6 +870,7 @@ def main(
                 console=console,
                 dry_run=dry_run,
                 verbose=verbose,
+                resume=continue_,
             )
             try:
                 return await agent.run()

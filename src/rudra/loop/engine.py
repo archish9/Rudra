@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -252,6 +253,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             task.status = TaskStatus.DONE
             task.note = ""
             ledger.save(context.paths.ledger_json)
+            record_task_in_memory(context.paths, task)
             return Outcome.DONE
 
         signature = failure_signature(report)
@@ -327,6 +329,101 @@ async def review_once(context: LoopContext, ledger: Ledger) -> None:
     if result.text.strip():
         context.console.print("\n[bold]Review[/bold] [dim](advisory)[/dim]")
         context.console.print(result.text)
+
+
+_ARCHITECTURE_PROMPT = """You are updating a project's engineering memory.
+
+Below is the running log of work completed on this project, and the current
+Architecture Notes. Rewrite the Architecture Notes so they describe how this
+project is built: its layout, its boundaries, and any decision a future
+contributor would otherwise have to rediscover.
+
+Write prose, not a changelog. Do not list the tasks back. Do not invent
+anything the log does not support. Reply with the notes and nothing else.
+
+## Current Architecture Notes
+{notes}
+
+## Session Log
+{log}
+"""
+
+
+def record_task_in_memory(paths: Any, task: Task) -> None:
+    """Append one completed task to AGENTS.md's Session Log (C7.3).
+
+    Deterministic: the description is the task's own, and `files_touched`
+    came from git rather than from the model (S9c). Nothing here may raise
+    -- a task that genuinely finished must not be undone by a memory write.
+
+    Absent AGENTS.md is a no-op, not a create: `_ensure_agents_md` owns
+    creating it, and inventing one here would produce a memory file for a
+    project that never ran a plan.
+    """
+    from rudra.context.agents_md import append_session_entry, format_entry
+
+    try:
+        path = paths.agents_md
+        if not path.is_file():
+            return
+        entry = format_entry(
+            datetime.now(timezone.utc).date().isoformat(),
+            task.id,
+            task.description,
+            tuple(task.files_touched),
+        )
+        path.write_text(
+            append_session_entry(path.read_text(encoding="utf-8"), entry), encoding="utf-8"
+        )
+    except OSError:
+        return
+
+
+async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
+    """Fold the run's Session Log into Architecture Notes. One model call.
+
+    Runs once, at run end, and only when something reached DONE. Wrapped
+    so any failure costs polish rather than the run: the deterministic
+    entries are already on disk, which is why the Python half is done
+    first.
+
+    `context._model` is a test seam -- when absent the model comes from
+    build_model("default"). Documented rather than hidden, because an
+    undocumented seam is a trap for the next reader.
+    """
+    from rudra.context.agents_md import replace_section, section_body
+
+    if not any(task.status is TaskStatus.DONE for task in ledger.tasks):
+        return
+
+    try:
+        path = context.paths.agents_md
+        if not path.is_file():
+            return
+
+        text = path.read_text(encoding="utf-8")
+        model = getattr(context, "_model", None)
+        if model is None:
+            from rudra.llm import build_model
+
+            model = build_model("default", context.cfg)
+
+        reply = await model.ainvoke(
+            [
+                {
+                    "role": "user",
+                    "content": _ARCHITECTURE_PROMPT.format(
+                        notes=section_body(text, "Architecture Notes"),
+                        log=section_body(text, "Session Log"),
+                    ),
+                }
+            ]
+        )
+        notes = str(getattr(reply, "content", "")).strip()
+        if notes:
+            path.write_text(replace_section(text, "Architecture Notes", notes), encoding="utf-8")
+    except Exception:  # noqa: BLE001 - memory is polish; a run must survive it
+        context.console.print("[dim]Could not update AGENTS.md architecture notes.[/dim]")
 
 
 def write_usage_log(path: Path, usage: Any) -> None:
@@ -417,7 +514,11 @@ async def plan(
     only so tests can drive planning without wiring an agent.
     """
     ledger = ledger if ledger is not None else Ledger()
-    ledger.save(context.paths.ledger_json)
+    # The one save that knows the request, so record it here (C7.2).
+    # Every later save passes nothing and keeps it. Without this the field
+    # existed and was always "", which a live run found and no unit test
+    # could -- they called save(request=...) directly.
+    ledger.save(context.paths.ledger_json, request=request)
 
     # Three stages, in order (C6.7, S10b.1): settle the facts, decide the
     # shape, then declare the work. Each is a separate agent with its own
@@ -468,6 +569,7 @@ async def work(
 
     if any(task.status is TaskStatus.DONE for task in ledger.tasks):
         await review_once(context, ledger)
+    await summarise_architecture(context, ledger)
     run_usage = getattr(context, "usage", None)
     write_usage_log(context.paths.logs / "usage.json", run_usage)
     return summarise(ledger, context.console, run_usage)
@@ -511,7 +613,9 @@ __all__ = [
     "review_once",
     "run_loop",
     "run_task",
+    "record_task_in_memory",
     "summarise",
+    "summarise_architecture",
     "write_usage_log",
     "work",
 ]
