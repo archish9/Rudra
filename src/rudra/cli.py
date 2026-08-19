@@ -766,6 +766,27 @@ def init_command(
     target.write_text(CONFIG_TEMPLATE, encoding="utf-8")
     console.print(f"[green]Wrote[/green] {target}")
 
+    # C8.5 / D12: fetch the embedding model now, so no run discovers a
+    # 167 MB download mid-task. Saying the size *before* starting matters --
+    # an unexplained download during what looks like a config-file command
+    # is the surprise D12 exists to prevent.
+    from rudra.memory.prefetch import MODEL_SIZE_MB, is_warm, warm_model
+
+    if is_warm():
+        console.print("[dim]Embedding model already present.[/dim]")
+    else:
+        console.print(
+            f"[dim]Fetching the embedding model (~{MODEL_SIZE_MB} MB, once per machine, "
+            f"shared by every project)…[/dim]"
+        )
+        ok, detail = warm_model()
+        console.print(
+            f"[green]Embedding model ready[/green] — {detail}"
+            if ok
+            else f"[yellow]Embedding model not fetched[/yellow] — {detail}. "
+            f"It will download on first use instead."
+        )
+
     # No MCP server ships enabled (S13.4): every candidate duplicates
     # something Rudra already gates natively, and a shipped default is an
     # unrequested subprocess. The empty file exists so `rudra mcp add` has
