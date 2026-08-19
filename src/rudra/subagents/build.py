@@ -135,6 +135,12 @@ def _prompt_for(spec: RudraSubagent, context: Any) -> str:
         block = recall_block(store.search(query, limit=8), recall_limit(context.cfg, spec.role))
         if block:
             parts.append(block)
+            # What it cost, so RECALL_FRACTION can be revised with evidence
+            # rather than argument (spec 4.6). It rides inside input_tokens
+            # on every call, so nothing else can isolate it.
+            usage = getattr(context, "usage", None)
+            if usage is not None:
+                usage.record_recall(spec.role, len(block))
 
     client = getattr(context, "mcp", None)
     if client is not None and spec.wants_mcp:

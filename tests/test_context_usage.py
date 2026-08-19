@@ -26,6 +26,10 @@ def test_recording_accumulates_per_role():
         "input_tokens": 350,
         "output_tokens": 40,
         "compactions": 0,
+        # Added in Step 14b: the recall block's cost, isolated because it
+        # otherwise rides invisibly inside input_tokens (spec 4.6).
+        "recall_chars": 0,
+        "recall_injections": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -135,3 +139,36 @@ def test_a_half_silent_provider_still_shows_both_sides():
     text = render_usage(usage)
     assert "100 in" in text
     assert "not reported out" in text
+
+
+def test_recall_cost_is_tracked_separately_from_the_calls_it_rides_in() -> None:
+    """Spec 4.6: the recall block's budget must be defensible with numbers.
+
+    It is part of input_tokens on every call, so nothing else can isolate
+    it -- and a constant nobody can measure is a constant nobody can
+    revise with evidence.
+    """
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    usage.record_recall("coder", 1263)
+    assert usage.as_dict()["coder"]["recall_chars"] == 1263
+
+
+def test_recall_cost_accumulates_across_builds() -> None:
+    """The block is rebuilt on every agent construction, not once."""
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    usage.record_recall("coder", 100)
+    usage.record_recall("coder", 200)
+    assert usage.as_dict()["coder"]["recall_chars"] == 300
+    assert usage.as_dict()["coder"]["recall_injections"] == 2
+
+
+def test_a_role_that_never_recalled_reports_zero_not_none() -> None:
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    usage.record("coder", input_tokens=5, output_tokens=5)
+    assert usage.as_dict()["coder"]["recall_chars"] == 0
