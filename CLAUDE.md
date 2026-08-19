@@ -74,6 +74,14 @@ src/rudra/
 │                           size, never names. render.py puts them in every
 │                           agent's prompt: the planner at construction,
 │                           each subagent at its own build_agent call
+├── context/                Context budgeting (Step 12). budget.py is pure and
+│                           imports nothing from Rudra. evict_limit derives the
+│                           tool-result eviction threshold from the same
+│                           context_tokens C1.4a feeds to max_input_tokens, so
+│                           the eviction threshold and the summarization
+│                           trigger cannot drift apart (A1.47). evict_kwargs
+│                           exists because omitting that argument and passing
+│                           None are different: None disables eviction outright
 ├── loop/                   The agentic loop (Step 9c). ledger · bounds · tools ·
 │                           engine. ledger.py and bounds.py import nothing from
 │                           Rudra. No agent-facing tool can write DONE — only
