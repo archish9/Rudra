@@ -70,3 +70,15 @@ def test_doctor_reports_the_model_cache_state(tmp_path: Path) -> None:
     project.mkdir()
     result = runner.invoke(app, ["doctor", "--offline", "-d", str(project)])
     assert "model" in result.stdout.lower()
+
+
+def test_doctor_no_longer_claims_memory_is_unchecked(tmp_path: Path) -> None:
+    """It said "Memory is not checked — it arrives in Step 14" until 14c.
+
+    A doctor that misreports what it checked is worse than one that checks
+    less, because the reader stops looking for the row that is right there.
+    """
+    project = tmp_path / "demo"
+    project.mkdir()
+    result = runner.invoke(app, ["doctor", "--offline", "-d", str(project)])
+    assert "not checked" not in result.stdout

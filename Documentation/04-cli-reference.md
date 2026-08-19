@@ -371,6 +371,50 @@ the same servers without starting them — it only checks that each command exis
 
 ---
 
+## `rudra memory`
+
+What this project has learned, across runs. See
+[Context & Memory](13-context-and-memory.md#long-term-memory) for what gets stored
+and why.
+
+```bash
+rudra memory list                      # everything, newest first
+rudra memory list --room decisions     # one room
+rudra memory list --added-by agent     # only what a model chose to record
+rudra memory search "package manager"  # by meaning, not by keyword
+rudra memory export                    # markdown copy into .rudra/memory/export/
+rudra memory import .rudra/memory/export
+rudra memory forget --added-by agent   # prune. irreversible
+```
+
+`list` and `search` both show who recorded each memory:
+
+```
+┃ Room      ┃ By    ┃ Recorded   ┃ Memory                                     ┃
+│ tasks     │ rudra │ 2026-08-19 │ Completed: implement the farewell function │
+│ decisions │ rudra │ 2026-08-19 │ farewell_tests_location = test_greet.py …  │
+```
+
+**`rudra` means Rudra recorded it** from a task that actually finished, with the file
+list taken from git. **`agent` means a model decided it was worth keeping.** They are
+different kinds of claim, which is why `forget` can target one and not the other.
+
+`forget` requires a target — bare `rudra memory forget` is an error, not a synonym for
+`--all`. It prints what it will delete, then asks. With no terminal attached it exits
+**2** rather than prompting into the void; pass `--yes` for scripts.
+
+`export` writes one markdown file per room, readable and diffable:
+
+```markdown
+<!-- rudra-memory added_by=rudra filed_at=2026-08-19T21:43:38 -->
+Completed: implement the farewell function in greet.py. Files: greet.py, test_greet.py.
+```
+
+`import` reads that tree back exactly — same rooms, same authors. Importing twice is
+safe; memories are content-addressed, so a repeat is an update rather than a duplicate.
+
+---
+
 ## Commands that no longer exist
 
 Earlier versions documented `build`, `chat`, `fix`, `edit`, `review`, `suggest`, `resume`, and `watch`. **None of them exist.** Use a plain prompt instead:

@@ -717,8 +717,8 @@ def doctor_command(
 
     console.print(table)
     console.print(
-        "[dim]Memory is not checked — it arrives in Step 14. MCP servers are "
-        "checked here; `rudra mcp test` actually starts them.[/dim]"
+        "[dim]MCP servers are checked here; `rudra mcp test` actually starts them. "
+        "`rudra memory list` shows what has been remembered.[/dim]"
     )
 
 

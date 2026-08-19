@@ -193,11 +193,32 @@ Unknown keys are errors rather than warnings on purpose: the usual cause is a
 typo, and quietly ignoring one means your setting never applies and nothing
 says so.
 
-Sections that aren't supported yet say when they will be:
+Sections that aren't supported yet say when they will be, naming the step that
+implements them. There are none left — `[tools]`, `[skills]`, `[mcp]` and
+`[memory]` are all real — but the mechanism stays for the next one.
 
+## The memory section
+
+```toml
+[memory]
+backend = "chroma"    # chroma | sqlite | milvus | qdrant | pgvector
 ```
-Configuration error: [memory] is not supported yet — arrives in Step 14 (C8.1).
-```
+
+One key, and the two you might expect are deliberately absent.
+
+There is no `enabled`. Long-term memory is not optional — see
+[Context & Memory](13-context-and-memory.md#long-term-memory) for what it stores
+and how to purge it.
+
+There is no knob for how much of the context window recalled memories may use.
+It is 2%, a constant, because nobody has measured what it should be — and an
+unmeasured knob is worse than a constant somebody can change with evidence.
+`rudra doctor` and `.rudra/run/logs/usage.json` both report what it actually
+costs, which is what a future default would be argued from.
+
+The palace's location is not configurable either: it is always
+`<project>/.rudra/memory/palace/`, because that layout is what makes committing
+`.rudra/` safe.
 
 ## The skills section
 

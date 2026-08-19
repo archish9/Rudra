@@ -191,6 +191,68 @@ The short version: it works the remaining tasks, reuses the original request so 
 
 ---
 
+## Long-term memory
+
+Everything above is about one run. This is what survives between them.
+
+Rudra keeps a small searchable store per project at `.rudra/memory/palace/`.
+Every run reads from it before planning and writes to it as work finishes.
+
+### What gets stored
+
+Four categories, and nothing else:
+
+| Room | Holds |
+|---|---|
+| `decisions` | choices and the reasoning behind them — "language = Python (inferred: the request asks for greet.py)" |
+| `tasks` | what finished, with the files git says changed |
+| `blockers` | what stopped a task, and why |
+| `preferences` | how you want work done |
+
+Every memory is tagged with **who recorded it**:
+
+- **`rudra`** — recorded automatically when a task passed the verification gate, or
+  when you approved a plan. Deterministic: no model decided it was worth keeping, and
+  the file list comes from git rather than from anything a model said.
+- **`agent`** — a model called the `remember` tool because it judged something worth
+  keeping. Useful, but it is a model's opinion, and worth reading as one.
+
+`rudra memory list` shows both, so you can always tell them apart — and
+`rudra memory forget --added-by agent` prunes one without touching the other.
+
+### What is not stored
+
+**Conversation transcripts.** Rudra never mines the dialogue. What you see in
+`rudra memory list` is the whole of it.
+
+### Where it lives, and whether it leaves your machine
+
+`<project>/.rudra/memory/palace/` — project-local. A memory from one project is
+invisible to another, by design: a preference established in a Rust project may not
+hold in a Python one.
+
+**Nothing is transmitted anywhere.** Embedding runs locally with no API key. The only
+network access is a one-time model download (~167 MB), shared by every project on the
+machine, which `rudra init` does up front so no run discovers it mid-task. For an
+air-gapped install, `rudra doctor` prints the cache path to pre-seed.
+
+Disk cost is a few MB per project, plus that one shared model.
+
+### Keeping it, and throwing it away
+
+```bash
+rudra memory export        # markdown into .rudra/memory/export/
+rudra memory forget --all  # irreversible
+```
+
+The palace is a binary store that churns on every write, so the export is the copy
+worth keeping. `.rudra/.gitignore` already excludes the palace and keeps the export —
+committing it is safe, and whether you do is your call.
+
+`rudra memory import` restores an exported tree exactly: same rooms, same authors.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |
@@ -201,6 +263,10 @@ The short version: it works the remaining tasks, reuses the original request so 
 | Token counts say `not reported` | Your endpoint doesn't return usage data | Nothing to fix; it's the provider |
 | `AGENTS.md` architecture notes are empty | No task reached `done`, or the summarising call failed | Check the session log — if entries are there, only the prose is missing |
 | `.rudra/run/artifacts/` is filling up | Large tool results being offloaded, working as intended | Safe to delete; it's regenerated |
+| `rudra memory list` is empty after a run | No task reached `done` — memory records finished work, not attempts | Check the run's summary for blocked tasks |
+| `doctor` says the embedding model is not fetched | First install, or `rudra init` was never run here | `rudra init`, or let it download on first use |
+| `doctor` warns your `~/.mempalace/config.json` is ignored | You use MemPalace yourself; Rudra deliberately does not read your settings | Nothing to fix — Rudra passes its own explicitly so your setup can't change its behaviour |
+| Memories from another project appear | They cannot — each project has its own store | Check which directory you ran in |
 
 ---
 
