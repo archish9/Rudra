@@ -401,6 +401,16 @@ def create_planner_agent(
         memory=memory,
         recall_tokens=recall_limit(cfg, "planner"),
     )
+    # Account for the planner's recall block the same way build.py does for
+    # the subagents. Measured by re-rendering rather than threaded back out
+    # of build_planner_prompt, which stays a pure string function -- the
+    # search is already cached by the store's open collection.
+    if memory is not None and usage is not None:
+        from rudra.memory.render import recall_block
+
+        recalled = recall_block(memory.search(task, limit=8), recall_limit(cfg, "planner"))
+        if recalled:
+            usage.record_recall("planner", len(recalled))
     # C5.3: the index alone is inert. This is the instruction block that
     # makes the model reach for a skill, and it chains onward -- it tells
     # the model to read its harness's reference file, which is Rudra's
