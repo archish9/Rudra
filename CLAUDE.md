@@ -97,7 +97,12 @@ src/rudra/
 │                           overridden by env at all (C8.1b). render.py builds
 │                           the recall block; the write spine lives in
 │                           loop/engine.py beside the AGENTS.md writer, which
-│                           is what makes C8.9 structural (Step 14b)
+│                           is what makes C8.9 structural (Step 14b). export.py
+│                           owns BOTH halves of the round trip because
+│                           mempalace's exporter resolves collection and
+│                           backend from the user's global config (A1.87);
+│                           prefetch.py warms chromadb's ONNX MiniLM through
+│                           mempalace's own code path (Step 14c)
 ├── agent/
 │   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -168,7 +173,7 @@ only function that creates anything.
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
 | `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens and compactions for the last run. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
-| `memory/export/` | durable | — | — | Step 14c. The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
+| `memory/export/` | durable | `rudra memory export` | `rudra memory import` | The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
 | `memory/palace/` | volatile | `rudra.memory.store` | `rudra.memory.store` | ChromaDB, project-scoped per D14/S14.5. Opened only through `MemoryStore`; a failure degrades loudly and never fails a task (C8.6) |
 
 Agent-facing prompts used to name these paths as literal strings, and a path
@@ -374,6 +379,8 @@ git config core.hooksPath .githooks  # once per clone: run all three gates on pu
 .venv/bin/rudra config list          # every effective value + which layer set it
 .venv/bin/rudra doctor --offline     # diagnose config, layout, deps; --offline skips network
 .venv/bin/rudra models test          # verify each role is reachable and can call tools
+.venv/bin/rudra memory list          # what this project has learned, and who recorded it
+.venv/bin/rudra memory search "..."  # by meaning; `forget` prunes, `export` keeps
 .venv/bin/rudra verify               # deterministic gate over the changed files (Step 9a)
 .venv/bin/rudra verify --all --json  # whole project, machine-readable. Exit 0/1/2
 .venv/bin/rudra "build a flask app"  # single-shot; prompts before each write and command
