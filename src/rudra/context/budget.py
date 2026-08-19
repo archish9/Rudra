@@ -49,3 +49,21 @@ def evict_limit(cfg: Any, role: str) -> int | None:
     if declared is None:
         return None
     return max(int(declared * TOOL_RESULT_FRACTION), MIN_TOOL_RESULT_TOKENS)
+
+
+def evict_kwargs(cfg: Any, role: str) -> dict[str, int]:
+    """`FilesystemMiddleware` keyword arguments for this role's budget.
+
+    A dict rather than a plain value because **omitting the argument and
+    passing None are different things**, and the difference is dangerous:
+    the constructor defaults to 20 000, but every consumer guards with
+    `if not self._tool_token_limit_before_evict`
+    (`deepagents/middleware/filesystem.py:2738`, `:3147`, `:3464`), so an
+    explicit None **switches eviction off entirely**. That is worse than
+    the default it was meant to preserve.
+
+    Measured 2026-08-19 while executing Step 12a's plan, which had the
+    call sites passing None directly.
+    """
+    limit = evict_limit(cfg, role)
+    return {} if limit is None else {"tool_token_limit_before_evict": limit}

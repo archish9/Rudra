@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from rudra.context.budget import (
     MIN_TOOL_RESULT_TOKENS,
     TOOL_RESULT_FRACTION,
+    evict_kwargs,
     evict_limit,
 )
 
@@ -90,3 +91,37 @@ def test_module_imports_nothing_from_rudra():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
     assert not [name for name in imported if name.startswith("rudra")]
+
+
+def test_evict_kwargs_omits_the_argument_when_no_window_is_declared():
+    """Omitting and passing None are NOT the same thing.
+
+    deepagents' constructor defaults to 20 000, but every consumer guards
+    with `if not self._tool_token_limit_before_evict`
+    (filesystem.py:2738, :3147, :3464), so an explicit None switches
+    eviction off entirely -- worse than the default it meant to preserve.
+    Measured while executing Step 12a's plan, which passed None directly.
+    """
+    assert evict_kwargs(_cfg(coder=None), "coder") == {}
+
+
+def test_evict_kwargs_passes_the_derived_limit_when_there_is_one():
+    assert evict_kwargs(_cfg(coder=131072), "coder") == {"tool_token_limit_before_evict": 13107}
+
+
+def test_none_really_does_disable_eviction_upstream():
+    """The measurement the two tests above rest on, pinned upstream.
+
+    If deepagents ever makes None mean "use the default", evict_kwargs
+    becomes unnecessary rather than load-bearing -- and this test says so
+    instead of leaving a helper nobody can justify.
+    """
+    from deepagents.backends.filesystem import FilesystemBackend
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+
+    backend = FilesystemBackend(root_dir="/tmp", virtual_mode=True)
+    omitted = FilesystemMiddleware(backend=backend)
+    explicit_none = FilesystemMiddleware(backend=backend, tool_token_limit_before_evict=None)
+
+    assert omitted._tool_token_limit_before_evict == 20000
+    assert explicit_none._tool_token_limit_before_evict is None

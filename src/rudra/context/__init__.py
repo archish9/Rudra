@@ -6,6 +6,6 @@ imports nothing from the agent layer, which is what keeps this a package
 rather than a junk drawer.
 """
 
-from rudra.context.budget import evict_limit
+from rudra.context.budget import evict_kwargs, evict_limit
 
-__all__ = ["evict_limit"]
+__all__ = ["evict_kwargs", "evict_limit"]

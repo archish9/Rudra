@@ -110,8 +110,19 @@ def test_task_anchor_is_absent_from_the_subagents(tmp_path: Path) -> None:
         sandbox_paths: bool = False
 
     @dataclass
+    class ModelCfg:
+        context_tokens: int | None = 131072
+
+    @dataclass
     class Cfg:
         compat: Any = None
+
+        def model_for(self, role: str):
+            """Mirrors Config.model_for (config/loader.py:293).
+
+            _middleware_for reads it for the eviction budget (Step 12a).
+            """
+            return ModelCfg()
 
     @dataclass
     class Ctx:
