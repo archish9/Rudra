@@ -763,6 +763,11 @@ def main(
         "--allow-shell",
         help="Let --auto run commands too (off by default: nobody reads them first)",
     ),
+    allow_mcp: bool = typer.Option(
+        False,
+        "--allow-mcp",
+        help="Let --auto call MCP tools too (off by default: a server is a separate process)",
+    ),
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
     ),
@@ -803,6 +808,7 @@ def main(
         verbose=verbose,
         permission_mode=permission_mode,
         allow_shell=True if allow_shell else None,
+        allow_mcp=True if allow_mcp else None,
     )
 
     from rudra.permissions import disabled_floor_notice, stdin_is_interactive

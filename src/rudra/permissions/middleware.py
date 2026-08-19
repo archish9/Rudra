@@ -31,6 +31,15 @@ def _denial_text(tool: str, arg: str | None, rule: str | None) -> str:
             "you need and describe what should be run instead. The user can "
             "enable it with --allow-shell or [tools] shell_in_auto = true."
         )
+    if rule == "<auto:mcp-not-opted-in>":
+        return (
+            "Permission denied: MCP tools are disabled in unattended ('auto') "
+            "mode unless the user opts in, because an MCP server is a separate "
+            "process and nobody reads the call before it runs. Do not retry "
+            "this call — do the work with your own tools and say what you "
+            "would have called. The user can enable it with --allow-mcp or "
+            "[mcp] mcp_in_auto = true."
+        )
     if rule and rule.startswith("<floor:"):
         name = rule[len("<floor:") : -1]
         return (
