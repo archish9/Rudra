@@ -185,3 +185,45 @@ def test_an_unquoted_multi_word_task_is_rejoined() -> None:
     _, ctx = parse_cli(["build", "a", "flask", "app"])
 
     assert " ".join(ctx.args) == "build a flask app"
+
+
+def test_doctor_reports_roles_without_a_declared_context_window(tmp_path, monkeypatch):
+    """S12.9: an undeclared window is a real setting, not an absence."""
+    from typer.testing import CliRunner
+
+    from rudra.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    runner.invoke(app, ["init"])
+    result = runner.invoke(app, ["doctor", "--offline"])
+
+    assert result.exit_code == 0
+    assert "context window" in result.stdout
+
+
+def test_doctor_reports_the_derived_limits_when_windows_are_declared(tmp_path, monkeypatch):
+    """The other branch of the same row -- the join, not just the warning."""
+    from typer.testing import CliRunner
+
+    from rudra.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    runner.invoke(app, ["init"])
+
+    config = tmp_path / ".rudra" / "config.toml"
+    config.write_text(
+        config.read_text(encoding="utf-8").replace(
+            "[model.default]", "[model.default]\ncontext_tokens = 131072", 1
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["doctor", "--offline"])
+
+    assert result.exit_code == 0
+    # int(131072 * 0.10). Role inheritance runs after the cross-layer merge,
+    # so declaring it once on `default` reaches every role.
+    assert "13107" in result.stdout
+    assert "No context_tokens" not in result.stdout

@@ -521,6 +521,8 @@ def doctor_command(
     from importlib.metadata import version
 
     from rudra.compat.version_guard import EXPECTED_DEEPAGENTS_VERSION
+    from rudra.config.schema import BUILTIN_ROLES
+    from rudra.context.budget import evict_limit
     from rudra.state.paths import rudra_paths
 
     project_path = get_project_path(project_dir)
@@ -573,6 +575,26 @@ def doctor_command(
         f"mode = {cfg.permissions.mode} — {_MODE_DESCRIPTIONS.get(cfg.permissions.mode, '')}. "
         f"{len(cfg.permissions.allow)} allow, {len(cfg.permissions.deny)} deny. "
         f"Deny floor: {'disabled ' + ', '.join(floor_off) if floor_off else 'all rules active'}.",
+    )
+
+    # An undeclared context window is a real setting with a real cost, not
+    # an absence (S12.9): tool results then evict at deepagents' default
+    # instead of at a tenth of the model's actual window. escape() because
+    # Rich would parse "[model.<role>]" as a style tag (A1.48).
+    undeclared = [role for role in BUILTIN_ROLES if evict_limit(cfg, role) is None]
+    limits = ", ".join(
+        f"{role} {evict_limit(cfg, role)}" for role in BUILTIN_ROLES if evict_limit(cfg, role)
+    )
+    table.add_row(
+        "context window",
+        "warn" if undeclared else "ok",
+        escape(
+            f"No context_tokens for: {', '.join(undeclared)}. Tool results evict at "
+            f"deepagents' 20000-token default for those roles, and summarization "
+            f"triggers at 170000 — set [model.<role>] context_tokens."
+            if undeclared
+            else f"Tool results evict at: {limits}."
+        ),
     )
 
     # escape() for the same reason as the config-error path: Rich parses
