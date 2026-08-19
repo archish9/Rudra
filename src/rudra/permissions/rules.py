@@ -32,7 +32,15 @@ if TYPE_CHECKING:  # pragma: no cover - broken at runtime to avoid a cycle
 # the one thing that flag exists to show, and in `ask` mode it fell to a
 # bare "ask" that no interrupt could deliver -- A1.53's shape, since
 # build_interrupt_on covers MUTATING_TOOLS only.
-CONTROL_PLANE_TOOLS = frozenset({"add_tasks", "drop_task", "ask_user", "record_fact"})
+# `compact_conversation` is control plane for the same reason: it writes no
+# file and runs no command, it shrinks the agent's own context. Outside this
+# set it would be decided `ask` with no interrupt registered, which the
+# middleware denies rather than runs (tests/test_permissions_unknown_tool.py)
+# -- so the tool would be offered to the model and refused every time. That
+# is A1.75's shape, found the same way.
+CONTROL_PLANE_TOOLS = frozenset(
+    {"add_tasks", "drop_task", "ask_user", "record_fact", "compact_conversation"}
+)
 
 # `read_ledger` belongs here, not in the control plane: it only reads
 # .rudra/run/ledger.json. Its predecessor `read_plan` was in neither set

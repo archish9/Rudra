@@ -216,3 +216,16 @@ def test_planner_with_no_declared_window_keeps_the_upstream_default():
 
     filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"][0]
     assert filesystem._tool_token_limit_before_evict == 20000
+
+
+def test_planner_middleware_reports_its_usage():
+    from rudra.agent.planner_agent import build_planner_middleware
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    middleware = build_planner_middleware("a task", usage=usage)
+
+    recorders = [m for m in middleware if type(m).__name__ == "UsageMiddleware"]
+    assert len(recorders) == 1
+    assert recorders[0].role == "planner"
+    assert recorders[0].usage is usage

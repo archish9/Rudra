@@ -7,9 +7,17 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from rich.console import Console
 
-from rudra.subagents.build import _middleware_for, _tools_for, to_subagent_spec
+from rudra.subagents.build import (
+    _middleware_for,
+    _model_for,
+    _tools_for,
+    to_subagent_spec,
+)
 from rudra.subagents.registry import REGISTRY
 
 
@@ -63,26 +71,42 @@ class FakeContext:
     # Mirrors SubagentContext (Step 11b). A fake that drifts from the real
     # dataclass is how tests stay green against code that would break.
     skills_sources: tuple[str, ...] | None = None
+    usage: Any = None
 
 
-class FakeModel:
-    """Stands in for a BaseChatModel.
+class FakeModel(BaseChatModel):
+    """Stands in for a BaseChatModel -- and actually is one.
 
     These tests are about assembly -- which tools and which middleware a
     spec produces. Resolving a real model is llm/factory.py's job and is
     covered by tests/test_llm_factory.py; building one here would only
     require a full Config to test something else.
+
+    It subclasses BaseChatModel rather than merely resembling one because
+    Step 12b's compaction middleware type-checks its model
+    (deepagents/middleware/summarization.py:1663). A duck-typed stand-in
+    passed every assertion here right up until something looked.
     """
 
-    def __init__(self, role: str) -> None:
-        self.role = role
+    role: str = ""
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-assembly-model"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        message = AIMessage(content="")
+        return ChatResult(generations=[ChatGeneration(message=message)])
+
+    def bind_tools(self, tools, **kwargs):
+        return self
 
 
 @pytest.fixture(autouse=True)
 def fake_models(monkeypatch):
     import rudra.subagents.build as build
 
-    monkeypatch.setattr(build, "build_model", lambda role, cfg=None: FakeModel(role))
+    monkeypatch.setattr(build, "build_model", lambda role, cfg=None: FakeModel(role=role))
 
 
 @pytest.fixture
@@ -105,7 +129,7 @@ def test_every_subagent_carries_the_gate(name, context):
     # The invariant. deepagents does not propagate the parent's middleware=
     # to subagents (graph.py:666-703), so a spec without this is gated for
     # approvals and not for denials.
-    middleware = _middleware_for(REGISTRY[name], context)
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
     assert any(m is context.gate.middleware for m in middleware)
 
 
@@ -113,14 +137,14 @@ def test_every_subagent_carries_the_gate(name, context):
 def test_the_gate_precedes_the_argument_rewriter(name, context):
     # A denied call must stop before anything rewrites its arguments
     # (planner_agent.py:126-128).
-    middleware = _middleware_for(REGISTRY[name], context)
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
     names = [type(m).__name__ for m in middleware]
     assert names.index("FakeMiddleware") < names.index("FixWriteParamsMiddleware")
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
 def test_the_filesystem_middleware_is_scoped_to_the_spec(name, context):
-    middleware = _middleware_for(REGISTRY[name], context)
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
     filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"]
     assert len(filesystem) == 1
 
@@ -129,7 +153,9 @@ def test_a_gateless_context_still_builds(context):
     # Only a caller constructing this by hand can produce gate=None; it must
     # not crash, matching how RudraAgent tolerates it (main_agent.py:91-93).
     context.gate = None
-    middleware = _middleware_for(REGISTRY["coder"], context)
+    middleware = _middleware_for(
+        REGISTRY["coder"], context, _model_for(REGISTRY["coder"], context.cfg)
+    )
     assert middleware
 
 
@@ -154,7 +180,7 @@ def test_an_unknown_rudra_tool_is_a_construction_error(context):
 def test_an_unknown_fs_tool_is_a_construction_error(context):
     broken = replace(REGISTRY["coder"], fs_tools=("read_file", "teleport"))
     with pytest.raises(ValueError, match="teleport"):
-        _middleware_for(broken, context)
+        _middleware_for(broken, context, _model_for(broken, context.cfg))
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
@@ -175,7 +201,10 @@ def test_the_delegation_spec_inherits_the_gate_interrupts(name, context):
 def test_both_paths_agree_on_middleware(name, context):
     # The parity guard: if the two consumers ever disagree about what a
     # subagent is, the delegating path silently loses the gate.
-    direct = [type(m).__name__ for m in _middleware_for(REGISTRY[name], context)]
+    direct = [
+        type(m).__name__
+        for m in _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    ]
     delegated = [type(m).__name__ for m in to_subagent_spec(REGISTRY[name], context)["middleware"]]
     assert direct == delegated
 
@@ -395,7 +424,7 @@ def test_every_subagent_carries_a_derived_evict_limit(name, context):
     13107 == int(131072 * 0.10), written out so this test fails if the
     fraction changes rather than following it.
     """
-    middleware = _middleware_for(REGISTRY[name], context)
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
     filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"]
     assert len(filesystem) == 1, f"{name} has {len(filesystem)} FilesystemMiddleware"
     assert filesystem[0]._tool_token_limit_before_evict == 13107, name
@@ -405,6 +434,30 @@ def test_an_undeclared_window_leaves_the_upstream_default(context):
     """S12.9: None must not become 0 or a guess on the way through."""
     cfg = replace(context.cfg, models={"default": FakeModelConfig(context_tokens=None)})
     spec = REGISTRY[sorted(REGISTRY)[0]]
-    middleware = _middleware_for(spec, replace(context, cfg=cfg))
+    ctx = replace(context, cfg=cfg)
+    middleware = _middleware_for(spec, ctx, _model_for(spec, ctx.cfg))
     filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"][0]
     assert filesystem._tool_token_limit_before_evict == 20000
+
+
+def test_every_subagent_reports_its_usage(context):
+    """One accumulator, fed by every agent (C7.5)."""
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    ctx = replace(context, usage=usage)
+
+    for name in sorted(REGISTRY):
+        middleware = _middleware_for(REGISTRY[name], ctx, _model_for(REGISTRY[name], ctx.cfg))
+        recorders = [m for m in middleware if type(m).__name__ == "UsageMiddleware"]
+        assert len(recorders) == 1, name
+        assert recorders[0].usage is usage, name
+        assert recorders[0].role == REGISTRY[name].role, name
+
+
+def test_no_usage_object_means_no_usage_middleware(context):
+    """Every 9b-era test builds a context without one and must still work."""
+    middleware = _middleware_for(
+        REGISTRY["coder"], context, _model_for(REGISTRY["coder"], context.cfg)
+    )
+    assert not [m for m in middleware if type(m).__name__ == "UsageMiddleware"]

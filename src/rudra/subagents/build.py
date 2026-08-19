@@ -94,7 +94,7 @@ def _prompt_for(spec: RudraSubagent, context: Any) -> str:
     return f"{spec.system_prompt}\n\n{block}"
 
 
-def _middleware_for(spec: RudraSubagent, context: Any) -> list:
+def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
     """The middleware stack: gate first, then argument repair, then filesystem.
 
     The FilesystemMiddleware is constructed here rather than inherited so
@@ -130,6 +130,31 @@ def _middleware_for(spec: RudraSubagent, context: Any) -> list:
             **evict_kwargs(context.cfg, spec.role),
         ),
     ]
+    if getattr(context, "usage", None) is not None:
+        from rudra.context.middleware import UsageMiddleware
+
+        middleware.append(UsageMiddleware(spec.role, context.usage))
+
+    if spec.wants_compaction:
+        from deepagents.middleware.summarization import create_summarization_tool_middleware
+
+        # Registers the tool layer only. The engine it calls into is the
+        # SummarizationMiddleware create_deep_agent already adds; they
+        # interoperate through the shared `_summarization_event` state key,
+        # so nothing else needs registering. Its own eligibility gate
+        # refuses to compact below ~50% of the auto-trigger, so an eager
+        # model cannot compact a nearly-empty context.
+        #
+        # `model` is passed in rather than resolved here: both callers
+        # already resolve it for create_deep_agent, and resolving a second
+        # time would build two model objects per agent. It is required
+        # rather than defaulted because a default silently drops this
+        # middleware from any stack whose caller forgot -- which the parity
+        # test caught the moment it was written that way. It is also the one
+        # middleware needing a real BaseChatModel: the upstream factory
+        # type-checks it (summarization.py:1663).
+        middleware.append(create_summarization_tool_middleware(model, context.backend))
+
     if context.gate is not None:
         # First: a denied call must be stopped before anything rewrites its
         # arguments (planner_agent.py:126-128).
@@ -178,13 +203,14 @@ def build_agent(spec: RudraSubagent, context: Any) -> Any:
     """
     from langgraph.checkpoint.memory import InMemorySaver
 
+    model = _model_for(spec, context.cfg)
     return create_deep_agent(
-        model=_model_for(spec, context.cfg),
+        model=model,
         tools=_tools_for(spec, context),
         system_prompt=_prompt_for(spec, context),
         backend=context.backend,
         checkpointer=context.checkpointer or InMemorySaver(),
-        middleware=_middleware_for(spec, context),
+        middleware=_middleware_for(spec, context, model),
         interrupt_on=context.gate.interrupt_on if context.gate is not None else None,
         skills=_skills_for(spec, context),
     )
@@ -201,13 +227,14 @@ def to_subagent_spec(spec: RudraSubagent, context: Any) -> dict:
     `model` and `tools` are always set because create_sub_agent raises
     without them (subagents.py:358-363).
     """
+    _spec_model = _model_for(spec, context.cfg)
     return {
         "name": spec.name,
         "description": spec.description,
         "system_prompt": _prompt_for(spec, context),
-        "model": _model_for(spec, context.cfg),
+        "model": _spec_model,
         "tools": _tools_for(spec, context),
-        "middleware": _middleware_for(spec, context),
+        "middleware": _middleware_for(spec, context, _spec_model),
         "interrupt_on": context.gate.interrupt_on if context.gate is not None else None,
         # Only when the spec wants them: create_sub_agent reads this key
         # (graph.py:676-678), and the delegated path must grant exactly

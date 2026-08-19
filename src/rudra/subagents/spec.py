@@ -43,6 +43,10 @@ class RudraSubagent:
             methodology library helps an agent choosing *how* to work. The
             reviewer reads a diff and reports, and would pay ~916 tokens
             for descriptions it cannot act on (S11b.1).
+        wants_compaction: Does this subagent get `compact_conversation`?
+            The coder and tester retry and read pytest transcripts; the
+            planner stages are short and the reviewer runs once, so they
+            are simply not given the tool (S12.8, on S9b.3's precedent).
     """
 
     name: str
@@ -52,6 +56,7 @@ class RudraSubagent:
     fs_tools: tuple[str, ...] = ()
     rudra_tools: tuple[str, ...] = ()
     wants_skills: bool = False
+    wants_compaction: bool = False
 
     @property
     def can_write(self) -> bool:

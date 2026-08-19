@@ -17,6 +17,7 @@ from rich.console import Console
 
 from rudra.config import get_config
 from rudra.context.budget import evict_limit
+from rudra.context.middleware import UsageMiddleware
 from rudra.facts import facts_block
 from rudra.filesystem import project_tree
 from rudra.llm import build_model
@@ -163,6 +164,7 @@ def build_planner_middleware(
     compat_sandbox_paths: bool = False,
     backend: Any = None,
     evict_tokens: int | None = None,
+    usage: Any = None,
 ) -> list:
     """The planner's middleware stack, with both D4 workarounds gated.
 
@@ -198,6 +200,8 @@ def build_planner_middleware(
     if backend is not None:
         evict = {} if evict_tokens is None else {"tool_token_limit_before_evict": evict_tokens}
         middleware.append(FilesystemMiddleware(backend=backend, **evict))
+    if usage is not None:
+        middleware.append(UsageMiddleware("planner", usage))
     if compat_task_anchor:
         middleware.append(TaskAnchorMiddleware(task))
     return middleware
@@ -311,6 +315,7 @@ def create_planner_agent(
     stage: str = "breakdown",
     skills_sources: tuple[str, ...] | None = None,
     skills_cache_root: Path | None = None,
+    usage: Any = None,
 ):
     """Create one stage of the planner (S10b.1).
 
@@ -358,6 +363,7 @@ def create_planner_agent(
         compat_sandbox_paths=cfg.compat.sandbox_paths,
         backend=filesystem_backend,
         evict_tokens=evict_limit(cfg, "planner"),
+        usage=usage,
     )
     if gate is not None:
         # First in the list: a denied call must be stopped before any other

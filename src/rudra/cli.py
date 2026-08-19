@@ -18,6 +18,7 @@ from typer.core import TyperGroup
 from rudra import __version__
 from rudra.agent import AgentResult, create_main_agent
 from rudra.config import get_config
+from rudra.context.usage import render_usage
 from rudra.filesystem import project_tree
 
 
@@ -853,16 +854,16 @@ def main(
         result: AgentResult = asyncio.run(_run())
 
         if result.success:
-            console.print(
-                Panel(
-                    f"[green]✓[/green] {result.message}\n\n"
-                    f"Files created:  {len(result.files_created)}\n"
-                    f"Files modified: {len(result.files_modified)}\n"
-                    f"Iterations:     {result.iterations}",
-                    title="✅ Complete",
-                    border_style="green",
-                )
+            body = (
+                f"[green]✓[/green] {result.message}\n\n"
+                f"Files created:  {len(result.files_created)}\n"
+                f"Files modified: {len(result.files_modified)}\n"
+                f"Iterations:     {result.iterations}"
             )
+            block = render_usage(result.usage)
+            if block:
+                body += f"\n\n{block}"
+            console.print(Panel(body, title="✅ Complete", border_style="green"))
         else:
             console.print(
                 Panel(
@@ -934,15 +935,15 @@ def main(
                         await agent.close()
 
                     if result.success:
-                        console.print(
-                            Panel(
-                                f"[green]✓[/green] {result.message}\n\n"
-                                f"Files created:  {len(result.files_created)}\n"
-                                f"Files modified: {len(result.files_modified)}",
-                                title="✅ Complete",
-                                border_style="green",
-                            )
+                        body = (
+                            f"[green]✓[/green] {result.message}\n\n"
+                            f"Files created:  {len(result.files_created)}\n"
+                            f"Files modified: {len(result.files_modified)}"
                         )
+                        block = render_usage(result.usage)
+                        if block:
+                            body += f"\n\n{block}"
+                        console.print(Panel(body, title="✅ Complete", border_style="green"))
                     else:
                         console.print(
                             Panel(

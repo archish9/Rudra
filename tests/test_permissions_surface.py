@@ -89,7 +89,7 @@ def test_task_anchor_is_present_when_compat_enables_it(tmp_path: Path) -> None:
     assert "TaskAnchorMiddleware" in names
 
 
-def test_task_anchor_is_absent_from_the_subagents(tmp_path: Path) -> None:
+def test_task_anchor_is_absent_from_the_subagents(tmp_path: Path, monkeypatch) -> None:
     """Step 9c: subagents never take TaskAnchorMiddleware at all.
 
     It is a D4 compat shim for qwen3:14b losing the task mid-run, default
@@ -101,8 +101,14 @@ def test_task_anchor_is_absent_from_the_subagents(tmp_path: Path) -> None:
 
     from rich.console import Console
 
-    from rudra.subagents.build import _middleware_for
+    import rudra.subagents.build as build
+    from rudra.subagents.build import _middleware_for, _model_for
     from rudra.subagents.registry import REGISTRY
+    from tests.test_subagents_build import FakeModel
+
+    # The coder wants compaction, whose middleware type-checks its model
+    # (summarization.py:1663), so a resolvable one is required here.
+    monkeypatch.setattr(build, "build_model", lambda role, cfg=None: FakeModel(role=role))
 
     @dataclass
     class Compat:
@@ -139,7 +145,12 @@ def test_task_anchor_is_absent_from_the_subagents(tmp_path: Path) -> None:
         console=Console(quiet=True),
         cfg=Cfg(compat=Compat()),
     )
-    names = [type(m).__name__ for m in _middleware_for(REGISTRY["coder"], context)]
+    names = [
+        type(m).__name__
+        for m in _middleware_for(
+            REGISTRY["coder"], context, _model_for(REGISTRY["coder"], context.cfg)
+        )
+    ]
     assert "TaskAnchorMiddleware" not in names
     assert "FixWriteParamsMiddleware" in names
 
