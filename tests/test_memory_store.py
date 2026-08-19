@@ -85,3 +85,36 @@ def test_a_project_name_with_no_usable_characters_fails_at_construction(tmp_path
     bad.mkdir()
     with pytest.raises(TaxonomyError):
         MemoryStore(bad)
+
+
+def test_search_finds_a_written_memory(store: MemoryStore) -> None:
+    store.write(
+        MemoryEntry(content="we chose uv over pip for speed", room="decisions", added_by="rudra")
+    )
+    hits = store.search("which package manager did we pick")
+    assert hits
+    assert "uv" in hits[0].content
+
+
+def test_search_can_filter_by_room(store: MemoryStore) -> None:
+    store.write(MemoryEntry(content="uv over pip", room="decisions", added_by="rudra"))
+    store.write(MemoryEntry(content="uv over pip", room="preferences", added_by="agent"))
+    hits = store.search("uv", room="preferences")
+    assert hits
+    assert all(hit.room == "preferences" for hit in hits)
+
+
+def test_search_carries_added_by_through(store: MemoryStore) -> None:
+    store.write(MemoryEntry(content="the model's opinion", room="preferences", added_by="agent"))
+    hits = store.search("opinion")
+    assert hits[0].added_by == "agent"
+
+
+def test_search_on_an_empty_palace_returns_no_hits_and_does_not_raise(store: MemoryStore) -> None:
+    assert store.search("anything") == []
+
+
+def test_search_respects_the_limit(store: MemoryStore) -> None:
+    for n in range(6):
+        store.write(MemoryEntry(content=f"decision number {n}", room="decisions", added_by="rudra"))
+    assert len(store.search("decision", limit=3)) <= 3

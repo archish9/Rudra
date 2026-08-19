@@ -154,6 +154,56 @@ class MemoryStore:
         collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
         return True
 
+    @degrades(default=[])
+    def search(self, query: str, room: str | None = None, limit: int = 5) -> list[MemoryHit]:
+        """Semantic search over this project's palace.
+
+        collection_name is passed for the same reason it is on open: it has
+        no env override, so a user's global config.json would otherwise
+        decide which collection is searched.
+
+        The `added_by` lookup is not redundant. search_memories returns
+        drawer_id / text / wing / room / similarity and no `added_by` at
+        all, so the tag every drawer carries would be lost exactly where
+        14b needs it to label a hit and 14c needs it to filter a purge.
+        One `get` by the ids already in hand is the cheapest way back to it.
+        """
+        from mempalace.searcher import search_memories
+
+        collection = self._open()
+        result = search_memories(
+            query=query,
+            palace_path=self.palace_path,
+            wing=self.wing,
+            room=room,
+            n_results=limit,
+            collection_name=self.collection_name,
+        )
+        if result.get("error"):
+            msg = f"search failed: {result['error']}"
+            raise MemoryUnavailable(msg)
+
+        rows = list(result.get("results") or [])[:limit]
+        if not rows:
+            return []
+
+        ids = [row.get("drawer_id", "") for row in rows]
+        got = collection.get(ids=ids, include=["metadatas"])
+        by_id = dict(zip(got.get("ids") or [], got.get("metadatas") or [], strict=False))
+
+        hits = []
+        for row in rows:
+            meta = by_id.get(row.get("drawer_id", "")) or {}
+            hits.append(
+                MemoryHit(
+                    content=row.get("text", ""),
+                    room=str(row.get("room", "")),
+                    added_by=str(meta.get("added_by", "")),
+                    score=float(row.get("similarity", 0.0)),
+                )
+            )
+        return hits
+
     @degrades(default=0)
     def count(self) -> int:
         """How many drawers this project's palace holds."""
