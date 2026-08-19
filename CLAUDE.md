@@ -150,6 +150,7 @@ only function that creates anything.
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
+| `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens and compactions for the last run. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
 | `memory/export/` | durable | — | — | Step 14 |
 | `memory/palace/` | volatile | — | — | Step 14 |
@@ -204,6 +205,43 @@ that package imports.
 The historical detail — `OllamaConfig`, the `OLLAMA_*` env vars, `ChatOllama`
 built inline in two agent modules — is gone from the code. The `OLLAMA_*`
 variables survive only as a deprecation shim that warns and maps to `RUDRA_*`.
+
+---
+
+## 5a. Context Management (Step 12)
+
+Most of what manages context is **inherited from deepagents**. Rudra's work
+was making it real: three of the four inherited mechanisms were present and
+inert before Step 12.
+
+| Mechanism | Origin | State |
+|---|---|---|
+| Auto-summarization at 85% of the window | inherited | Real since `C1.4a`/`C7.6` declares `max_input_tokens` per role. Before that every local model took a fixed **170 000**-token fallback and never summarized (A1.17) |
+| Tool-result eviction to `/artifacts/` | inherited | Real since Step 12a passes a derived threshold. Before that every agent took the **20 000** default — a third of a 32B window for one failing-`pytest` transcript (A1.47) |
+| `compact_conversation` | inherited | Registered for the coder and tester only (S12.8). It is control plane, and that is load-bearing: outside `CONTROL_PLANE_TOOLS` the gate denies it |
+| Artifacts kept out of the user's repo | **designed** | `artifacts_root="/artifacts"`, or deepagents writes `large_tool_results/` and `conversation_history/` into the project (A1.45) |
+| Per-run token accounting | **designed** | `src/rudra/context/usage.py`. Nothing upstream reports what a run cost |
+| Per-task memory in `AGENTS.md` | **designed** | Step 12c |
+
+**One number, two consumers.** `[model.<role>] context_tokens` feeds both
+the summarization trigger and the eviction threshold. That is deliberate:
+two independently configured numbers would drift, and the pair only makes
+sense read together.
+
+**The standing gap, stated rather than implied: nothing measures system
+prompt growth.** Skills, facts and the bootstrap are a fixed cost paid on
+every call, and no mechanism here trims them. Summarization compacts the
+*conversation*; the prompt is rebuilt in full each time.
+
+**The compaction count is tool-driven only.** deepagents' automatic
+summarization fires without passing through any Rudra middleware, so
+`usage.json`'s `compactions` must not be read as "every time context was
+shed".
+
+**`/compact` is not a REPL command**, and that is not an oversight. The
+REPL builds a fresh agent per input (`cli.py`, inside `_repl_session`), so
+context does not accumulate between turns and there would be nothing to
+compact. Making the REPL session persistent is Step 15's call (`C9.1`–`C9.7`).
 
 ---
 
