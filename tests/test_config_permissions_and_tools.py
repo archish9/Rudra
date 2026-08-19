@@ -87,13 +87,12 @@ def test_shell_must_be_a_bool(tmp_path):
         build_config(root)
 
 
-def test_memory_stays_reserved(tmp_path):
-    # [skills] was reserved here until Step 11b implemented it, and [mcp]
-    # until Step 13 did. Reserved-to-real is the transition worth covering,
-    # so the row moves to the test below rather than being deleted.
-    root = write_config(tmp_path, "[memory]\nx = 1\n")
-    with pytest.raises(ConfigError, match="Step 14"):
-        build_config(root)
+def test_memory_is_no_longer_reserved(tmp_path):
+    # [skills] was reserved here until Step 11b implemented it, [mcp] until
+    # Step 13 did, and [memory] until Step 14a did. Reserved-to-real is the
+    # transition worth covering, so each row moves here rather than going away.
+    root = write_config(tmp_path, '[memory]\nbackend = "sqlite"\n')
+    assert build_config(root).memory.backend == "sqlite"
     reset_config()
 
 

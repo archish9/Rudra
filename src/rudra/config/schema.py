@@ -38,12 +38,17 @@ FLOOR_RULE_NAMES = ("outside-root", "git-dir", "catastrophic-command")
 # rejecting it. See TODO.md A1.50.
 DISABLEABLE_FLOOR_RULES = ("git-dir", "catastrophic-command")
 
-# `tools`, `skills` and `mcp` were all reserved here naming their implementing
-# steps. Step 7 implemented `tools`, Step 11b `skills`, and Step 13 `mcp`, so
-# all three are real sections now — see ToolsConfig, SkillsConfig, McpConfig.
-RESERVED_SECTIONS = {
-    "memory": "not supported yet — arrives in Step 14 (C8.1)",
-}
+# `tools`, `skills`, `mcp` and `memory` were all reserved here naming their
+# implementing steps. Step 7 implemented `tools`, Step 11b `skills`, Step 13
+# `mcp`, and Step 14a `memory` — all four are real sections now. The dict stays
+# because the mechanism is how a future reserved section is declared.
+RESERVED_SECTIONS: dict[str, str] = {}
+
+# ChromaDB is the default because it is already a mempalace dependency and
+# needs no server (C8.2). The rest are reachable but untested by Rudra —
+# each one is a different failure surface, and shipping a name Rudra has
+# never opened would be the inert-key mistake A1.47 records.
+VALID_MEMORY_BACKENDS = frozenset({"chroma", "sqlite", "milvus", "qdrant", "pgvector"})
 
 
 @dataclass(frozen=True)
@@ -178,6 +183,25 @@ class McpConfig:
     readonly: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class MemoryConfig:
+    """Long-term memory policy (Step 14, C8.2).
+
+    One key, deliberately. There is no `enabled`: MemPalace is mandatory
+    for every user (S14.2), so a key that cannot be turned off is worse
+    than no key — the reasoning that kept the tool-result threshold out
+    of [tools] (A1.47).
+
+    There is no `recall_fraction` either. The injected recall block's
+    budget is a constant in context/budget.py, carrying the comment
+    SESSION_LOG_ENTRIES carries: an unmeasured knob is worse than a
+    constant somebody can change with evidence (S12.4). It becomes a key
+    when a measurement says what it should be.
+    """
+
+    backend: str
+
+
 MODEL_KEYS = frozenset(f.name for f in fields(ModelConfig))
 
 DEFAULTS: dict[str, Any] = {
@@ -217,6 +241,11 @@ DEFAULTS: dict[str, Any] = {
         "timeout": 60,
         "readonly": [],
     },
+    # The palace itself lives at <project>/.rudra/memory/palace/ via
+    # rudra_paths() — never a config key, because D15 owns that layout.
+    "memory": {
+        "backend": "chroma",
+    },
 }
 
 __all__ = [
@@ -227,7 +256,9 @@ __all__ = [
     "MODEL_KEYS",
     "RESERVED_SECTIONS",
     "McpConfig",
+    "MemoryConfig",
     "SkillsConfig",
+    "VALID_MEMORY_BACKENDS",
     "VALID_MODES",
     "VALID_PROVIDERS",
     "AgentConfig",
