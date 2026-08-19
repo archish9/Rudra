@@ -118,3 +118,46 @@ def test_search_respects_the_limit(store: MemoryStore) -> None:
     for n in range(6):
         store.write(MemoryEntry(content=f"decision number {n}", room="decisions", added_by="rudra"))
     assert len(store.search("decision", limit=3)) <= 3
+
+
+def test_list_entries_returns_every_drawer(store: MemoryStore) -> None:
+    store.write(MemoryEntry(content="first", room="tasks", added_by="rudra"))
+    store.write(MemoryEntry(content="second", room="decisions", added_by="agent"))
+    assert len(store.list_entries()) == 2
+
+
+def test_list_entries_filters_by_room(store: MemoryStore) -> None:
+    store.write(MemoryEntry(content="first", room="tasks", added_by="rudra"))
+    store.write(MemoryEntry(content="second", room="decisions", added_by="rudra"))
+    assert [r.content for r in store.list_entries(room="tasks")] == ["first"]
+
+
+def test_list_entries_filters_by_author(store: MemoryStore) -> None:
+    """The filter 14c's `forget --added-by agent` is built on."""
+    store.write(MemoryEntry(content="from rudra", room="tasks", added_by="rudra"))
+    store.write(MemoryEntry(content="from the model", room="tasks", added_by="agent"))
+    assert [r.content for r in store.list_entries(added_by="agent")] == ["from the model"]
+
+
+def test_list_entries_carries_the_id_delete_needs(store: MemoryStore) -> None:
+    store.write(MemoryEntry(content="first", room="tasks", added_by="rudra"))
+    assert store.list_entries()[0].id
+
+
+def test_delete_removes_exactly_the_named_drawers(store: MemoryStore) -> None:
+    store.write(MemoryEntry(content="keep me", room="tasks", added_by="rudra"))
+    store.write(MemoryEntry(content="delete me", room="tasks", added_by="agent"))
+    doomed = [r.id for r in store.list_entries(added_by="agent")]
+    assert store.delete(doomed) == 1
+    assert [r.content for r in store.list_entries()] == ["keep me"]
+
+
+def test_delete_of_nothing_is_zero_not_an_error(store: MemoryStore) -> None:
+    assert store.delete([]) == 0
+
+
+def test_list_entries_on_a_broken_palace_degrades_to_empty(tmp_path: Path) -> None:
+    project = tmp_path / "demo"
+    (project / ".rudra" / "memory").mkdir(parents=True)
+    (project / ".rudra" / "memory" / "palace").write_text("not a directory")
+    assert MemoryStore(project).list_entries() == []

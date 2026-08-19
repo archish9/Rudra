@@ -21,6 +21,7 @@ backend. tests/test_memory_isolation.py is that scenario, executable.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,23 @@ class MemoryHit:
     room: str
     added_by: str
     score: float
+
+
+@dataclass(frozen=True)
+class MemoryRecord:
+    """One stored drawer, as the CLI sees it.
+
+    Distinct from MemoryHit because listing and searching answer different
+    questions: a hit carries a relevance score and no id, a record carries
+    the id `delete` needs and no score. Merging them would give every
+    caller a field that is meaningless half the time.
+    """
+
+    id: str
+    content: str
+    room: str
+    added_by: str
+    filed_at: str
 
 
 class MemoryStore:
@@ -204,6 +222,56 @@ class MemoryStore:
             )
         return hits
 
+    @degrades(default=[])
+    def list_entries(
+        self,
+        room: str | None = None,
+        added_by: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryRecord]:
+        """Every drawer, newest first, optionally narrowed.
+
+        Filtered in Python rather than through a `where` clause: the
+        predicates are two exact-match fields over a store that is small by
+        construction (one project's decisions), and a backend-specific
+        filter dialect is a second thing to get right per backend.
+        """
+        got = self._open().get(include=["documents", "metadatas"])
+        rows = [
+            MemoryRecord(
+                id=str(drawer_id),
+                content=str(doc),
+                room=str(meta.get("room", "")),
+                added_by=str(meta.get("added_by", "")),
+                filed_at=str(meta.get("filed_at", "")),
+            )
+            for drawer_id, doc, meta in zip(
+                got.get("ids") or [],
+                got.get("documents") or [],
+                got.get("metadatas") or [],
+                strict=False,
+            )
+        ]
+        if room is not None:
+            rows = [r for r in rows if r.room == room]
+        if added_by is not None:
+            rows = [r for r in rows if r.added_by == added_by]
+        rows.sort(key=lambda r: r.filed_at, reverse=True)
+        return rows[:limit]
+
+    @degrades(default=0)
+    def delete(self, ids: Sequence[str]) -> int:
+        """Remove drawers by id. Returns how many were named.
+
+        Irreversible, which is why the confirmation lives in the CLI and
+        not here: a library call that prompts cannot be scripted.
+        """
+        ids = list(ids)
+        if not ids:
+            return 0
+        self._open().delete(ids=ids)
+        return len(ids)
+
     @degrades(default=0)
     def count(self) -> int:
         """How many drawers this project's palace holds."""
@@ -216,4 +284,11 @@ class MemoryStore:
         return list(got.get("metadatas") or [])
 
 
-__all__ = ["CHUNK_CHARS", "EMBEDDING_MODEL", "RUDRA_COLLECTION", "MemoryHit", "MemoryStore"]
+__all__ = [
+    "CHUNK_CHARS",
+    "EMBEDDING_MODEL",
+    "RUDRA_COLLECTION",
+    "MemoryHit",
+    "MemoryRecord",
+    "MemoryStore",
+]

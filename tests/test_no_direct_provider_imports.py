@@ -153,7 +153,16 @@ def test_the_coder_agent_can_be_constructed(coded_defaults, tmp_path) -> None:
 # reason: one import site means one place that knows the vendor's API, so
 # a 3.7 -> 3.8 change is one file's problem. store.py is that site.
 MEMORY_PACKAGE = "mempalace"
-MEMORY_MODULE_PREFIX = "memory/store.py"
+
+# Two files, and the second one earned its place rather than drifting into
+# it. `memory/store.py` is the API surface. `memory/prefetch.py` exists
+# *because* it calls the vendor: C8.5 warms the embedding model through
+# mempalace's own get_embedding_function so Rudra never reimplements a
+# cache layout that can drift under it (D12 named the wrong cache, which is
+# what happens when the layout is described rather than executed).
+#
+# Adding a third entry here should require the same kind of argument.
+MEMORY_MODULES = ("memory/store.py", "memory/prefetch.py")
 
 
 def test_only_the_memory_store_imports_mempalace() -> None:
@@ -177,27 +186,29 @@ def test_only_the_memory_store_imports_mempalace() -> None:
             hit = any(
                 name == MEMORY_PACKAGE or name.startswith(f"{MEMORY_PACKAGE}.") for name in names
             )
-            if hit and not str(path).endswith(MEMORY_MODULE_PREFIX):
+            if hit and not any(str(path).endswith(name) for name in MEMORY_MODULES):
                 offenders.append(f"{path}:{node.lineno}")
-    assert not offenders, f"mempalace may only be imported by memory/store.py, found: {offenders}"
+    allowed = ", ".join(MEMORY_MODULES)
+    assert not offenders, f"mempalace may only be imported by {allowed}, found: {offenders}"
 
 
-def test_the_memory_store_imports_mempalace_lazily() -> None:
+def test_every_mempalace_importer_imports_it_lazily() -> None:
     """No module-scope mempalace import, anywhere -- including store.py.
 
     chromadb's import chain pulls onnxruntime, grpcio and opentelemetry.
     At module scope that lands on `rudra --version`, against D16's
     measured 0.59 s startup which C9.8 already wants to cut.
     """
-    store = SRC / "memory" / "store.py"
-    tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
-    for node in tree.body:  # module scope only, not ast.walk
-        if isinstance(node, ast.Import):
-            names = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            names = [node.module or ""]
-        else:
-            continue
-        assert not any(name.startswith(MEMORY_PACKAGE) for name in names), (
-            f"module-scope mempalace import at store.py:{node.lineno}"
-        )
+    for name in MEMORY_MODULES:
+        path = SRC / Path(name)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in tree.body:  # module scope only, not ast.walk
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                names = [node.module or ""]
+            else:
+                continue
+            assert not any(n.startswith(MEMORY_PACKAGE) for n in names), (
+                f"module-scope mempalace import at {name}:{node.lineno}"
+            )
