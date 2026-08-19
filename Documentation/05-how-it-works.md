@@ -3,7 +3,7 @@
 What actually happens between typing a prompt and finding files on disk.
 
 - [The short story](#the-short-story)
-- [The two agents](#the-two-agents)
+- [The planner](#the-planner)
 - [The subagents](#the-subagents)
 - [Step by step](#step-by-step)
 - [The `.rudra/` folder](#the-rudra-folder)
