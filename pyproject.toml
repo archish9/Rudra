@@ -50,6 +50,12 @@ dependencies = [
     # this is the only new runtime dependency MCP support adds; it pulls
     # mcp>=1.24.0 itself.
     "langchain-mcp-adapters>=0.3.1",
+    # Long-term memory (Step 14, C8.1). MemPalace is mandatory for every
+    # user (S14.2) -- never an extra. It pulls chromadb, which pulls
+    # onnxruntime, grpcio, kubernetes and opentelemetry: ~64 MB of wheels,
+    # plus an ~80 MB ONNX MiniLM model on first embedding call. Every
+    # import of it is function-local inside rudra/memory/store.py.
+    "mempalace>=3.7.1",
     "wcmatch>=11.0",
     "packaging>=23.2",
     # CLI Interface & Terminal UI

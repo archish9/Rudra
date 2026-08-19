@@ -14,6 +14,7 @@ from rudra.config import (
     CompatConfig,
     Config,
     McpConfig,
+    MemoryConfig,
     ModelConfig,
     PermissionsConfig,
     SkillsConfig,
@@ -59,6 +60,7 @@ def make_config(**overrides) -> Config:
             timeout=60,
             readonly=(),
         ),
+        memory=MemoryConfig(backend="chroma"),
         models={"default": settings, "planner": settings, "coder": settings},
     )
 

@@ -43,6 +43,13 @@ jobs:
       # requires: it compares __version__ against installed distribution
       # metadata, and an uninstalled source tree yields 0.0.0+unknown.
       - run: uv sync --python ${{ matrix.python-version }}
+      # The MiniLM ONNX model chromadb embeds with is ~80 MB and downloads
+      # on the first embedding call. Without this cache both matrix legs
+      # refetch it on every run. Step 14a, C8.1.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/chroma
+          key: chroma-onnx-minilm-v1
       # The suite runs under coverage rather than beside it. A standalone
       # coverage job re-ran the whole suite a second time to print a number
       # with no --fail-under -- a quarter of CI's wall time and a fourth

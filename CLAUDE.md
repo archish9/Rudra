@@ -86,6 +86,15 @@ src/rudra/
 │                           engine. ledger.py and bounds.py import nothing from
 │                           Rudra. No agent-facing tool can write DONE — only
 │                           engine.py, and only on VerifyReport.passed
+├── memory/                 Long-term memory (Step 14a, C8.1). store.py is the
+│                           ONLY module that imports mempalace, and imports it
+│                           lazily -- chromadb pulls onnxruntime, grpcio and
+│                           opentelemetry, which at module scope would land on
+│                           `rudra --version`. entry/taxonomy/degrade import
+│                           nothing from Rudra. Every mempalace call passes
+│                           palace_path, collection_name and backend
+│                           explicitly, because two of the three cannot be
+│                           overridden by env at all (C8.1b)
 ├── agent/
 │   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -152,8 +161,8 @@ only function that creates anything.
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
 | `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens and compactions for the last run. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
-| `memory/export/` | durable | — | — | Step 14 |
-| `memory/palace/` | volatile | — | — | Step 14 |
+| `memory/export/` | durable | — | — | Step 14c. The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
+| `memory/palace/` | volatile | `rudra.memory.store` | `rudra.memory.store` | ChromaDB, project-scoped per D14/S14.5. Opened only through `MemoryStore`; a failure degrades loudly and never fails a task (C8.6) |
 
 Agent-facing prompts used to name these paths as literal strings, and a path
 that moved without its prompt meant the coder wrote where nothing reads. Step 9c

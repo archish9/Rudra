@@ -131,14 +131,26 @@ def test_unknown_key_is_a_hard_error_naming_the_nearest_match(tmp_path: Path) ->
     assert "config.toml" in message
 
 
-def test_reserved_section_names_the_step_that_implements_it(tmp_path: Path) -> None:
+def test_reserved_section_names_the_step_that_implements_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mechanism, exercised against a section reserved for the test.
+
+    [skills] was the live example until Step 11b implemented it, [mcp] until
+    Step 13, and [memory] until Step 14a. RESERVED_SECTIONS is empty now, so
+    the map is patched rather than the test deleted: the next section to be
+    reserved would otherwise ship with its error path never once executed.
+    """
     project = tmp_path / "proj"
     project.mkdir()
-    # [skills] was the example here until Step 11b implemented it.
-    _write_project_toml(project, "[memory]\npalace = true\n")
+    monkeypatch.setattr(
+        "rudra.config.loader.RESERVED_SECTIONS",
+        {"telemetry": "not supported yet — arrives in Step 99 (C9.9)"},
+    )
+    _write_project_toml(project, "[telemetry]\nenabled = true\n")
     with pytest.raises(ConfigError) as excinfo:
         get_config(project)
-    assert "Step 14" in str(excinfo.value)
+    assert "Step 99" in str(excinfo.value)
 
 
 def test_unknown_section_is_rejected(tmp_path: Path) -> None:

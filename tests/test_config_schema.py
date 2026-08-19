@@ -36,9 +36,11 @@ def test_valid_modes_are_exactly_the_d5_set() -> None:
 
 
 def test_reserved_sections_name_the_step_that_implements_them() -> None:
-    # `skills` left this set in Step 11b and `mcp` in Step 13, each when the
-    # step implementing it landed.
-    assert set(RESERVED_SECTIONS) == {"memory"}
+    # `skills` left this set in Step 11b, `mcp` in Step 13 and `memory` in
+    # Step 14a, each when the step implementing it landed. The set is empty
+    # now; the dict stays because it is how the next one gets declared, and
+    # this loop is what will check its wording.
+    assert set(RESERVED_SECTIONS) == set()
     for section, note in RESERVED_SECTIONS.items():
         assert "Step" in note, f"{section} must tell the user when it arrives"
 

@@ -32,11 +32,13 @@ from rudra.config.schema import (
     FLOOR_RULE_NAMES,
     MODEL_KEYS,
     RESERVED_SECTIONS,
+    VALID_MEMORY_BACKENDS,
     VALID_MODES,
     VALID_PROVIDERS,
     AgentConfig,
     CompatConfig,
     McpConfig,
+    MemoryConfig,
     ModelConfig,
     PermissionsConfig,
     SkillsConfig,
@@ -44,7 +46,7 @@ from rudra.config.schema import (
 )
 from rudra.state.paths import rudra_paths
 
-_TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills", "mcp")
+_TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills", "mcp", "memory")
 _AGENT_KEYS = frozenset({"verbose", "max_fix_attempts", "max_questions"})
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
@@ -55,6 +57,7 @@ _TOOLS_KEYS = _TOOLS_BOOL_KEYS | _TOOLS_INT_KEYS
 _MCP_BOOL_KEYS = frozenset({"enabled", "mcp_in_auto"})
 _MCP_LIST_KEYS = frozenset({"disabled_servers", "allow", "deny", "readonly"})
 _MCP_KEYS = _MCP_BOOL_KEYS | _MCP_LIST_KEYS | frozenset({"timeout"})
+_MEMORY_KEYS = frozenset({"backend"})
 _POSITIVE_INT_KEYS = ("context_tokens", "max_output_tokens", "timeout")
 
 
@@ -246,6 +249,13 @@ def validate(
             if value <= 0:
                 raise ConfigError(f"[mcp] {key} must be greater than 0, got {value!r}.")
 
+    for key, value in merged.get("memory", {}).items():
+        if key not in _MEMORY_KEYS:
+            raise ConfigError(f"Unknown key '{key}' in [memory].{_suggest(key, _MEMORY_KEYS)}")
+        if not isinstance(value, str) or value not in VALID_MEMORY_BACKENDS:
+            valid = ", ".join(sorted(VALID_MEMORY_BACKENDS))
+            raise ConfigError(f"[memory] backend must be one of {valid}, got {value!r}.")
+
     _validate_skills(merged.get("skills", {}))
 
 
@@ -281,6 +291,12 @@ def _build_mcp(merged: dict[str, Any]) -> McpConfig:
         timeout=int(section["timeout"]),
         readonly=tuple(section["readonly"]),
     )
+
+
+def _build_memory(merged: dict[str, Any]) -> MemoryConfig:
+    """The [memory] policy. Mirrors _build_mcp so the two read alike."""
+    section = {**DEFAULTS["memory"], **merged.get("memory", {})}
+    return MemoryConfig(backend=str(section["backend"]))
 
 
 def _validate_skills(section: dict) -> None:
@@ -326,6 +342,7 @@ class Config:
     tools: ToolsConfig
     skills: SkillsConfig
     mcp: McpConfig
+    memory: MemoryConfig
     models: dict[str, ModelConfig]
     provenance: dict[str, str] = field(default_factory=dict)
     sources: dict[str, Path | None] = field(default_factory=dict)
@@ -420,6 +437,7 @@ def build_config(
         tools=ToolsConfig(**merged.get("tools", {})),
         skills=_build_skills(merged),
         mcp=_build_mcp(merged),
+        memory=_build_memory(merged),
         models=_build_models(merged),
         provenance=provenance,
         sources=sources,
