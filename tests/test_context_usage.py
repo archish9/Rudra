@@ -120,3 +120,18 @@ def test_module_imports_nothing_from_rudra():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module)
     assert not [name for name in imported if name.startswith("rudra")]
+
+
+def test_a_silent_provider_says_not_reported_once_not_twice():
+    """ "not reported in / not reported out" reads as two absences, not one."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=None, output_tokens=None)
+    assert render_usage(usage).count("not reported") == 1
+
+
+def test_a_half_silent_provider_still_shows_both_sides():
+    usage = RunUsage()
+    usage.record("coder", input_tokens=100, output_tokens=None)
+    text = render_usage(usage)
+    assert "100 in" in text
+    assert "not reported out" in text

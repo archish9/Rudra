@@ -10,6 +10,7 @@ tools cannot write DONE and this module is the only thing that can.
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -17,6 +18,7 @@ from typing import Any
 
 from rich.console import Console
 
+from rudra.context.usage import render_usage
 from rudra.git.core import is_repo, status
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
 from rudra.loop.ledger import Ledger, Task, TaskStatus
@@ -327,7 +329,24 @@ async def review_once(context: LoopContext, ledger: Ledger) -> None:
         context.console.print(result.text)
 
 
-def summarise(ledger: Ledger, console: Console) -> Any:
+def write_usage_log(path: Path, usage: Any) -> None:
+    """Write the run's tally beside permissions.jsonl and verify.log.
+
+    Volatile subtree (D15): regenerated every run, never worth committing.
+    Nothing here may raise. A run that finished its work must not be
+    reported as failed because its own bookkeeping could not be written --
+    the same rule _maybe_auto_branch follows for a branch it cannot make.
+    """
+    if usage is None or not usage.roles():
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(usage.as_dict(), indent=2), encoding="utf-8")
+    except OSError:
+        return
+
+
+def summarise(ledger: Ledger, console: Console, usage: Any = None) -> Any:
     """Print every task and return the run's result.
 
     A1.25 died here: there is no filter between what was declared and what
@@ -347,6 +366,11 @@ def summarise(ledger: Ledger, console: Console) -> Any:
     if counts["pending"]:
         headline += f" · {counts['pending']} never attempted"
     console.print(f"\n[bold]{headline}[/bold]\n")
+
+    block = render_usage(usage)
+    if block:
+        console.print(block)
+        console.print()
 
     for task in ledger.tasks:
         note = task.note
@@ -371,6 +395,7 @@ def summarise(ledger: Ledger, console: Console) -> Any:
         files_created=sorted(set(files)),
         files_modified=[],
         iterations=sum(1 for task in ledger.tasks if task.attempts > 0),
+        usage=usage,
     )
 
 
@@ -443,7 +468,9 @@ async def work(
 
     if any(task.status is TaskStatus.DONE for task in ledger.tasks):
         await review_once(context, ledger)
-    return summarise(ledger, context.console)
+    run_usage = getattr(context, "usage", None)
+    write_usage_log(context.paths.logs / "usage.json", run_usage)
+    return summarise(ledger, context.console, run_usage)
 
 
 async def run_loop(
@@ -485,5 +512,6 @@ __all__ = [
     "run_loop",
     "run_task",
     "summarise",
+    "write_usage_log",
     "work",
 ]

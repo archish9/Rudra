@@ -102,9 +102,14 @@ def render_usage(usage: Any) -> str:
     lines = []
     for role in usage.roles():
         tally = data[role]
+        if tally["input_tokens"] is None and tally["output_tokens"] is None:
+            # Said once, not twice: "not reported in / not reported out"
+            # reads as two separate absences rather than one silent provider.
+            counts = "not reported"
+        else:
+            counts = f"{_count(tally['input_tokens'])} in / {_count(tally['output_tokens'])} out"
         line = (
-            f"  {role:<{width}}  {_count(tally['input_tokens'])} in / "
-            f"{_count(tally['output_tokens'])} out  "
+            f"  {role:<{width}}  {counts}  "
             f"[dim]({tally['calls']} call{'s' if tally['calls'] != 1 else ''}"
         )
         if tally["compactions"]:

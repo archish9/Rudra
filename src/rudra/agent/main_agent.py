@@ -68,6 +68,9 @@ class AgentResult:
     files_created: list[str] = field(default_factory=list)
     files_modified: list[str] = field(default_factory=list)
     iterations: int = 0
+    # The run's token tally (C7.5). None when nothing recorded one, which
+    # is every programmatic caller that builds an AgentResult by hand.
+    usage: Any = None
 
 
 class RudraAgent:

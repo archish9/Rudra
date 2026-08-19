@@ -96,3 +96,72 @@ def test_files_touched_are_reported():
     ledger.tasks[1].files_touched = ("b.py", "c.py")
     result, _ = render(ledger)
     assert result.files_created == ["a.py", "b.py", "c.py"], "deduplicated and sorted"
+
+
+def test_summarise_puts_the_usage_on_the_result():
+    from rich.console import Console
+
+    from rudra.context.usage import RunUsage
+    from rudra.loop.engine import summarise
+    from rudra.loop.ledger import Ledger
+
+    usage = RunUsage()
+    usage.record("coder", input_tokens=100, output_tokens=10)
+
+    result = summarise(Ledger(), Console(quiet=True), usage)
+    assert result.usage is usage
+
+
+def test_summarise_without_usage_still_works():
+    """Every caller predating C7.5 passes two arguments."""
+    from rich.console import Console
+
+    from rudra.loop.engine import summarise
+    from rudra.loop.ledger import Ledger
+
+    assert summarise(Ledger(), Console(quiet=True)).usage is None
+
+
+def test_work_writes_the_usage_log(tmp_path):
+    """usage.json lands in D15's volatile subtree beside the other logs."""
+    import json
+
+    from rudra.context.usage import RunUsage
+    from rudra.loop.engine import write_usage_log
+
+    usage = RunUsage()
+    usage.record("coder", input_tokens=100, output_tokens=10)
+    target = tmp_path / "logs" / "usage.json"
+
+    write_usage_log(target, usage)
+
+    assert json.loads(target.read_text(encoding="utf-8"))["coder"]["input_tokens"] == 100
+
+
+def test_writing_the_usage_log_never_ends_a_run(tmp_path):
+    """A completed run must not fail on its own bookkeeping.
+
+    The tally must be NON-EMPTY, or write_usage_log returns before it
+    attempts anything and the test passes without exercising the guard.
+    """
+    from rudra.context.usage import RunUsage
+    from rudra.loop.engine import write_usage_log
+
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+
+    # A directory where the file should be: write_text raises
+    # IsADirectoryError, an OSError, which the guard must swallow.
+    target = tmp_path / "usage.json"
+    target.mkdir()
+
+    write_usage_log(target, usage)  # must not raise
+
+
+def test_writing_the_usage_log_skips_an_empty_tally(tmp_path):
+    from rudra.context.usage import RunUsage
+    from rudra.loop.engine import write_usage_log
+
+    target = tmp_path / "usage.json"
+    write_usage_log(target, RunUsage())
+    assert not target.exists()
