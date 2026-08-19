@@ -17,6 +17,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+# Imported at module scope, not inside __init__, and that is load-bearing:
+# `mcp.client.stdio.stdio_client` binds `errlog=sys.stderr` as a default
+# argument when it is imported (sessions.py:106). Importing it lazily means
+# the binding happens inside whichever caller spawns the first server -- and
+# if that caller has replaced sys.stderr with something lacking a fileno (a
+# CliRunner, a GUI host), every server spawn in the process then fails with
+# "UnsupportedOperation: fileno". See TODO.md A1.84.
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
 from rudra.mcp.config import ServerEntry, to_connection
 from rudra.mcp.registry import split_id, tool_id
 
@@ -67,8 +76,6 @@ class McpClient:
         timeout: int = 60,
         console: Any = None,
     ) -> None:
-        from langchain_mcp_adapters.client import MultiServerMCPClient
-
         self._entries = {entry.name: entry for entry in entries}
         self._client = MultiServerMCPClient(
             {name: to_connection(entry) for name, entry in self._entries.items()}

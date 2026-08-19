@@ -67,7 +67,12 @@ async def test_a_disabled_server_is_not_loaded(tmp_path):
         await agent.close()
 
 
-async def test_malformed_mcp_json_warns_and_the_run_continues(tmp_path, capsys):
+async def test_malformed_mcp_json_warns_and_the_run_continues(tmp_path, capfd):
+    # capfd, not capsys: capsys swaps sys.stderr for an object with no
+    # fileno, and `mcp.client.stdio.stdio_client` binds `errlog=sys.stderr`
+    # as a default argument at import time (sessions.py:106). A test that
+    # imports it under capsys poisons every later server spawn in the same
+    # process with "UnsupportedOperation: fileno". See TODO.md A1.84.
     root = project(tmp_path)
     (root / ".mcp.json").write_text("{oops", encoding="utf-8")
     agent = await create_main_agent(root, "task")
@@ -75,7 +80,7 @@ async def test_malformed_mcp_json_warns_and_the_run_continues(tmp_path, capsys):
         assert agent.mcp is None
     finally:
         await agent.close()
-    assert "mcp" in capsys.readouterr().out.lower()
+    assert "mcp" in capfd.readouterr().out.lower()
 
 
 async def test_mcp_disabled_in_config_beats_a_present_file(tmp_path):

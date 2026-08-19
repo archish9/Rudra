@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -70,6 +71,9 @@ app.add_typer(config_app, name="config")
 
 skills_app = typer.Typer(help="Inspect and validate the skill library.")
 app.add_typer(skills_app, name="skills")
+
+mcp_app = typer.Typer(help="Configure and check MCP servers.")
+app.add_typer(mcp_app, name="mcp")
 
 console = Console()
 
@@ -557,6 +561,38 @@ def doctor_command(
         str(paths.root) if paths.run.is_dir() else "run `rudra init`",
     )
 
+    # The MCP checks C2.3 deferred to Step 13. `--offline` changes nothing
+    # here: shutil.which starts no process, and spawning lives in
+    # `rudra mcp test`.
+    from rudra.mcp import mcp_json_path, read_mcp_json
+    from rudra.mcp.config import McpConfigError
+
+    mcp_file = mcp_json_path(project_path)
+    try:
+        entries = read_mcp_json(mcp_file)
+        detail = ", ".join(entry.name for entry in entries) or "no servers"
+        table.add_row(".mcp.json", "ok" if mcp_file.exists() else "-", detail)
+    except McpConfigError as exc:
+        entries = ()
+        table.add_row(".mcp.json", "error", str(exc))
+
+    for entry in entries:
+        if not cfg.mcp.enabled:
+            table.add_row(f"mcp: {entry.name}", "-", "[mcp] enabled = false")
+        elif entry.name in cfg.mcp.disabled_servers:
+            table.add_row(f"mcp: {entry.name}", "-", "disabled in [mcp] disabled_servers")
+        elif entry.command and shutil.which(entry.command) is None:
+            table.add_row(f"mcp: {entry.name}", "missing", f"'{entry.command}' is not on PATH")
+        else:
+            table.add_row(f"mcp: {entry.name}", "ok", entry.url or entry.command or "")
+
+    configured = {entry.name for entry in entries}
+    unknown = [name for name in cfg.mcp.disabled_servers if name not in configured]
+    if unknown:
+        table.add_row(
+            "mcp policy", "warn", f"disabled_servers names unconfigured: {', '.join(unknown)}"
+        )
+
     stale = paths.root / "checkpoints.db"
     if stale.exists():
         table.add_row(
@@ -740,6 +776,142 @@ def init_command(
             console.print(f"[green]Wrote[/green] {mcp_file} [dim](no servers configured)[/dim]")
 
     console.print("[dim]Edit it, then run `rudra models test` to check your model.[/dim]")
+
+
+@mcp_app.command("list")
+def mcp_list(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Show every configured MCP server and whether Rudra will load it."""
+    from rudra.mcp import mcp_json_path, read_mcp_json
+    from rudra.mcp.config import McpConfigError
+
+    project_path = get_project_path(project_dir)
+    cfg = _load_config_or_exit(project_dir)
+    path = mcp_json_path(project_path)
+    try:
+        entries = read_mcp_json(path)
+    except McpConfigError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    if not entries:
+        console.print(f"No MCP servers configured ({path} is absent or empty).")
+        console.print("Add one with `rudra mcp add <name> -- <command> [args...]`.")
+        return
+
+    table = Table(title="MCP servers", header_style="bold")
+    for column in ("Server", "Transport", "Command", "Loaded"):
+        table.add_column(column, overflow="fold")
+    for entry in entries:
+        target = entry.url or " ".join([entry.command or "", *entry.args]).strip()
+        if not cfg.mcp.enabled:
+            state = "no — [mcp] enabled = false"
+        elif entry.name in cfg.mcp.disabled_servers:
+            state = "no — disabled"
+        else:
+            state = "yes"
+        table.add_row(escape(entry.name), entry.transport, escape(target), state)
+    console.print(table)
+
+
+@mcp_app.command("add")
+def mcp_add(
+    name: str = typer.Argument(..., help="Name for this server, e.g. kala"),
+    command: Optional[list[str]] = typer.Argument(None, help="Command and args, after a `--`"),
+    url: Optional[str] = typer.Option(None, "--url", help="HTTP/SSE endpoint instead of a command"),
+    transport: Optional[str] = typer.Option(None, "--transport", help="stdio | http | sse"),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Add a server to .mcp.json."""
+    from rudra.mcp import ServerEntry, mcp_json_path, read_mcp_json, write_mcp_json
+
+    project_path = get_project_path(project_dir)
+    path = mcp_json_path(project_path)
+    existing = [entry for entry in read_mcp_json(path) if entry.name != name]
+
+    argv = list(command or [])
+    if not argv and url is None:
+        console.print("[red]Error:[/red] give a command after `--`, or a --url.")
+        raise typer.Exit(1)
+
+    entry = ServerEntry(
+        name=name,
+        transport=transport or ("stdio" if argv else "http"),
+        command=argv[0] if argv else None,
+        args=tuple(argv[1:]),
+        env={},
+        url=url,
+        headers={},
+    )
+    write_mcp_json(path, [*existing, entry])
+    console.print(f"Added '{name}' to {path}.")
+    console.print("[dim]Check it with `rudra mcp test`.[/dim]")
+
+
+@mcp_app.command("remove")
+def mcp_remove(
+    name: str = typer.Argument(...),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Remove a server from .mcp.json."""
+    from rudra.mcp import mcp_json_path, read_mcp_json, write_mcp_json
+
+    path = mcp_json_path(get_project_path(project_dir))
+    entries = read_mcp_json(path)
+    kept = [entry for entry in entries if entry.name != name]
+    if len(kept) == len(entries):
+        known = ", ".join(entry.name for entry in entries) or "none"
+        console.print(f"[red]Error:[/red] no MCP server named '{name}'. Configured: {known}.")
+        raise typer.Exit(1)
+    write_mcp_json(path, kept)
+    console.print(f"Removed '{name}' from {path}.")
+
+
+@mcp_app.command("test")
+def mcp_test(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Start each enabled server and list what it offers."""
+    import asyncio
+
+    from rudra.mcp import McpClient, mcp_json_path, read_mcp_json
+    from rudra.mcp.client import McpUnavailable
+
+    project_path = get_project_path(project_dir)
+    cfg = _load_config_or_exit(project_dir)
+    entries = [
+        entry
+        for entry in read_mcp_json(mcp_json_path(project_path))
+        if entry.name not in cfg.mcp.disabled_servers
+    ]
+    if not entries:
+        console.print("No MCP servers to test.")
+        return
+
+    client = McpClient(entries, timeout=cfg.mcp.timeout)
+    table = Table(title="rudra mcp test", header_style="bold")
+    for column in ("Server", "Status", "Detail"):
+        table.add_column(column, overflow="fold")
+
+    async def check() -> bool:
+        ok = True
+        for entry in entries:
+            try:
+                infos = await client.list_tools(entry.name)
+            except McpUnavailable as exc:
+                ok = False
+                table.add_row(escape(entry.name), "[red]fail[/red]", escape(str(exc)))
+                continue
+            names = ", ".join(info.name for info in infos) or "no tools"
+            table.add_row(escape(entry.name), "ok", f"{len(infos)} tools: {escape(names)}")
+        await client.aclose()
+        return ok
+
+    healthy = asyncio.run(check())
+    console.print(table)
+    if not healthy:
+        raise typer.Exit(1)
 
 
 @app.callback(
