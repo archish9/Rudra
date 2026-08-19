@@ -86,7 +86,7 @@ src/rudra/
 │                           engine. ledger.py and bounds.py import nothing from
 │                           Rudra. No agent-facing tool can write DONE — only
 │                           engine.py, and only on VerifyReport.passed
-├── memory/                 Long-term memory (Step 14a, C8.1). store.py is the
+├── memory/                 Long-term memory (Steps 14a/14b). store.py is the
 │                           ONLY module that imports mempalace, and imports it
 │                           lazily -- chromadb pulls onnxruntime, grpcio and
 │                           opentelemetry, which at module scope would land on
@@ -94,7 +94,10 @@ src/rudra/
 │                           nothing from Rudra. Every mempalace call passes
 │                           palace_path, collection_name and backend
 │                           explicitly, because two of the three cannot be
-│                           overridden by env at all (C8.1b)
+│                           overridden by env at all (C8.1b). render.py builds
+│                           the recall block; the write spine lives in
+│                           loop/engine.py beside the AGENTS.md writer, which
+│                           is what makes C8.9 structural (Step 14b)
 ├── agent/
 │   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -104,7 +107,11 @@ src/rudra/
 ├── middleware/             2 survivors of D4, both opt-in behind [compat]
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           interaction (record_fact · ask_user) · git_tools ·
-│                           testing_tools.
+│                           testing_tools · memory_tools (remember ·
+│                           search_memory). `remember` is CONTROL_PLANE, not
+│                           MUTATING: it writes under .rudra/ only, and
+│                           outside that set the gate would deny it on every
+│                           call (A1.75).
 │                           The last two are thin wrappers over git/ and
 │                           testing/, whose APIs the orchestrator calls directly
 ├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
@@ -230,6 +237,7 @@ inert before Step 12.
 | `compact_conversation` | inherited | Registered for the coder and tester only (S12.8). It is control plane, and that is load-bearing: outside `CONTROL_PLANE_TOOLS` the gate denies it |
 | Artifacts kept out of the user's repo | **designed** | `artifacts_root="/artifacts"`, or deepagents writes `large_tool_results/` and `conversation_history/` into the project (A1.45) |
 | Per-run token accounting | **designed** | `src/rudra/context/usage.py`. Nothing upstream reports what a run cost |
+| Recalled memories in every prompt | **designed** | `memory/render.py` + `recall_limit`. **One number now feeds three consumers** — summarization, eviction, and recall. `usage.json` carries `recall_chars` per role so the fraction can be revised with evidence (Step 14b) |
 | Per-task memory in `AGENTS.md` | **designed** | `src/rudra/context/agents_md.py` + the two writers in `loop/engine.py`. Session Log capped at 20 entries (C7.3) |
 
 **One number, two consumers.** `[model.<role>] context_tokens` feeds both
