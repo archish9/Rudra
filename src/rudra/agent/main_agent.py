@@ -500,6 +500,25 @@ def build_backend(cfg, project_path: Path, sources=()):
     )
 
 
+def build_memory_store(project_path: Path, cfg: Any, console: Console) -> Any:
+    """One MemoryStore for the run, or None if it cannot be built.
+
+    TaxonomyError is caught here rather than by `degrades`, because it is
+    raised by the *constructor* -- there is no store yet to degrade. A
+    project directory whose name yields no usable wing costs the run its
+    memory, never the run itself (C8.6), and says so rather than going
+    quiet (S14.2).
+    """
+    from rudra.memory.store import MemoryStore
+    from rudra.memory.taxonomy import TaxonomyError
+
+    try:
+        return MemoryStore(project_path, backend=cfg.memory.backend)
+    except TaxonomyError as exc:
+        console.print(f"[yellow]Long-term memory is off for this run: {exc}[/yellow]")
+        return None
+
+
 async def create_main_agent(
     project_path: Path,
     task: str,
@@ -621,6 +640,11 @@ async def create_main_agent(
     # subagent record into the same object, and the panel reads it once.
     usage = RunUsage()
 
+    # One store, shared by reference between the subagents and the loop --
+    # the rule the gate, the FactStore and the Ledger all follow. Two
+    # MemoryStores would hold two ChromaDB handles on one palace.
+    memory_store = build_memory_store(project_path, cfg, console)
+
     subagent_context = SubagentContext(
         project_path=project_path,
         backend=filesystem_backend,
@@ -633,6 +657,7 @@ async def create_main_agent(
         skills_sources=skills_sources,
         usage=usage,
         mcp=mcp_client,
+        memory=memory_store,
     )
     loop_context = LoopContext(
         subagents=subagent_context,
@@ -641,6 +666,7 @@ async def create_main_agent(
         cfg=cfg,
         paths=paths,
         usage=usage,
+        memory=memory_store,
     )
 
     # One Ledger, shared by reference: the planner's tools mutate it and the
