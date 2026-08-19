@@ -604,6 +604,51 @@ def doctor_command(
             f"{stale} predates the run/ layout and is unused — safe to delete",
         )
 
+    from rudra.memory.prefetch import MODEL_SIZE_MB, is_warm, model_cache_dir
+    from rudra.memory.store import MemoryStore
+    from rudra.memory.taxonomy import TaxonomyError
+
+    try:
+        store = MemoryStore(project_path, backend=cfg.memory.backend)
+        table.add_row(
+            "memory",
+            "ok",
+            f"{store.count()} memories in {paths.memory_palace} (backend: {cfg.memory.backend})",
+        )
+    except TaxonomyError as exc:
+        table.add_row("memory", "warn", f"off for this project — {exc}")
+
+    table.add_row(
+        "memory model",
+        "ok" if is_warm() else "warn",
+        f"{model_cache_dir()}"
+        if is_warm()
+        else f"not fetched — ~{MODEL_SIZE_MB} MB downloads on first use. Run `rudra init`.",
+    )
+
+    # C8.1b by name: the user's own MemPalace config is deliberately not
+    # honoured, and silently ignoring someone's configuration is how a bug
+    # reproduces on one machine only. Only shown when one exists -- a
+    # warning nobody needs trains people to skip the table.
+    global_config = Path.home() / ".mempalace" / "config.json"
+    if global_config.exists():
+        table.add_row(
+            "mempalace config",
+            "warn",
+            f"{global_config} exists and is ignored — Rudra passes palace_path, "
+            f"collection_name and backend explicitly (C8.1b).",
+        )
+
+    export_dir = paths.memory_export
+    exported = len(list(export_dir.glob("*.md"))) if export_dir.is_dir() else 0
+    table.add_row(
+        "memory export",
+        "ok" if exported else "-",
+        f"{exported} room file(s) in {export_dir}"
+        if exported
+        else f"none — `rudra memory export` writes the durable copy to {export_dir}",
+    )
+
     installed = version("deepagents")
     table.add_row(
         "deepagents",
