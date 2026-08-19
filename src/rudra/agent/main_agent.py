@@ -141,6 +141,7 @@ class RudraAgent:
         facts=None,
         approve=None,
         resume: bool = False,
+        mcp=None,
     ):
         self.context = context
         self.planner_agent = planner_agent
@@ -162,11 +163,16 @@ class RudraAgent:
         # auto-approve, so every existing caller and every test runs
         # without a prompt (S10c.3).
         self._approve = approve or auto_approve
+        # The run's MCP client, or None. Held so close() can release it and
+        # so a caller can see what was configured without re-reading disk.
+        self.mcp = mcp
         # A resume works the ledger already on disk and never plans (C7.2).
         self.resume = resume
         self.iterations = 0
 
     async def close(self) -> None:
+        if self.mcp is not None:
+            await self.mcp.aclose()
         if self._db_conn is not None:
             await self._db_conn.close()
             self._db_conn = None
@@ -556,6 +562,24 @@ async def create_main_agent(
     # without the gate in the same step.
     gate = build_gate(cfg, project_path)
 
+    # MCP is opt-in and no server ships enabled (S13.4). A malformed
+    # .mcp.json warns and disables MCP rather than failing the run: D19
+    # requires Rudra to work identically with no server present, and an
+    # unreadable server file is a special case of absent.
+    mcp_client = None
+    if cfg.mcp.enabled:
+        from rudra.mcp import McpClient, McpConfigError, mcp_json_path, read_mcp_json
+
+        try:
+            entries = read_mcp_json(mcp_json_path(project_path))
+        except McpConfigError as exc:
+            console.print(f"[yellow]Warning:[/yellow] MCP disabled — {exc}")
+            entries = ()
+        entries = tuple(entry for entry in entries if entry.name not in cfg.mcp.disabled_servers)
+        if entries:
+            # Constructing starts no process; the first call does (C4.4).
+            mcp_client = McpClient(entries, timeout=cfg.mcp.timeout, console=console)
+
     # AGENTS.md is durable and stays at the .rudra/ root (D15 / §0.7). Its
     # tech-stack section is rendered from the facts, and tech_stack.md is
     # gone: facts reach every agent through their prompts now (S10a.7).
@@ -588,6 +612,7 @@ async def create_main_agent(
         facts=facts,
         skills_sources=skills_sources,
         usage=usage,
+        mcp=mcp_client,
     )
     loop_context = LoopContext(
         subagents=subagent_context,
@@ -668,4 +693,5 @@ async def create_main_agent(
         # flag that decides whether ask_user is registered (S10a.5).
         approve=ask_approval if interactive else auto_approve,
         resume=resume,
+        mcp=mcp_client,
     )

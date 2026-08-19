@@ -113,10 +113,21 @@ def _prompt_for(spec: RudraSubagent, context: Any) -> str:
     (planner_agent.py:42), so a project whose facts said Rust had a coder
     that was never told.
     """
+    parts = [spec.system_prompt]
     block = facts_block(getattr(context, "facts", None))
-    if not block:
-        return spec.system_prompt
-    return f"{spec.system_prompt}\n\n{block}"
+    if block:
+        parts.append(block)
+    # A model never told a server exists will never call list_mcp_tools, so
+    # this block is what makes the meta-tool design reachable. Fixed size,
+    # and only for the specs that actually hold the tools.
+    client = getattr(context, "mcp", None)
+    if client is not None and spec.wants_mcp:
+        from rudra.mcp import mcp_catalog_block
+
+        catalog = mcp_catalog_block(client.servers)
+        if catalog:
+            parts.append(catalog)
+    return "\n\n".join(parts)
 
 
 def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:

@@ -726,6 +726,19 @@ def init_command(
 
     target.write_text(CONFIG_TEMPLATE, encoding="utf-8")
     console.print(f"[green]Wrote[/green] {target}")
+
+    # No MCP server ships enabled (S13.4): every candidate duplicates
+    # something Rudra already gates natively, and a shipped default is an
+    # unrequested subprocess. The empty file exists so `rudra mcp add` has
+    # somewhere obvious to write, and so the schema is discoverable. JSON
+    # carries no comments, so the explanation goes to the console instead of
+    # into an invalid file.
+    if not global_:
+        mcp_file = get_project_path(project_dir) / ".mcp.json"
+        if not mcp_file.exists():
+            mcp_file.write_text('{\n  "mcpServers": {}\n}\n', encoding="utf-8")
+            console.print(f"[green]Wrote[/green] {mcp_file} [dim](no servers configured)[/dim]")
+
     console.print("[dim]Edit it, then run `rudra models test` to check your model.[/dim]")
 
 
