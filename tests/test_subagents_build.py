@@ -63,6 +63,7 @@ class FakeContext:
     # Mirrors SubagentContext (Step 11b). A fake that drifts from the real
     # dataclass is how tests stay green against code that would break.
     skills_sources: tuple[str, ...] | None = None
+    usage: Any = None
 
 
 class FakeModel:
@@ -408,3 +409,24 @@ def test_an_undeclared_window_leaves_the_upstream_default(context):
     middleware = _middleware_for(spec, replace(context, cfg=cfg))
     filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"][0]
     assert filesystem._tool_token_limit_before_evict == 20000
+
+
+def test_every_subagent_reports_its_usage(context):
+    """One accumulator, fed by every agent (C7.5)."""
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    ctx = replace(context, usage=usage)
+
+    for name in sorted(REGISTRY):
+        middleware = _middleware_for(REGISTRY[name], ctx)
+        recorders = [m for m in middleware if type(m).__name__ == "UsageMiddleware"]
+        assert len(recorders) == 1, name
+        assert recorders[0].usage is usage, name
+        assert recorders[0].role == REGISTRY[name].role, name
+
+
+def test_no_usage_object_means_no_usage_middleware(context):
+    """Every 9b-era test builds a context without one and must still work."""
+    middleware = _middleware_for(REGISTRY["coder"], context)
+    assert not [m for m in middleware if type(m).__name__ == "UsageMiddleware"]

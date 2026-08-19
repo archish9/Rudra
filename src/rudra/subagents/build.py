@@ -130,6 +130,11 @@ def _middleware_for(spec: RudraSubagent, context: Any) -> list:
             **evict_kwargs(context.cfg, spec.role),
         ),
     ]
+    if getattr(context, "usage", None) is not None:
+        from rudra.context.middleware import UsageMiddleware
+
+        middleware.append(UsageMiddleware(spec.role, context.usage))
+
     if context.gate is not None:
         # First: a denied call must be stopped before anything rewrites its
         # arguments (planner_agent.py:126-128).

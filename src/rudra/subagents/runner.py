@@ -70,6 +70,11 @@ class SubagentContext:
     # reference for the same reason the gate and FactStore are: one run,
     # one cache. Only specs with wants_skills actually receive them.
     skills_sources: tuple[str, ...] | None = None
+    # The run's RunUsage, shared by reference for the same reason the gate
+    # and the FactStore are: one run, one tally. Optional because the
+    # subagent machinery must stay constructible without a run -- 9b's
+    # tests build a context with no facts either.
+    usage: Any = None
 
 
 @dataclass(frozen=True)

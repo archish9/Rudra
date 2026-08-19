@@ -47,6 +47,9 @@ class LoopContext:
     console: Console
     cfg: Any
     paths: Any
+    # The run's token tally. Optional: every 9c-era test builds a
+    # LoopContext without one.
+    usage: Any = None
 
 
 def _is_build_output(path: str) -> bool:

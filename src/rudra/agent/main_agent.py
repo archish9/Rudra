@@ -497,8 +497,13 @@ async def create_main_agent(
     session_id = uuid.uuid4().hex[:12]
 
     from rudra.agent.planner_agent import STAGES, consult_planner, create_planner_agent
+    from rudra.context.usage import RunUsage
     from rudra.loop import Ledger, LoopContext
     from rudra.subagents import SubagentContext
+
+    # One per run, shared by reference: the planner stages and every
+    # subagent record into the same object, and the panel reads it once.
+    usage = RunUsage()
 
     subagent_context = SubagentContext(
         project_path=project_path,
@@ -510,6 +515,7 @@ async def create_main_agent(
         session_id=session_id,
         facts=facts,
         skills_sources=skills_sources,
+        usage=usage,
     )
     loop_context = LoopContext(
         subagents=subagent_context,
@@ -517,6 +523,7 @@ async def create_main_agent(
         console=console,
         cfg=cfg,
         paths=paths,
+        usage=usage,
     )
 
     # One Ledger, shared by reference: the planner's tools mutate it and the
@@ -545,6 +552,7 @@ async def create_main_agent(
             stage=stage,
             skills_sources=skills_sources,
             skills_cache_root=skill_cache.root if skill_cache else None,
+            usage=usage,
         )
         for stage in STAGES
     }
