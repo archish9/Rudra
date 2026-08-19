@@ -115,7 +115,12 @@ def _record_create_deep_agent(monkeypatch, module_name: str) -> dict:
         return object()
 
     monkeypatch.setattr(module, "create_deep_agent", fake_create_deep_agent)
-    monkeypatch.setattr(module, "build_model", lambda *a, **k: object())
+    # A real BaseChatModel, not object(): the coder and tester carry the
+    # compaction middleware since Step 12b, and its factory type-checks the
+    # model (summarization.py:1663).
+    from tests.test_subagents_build import FakeModel
+
+    monkeypatch.setattr(module, "build_model", lambda *a, **k: FakeModel())
     return captured
 
 
