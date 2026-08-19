@@ -53,8 +53,10 @@ def _tools_for(spec: RudraSubagent, context: Any) -> list:
     missing the one tool its prompt tells it to call would loop asking for
     something that is not there.
     """
+    selected: list[Any] = []
     if not spec.rudra_tools:
-        return []
+        selected.extend(_mcp_tools_for(spec, context))
+        return selected
 
     available: dict[str, Any] = {}
     for factory in _TOOL_FACTORIES:
@@ -72,7 +74,30 @@ def _tools_for(spec: RudraSubagent, context: Any) -> list:
         msg = f"subagent '{spec.name}' asks for unknown tool(s) {missing}; available: {known}"
         raise ValueError(msg)
 
-    return [available[name] for name in spec.rudra_tools]
+    selected = [available[name] for name in spec.rudra_tools]
+    selected.extend(_mcp_tools_for(spec, context))
+    return selected
+
+
+def _mcp_tools_for(spec: RudraSubagent, context: Any) -> list:
+    """The MCP meta-tools this subagent may hold, or nothing.
+
+    Read with getattr for the reason `facts` is: the context is duck-typed
+    `Any`, and callers outside a full run build minimal stand-ins.
+
+    The reviewer's restriction is applied here, at registration, not in a
+    prompt: an id outside `[mcp] readonly` is neither listed nor callable,
+    so it cannot be named at all (S13.5).
+    """
+    client = getattr(context, "mcp", None)
+    mcp_cfg = getattr(getattr(context, "cfg", None), "mcp", None)
+    if client is None or not spec.wants_mcp or mcp_cfg is None or not mcp_cfg.enabled:
+        return []
+
+    from rudra.mcp.tools import create_mcp_tools
+
+    allow = mcp_cfg.readonly if spec.mcp_readonly else mcp_cfg.allow
+    return create_mcp_tools(client, allow=allow, deny=mcp_cfg.deny)
 
 
 def _prompt_for(spec: RudraSubagent, context: Any) -> str:
