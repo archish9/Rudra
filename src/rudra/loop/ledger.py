@@ -16,6 +16,7 @@ import json
 import os
 import uuid
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 
@@ -59,6 +60,12 @@ class Ledger:
     """Every task this run declared, in declaration order."""
 
     tasks: list[Task] = field(default_factory=list)
+    # The request this plan was built for (C7.2). Resume compares against
+    # it: working an old plan against a new intent is worse than refusing.
+    request: str = ""
+    # When it was last written, ISO-8601. Shown in the resume summary so a
+    # user can tell a ledger from this morning from one from last week.
+    saved_at: str = ""
 
     def add(self, description: str) -> Task:
         """Append a task and return it.
@@ -75,6 +82,17 @@ class Ledger:
 
     def next_pending(self) -> Task | None:
         return next((task for task in self.tasks if task.status is TaskStatus.PENDING), None)
+
+    def resumable(self) -> tuple[Task, ...]:
+        """The tasks a resume would work, in declaration order.
+
+        PENDING only. BLOCKED hit two identical failure signatures
+        (C6.5a), so retrying it identically burns a run to reach the same
+        place; DONE and DROPPED are finished. IN_PROGRESS is deliberately
+        excluded too: it means the process died mid-task, and the coder's
+        partial work is already on disk for the next attempt to see.
+        """
+        return tuple(task for task in self.tasks if task.status is TaskStatus.PENDING)
 
     def counts(self) -> dict[str, int]:
         """Requested, and the terminal buckets. They always add up.
@@ -93,7 +111,7 @@ class Ledger:
             "pending": tally[TaskStatus.PENDING.value] + tally[TaskStatus.IN_PROGRESS.value],
         }
 
-    def save(self, path: Path) -> None:
+    def save(self, path: Path, request: str | None = None) -> None:
         """Write atomically: a private temp file, then os.replace.
 
         A crash mid-write must leave the previous ledger readable rather
@@ -109,7 +127,17 @@ class Ledger:
         """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"tasks": [{**asdict(task), "status": task.status.value} for task in self.tasks]}
+        # None means "whatever it already said". Every mid-run save passes
+        # nothing, and erasing the request on each status change would
+        # leave resume with nothing to compare against.
+        if request is not None:
+            self.request = request
+        self.saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        payload = {
+            "request": self.request,
+            "saved_at": self.saved_at,
+            "tasks": [{**asdict(task), "status": task.status.value} for task in self.tasks],
+        }
         temporary = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
         try:
             temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -138,7 +166,11 @@ class Ledger:
             )
             for entry in payload.get("tasks", [])
         ]
-        return cls(tasks=tasks)
+        return cls(
+            tasks=tasks,
+            request=payload.get("request", ""),
+            saved_at=payload.get("saved_at", ""),
+        )
 
 
 __all__ = ["Ledger", "Task", "TaskStatus"]
