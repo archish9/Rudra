@@ -23,6 +23,7 @@ from rudra.context.usage import render_usage
 from rudra.git.core import is_repo, status
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
 from rudra.loop.ledger import Ledger, Task, TaskStatus
+from rudra.memory.entry import MemoryEntry
 from rudra.subagents import SubagentContext, run_subagent
 from rudra.verify import verify_project
 from rudra.verify.stubs import SKIP_DIRS, source_files
@@ -53,6 +54,10 @@ class LoopContext:
     # The run's token tally. Optional: every 9c-era test builds a
     # LoopContext without one.
     usage: Any = None
+    # The run's MemoryStore, or None when it could not be built. Shared by
+    # reference with SubagentContext -- one run, one palace handle. Optional
+    # for the reason `usage` is.
+    memory: Any = None
 
 
 def _is_build_output(path: str) -> bool:
@@ -254,6 +259,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             task.note = ""
             ledger.save(context.paths.ledger_json)
             record_task_in_memory(context.paths, task)
+            record_task_memory(context, task)
             return Outcome.DONE
 
         signature = failure_signature(report)
@@ -262,6 +268,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             task.status = TaskStatus.BLOCKED
             task.note = "no progress: the same failure twice"
             ledger.save(context.paths.ledger_json)
+            record_block_memory(context, task)
             return Outcome.BLOCKED
         task.last_signature = signature
 
@@ -269,6 +276,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     if "wrote nothing" not in task.note:
         task.note = f"{task.attempts} attempts exhausted"
     ledger.save(context.paths.ledger_json)
+    record_block_memory(context, task)
     return Outcome.BLOCKED
 
 
@@ -377,6 +385,69 @@ def record_task_in_memory(paths: Any, task: Task) -> None:
         )
     except OSError:
         return
+
+
+def record_task_memory(context: Any, task: Task) -> None:
+    """File one completed task in the palace (C8.3).
+
+    The palace twin of record_task_in_memory, and deliberately adjacent to
+    it: AGENTS.md is the recent window, capped at 20 (S12.4), and the
+    palace is the unbounded history. Writing both from the same place is
+    what makes C8.9's "must not diverge" structural rather than a promise.
+
+    No try/except here on purpose -- MemoryStore.write is already
+    @degrades-wrapped, and a second guard would swallow a Rudra bug as if
+    it were a ChromaDB one.
+    """
+    store = getattr(context, "memory", None)
+    if store is None:
+        return
+    files = ", ".join(task.files_touched) if task.files_touched else "no files changed"
+    store.write(
+        MemoryEntry(
+            content=f"Completed: {task.description}. Files: {files}.",
+            room="tasks",
+            added_by="rudra",
+        )
+    )
+
+
+def record_block_memory(context: Any, task: Task) -> None:
+    """File one blocked task and its blocker (C8.3).
+
+    Bug-to-fix pairs are what make this worth storing: the next run's
+    planner sees what stopped the last one before it plans the same thing
+    again.
+    """
+    store = getattr(context, "memory", None)
+    if store is None:
+        return
+    store.write(
+        MemoryEntry(
+            content=f"Blocked: {task.description}. Reason: {task.note or 'unknown'}.",
+            room="blockers",
+            added_by="rudra",
+        )
+    )
+
+
+def record_plan_memory(store: Any, facts: Any, tasks: Any) -> None:
+    """File the approved plan's facts, each with its source (C8.3).
+
+    Facts, not the task list: the tasks are this run's shape and mean
+    nothing to the next request, which is why the ledger is volatile
+    (D15). A fact carries why it is believed, and that survives.
+    """
+    if store is None or facts is None:
+        return
+    for key, fact in facts.items():
+        store.write(
+            MemoryEntry(
+                content=f"{key} = {fact.value} ({fact.source}: {fact.why})",
+                room="decisions",
+                added_by="rudra",
+            )
+        )
 
 
 async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
@@ -614,6 +685,9 @@ __all__ = [
     "run_loop",
     "run_task",
     "record_task_in_memory",
+    "record_task_memory",
+    "record_block_memory",
+    "record_plan_memory",
     "summarise",
     "summarise_architecture",
     "write_usage_log",

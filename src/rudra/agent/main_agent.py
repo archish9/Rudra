@@ -271,6 +271,7 @@ class RudraAgent:
                 decision = await self._settle_plan(self._ledger)
                 if decision is not PlanDecision.APPROVE:
                     return self._plan_only_result(self._ledger, decision)
+                self._record_plan_memory()
                 return await work(
                     self.context.task,
                     context=self._loop_context,
@@ -288,6 +289,7 @@ class RudraAgent:
             decision = await self._settle_plan(ledger)
             if decision is not PlanDecision.APPROVE:
                 return self._plan_only_result(ledger, decision)
+            self._record_plan_memory()
 
             return await work(
                 self.context.task,
@@ -315,6 +317,24 @@ class RudraAgent:
             self._log_always("[bold red]\n!! Agent crashed — full traceback:[/bold red]")
             self._log_always(traceback.format_exc())
             raise
+
+    def _record_plan_memory(self) -> None:
+        """File the approved plan's facts in long-term memory (C8.3).
+
+        After approval, never before: a plan the user cancelled is not a
+        decision this project made. Called on the resume path too, where
+        the facts are the ones a previous run established -- writing them
+        again is free, because drawer ids are content-addressed and an
+        identical fact is one drawer however often it is filed.
+        """
+        from rudra.loop.engine import record_plan_memory
+
+        # getattr, not attribute access: a caller constructing RudraAgent by
+        # hand can pass any object as loop_context, and several tests do.
+        # The same reason record_task_memory reads its store this way.
+        record_plan_memory(
+            getattr(self._loop_context, "memory", None), self._facts, self._ledger.tasks
+        )
 
     async def _settle_plan(self, ledger) -> PlanDecision:
         """Show the plan and find out whether to run it (C6.9).
