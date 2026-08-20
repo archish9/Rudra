@@ -186,52 +186,6 @@ class RudraAgent:
     def _status(self, message: str) -> None:
         self.console.print(f"[dim]→ {message}[/dim]")
 
-    def _log_single_message(self, msg: Any, index: int, prefix: str = "") -> None:
-        msg_type = type(msg).__name__
-        tag = f"[{prefix}] " if prefix else ""
-
-        if msg_type == "AIMessage":
-            tool_calls = getattr(msg, "tool_calls", [])
-            if tool_calls:
-                for tc in tool_calls:
-                    name = tc.get("name", "?")
-                    args = str(tc.get("args", {}))[:400]
-                    self._log_always(
-                        f"[bold cyan]{tag}→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args}"
-                    )
-            else:
-                content = str(getattr(msg, "content", ""))[:300].replace("\n", " ")
-                self._log_always(f"[bold cyan]{tag}← [{index}] AI[/bold cyan]  {content}")
-
-        elif msg_type == "ToolMessage":
-            content = str(getattr(msg, "content", ""))
-            tool_name = getattr(msg, "name", "?")
-            first_line = content.split("\n")[0] if content else ""
-            is_error = (
-                first_line.startswith("Error:")
-                or first_line.startswith("Cannot write to")
-                or "Error:" in first_line
-                or "Traceback" in first_line
-                or "Errno" in first_line
-                or "not a valid tool" in content
-                or "Input should be a valid string" in content
-                or "BLOCKED:" in first_line
-            )
-            if is_error:
-                self._log_always(
-                    f"[bold red]{tag}✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
-                )
-            else:
-                self._log_always(f"[green]{tag}✓ [{index}] {tool_name}:[/green] {content}")
-
-        elif msg_type == "HumanMessage":
-            content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
-            self._log_always(f"[dim]{tag}[{index}] USER: {content}[/dim]")
-
-        else:
-            content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
-            self._log_always(f"[dim]{tag}[{index}] {msg_type}: {content}[/dim]")
-
     async def run(self) -> AgentResult:
         """Plan, work, verify, fix, and report. The whole run (C6.1)."""
         try:
