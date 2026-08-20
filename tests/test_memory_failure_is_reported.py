@@ -77,7 +77,7 @@ def test_the_run_summary_names_a_memory_failure(tmp_path: Path) -> None:
     store.write(MemoryEntry(content="x", room="tasks", added_by="rudra"))
 
     ledger = Ledger()
-    ledger.add(["do the thing"])
+    ledger.add("do the thing")
     ledger.tasks[0].status = TaskStatus.DONE
 
     console = Console(record=True, width=200)
@@ -93,7 +93,7 @@ def test_a_healthy_run_summary_says_nothing_about_memory(tmp_path: Path) -> None
     from rudra.loop.ledger import Ledger, TaskStatus
 
     ledger = Ledger()
-    ledger.add(["do the thing"])
+    ledger.add("do the thing")
     ledger.tasks[0].status = TaskStatus.DONE
 
     console = Console(record=True, width=200)

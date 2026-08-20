@@ -348,3 +348,34 @@ async def test_the_reviewer_still_runs_when_nothing_was_recorded(monkeypatch, co
     await engine.review_once(context, Ledger())
 
     assert prompts, "an empty file list must not skip the review"
+
+
+async def test_a_finished_task_records_how_long_it_took(monkeypatch, context):
+    """The per-task half of C9.6: a user asking "what was slow" is asking
+    about a task, not about a role."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    _outcome, task, _ledger = await run_one(context)
+    assert task.seconds > 0
+
+
+async def test_a_blocked_task_records_the_time_it_burned(monkeypatch, context):
+    """Three failed attempts cost the user three attempts' worth of wait."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report())
+    outcome, task, _ledger = await run_one(context)
+    assert outcome is Outcome.BLOCKED
+    assert task.seconds > 0
+
+
+async def test_a_stopped_run_records_the_time_too(monkeypatch, context):
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: escalating_report())
+    outcome, task, _ledger = await run_one(context)
+    assert outcome is Outcome.STOP_RUN
+    assert task.seconds > 0
+
+
+async def test_seconds_survive_the_save_run_task_makes(monkeypatch, context):
+    """run_task must assign before it saves, or the ledger on disk reports
+    0.0 for a task that took a minute."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    _outcome, task, _ledger = await run_one(context)
+    assert Ledger.load(context.paths.ledger_json).get(task.id).seconds == task.seconds
