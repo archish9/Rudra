@@ -34,7 +34,10 @@ def test_sync_hook_records_the_reported_counts():
 
     result = middleware.wrap_model_call(object(), lambda request: _response(_meta(100, 10)))
 
-    assert usage.as_dict()["coder"] == {
+    recorded = usage.as_dict()["coder"]
+    # seconds is measured, not fixed -- checked separately below.
+    assert recorded.pop("seconds") >= 0.0
+    assert recorded == {
         "calls": 1,
         "input_tokens": 100,
         "output_tokens": 10,
@@ -71,13 +74,21 @@ def test_a_response_without_usage_metadata_counts_the_call_only():
 
 
 def test_a_response_with_no_messages_is_survived():
-    """Never let accounting be the thing that ends a run."""
+    """Never let accounting be the thing that ends a run.
+
+    Step 15a changed what this records, not whether it survives: an empty
+    response has no token counts, but the call still took time, and a
+    provider that returns nothing slowly is exactly what somebody would be
+    trying to diagnose. The role now appears with both counts unreported.
+    """
     usage = RunUsage()
     middleware = UsageMiddleware("coder", usage)
 
     middleware.wrap_model_call(object(), lambda request: ModelResponse(result=[]))
 
-    assert usage.roles() == ()
+    assert usage.roles() == ("coder",)
+    assert usage.as_dict()["coder"]["input_tokens"] is None
+    assert usage.as_dict()["coder"]["output_tokens"] is None
 
 
 def test_the_response_is_returned_unchanged():
@@ -111,3 +122,51 @@ def test_other_tool_calls_are_not_counted_as_compactions():
     middleware.wrap_tool_call(Request(), lambda request: "written")
 
     assert usage.roles() == ()
+
+
+def test_the_middleware_records_wall_clock():
+    import time
+
+    usage = RunUsage()
+    middleware = UsageMiddleware("coder", usage)
+
+    def slow(request):
+        time.sleep(0.01)
+        return _response(_meta(1, 1))
+
+    middleware.wrap_model_call(object(), slow)
+
+    assert usage.as_dict()["coder"]["seconds"] >= 0.01
+
+
+def test_the_async_hook_records_wall_clock_too():
+    usage = RunUsage()
+    middleware = UsageMiddleware("coder", usage)
+
+    async def slow(request):
+        await asyncio.sleep(0.01)
+        return _response(_meta(1, 1))
+
+    asyncio.run(middleware.awrap_model_call(object(), slow))
+
+    assert usage.as_dict()["coder"]["seconds"] >= 0.01
+
+
+def test_a_failing_model_call_still_records_the_time_it_burned():
+    import time
+
+    """A call that raised still cost the user the wait, and a run that dies
+    slowly is exactly when somebody wants to know where the time went."""
+    import pytest
+
+    usage = RunUsage()
+    middleware = UsageMiddleware("coder", usage)
+
+    def boom(request):
+        time.sleep(0.01)  # as_dict rounds to ms; an instant raise is 0.0
+        raise RuntimeError("provider is down")
+
+    with pytest.raises(RuntimeError):
+        middleware.wrap_model_call(object(), boom)
+
+    assert usage.as_dict()["coder"]["seconds"] >= 0.01

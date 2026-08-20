@@ -39,6 +39,17 @@ class RoleUsage:
     # evidence rather than argument.
     recall_chars: int = 0
     recall_injections: int = 0
+    # Wall clock this role spent inside model calls, in seconds (C9.6).
+    # Measured by Rudra rather than reported by a provider, which makes it
+    # the one number that is always there: token counts are frequently
+    # absent on local backends, which is what _add's None handling exists
+    # for.
+    #
+    # There is deliberately NO cost field, and S15.2 makes that permanent:
+    # Rudra is free, the provider bill is the user's, and a bundled price
+    # table would go stale silently and be wrong for OpenRouter, vLLM and
+    # every proxy. A wrong number is worse than no number.
+    seconds: float = 0.0
 
 
 def _add(total: int | None, reported: int | None) -> int | None:
@@ -59,12 +70,25 @@ class RunUsage:
             self.per_role[role] = RoleUsage()
         return self.per_role[role]
 
-    def record(self, role: str, *, input_tokens: int | None, output_tokens: int | None) -> None:
-        """One model call by `role`, with whatever the provider reported."""
+    def record(
+        self,
+        role: str,
+        *,
+        input_tokens: int | None,
+        output_tokens: int | None,
+        seconds: float = 0.0,
+    ) -> None:
+        """One model call by `role`, with whatever the provider reported.
+
+        `seconds` defaults to 0.0 rather than None because, unlike the
+        token counts, it is never "not reported" -- a caller that does not
+        measure simply contributes nothing to the total.
+        """
         slot = self._slot(role)
         slot.calls += 1
         slot.input_tokens = _add(slot.input_tokens, input_tokens)
         slot.output_tokens = _add(slot.output_tokens, output_tokens)
+        slot.seconds += seconds
 
     def record_recall(self, role: str, chars: int) -> None:
         """One recall block injected into `role`'s prompt."""
@@ -95,6 +119,7 @@ class RunUsage:
                 "compactions": tally.compactions,
                 "recall_chars": tally.recall_chars,
                 "recall_injections": tally.recall_injections,
+                "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()
         }
@@ -129,6 +154,8 @@ def render_usage(usage: Any) -> str:
             f"  {role:<{width}}  {counts}  "
             f"[dim]({tally['calls']} call{'s' if tally['calls'] != 1 else ''}"
         )
+        if tally["seconds"]:
+            line += f", {tally['seconds']}s"
         if tally["compactions"]:
             plural = "s" if tally["compactions"] != 1 else ""
             line += f", {tally['compactions']} compaction{plural}"

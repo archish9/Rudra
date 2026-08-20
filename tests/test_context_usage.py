@@ -26,6 +26,9 @@ def test_recording_accumulates_per_role():
         "input_tokens": 350,
         "output_tokens": 40,
         "compactions": 0,
+        # Added in Step 15a: wall clock, the one number a local backend
+        # always has -- token counts are frequently absent (C9.6).
+        "seconds": 0.0,
         # Added in Step 14b: the recall block's cost, isolated because it
         # otherwise rides invisibly inside input_tokens (spec 4.6).
         "recall_chars": 0,
@@ -172,3 +175,37 @@ def test_a_role_that_never_recalled_reports_zero_not_none() -> None:
     usage = RunUsage()
     usage.record("coder", input_tokens=5, output_tokens=5)
     assert usage.as_dict()["coder"]["recall_chars"] == 0
+
+
+def test_seconds_accumulate_per_role():
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1, seconds=1.5)
+    usage.record("coder", input_tokens=1, output_tokens=1, seconds=2.25)
+    assert usage.as_dict()["coder"]["seconds"] == 3.75
+
+
+def test_a_provider_that_reports_no_tokens_still_reports_seconds():
+    """The local-first case: tokens are often absent, wall clock never is."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=None, output_tokens=None, seconds=4.0)
+    rendered = render_usage(usage)
+    assert "not reported" in rendered
+    assert "4.0s" in rendered
+
+
+def test_a_role_with_no_measured_time_says_nothing_about_it():
+    """0.0s is noise in a panel read at a glance -- the facts_block rule."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+    assert "0.0s" not in render_usage(usage)
+
+
+def test_the_usage_block_carries_no_currency():
+    """S15.2: cost is out of scope, permanently. Rudra is free and the
+    provider bill is the user's; a bundled price table would go stale
+    silently and be wrong for every proxy."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=100, output_tokens=10, seconds=1.0)
+    rendered = render_usage(usage)
+    assert "$" not in rendered
+    assert "cost" not in rendered.lower()
