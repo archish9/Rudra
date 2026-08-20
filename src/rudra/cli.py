@@ -9,7 +9,7 @@ import signal
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 import typer
@@ -21,11 +21,36 @@ from rich.table import Table
 from typer.core import TyperGroup
 
 from rudra import __version__
-from rudra.agent import AgentResult, create_main_agent
 from rudra.cli_repl import REPL_COMMANDS, build_session, expand_mentions
 from rudra.config import get_config
 from rudra.context.usage import render_usage
 from rudra.filesystem import project_tree
+
+if TYPE_CHECKING:  # pragma: no cover -- annotations only
+    from rudra.agent import AgentResult
+
+# `rudra.agent` is NOT imported here (C9.8 / A1.94). That one line pulled
+# deepagents, langchain.agents and a provider package into every
+# invocation -- `--version`, `--help`, `config list`, shell completion --
+# and measured 0.58s of it. It is imported inside the two command bodies
+# that build an agent instead. `AgentResult` is used only in annotations,
+# which `from __future__ import annotations` (line 3) leaves unevaluated.
+# tests/test_cli_startup_imports.py asserts the absence on the import
+# graph rather than on the clock.
+
+
+async def create_main_agent(*args: Any, **kwargs: Any) -> Any:
+    """The factory, imported at call time rather than at import time.
+
+    A proxy rather than a local import at each call site, for two reasons:
+    the call sites stay readable, and `rudra.cli.create_main_agent`
+    remains a patchable name -- four test modules monkeypatch it, and a
+    function-local import would have made the seam disappear while
+    pretending the tests still covered it.
+    """
+    from rudra.agent import create_main_agent as _factory
+
+    return await _factory(*args, **kwargs)
 
 
 class TaskOrCommandGroup(TyperGroup):
