@@ -95,14 +95,18 @@ def _events_for(
 
     if kind == "AIMessage":
         calls = getattr(message, "tool_calls", None) or []
-        if calls:
-            return [
-                event(TraceKind.TOOL_CALL, call.get("name", "?"), str(call.get("args", {})))
-                for call in calls
-            ]
-        # A tool-calling turn often carries empty prose; a blank AI line
-        # is noise, not information.
-        return [event(TraceKind.AI_TEXT, payload=content)] if content.strip() else []
+        # Prose FIRST, then the calls, and both when the turn has both --
+        # models routinely say what they are about to do in the same
+        # message that does it, and dropping that sentence loses the only
+        # statement of intent the trace ever gets. An empty content field
+        # yields nothing: a tool-calling turn usually carries one, and a
+        # blank AI line per call is noise.
+        events = [event(TraceKind.AI_TEXT, payload=content)] if content.strip() else []
+        events.extend(
+            event(TraceKind.TOOL_CALL, call.get("name", "?"), str(call.get("args", {})))
+            for call in calls
+        )
+        return events
 
     if kind == "ToolMessage":
         name = str(getattr(message, "name", "") or "?")

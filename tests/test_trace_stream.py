@@ -97,9 +97,33 @@ def test_an_empty_assistant_turn_produces_nothing():
 
 
 def test_the_error_markers_are_one_list_not_two():
-    """runner.py carried seven markers, planner_agent.py four -- so the
-    planner's failure counter could not see BLOCKED: at all."""
+    """Three copies had drifted: runner's 6-marker guard list, the
+    planner's 4-marker guard list, and the planner renderer's 8
+    conditions. The planner's guard could not see BLOCKED: at all."""
     assert looks_like_error("Error: boom")
     assert looks_like_error("BLOCKED: permission denied")
     assert looks_like_error("some preamble\nInput should be a valid string")
     assert not looks_like_error("Wrote a.py")
+
+
+def test_prose_and_tool_calls_in_one_message_both_survive():
+    """Models routinely say what they are about to do in the same message
+    that does it. Emitting only the calls loses the one statement of
+    intent the trace ever gets -- found by reading rendered output, not by
+    a failing test."""
+    state = StreamState(role="coder")
+    message = AIMessage(
+        content="I'll write the parser first.",
+        tool_calls=[{"name": "write_file", "args": {"file_path": "a.py"}, "id": "1"}],
+    )
+
+    events = consume(_chunk((), [message]), state)
+
+    assert [event.kind for event in events] == [TraceKind.AI_TEXT, TraceKind.TOOL_CALL]
+    assert events[0].payload == "I'll write the parser first."
+
+
+def test_an_empty_content_field_beside_tool_calls_adds_no_line():
+    state = StreamState(role="coder")
+    message = AIMessage(content="", tool_calls=[{"name": "write_file", "args": {}, "id": "1"}])
+    assert [event.kind for event in consume(_chunk((), [message]), state)] == [TraceKind.TOOL_CALL]
