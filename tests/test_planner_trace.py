@@ -38,7 +38,9 @@ async def test_planner_messages_reach_the_sink(monkeypatch):
     seen = []
     sink = TraceSink(level=TraceLevel.VERBOSE, consumers=[seen.append])
 
-    ok = await _run(monkeypatch, [((), {"messages": [AIMessage(content="here is the plan")]})], sink)
+    ok = await _run(
+        monkeypatch, [((), {"messages": [AIMessage(content="here is the plan")]})], sink
+    )
 
     assert ok
     assert [event.payload for event in seen] == ["here is the plan"]
@@ -72,8 +74,7 @@ async def test_the_planning_call_guard_still_halts(monkeypatch):
 
 async def test_the_consecutive_failure_guard_still_halts(monkeypatch):
     failures = [
-        ToolMessage(content="Error: boom", tool_call_id=str(n), name="write_file")
-        for n in range(3)
+        ToolMessage(content="Error: boom", tool_call_id=str(n), name="write_file") for n in range(3)
     ]
     chunks = [((), {"messages": failures[: n + 1]}) for n in range(3)]
 
