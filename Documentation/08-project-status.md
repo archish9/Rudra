@@ -187,12 +187,11 @@ Older versions of the README described commands that never existed or were remov
 
 Built in order, because each depends on the last.
 
-**Shipped since this page last named them as "next":** the real agent loop — subagents, a tester, an advisory reviewer, and a completion gate that means *the tests pass* rather than *the file exists*; better planning, which turned out to mean three staged agents, dynamic clarifying questions, and a plan you approve before any code is written; the [skills](12-skills.md) library with user-authored skills and `rudra skills validate`; [context management](13-context-and-memory.md), which made summarisation, eviction and per-run token accounting real; [MCP](14-mcp.md); and [long-term memory](15-memory.md).
+**Shipped since this page last named them as "next":** the real agent loop — subagents, a tester, an advisory reviewer, and a completion gate that means *the tests pass* rather than *the file exists*; better planning, which turned out to mean three staged agents, dynamic clarifying questions, and a plan you approve before any code is written; the [skills](12-skills.md) library with user-authored skills and `rudra skills validate`; [context management](13-context-and-memory.md), which made summarisation, eviction and per-run token accounting real; [MCP](14-mcp.md); and [long-term memory](15-memory.md). Since then, release polish shipped too: the run trace with per-role latency, `--debug` logging, a Ctrl-C that stops at a task boundary and hands the task back to `--continue`, a REPL with history, multiline, `@`-file mentions and `/`-completion, and a per-run transcript that `rudra log` replays.
 
 | Next | What it brings |
 |---|---|
-| **Release polish** | Token-level streaming, Ctrl-C that cancels the turn rather than printing a hint, a better REPL (history, multiline, `@`-file mentions), structured `--debug` logging |
-| **OSS launch** | PyPI publish, CONTRIBUTING / SECURITY / issue templates, repo cleanup, a plainly stated security model for shell execution |
+| **Packaging** | A PyPI release, so `uv tool install rudra` and `pipx install rudra` work. Until then, install from source — see [Getting Started](01-getting-started.md) |
 | **Stack coverage** | An end-to-end acceptance case per stack — Rust, Python, Node, React, Angular — greenfield and brownfield. Detection itself already ships |
 
 `TODO.md` in the repository root is the live ledger — every item, its status, and the evidence behind it.
@@ -207,7 +206,6 @@ Built in order, because each depends on the last.
 - Generating a first draft you intend to review
 - Working in an existing repo, in `ask` mode, on a branch — you see every change before it lands
 - Trying out a local-first coding agent
-- Contributing to Rudra itself
 
 **Also a good fit now**
 

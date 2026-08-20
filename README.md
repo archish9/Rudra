@@ -410,10 +410,14 @@ it thinks to, and recall cannot depend on that. The block is capped at a fiftiet
 model's context window and truncated by whole entries. The reviewer is the one agent that
 doesn't get it: it reads a diff, and history doesn't change what the diff says.
 
-**Nothing leaves your machine.** Embedding is local. No transcripts are ever stored — no
-dialogue, no reasoning, no file contents. Each project's memory is invisible to every
-other project. The single network access is the one-time model download that `rudra init`
-does up front.
+**Nothing leaves your machine.** Embedding is local. **Memory stores no transcripts** — no
+dialogue, no reasoning, no file contents; only the entries you can read with
+`rudra memory list`. Each project's memory is invisible to every other project. The single
+network access is the one-time model download that `rudra init` does up front.
+
+Rudra does keep a local record of each run at `.rudra/run/transcripts/<id>.jsonl` — capped,
+newest twenty runs only, redacted where each event is built, and never transmitted. It is
+for reading afterwards with `rudra log`, and it never re-enters a prompt.
 
 **Keep it in git without committing a binary.** `rudra memory export` writes plain
 markdown to `.rudra/memory/export/`, one file per room, which the shipped
@@ -495,6 +499,17 @@ Setup, settings, a full worked example, and what to do when a server misbehaves:
 | **[15. Memory](Documentation/15-memory.md)** | MemPalace: what Rudra remembers about your project, how it comes back, and how to read, prune, export and restore it |
 
 New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**. If the agent seems to lose track of what it was doing, read **[Context and Memory](Documentation/13-context-and-memory.md)** — it is almost always one unset setting — the same setting decides whether it recalls anything from earlier runs, which is **[Memory](Documentation/15-memory.md)**. Want it to reach tools Rudra doesn't ship? **[MCP](Documentation/14-mcp.md)**.
+
+---
+
+## Contributing
+
+Rudra is free and open source, and developed by one person. **Code
+contributions are not accepted right now** — but bug reports and feature
+requests are genuinely welcome, and they are read.
+
+What to include in a report, and how to report a security problem instead:
+**[CONTRIBUTING.md](CONTRIBUTING.md)** and **[SECURITY.md](SECURITY.md)**.
 
 ---
 

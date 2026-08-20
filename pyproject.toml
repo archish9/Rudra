@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "rudra"
 version = "0.2.0"
-description = "Autonomous coding agent CLI tool using deepagents framework"
+description = "Local-first autonomous coding agent for the terminal — plans, writes, tests, reviews and fixes code, with any model you choose"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.12"
 authors = [
     { name = "Archish" }
 ]
-keywords = ["ai", "agent", "coding", "cli", "deepagents", "ollama"]
+keywords = ["ai", "agent", "coding", "cli", "autonomous-agent", "llm", "local-first", "developer-tools"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",

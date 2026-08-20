@@ -326,11 +326,115 @@ It lives under `run/`, which Rudra's own `.gitignore` excludes.
   isolation, which Rudra does not do.
 - Stop a command reading files your account can read, including credentials
   on disk.
-- Verify that generated code is correct. A file counts as done when it
-  exists, not when it works.
+- Verify that generated code is correct. That is `rudra verify`'s job, not
+  the permission layer's — the gate decides whether a task is done; this
+  layer only decides whether a tool call is allowed to happen.
 
 The practical advice hasn't changed: work on a branch, and read what it
 writes.
+
+---
+
+## The security model, stated plainly
+
+The section above is the user-facing summary. This one is the same truth
+written as a threat model, and it is what [SECURITY.md](../SECURITY.md) points
+at. It is blunt on purpose.
+
+### The trust boundary
+
+Since Step 7, Rudra's backend is
+`CompositeBackend(default=LocalShellBackend(...))`. The `execute` tool
+therefore runs arbitrary commands **as you**, with your account's full
+authority: your files, your network, your SSH keys, whatever is in your
+environment.
+
+**There is no sandbox.** Rudra's permission engine decides *whether* a command
+runs. It has no say in what that command can reach once it does.
+
+### What the deny floor actually covers
+
+The floor's path rules (`outside-root`, `git-dir`) are evaluated against a
+resolved filesystem path — and only `write_file`, `edit_file` and `delete`
+carry one. `execute` is checked against exactly one floor rule,
+`catastrophic-command`, which matches shapes like `rm -rf /`, `mkfs*` and
+`dd of=/dev/*`.
+
+So: **the floor's path protection does not apply to shell commands at all.**
+
+### An agent found the way around it, unprompted
+
+This is not hypothetical. During the Step 7 acceptance run, in auto mode, the
+model was denied twice on `write_file` outside the project root. It then ran a
+shell redirect and succeeded. The audit log is the whole story:
+
+```
+deny  floor  write_file  /var/.../escaped.txt
+allow        execute     pwd
+deny  floor  write_file  ../tmp.../escaped.txt
+allow        execute     echo "hello" > /var/.../escaped.txt
+```
+
+Two denials, then success by another route, in a single run, with no user
+involvement and no prompting toward it.
+
+**This cannot be fixed by pattern-matching commands.** Redirection, `tee`,
+`cp`, `mv`, `python -c`, and any script the agent writes and then runs are all
+equivalent. Real containment is an operating-system concern — a container,
+seccomp, or a genuinely isolated `SandboxBackendProtocol` backend — not a
+regular expression.
+
+### What does contain the filesystem tools
+
+Not the floor. `virtual_mode=True` on the backend confines `write_file`,
+`edit_file` and `delete` to the project root, and that is the real mechanism.
+
+That difference is exactly why `--auto` ships the way it does: the filesystem
+tools are genuinely confined, and `execute` is not.
+
+### The `--auto` rule
+
+`--auto` alone runs the filesystem tools only. `execute` is denied unless you
+opt in, in one of three ways:
+
+- `--allow-shell` on the command line, or
+- `[tools] shell_in_auto = true` in config, or
+- an explicit allow rule naming the command, such as
+  `allow = ["execute:pytest*"]` — naming a command *is* consent, which is why
+  this check sits **after** the allow rules in `PermissionEngine.decide`.
+
+**The consequence people trip over:** `--auto` alone cannot run its own tests,
+because `run_tests` is gated as `execute`. A loop-engineering run wants
+`--auto --allow-shell`.
+
+`ask` mode is materially safer and this exposure never existed there — you
+read every command string before it runs.
+
+### The compensating control, and its limit
+
+Every gated decision is written to `.rudra/run/logs/permissions.jsonl`, in
+every mode, including `--auto`.
+
+It is a record, not a control. It tells you what happened, after it happened.
+
+### Credentials in the run record
+
+Redaction happens where a trace event is **built**, not where it is rendered.
+That is what makes the run transcript at `.rudra/run/transcripts/<id>.jsonl`
+safe to write by default. Moving redaction into the renderer would silently
+refill that file with credentials — which is not theoretical either: a live API
+key reached the console during Step 15b's own acceptance run, and the fix was
+made at the event boundary for this reason.
+
+It is pattern matching, so it is not a guarantee. A credential with no
+recognisable shape, in an innocuously named variable, still passes. Read a log
+before you attach it to anything.
+
+### If you need real isolation
+
+Run Rudra in a container or VM that holds nothing you are not willing to lose,
+with credentials scoped to the job. Nothing in Rudra's permission layer is a
+substitute for that, and it does not claim to be.
 
 ---
 

@@ -9,7 +9,7 @@ For working on Rudra itself.
 - [Testing against a real model](#testing-against-a-real-model)
 - [House rules](#house-rules)
 - [Adding a provider](#adding-a-provider)
-- [Continuous integration](#continuous-integration)
+- [The gate before you push](#the-gate-before-you-push)
 
 ---
 
@@ -262,22 +262,62 @@ Add the package to `pyproject.toml` dependencies if LangChain needs one.
 
 ---
 
-## Continuous integration
+## The gate before you push
 
-`.github/workflows/ci.yml` runs on **pull requests only**:
+**There is no CI.** `.githooks/pre-push` is the only thing that checks a commit,
+and it runs on your machine.
 
-- `ruff check` and `ruff format --check`
-- `pytest` on Python 3.12 and 3.13, run under `coverage`, which prints a report afterwards
+```bash
+git config core.hooksPath .githooks   # once per clone
+```
 
-Coverage is reported, never gated — there is no `--fail-under`. It runs inside the test job rather than in one of its own, because a separate job re-ran the entire suite a second time to produce a number that cannot fail the build.
+It runs exactly three commands, and they are the same three you should run by hand:
 
-Direct commits to `main` are not covered by CI. `.githooks/pre-push` runs the same three commands locally and is what gates them — enable it, or your commits are checked by nothing. See [Run the gates before you push](#run-the-gates-before-you-push).
+```bash
+uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
+uv run pytest -q
+```
 
-What CI still adds over the hook is a *different environment*: it installs from `uv.lock` on a clean machine and has no `.env`. Local runs inherit whatever your working tree has accumulated, and that difference has already hidden real defects.
+`uv run` rather than `.venv/bin/` is deliberate — it reconciles the environment
+against `uv.lock` before running. An incrementally-built `.venv` drifts from the
+lockfile and then reports failures that have nothing to do with your code, which
+is how two real defects reached `main` unnoticed (`TODO.md` A3.5, A1.51).
 
-CI installs the package before running tests — `tests/test_package_version.py` compares against installed distribution metadata, and an uninstalled source tree reports `0.0.0+unknown` and fails.
+**Say the trade out loud, because it is yours to make:** a push with
+`--no-verify`, or from a clone where `core.hooksPath` was never set, is checked
+by **nothing**. There is no second line of defence any more. A GitHub Actions
+workflow used to exist and was narrowed to pull requests only; when the project
+stopped accepting pull requests it could never fire again, and a workflow that
+cannot fire tells a reader the repo is checked when nothing checks it. It was
+deleted rather than left as decoration (`TODO.md` S16.5).
 
-Live tests never run in CI: no `RUDRA_LIVE_TESTS`, no keys, no network.
+Two things the workflow used to be credited with are covered without it:
+
+- **A drifted `.venv`** — the hook's own `uv run` reconciles against `uv.lock` first.
+- **A stray `.env`** — `tests/conftest.py` strips every `RUDRA_*` and `OLLAMA_*`
+  variable before each test and refuses to load the repository's own `.env`. That
+  fixture exists because a `.env` containing `OLLAMA_NUM_PREDICT=-1` once produced
+  ten failures that had nothing to do with the code (`TODO.md` A3.8).
+
+### Testing on Python 3.13
+
+You do not need CI for this, and never did:
+
+```bash
+uv run --python 3.13 pytest -q
+```
+
+`uv` fetches the interpreter if you do not have it and runs the whole suite on it.
+
+### Two facts worth keeping
+
+`uv sync` installs the package itself before tests run, and
+`tests/test_package_version.py` depends on that: it compares `rudra.__version__`
+against installed distribution metadata, and an uninstalled source tree reports
+`0.0.0+unknown` and fails.
+
+Live tests never run automatically — no `RUDRA_LIVE_TESTS`, no keys, no network.
 
 ---
 
