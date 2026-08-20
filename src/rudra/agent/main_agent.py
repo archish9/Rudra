@@ -487,6 +487,7 @@ async def create_main_agent(
     console: Optional[Console] = None,
     dry_run: bool = False,
     verbose: Optional[bool] = None,
+    debug: bool = False,
     resume: bool = False,
     **kwargs,
 ) -> RudraAgent:
@@ -613,6 +614,19 @@ async def create_main_agent(
     trace_level = resolve_level(verbose, cfg.agent.verbose)
     trace = TraceSink(level=trace_level)
     trace.add(console_consumer(console, trace_level))
+
+    # --debug adds a second consumer on the SAME events (C9.7), so the
+    # file and the screen cannot disagree about what happened -- only
+    # about how much of it was drawn. A log that cannot be opened is
+    # reported as None and skipped, never raised: bookkeeping must not end
+    # a run (loop/engine.py:501-515).
+    if debug:
+        from rudra.trace.debug import configure_debug_logging, debug_consumer
+
+        if configure_debug_logging(paths.logs / "debug.jsonl", enabled=True) is not None:
+            trace.add(debug_consumer())
+        else:
+            console.print("[yellow]--debug: could not open .rudra/run/logs/debug.jsonl[/yellow]")
 
     # One store, shared by reference between the subagents and the loop --
     # the rule the gate, the FactStore and the Ledger all follow. Two

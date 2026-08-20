@@ -1064,6 +1064,15 @@ def main(
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
     ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help=(
+            "Write a machine-readable run log to .rudra/run/logs/debug.jsonl. "
+            "Pair with --verbose for a bug report: the log records what the "
+            "trace shows, so a quiet run logs errors only."
+        ),
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -1171,6 +1180,7 @@ def main(
                 console=console,
                 dry_run=dry_run,
                 verbose=verbose,
+                debug=debug,
                 resume=continue_,
             )
             try:
@@ -1255,6 +1265,7 @@ def main(
                         console=console,
                         dry_run=dry_run,
                         verbose=verbose,
+                        debug=debug,
                     )
                     try:
                         result = await agent.run()

@@ -31,6 +31,25 @@ def _coded_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator
     reset_config()
 
 
+def _flush_debug_handlers() -> None:
+    import logging
+
+    for handler in logging.getLogger("rudra").handlers:
+        handler.flush()
+
+
+def _detach_debug_handlers() -> None:
+    """The logger tree is process-global: a handler left attached writes a
+    later test's records into a deleted tmp_path."""
+    import logging
+
+    logger = logging.getLogger("rudra")
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        handler.close()
+    logger.propagate = True
+
+
 async def _agent(tmp_path: Path, **kwargs):
     project = tmp_path / "demo"
     project.mkdir(exist_ok=True)
@@ -79,3 +98,48 @@ def test_the_shipped_default_is_normal_not_verbose():
     from rudra.config.schema import DEFAULTS
 
     assert DEFAULTS["agent"]["verbose"] is False
+
+
+async def test_debug_registers_a_second_consumer_on_the_same_sink(tmp_path: Path) -> None:
+    """C9.7: the file and the screen read the SAME events, so they cannot
+    disagree about what happened."""
+    agent = await _agent(tmp_path, debug=True)
+    try:
+        sink = agent._loop_context.subagents.trace
+        assert len(sink.consumers) == 2
+    finally:
+        await agent.close()
+        _detach_debug_handlers()
+
+
+async def test_debug_writes_into_the_volatile_subtree(tmp_path: Path) -> None:
+    """D15: beside permissions.jsonl, verify.log and usage.json."""
+    import json
+
+    from rudra.trace import TraceEvent, TraceKind
+
+    agent = await _agent(tmp_path, debug=True, verbose=True)
+    try:
+        agent._loop_context.subagents.trace.emit(
+            TraceEvent(kind=TraceKind.TOOL_CALL, role="coder", name="write_file", payload="{}")
+        )
+        _flush_debug_handlers()
+        log = tmp_path / "demo" / ".rudra" / "run" / "logs" / "debug.jsonl"
+        assert log.exists()
+        # Not line 0: a real run logs before the first event -- memory and
+        # model setup both use the `rudra` tree, which is the point of
+        # attaching to it rather than to a private logger.
+        records = [json.loads(line) for line in log.read_text().splitlines() if line]
+        assert any(record.get("name") == "write_file" for record in records)
+        assert all("kind" in record for record in records), "one grammar per file"
+    finally:
+        await agent.close()
+        _detach_debug_handlers()
+
+
+async def test_without_the_flag_no_log_is_written(tmp_path: Path) -> None:
+    agent = await _agent(tmp_path)
+    try:
+        assert not (tmp_path / "demo" / ".rudra" / "run" / "logs" / "debug.jsonl").exists()
+    finally:
+        await agent.close()
