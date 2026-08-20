@@ -114,6 +114,17 @@ class SubagentResult:
     error: str | None = None
 
 
+def _wants_token_stream(context: Any) -> bool:
+    """Is token streaming on for this run?
+
+    Read defensively: 9b-era callers -- and several tests -- build a
+    SubagentContext with `cfg=None`, and an observability setting must not
+    be the thing that makes those unbuildable.
+    """
+    agent_cfg = getattr(getattr(context, "cfg", None), "agent", None)
+    return bool(getattr(agent_cfg, "stream_tokens", False))
+
+
 def _call_key(tool_call: dict) -> tuple[str, str]:
     args = tool_call.get("args") or {}
     identifier = args.get("file_path") or args.get("path") or args.get("subagent_type") or ""
@@ -175,6 +186,9 @@ async def run_subagent(
             config,
             context.gate,
             context.console,
+            trace=context.trace,
+            stream_tokens=_wants_token_stream(context),
+            role=name,
         ):
             if halted is not None:
                 break

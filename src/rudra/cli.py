@@ -1064,6 +1064,11 @@ def main(
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
     ),
+    stream: bool = typer.Option(
+        False,
+        "--stream",
+        help="Stream the model's prose token by token into the trace (implies --verbose)",
+    ),
     debug: bool = typer.Option(
         False,
         "--debug",
@@ -1107,7 +1112,7 @@ def main(
     permission_mode = "auto" if auto else "plan" if plan else None
     cfg = get_config(
         project_path,
-        verbose=verbose,
+        verbose=True if stream else verbose,
         permission_mode=permission_mode,
         allow_shell=True if allow_shell else None,
         allow_mcp=True if allow_mcp else None,

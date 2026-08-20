@@ -46,6 +46,10 @@ model = "qwen3-coder:32b"
 # errors only.
 verbose = false
 
+# Stream the model's prose token by token into the trace. Off until it has
+# been measured against a 32B (D6) -- `--stream` turns it on for one run.
+stream_tokens = false
+
 # How many times the fix loop retries one task before giving up. It
 # usually stops sooner: two attempts that fail identically count as no
 # progress and stop immediately.

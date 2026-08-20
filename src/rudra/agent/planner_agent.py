@@ -480,6 +480,9 @@ async def _stream_planner_turn(
         lg_config,
         gate,
         console,
+        trace=trace,
+        stream_tokens=get_config().agent.stream_tokens,
+        role="planner",
     ):
         if _halt:
             break

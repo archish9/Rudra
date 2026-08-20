@@ -93,6 +93,13 @@ class AgentConfig:
     # where 0 would block every task without the coder running once, a
     # run that asks nothing is a legitimate unattended run.
     max_questions: int = 5
+    # Stream the model's prose token by token into the trace (C9.1).
+    # Off by default and deliberately so: it is unmeasured against D6's
+    # 32B floor, and this flag is how it gets measured. It changes only
+    # what the trace shows -- the chunk shape every parse loop depends on
+    # is unchanged, because the second stream mode never leaves
+    # permissions/approval.py.
+    stream_tokens: bool = False
 
 
 @dataclass(frozen=True)
@@ -224,7 +231,12 @@ DEFAULTS: dict[str, Any] = {
             "timeout": 300,
         }
     },
-    "agent": {"verbose": False, "max_fix_attempts": 3, "max_questions": 5},
+    "agent": {
+        "verbose": False,
+        "max_fix_attempts": 3,
+        "max_questions": 5,
+        "stream_tokens": False,
+    },
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},
     "tools": {
