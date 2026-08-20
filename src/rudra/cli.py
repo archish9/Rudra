@@ -22,6 +22,7 @@ from typer.core import TyperGroup
 
 from rudra import __version__
 from rudra.agent import AgentResult, create_main_agent
+from rudra.cli_repl import REPL_COMMANDS, build_session, expand_mentions
 from rudra.config import get_config
 from rudra.context.usage import render_usage
 from rudra.filesystem import project_tree
@@ -155,36 +156,6 @@ def print_banner() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_prompt_toolkit_session():
-    """Create a prompt_toolkit PromptSession with a blinking cursor."""
-    try:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.styles import Style
-
-        style = Style.from_dict(
-            {
-                "prompt": "ansibrightcyan bold",
-                "": "ansiwhite",
-            }
-        )
-
-        bindings = KeyBindings()
-
-        @bindings.add("escape", "escape", "escape")
-        def _(event):
-            event.app.exit(result="/exit")
-
-        session = PromptSession(
-            style=style,
-            mouse_support=False,
-            key_bindings=bindings,
-        )
-        return session
-    except ImportError:
-        return None
-
-
 async def _prompt_input(session, prompt_text: str) -> str:
     """Read one line from the user, using prompt_toolkit if available.
 
@@ -194,8 +165,18 @@ async def _prompt_input(session, prompt_text: str) -> str:
     if session is not None:
         from prompt_toolkit.formatted_text import HTML
 
+        from rudra.cli_repl import wants_more_input
+
         # prompt_async is awaitable — safe to call inside a running event loop
-        return await session.prompt_async(HTML(f"<prompt>{prompt_text}</prompt> "))
+        line = await session.prompt_async(HTML(f"<prompt>{prompt_text}</prompt> "))
+        # A trailing backslash continues, shell-style. Kept here rather
+        # than in prompt_toolkit's own multiline mode because that makes
+        # Enter ambiguous for every ordinary one-line prompt, which is
+        # nearly all of them.
+        while wants_more_input(line):
+            more = await session.prompt_async(HTML("<prompt>...</prompt> "))
+            line = line[:-1] + "\n" + more
+        return line
     # Fallback: rich Prompt (blocking) — run it in a thread executor so we
     # don't block the event loop
     loop = asyncio.get_event_loop()
@@ -1307,7 +1288,7 @@ def main(
 
         console.print(f"  [dim]Working directory:[/dim] [bold white]{project_path}[/bold white]\n")
 
-        pt_session = _make_prompt_toolkit_session()
+        pt_session = build_session(project_path)
 
         async def _repl_session():
             while True:
@@ -1329,16 +1310,20 @@ def main(
                         continue
                     elif cmd.startswith("/"):
                         console.print(
-                            f"  [yellow]Unknown command:[/yellow] {cmd}  [dim](type /help)[/dim]"
+                            f"  [yellow]Unknown command:[/yellow] {escape(cmd)}  "
+                            f"[dim](type /help)[/dim]"
                         )
                         continue
 
                     if not user_input.strip():
                         continue
 
+                    # Before the Panel, so what is shown is what is sent.
+                    user_input = expand_mentions(user_input, project_path)
+
                     console.print(
                         Panel(
-                            f"[bold]{user_input}[/bold]\n"
+                            f"[bold]{escape(user_input)}[/bold]\n"
                             f"[dim]Path:[/dim] {project_path}\n"
                             f"[dim]Planner:[/dim] {cfg.model_for('planner').model}  "
                             f"[dim]│  Coder:[/dim] {cfg.model_for('coder').model}\n"
@@ -1408,10 +1393,10 @@ def _print_help() -> None:
     table.add_column("cmd", style="bold cyan", no_wrap=True)
     table.add_column("desc", style="dim white")
 
-    rows = [
-        ("/help", "Show this help message"),
-        ("/tree", "Print the project file tree"),
-        ("/exit", "Quit Rudra"),
+    # The one table (cli_repl.REPL_COMMANDS), so help and completion
+    # cannot disagree about which commands exist.
+    rows = [*REPL_COMMANDS.items()]
+    rows += [
         ("", ""),
         ("Examples:", ""),
         ('"Build a FastAPI app with JWT"', "Creates a new project"),
