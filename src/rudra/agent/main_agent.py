@@ -486,7 +486,7 @@ async def create_main_agent(
     command: str = "build",
     console: Optional[Console] = None,
     dry_run: bool = False,
-    verbose: bool = False,
+    verbose: Optional[bool] = None,
     resume: bool = False,
     **kwargs,
 ) -> RudraAgent:
@@ -500,7 +500,7 @@ async def create_main_agent(
         task=task,
         console=console,
         dry_run=dry_run,
-        verbose=verbose,
+        verbose=bool(verbose),
         command=command,
         planner_model=cfg.model_for("planner").model,
         coder_model=cfg.model_for("coder").model,
@@ -596,10 +596,23 @@ async def create_main_agent(
     from rudra.context.usage import RunUsage
     from rudra.loop import Ledger, LoopContext
     from rudra.subagents import SubagentContext
+    from rudra.trace.sink import TraceSink, console_consumer, resolve_level
 
     # One per run, shared by reference: the planner stages and every
     # subagent record into the same object, and the panel reads it once.
     usage = RunUsage()
+
+    # One sink per run, shared by reference for the reason the gate, the
+    # FactStore and RunUsage are. The level is three-state because the CLI
+    # flag is (A1.15): --verbose wins, --no-verbose means errors only, and
+    # an absent flag consults [agent] verbose.
+    #
+    # Until Step 15a nothing consumed that flag at all (A1.90) and the
+    # subagents printed nothing, so a run was silent exactly while the
+    # coder was working.
+    trace_level = resolve_level(verbose, cfg.agent.verbose)
+    trace = TraceSink(level=trace_level)
+    trace.add(console_consumer(console, trace_level))
 
     # One store, shared by reference between the subagents and the loop --
     # the rule the gate, the FactStore and the Ledger all follow. Two
@@ -619,6 +632,7 @@ async def create_main_agent(
         usage=usage,
         mcp=mcp_client,
         memory=memory_store,
+        trace=trace,
     )
     loop_context = LoopContext(
         subagents=subagent_context,
@@ -685,6 +699,7 @@ async def create_main_agent(
             gate=gate,
             console=console,
             session_id=session_id,
+            trace=trace,
         )
 
     return RudraAgent(

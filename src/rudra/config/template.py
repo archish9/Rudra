@@ -40,7 +40,11 @@ model = "qwen3:32b"
 model = "qwen3-coder:32b"
 
 [agent]
-verbose = true
+# Show assistant prose and untruncated tool payloads in the run trace.
+# false still shows every tool call, result and error -- `--verbose` on
+# the command line turns this on for one run, `--no-verbose` drops to
+# errors only.
+verbose = false
 
 # How many times the fix loop retries one task before giving up. It
 # usually stops sooner: two attempts that fail identically count as no

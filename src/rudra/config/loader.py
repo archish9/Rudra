@@ -423,7 +423,7 @@ def build_config(
     permissions = merged.get("permissions", {})
     return Config(
         agent=AgentConfig(
-            verbose=bool(merged.get("agent", {}).get("verbose", True)),
+            verbose=bool(merged.get("agent", {}).get("verbose", False)),
             max_fix_attempts=int(merged.get("agent", {}).get("max_fix_attempts", 3)),
             max_questions=int(merged.get("agent", {}).get("max_questions", 5)),
         ),

@@ -75,6 +75,13 @@ class ModelConfig:
 class AgentConfig:
     """Agent execution settings."""
 
+    # Show every assistant message and untruncated tool payload in the run
+    # trace (Step 15a). Re-based from True to False when the key finally
+    # got a consumer: it had had none since Step 9c (A1.90), so `true` was
+    # a default nothing honoured -- and honouring it would have made
+    # untruncated output the shipped behaviour. False still prints tool
+    # calls, results and errors; it is `--verbose` that adds prose and the
+    # full payloads.
     verbose: bool
     # How many times the fix loop may retry one task before giving up
     # (C6.5a). Three matches the convention the deleted file-by-file
@@ -217,7 +224,7 @@ DEFAULTS: dict[str, Any] = {
             "timeout": 300,
         }
     },
-    "agent": {"verbose": True, "max_fix_attempts": 3, "max_questions": 5},
+    "agent": {"verbose": False, "max_fix_attempts": 3, "max_questions": 5},
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},
     "tools": {

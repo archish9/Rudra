@@ -1100,11 +1100,13 @@ def main(
     if floor_notice:
         console.print(f"[yellow]Warning:[/yellow] {floor_notice}")
 
-    # A default of `config.agent.verbose` here would be evaluated when this
-    # module is imported, which is the A1.15 defect. Three-state instead:
-    # absent -> consult config, --verbose -> True, --no-verbose -> False.
-    if verbose is None:
-        verbose = cfg.agent.verbose
+    # `verbose` stays THREE-STATE all the way to create_main_agent, which
+    # resolves it against [agent] verbose in one place (trace.resolve_level).
+    # It used to be collapsed here with `if verbose is None: verbose =
+    # cfg.agent.verbose`, which erased the difference between "the user
+    # asked for less" and "the user said nothing" -- the difference between
+    # QUIET and NORMAL. Resolving inside the factory also keeps A1.15's
+    # rule intact: no config value is read at import time.
 
     # Before any agent is built, so a bad --continue never constructs a
     # model, reads a key, or touches the network.
