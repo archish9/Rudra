@@ -446,7 +446,14 @@ def config_list(
     for key, value in _flatten(cfg):
         if role and key.startswith("model.") and not key.startswith(f"model.{role}."):
             continue
-        table.add_row(key, "-" if value is None else str(value), _source_of(cfg, key))
+        # escape: a config value is user-written and a source label is
+        # built from one. A model name or path containing brackets would
+        # otherwise vanish from the column that exists to show it (A1.91).
+        table.add_row(
+            key,
+            "-" if value is None else escape(str(value)),
+            escape(_source_of(cfg, key)),
+        )
 
     console.print(table)
     for layer in ("user", "project"):
@@ -524,7 +531,7 @@ def skills_list(
             escape(name),
             label,
             "" if shadowed else state,
-            f"shadowed by {owner[name]}" if shadowed else "",
+            escape(f"shadowed by {owner[name]}") if shadowed else "",
         )
     console.print(table)
 
@@ -751,6 +758,21 @@ def doctor_command(
         escape(f"{exported} room file(s) in {export_dir}")
         if exported
         else escape(f"none — `rudra memory export` writes the durable copy to {export_dir}"),
+    )
+
+    # C9.9's disposition (S15.1). Rudra owns no grep tool -- deepagents'
+    # FilesystemBackend shells to ripgrep and falls back to a Python search
+    # (filesystem.py:72-86, :671-672), and the shipped LocalShellBackend
+    # inherits it. Implementing the row would mean overriding a method to
+    # re-do what it already does; what was actually worth having is a user
+    # being able to SEE which path they are on.
+    which_rg = shutil.which("rg")
+    table.add_row(
+        "ripgrep",
+        "ok" if which_rg else "-",
+        escape(which_rg)
+        if which_rg
+        else "not on PATH — deepagents falls back to a Python search (slower on large repos)",
     )
 
     installed = version("deepagents")

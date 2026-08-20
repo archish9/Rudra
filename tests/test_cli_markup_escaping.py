@@ -66,3 +66,35 @@ def test_doctor_does_not_swallow_a_bracketed_project_directory(tmp_path: Path):
     result = CliRunner().invoke(app, ["doctor", "--offline", "--project-dir", str(project)])
 
     assert "[draft] proj" in result.output
+
+
+def test_config_list_does_not_swallow_a_bracketed_value(tmp_path: Path):
+    """A1.91's remainder. Built from a real config.toml rather than a
+    hand-made Config, so it exercises the path a user actually takes."""
+    project = tmp_path / "proj"
+    (project / ".rudra").mkdir(parents=True)
+    (project / ".rudra" / "config.toml").write_text(
+        '[model.default]\nmodel = "vendor/model[preview]"\n', encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(app, ["config", "list", "--project-dir", str(project)])
+
+    assert result.exit_code == 0
+    assert "[preview]" in result.output
+
+
+def test_doctor_reports_whether_ripgrep_is_on_path(tmp_path: Path, monkeypatch):
+    """C9.9's disposition: deepagents already uses rg when it is there, so
+    the value left to add is letting a user see which path they are on."""
+    import shutil
+
+    project = tmp_path / "proj"
+    project.mkdir()
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/rg" if name == "rg" else None)
+    present = CliRunner().invoke(app, ["doctor", "--offline", "--project-dir", str(project)])
+    assert "/usr/bin/rg" in present.output
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    absent = CliRunner().invoke(app, ["doctor", "--offline", "--project-dir", str(project)])
+    assert "not on PATH" in absent.output
