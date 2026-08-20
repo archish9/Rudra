@@ -562,6 +562,12 @@ Two more files in the same directory are usually worth attaching:
 **Read the debug log before you post it.** It contains file paths and
 whatever your model wrote, which may include contents of your project.
 
+Rudra redacts credential-shaped values — `API_KEY=…`, `Bearer …`, and keys
+carrying a known vendor prefix — before they reach the trace, the debug
+log, or a transcript. That is pattern matching, not a guarantee: a secret
+with no recognisable shape, in a variable with an innocuous name, will
+pass straight through. Skim the file yourself.
+
 Then open an issue at [github.com/archish9/Rudra/issues](https://github.com/archish9/Rudra/issues).
 
 **Never paste an API key** into an issue, log, or screenshot. The command above masks anything ending in `KEY=`, but check the output before posting.
