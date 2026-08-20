@@ -9,5 +9,6 @@ printed its own trace, the subagents printed nothing at all, and
 from __future__ import annotations
 
 from rudra.trace.events import TraceEvent, TraceKind, TraceLevel
+from rudra.trace.render import render
 
-__all__ = ["TraceEvent", "TraceKind", "TraceLevel"]
+__all__ = ["TraceEvent", "TraceKind", "TraceLevel", "render"]
