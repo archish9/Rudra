@@ -100,13 +100,21 @@ def test_the_shipped_default_is_normal_not_verbose():
     assert DEFAULTS["agent"]["verbose"] is False
 
 
-async def test_debug_registers_a_second_consumer_on_the_same_sink(tmp_path: Path) -> None:
-    """C9.7: the file and the screen read the SAME events, so they cannot
-    disagree about what happened."""
+async def test_debug_registers_another_consumer_on_the_same_sink(tmp_path: Path) -> None:
+    """C9.7: every consumer reads the SAME events, so they cannot disagree
+    about what happened -- only about how much each keeps.
+
+    Asserted as "one more than without the flag" rather than as a fixed
+    count: 15c added the transcript to the same sink, and a hard-coded 2
+    would have to be revised every time a consumer joins, which teaches
+    people to update the number instead of checking the property."""
+    plain = await _agent(tmp_path)
+    baseline = len(plain._loop_context.subagents.trace.consumers)
+    await plain.close()
+
     agent = await _agent(tmp_path, debug=True)
     try:
-        sink = agent._loop_context.subagents.trace
-        assert len(sink.consumers) == 2
+        assert len(agent._loop_context.subagents.trace.consumers) == baseline + 1
     finally:
         await agent.close()
         _detach_debug_handlers()
@@ -143,3 +151,44 @@ async def test_without_the_flag_no_log_is_written(tmp_path: Path) -> None:
         assert not (tmp_path / "demo" / ".rudra" / "run" / "logs" / "debug.jsonl").exists()
     finally:
         await agent.close()
+
+
+async def test_every_run_writes_a_transcript(tmp_path: Path) -> None:
+    """Unlike --debug, this is not behind a flag: the point of a record is
+    that it exists when somebody wants it, which is after the fact."""
+    from rudra.trace import TraceEvent, TraceKind
+
+    agent = await _agent(tmp_path)
+    try:
+        agent._loop_context.subagents.trace.emit(
+            TraceEvent(kind=TraceKind.TOOL_CALL, role="coder", name="write_file")
+        )
+        written = list((tmp_path / "demo" / ".rudra" / "run" / "transcripts").glob("*.jsonl"))
+        assert len(written) == 1
+        assert "write_file" in written[0].read_text()
+    finally:
+        await agent.close()
+
+
+async def test_the_transcript_is_named_for_the_run(tmp_path: Path) -> None:
+    from rudra.trace import TraceEvent, TraceKind
+
+    agent = await _agent(tmp_path)
+    try:
+        agent._loop_context.subagents.trace.emit(
+            TraceEvent(kind=TraceKind.TOOL_CALL, role="coder", name="write_file")
+        )
+        written = list((tmp_path / "demo" / ".rudra" / "run" / "transcripts").glob("*.jsonl"))
+        assert written[0].stem == agent.session_id
+    finally:
+        await agent.close()
+
+
+async def test_closing_the_agent_closes_the_transcript(tmp_path: Path) -> None:
+    """An unflushed handle keeps the file locked on Windows, and a record
+    nobody closed is a record somebody finds empty."""
+    agent = await _agent(tmp_path)
+    writer = agent._transcript
+    await agent.close()
+
+    assert writer._handle is None
