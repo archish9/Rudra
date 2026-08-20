@@ -10,5 +10,6 @@ from __future__ import annotations
 
 from rudra.trace.events import TraceEvent, TraceKind, TraceLevel
 from rudra.trace.render import render
+from rudra.trace.stream import StreamState, consume
 
-__all__ = ["TraceEvent", "TraceKind", "TraceLevel", "render"]
+__all__ = ["StreamState", "TraceEvent", "TraceKind", "TraceLevel", "consume", "render"]
