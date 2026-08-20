@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -18,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 
 from rudra.context.usage import render_usage
 from rudra.git.core import is_repo, status
@@ -201,6 +203,22 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     """
     tested = False
     blocker_text = ""
+    # Across every attempt, not per attempt: "how long did this task take"
+    # is the question, and a task that failed twice before passing cost
+    # the user all three tries (C9.6).
+    started = time.monotonic()
+
+    def _stop(outcome: Outcome) -> Outcome:
+        """Record the elapsed time, save, and return. Assignment BEFORE the
+        save, or the ledger on disk reports 0.0 for a task that took a
+        minute."""
+        # Stored at full precision and rounded only where it is shown.
+        # Rounding here made a task that finished in under 10 ms read as
+        # 0.0 -- never true of real work, but it also meant the stored
+        # number was a display decision rather than a measurement.
+        task.seconds = time.monotonic() - started
+        ledger.save(context.paths.ledger_json)
+        return outcome
 
     while task.attempts < context.cfg.agent.max_fix_attempts:
         task.attempts += 1
@@ -219,8 +237,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # Never ran: a build failure or a mid-stream exception. Both are
             # environment-class and would recur on every remaining task.
             task.note = f"the coder could not run: {result.error}"
-            ledger.save(context.paths.ledger_json)
-            return Outcome.STOP_RUN
+            return _stop(Outcome.STOP_RUN)
 
         if result.halted_reason:
             # A guard fired. Recorded for the summary; the gate below is what
@@ -252,33 +269,32 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
 
         if report.escalate:
             task.note = _blocker_text(report)
-            ledger.save(context.paths.ledger_json)
-            return Outcome.STOP_RUN
+            return _stop(Outcome.STOP_RUN)
 
         if report.passed:
             task.status = TaskStatus.DONE
             task.note = ""
-            ledger.save(context.paths.ledger_json)
+            outcome = _stop(Outcome.DONE)
             record_task_in_memory(context.paths, task)
             record_task_memory(context, task)
-            return Outcome.DONE
+            return outcome
 
         signature = failure_signature(report)
         blocker_text = _blocker_text(report)
         if signature is not None and signature == task.last_signature:
             task.status = TaskStatus.BLOCKED
             task.note = "no progress: the same failure twice"
-            ledger.save(context.paths.ledger_json)
+            outcome = _stop(Outcome.BLOCKED)
             record_block_memory(context, task)
-            return Outcome.BLOCKED
+            return outcome
         task.last_signature = signature
 
     task.status = TaskStatus.BLOCKED
     if "wrote nothing" not in task.note:
         task.note = f"{task.attempts} attempts exhausted"
-    ledger.save(context.paths.ledger_json)
+    outcome = _stop(Outcome.BLOCKED)
     record_block_memory(context, task)
-    return Outcome.BLOCKED
+    return outcome
 
 
 _STATUS_MARK = {
@@ -555,9 +571,12 @@ def summarise(ledger: Ledger, console: Console, usage: Any = None) -> Any:
         note = task.note
         if task.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
             note = _NOT_ATTEMPTED
-        console.print(f"  {_STATUS_MARK[task.status]} {task.id}  {task.description}")
+        # escape(): a task description is model-written and a bracketed
+        # word in it would be parsed as a style tag (A1.91's class).
+        took = f"  [dim]({task.seconds:.1f}s)[/dim]" if task.seconds >= 0.05 else ""
+        console.print(f"  {_STATUS_MARK[task.status]} {task.id}  {escape(task.description)}{took}")
         if note:
-            console.print(f"      [dim]{note}[/dim]")
+            console.print(f"      [dim]{escape(str(note))}[/dim]")
 
     files: list[str] = []
     for task in ledger.tasks:

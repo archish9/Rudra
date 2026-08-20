@@ -217,7 +217,9 @@ per-stack install matrix.
 | Flag | Short | Does |
 |---|---|---|
 | `--project-dir PATH` | `-d` | Work in that directory instead of the current one |
-| `--verbose` / `--no-verbose` | `-V` | Show or hide detailed tool-call output |
+| `--verbose` / `--no-verbose` | `-V` | Raise or lower the run trace. See [What the trace shows](#what-the-trace-shows) |
+| `--stream` | | Stream the model's prose token by token. Implies `--verbose` |
+| `--debug` | | Also write `.rudra/run/logs/debug.jsonl` — one JSON object per line, for a bug report |
 | `--version` | `-v` | Print the version and exit |
 | `--dry-run` | | **Not functional yet** — see below. Use `--plan` |
 | `--auto` / `--yolo` | | Approve every file operation without prompting |
@@ -226,6 +228,48 @@ per-stack install matrix.
 | `--plan` | | Show the plan — the facts Rudra established and the tasks it declared — then stop. Writes nothing, runs nothing |
 | `--continue` / `--resume` | | Work the remaining tasks from the last run instead of planning afresh |
 | `--help` | | Show help |
+
+### What the trace shows
+
+Every agent prints what it is doing while it does it — the planner, the
+coder, the tester and the reviewer alike. One line per tool call, per
+result, per error:
+
+```
+[coder] → [4] CALL write_file  {'file_path': 'parser.py'}
+[coder] ✓ [5] write_file: Wrote parser.py
+[coder:task:1] ✗ [9] ERROR from execute:
+Error: pytest exited 1
+```
+
+The tag names the agent. A tag like `[coder:task:1]` means the line came
+from inside a subagent that agent delegated to.
+
+Three levels, and the flag picks one:
+
+| You type | Level | You see |
+|---|---|---|
+| `--no-verbose` | quiet | Errors only |
+| *nothing* | normal | Tool calls, results and errors, truncated |
+| `--verbose` | verbose | The above, plus the model's prose and untruncated payloads |
+
+Nothing typed consults `[agent] verbose` in your config, which ships
+`false`. Setting it `true` makes `--verbose` the default for that project.
+
+> **Before v0.2.1 the coder, tester and reviewer printed nothing at all.**
+> A run showed planning, then went quiet for however long the work took.
+> If you remember that, this is what changed.
+
+### Reporting a bug
+
+```bash
+rudra --debug --verbose "the thing that went wrong"
+```
+
+`--debug` writes `.rudra/run/logs/debug.jsonl`: one JSON object per line,
+covering both the trace and Rudra's internal log records. It records what
+the trace shows, so a quiet run logs a quiet file — pair it with
+`--verbose`. Nothing is written without the flag.
 
 ```bash
 rudra "add error handling" -d ~/projects/api

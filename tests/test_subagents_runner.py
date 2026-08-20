@@ -42,7 +42,9 @@ def make_context(tmp_path):
 
 
 def stream_of(*chunks):
-    async def fake_stream(agent, inputs, config, gate, console):
+    # **kwargs: Step 15a added trace/stream_tokens/role to
+    # run_with_approvals, and this stub stands in for it.
+    async def fake_stream(agent, inputs, config, gate, console, **kwargs):
         for chunk in chunks:
             yield chunk
 
@@ -105,7 +107,7 @@ async def test_a_build_failure_is_reported_not_raised(monkeypatch, patched):
 
 
 async def test_a_provider_error_mid_stream_is_reported_not_raised(monkeypatch, patched):
-    async def exploding(agent, inputs, config, gate, console):
+    async def exploding(agent, inputs, config, gate, console, **kwargs):
         yield {"messages": [ai("starting")]}
         raise RuntimeError("connection reset")
 
@@ -167,7 +169,7 @@ async def test_the_same_tool_on_different_files_does_not_halt(monkeypatch, patch
 async def test_each_invocation_gets_a_distinct_thread(monkeypatch, patched):
     seen: list[str] = []
 
-    async def capture(agent, inputs, config, gate, console):
+    async def capture(agent, inputs, config, gate, console, **kwargs):
         seen.append(config["configurable"]["thread_id"])
         yield {"messages": [ai("ok")]}
 
@@ -181,7 +183,7 @@ async def test_each_invocation_gets_a_distinct_thread(monkeypatch, patched):
 async def test_an_explicit_thread_id_is_honoured(monkeypatch, patched):
     seen: list[str] = []
 
-    async def capture(agent, inputs, config, gate, console):
+    async def capture(agent, inputs, config, gate, console, **kwargs):
         seen.append(config["configurable"]["thread_id"])
         yield {"messages": [ai("ok")]}
 

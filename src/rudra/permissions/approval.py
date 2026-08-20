@@ -127,7 +127,13 @@ def decide_action_requests(
 
 
 async def _stream_with_retry(
-    agent: Any, payload: Any, config: dict[str, Any]
+    agent: Any,
+    payload: Any,
+    config: dict[str, Any],
+    *,
+    trace: Any = None,
+    stream_tokens: bool = False,
+    role: str = "agent",
 ) -> AsyncIterator[Any]:
     """`agent.astream`, surviving a transient provider failure (A1.39).
 
@@ -142,6 +148,14 @@ async def _stream_with_retry(
 
     This is the one funnel for model invocation: the planner streams
     through it, and so does every subagent (subagents/runner.py:150).
+
+    It is also where token streaming is CONTAINED (C9.1). With
+    `stream_tokens` on, the agent is asked for ["values", "messages"] and
+    langgraph tags each chunk with its mode; message-chunks are emitted to
+    the trace and **only value-chunks are yielded**, unwrapped to exactly
+    the shape the single-mode call produces. Every caller's parse loop is
+    untouched, which is the constraint this module's docstring sets out
+    and which both parse loops depend on.
     """
     import asyncio
 
@@ -150,10 +164,20 @@ async def _stream_with_retry(
     delays = retry_delays()
     last: BaseException | None = None
 
+    mode: Any = ["values", "messages"] if stream_tokens else "values"
+
     for attempt in range(len(delays) + 1):
         yielded = False
         try:
-            async for chunk in agent.astream(payload, config, stream_mode="values", subgraphs=True):
+            async for chunk in agent.astream(payload, config, stream_mode=mode, subgraphs=True):
+                if stream_tokens:
+                    tagged = _tagged(chunk)
+                    if tagged is None:
+                        continue
+                    kind, chunk = tagged
+                    if kind == "messages":
+                        _emit_token(chunk, trace=trace, role=role)
+                        continue
                 yielded = True
                 yield chunk
             return
@@ -169,12 +193,50 @@ async def _stream_with_retry(
         raise ProviderUnavailable("the model provider", len(delays) + 1, last) from last
 
 
+def _tagged(chunk: Any) -> tuple[str, Any] | None:
+    """Split langgraph's (mode, chunk) pair, or None if it is not one.
+
+    A list stream_mode makes every chunk a 2-tuple whose first element is
+    the mode name. `subgraphs=True` adds a namespace in front for some
+    shapes, so the namespace form is passed through as a value chunk --
+    that is what the parse loops already understand.
+    """
+    if not (isinstance(chunk, tuple) and len(chunk) == 2):
+        return None
+    first, rest = chunk
+    if isinstance(first, str):
+        return first, rest
+    return "values", chunk
+
+
+def _emit_token(chunk: Any, *, trace: Any, role: str) -> None:
+    """Turn one streamed message delta into an AI_TEXT event.
+
+    Deltas arrive as (message_chunk, metadata). Empty content is dropped:
+    a tool-calling turn streams empty deltas, and one blank line each
+    would bury the trace this exists to improve.
+    """
+    if trace is None:
+        return
+    message = chunk[0] if isinstance(chunk, tuple) and chunk else chunk
+    text = str(getattr(message, "content", "") or "")
+    if not text.strip():
+        return
+    from rudra.trace.events import TraceEvent, TraceKind
+
+    trace.emit(TraceEvent(kind=TraceKind.AI_TEXT, role=role, payload=text))
+
+
 async def run_with_approvals(
     agent: Any,
     inputs: Any,
     config: dict[str, Any],
     gate: Any,
     console: Console,
+    *,
+    trace: Any = None,
+    stream_tokens: bool = False,
+    role: str = "agent",
 ) -> AsyncIterator[Any]:
     """Stream an agent, pausing for approval and resuming, transparently.
 
@@ -187,14 +249,15 @@ async def run_with_approvals(
     both of main_agent.py's parse loops depend on.
     """
     payload: Any = inputs
+    streaming = {"trace": trace, "stream_tokens": stream_tokens, "role": role}
 
     if gate is None:
-        async for chunk in _stream_with_retry(agent, payload, config):
+        async for chunk in _stream_with_retry(agent, payload, config, **streaming):
             yield chunk
         return
 
     for _ in range(MAX_APPROVAL_ROUNDS):
-        async for chunk in _stream_with_retry(agent, payload, config):
+        async for chunk in _stream_with_retry(agent, payload, config, **streaming):
             yield chunk
 
         # aget_state, not get_state: Rudra's checkpointer is AsyncSqliteSaver,

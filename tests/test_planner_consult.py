@@ -14,8 +14,8 @@ from rudra.loop.ledger import Ledger
 def captured(monkeypatch):
     calls: list[dict] = []
 
-    async def fake_turn(agent, message, *, thread_id, gate, console):
-        calls.append({"message": message, "thread_id": thread_id})
+    async def fake_turn(agent, message, *, thread_id, gate, console, trace=None):
+        calls.append({"message": message, "thread_id": thread_id, "trace": trace})
         return True
 
     monkeypatch.setattr(planner_agent, "_stream_planner_turn", fake_turn)

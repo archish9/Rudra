@@ -28,6 +28,7 @@ from rudra.middleware import (
 )
 from rudra.permissions import run_with_approvals
 from rudra.tools.interaction_tools import create_interaction_tools
+from rudra.trace.stream import StreamState, looks_like_error
 
 _COMMON_HEADER = """You are a senior software architect and planning agent for Rudra.
 
@@ -435,53 +436,6 @@ def create_planner_agent(
     )
 
 
-def _log_message(console: Console, msg: Any, index: int, prefix: str = "planner") -> None:
-    msg_type = type(msg).__name__
-    tag = f"[{prefix}] " if prefix else ""
-
-    if msg_type == "AIMessage":
-        tool_calls = getattr(msg, "tool_calls", [])
-        if tool_calls:
-            for tc in tool_calls:
-                name = tc.get("name", "?")
-                args = str(tc.get("args", {}))[:400]
-                console.print(
-                    f"[bold cyan]{tag}→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args}"
-                )
-        else:
-            content = str(getattr(msg, "content", ""))[:300].replace("\n", " ")
-            console.print(f"[bold cyan]{tag}← [{index}] AI[/bold cyan]  {content}")
-
-    elif msg_type == "ToolMessage":
-        content = str(getattr(msg, "content", ""))
-        tool_name = getattr(msg, "name", "?")
-        first_line = content.split("\n")[0] if content else ""
-        is_error = (
-            first_line.startswith("Error:")
-            or first_line.startswith("Cannot write to")
-            or "Error:" in first_line
-            or "Traceback" in first_line
-            or "Errno" in first_line
-            or "not a valid tool" in content
-            or "Input should be a valid string" in content
-            or "BLOCKED:" in first_line
-        )
-        if is_error:
-            console.print(
-                f"[bold red]{tag}✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
-            )
-        else:
-            console.print(f"[green]{tag}✓ [{index}] {tool_name}:[/green] {content}")
-
-    elif msg_type == "HumanMessage":
-        content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
-        console.print(f"[dim]{tag}[{index}] USER: {content}[/dim]")
-
-    else:
-        content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
-        console.print(f"[dim]{tag}[{index}] {msg_type}: {content}[/dim]")
-
-
 async def _stream_planner_turn(
     agent: Any,
     message: str,
@@ -489,16 +443,27 @@ async def _stream_planner_turn(
     thread_id: str,
     gate: Any,
     console: Console,
+    trace: Any = None,
 ) -> bool:
     """Stream one planner turn. Returns False if a guard halted it.
 
     Lifted from RudraAgent._stream_planner in Step 9c: the class's loop
     is deleted and this is its only remaining caller. The guard logic is
-    unchanged. It still carries A1.20's remaining half -- one `processed`
-    counter across namespaces -- which is re-pointed to C9.1.
+    unchanged.
+
+    A1.20's remaining half -- one `processed` counter across namespaces --
+    is closed here in Step 15a: positions are keyed by namespace, exactly
+    as subagents/runner.py now does it. Printing moved to the shared
+    renderer at the same time, so the planner and the subagents cannot
+    drift apart again the way their error-marker lists had.
+
+    `trace` is optional because consult_planner's callers built no sink
+    before Step 15a and its tests still do not.
     """
     lg_config = {"configurable": {"thread_id": thread_id}}
-    processed = 0
+    # One counter per subgraph namespace, not one for the turn (A1.20).
+    seen: dict[tuple[str, ...], int] = {}
+    state = StreamState(role="planner")
     consecutive_failures = 0
     planning_tool_calls: dict[str, int] = {}
     MAX_PLANNING_CALLS = 4
@@ -508,13 +473,16 @@ async def _stream_planner_turn(
     # loop below is unchanged. It reads interrupts from get_state after
     # the stream drains, because __interrupt__ never appears in "values"
     # chunks and changing stream_mode would change the chunk shape this
-    # loop depends on -- the loop that still carries A1.20's hole.
+    # loop depends on.
     async for chunk in run_with_approvals(
         agent,
         {"messages": [{"role": "user", "content": message}]},
         lg_config,
         gate,
         console,
+        trace=trace,
+        stream_tokens=get_config().agent.stream_tokens,
+        role="planner",
     ):
         if _halt:
             break
@@ -522,14 +490,18 @@ async def _stream_planner_turn(
         namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
         msgs = event.get("messages", [])
 
+        if trace is not None:
+            # Before the guards read it, and before any `break`: an event
+            # the guard stops on is exactly the one worth seeing. The
+            # namespace rides on every event now, so the old
+            # "(planner subagent ...)" line is gone.
+            trace.feed(chunk, state)
+
+        where = tuple(namespace or ())
+        processed = seen.get(where, 0)
         while processed < len(msgs):
             msg = msgs[processed]
             msg_type = type(msg).__name__
-
-            if namespace:
-                console.print(f"[dim](planner subagent {':'.join(namespace)})[/dim]")
-
-            _log_message(console, msg, processed + 1)
 
             if msg_type == "AIMessage":
                 for tc in getattr(msg, "tool_calls", []):
@@ -549,16 +521,10 @@ async def _stream_planner_turn(
                     break
 
             elif msg_type == "ToolMessage":
-                content = str(getattr(msg, "content", ""))
-                first_line = content.split("\n")[0] if content else ""
-                is_error = (
-                    first_line.startswith("Error:")
-                    or first_line.startswith("Cannot write to")
-                    or "Error:" in first_line
-                    or "Traceback" in first_line
-                    or "Errno" in first_line
-                )
-                if is_error:
+                # The shared list, not a fourth private copy. This guard's
+                # own four markers could not see "BLOCKED:", so three
+                # consecutive denials never tripped it.
+                if looks_like_error(str(getattr(msg, "content", ""))):
                     consecutive_failures += 1
                     if consecutive_failures >= 3:
                         console.print(
@@ -571,6 +537,7 @@ async def _stream_planner_turn(
             if _halt:
                 break
             processed += 1
+        seen[where] = processed
 
     return not _halt
 
@@ -601,6 +568,7 @@ async def consult_planner(
     gate: Any,
     console: Console,
     session_id: str,
+    trace: Any = None,
 ) -> None:
     """Ask one planning stage to do its job. It mutates state via tools.
 
@@ -654,5 +622,10 @@ async def consult_planner(
         raise ValueError(f"unknown consult reason {reason!r}")
 
     await _stream_planner_turn(
-        agent, message, thread_id=f"{session_id}-{stage}", gate=gate, console=console
+        agent,
+        message,
+        thread_id=f"{session_id}-{stage}",
+        gate=gate,
+        console=console,
+        trace=trace,
     )

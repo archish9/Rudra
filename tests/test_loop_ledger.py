@@ -159,3 +159,23 @@ def test_concurrent_saves_do_not_race_on_the_temp_file(tmp_path):
     assert not errors, f"concurrent save raised {errors[0]!r}"
     assert json.loads(path.read_text(encoding="utf-8"))["tasks"]
     assert [entry.name for entry in tmp_path.iterdir()] == ["ledger.json"]
+
+
+def test_a_tasks_seconds_survive_a_save_and_load(tmp_path):
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    task.seconds = 12.5
+    path = tmp_path / "ledger.json"
+    ledger.save(path)
+
+    assert Ledger.load(path).tasks[0].seconds == 12.5
+
+
+def test_a_ledger_written_before_seconds_existed_still_loads(tmp_path):
+    """Volatile file, but a run in flight during an upgrade must not crash."""
+    path = tmp_path / "ledger.json"
+    path.write_text(
+        json.dumps({"tasks": [{"id": "t1", "description": "x", "status": "pending"}]}),
+        encoding="utf-8",
+    )
+    assert Ledger.load(path).tasks[0].seconds == 0.0

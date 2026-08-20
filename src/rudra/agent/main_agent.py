@@ -186,52 +186,6 @@ class RudraAgent:
     def _status(self, message: str) -> None:
         self.console.print(f"[dim]→ {message}[/dim]")
 
-    def _log_single_message(self, msg: Any, index: int, prefix: str = "") -> None:
-        msg_type = type(msg).__name__
-        tag = f"[{prefix}] " if prefix else ""
-
-        if msg_type == "AIMessage":
-            tool_calls = getattr(msg, "tool_calls", [])
-            if tool_calls:
-                for tc in tool_calls:
-                    name = tc.get("name", "?")
-                    args = str(tc.get("args", {}))[:400]
-                    self._log_always(
-                        f"[bold cyan]{tag}→ [{index}] CALL[/bold cyan] [yellow]{name}[/yellow]  {args}"
-                    )
-            else:
-                content = str(getattr(msg, "content", ""))[:300].replace("\n", " ")
-                self._log_always(f"[bold cyan]{tag}← [{index}] AI[/bold cyan]  {content}")
-
-        elif msg_type == "ToolMessage":
-            content = str(getattr(msg, "content", ""))
-            tool_name = getattr(msg, "name", "?")
-            first_line = content.split("\n")[0] if content else ""
-            is_error = (
-                first_line.startswith("Error:")
-                or first_line.startswith("Cannot write to")
-                or "Error:" in first_line
-                or "Traceback" in first_line
-                or "Errno" in first_line
-                or "not a valid tool" in content
-                or "Input should be a valid string" in content
-                or "BLOCKED:" in first_line
-            )
-            if is_error:
-                self._log_always(
-                    f"[bold red]{tag}✗ [{index}] ERROR from {tool_name}:[/bold red]\n[red]{content}[/red]"
-                )
-            else:
-                self._log_always(f"[green]{tag}✓ [{index}] {tool_name}:[/green] {content}")
-
-        elif msg_type == "HumanMessage":
-            content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
-            self._log_always(f"[dim]{tag}[{index}] USER: {content}[/dim]")
-
-        else:
-            content = str(getattr(msg, "content", ""))[:200].replace("\n", " ")
-            self._log_always(f"[dim]{tag}[{index}] {msg_type}: {content}[/dim]")
-
     async def run(self) -> AgentResult:
         """Plan, work, verify, fix, and report. The whole run (C6.1)."""
         try:
@@ -532,7 +486,8 @@ async def create_main_agent(
     command: str = "build",
     console: Optional[Console] = None,
     dry_run: bool = False,
-    verbose: bool = False,
+    verbose: Optional[bool] = None,
+    debug: bool = False,
     resume: bool = False,
     **kwargs,
 ) -> RudraAgent:
@@ -546,7 +501,7 @@ async def create_main_agent(
         task=task,
         console=console,
         dry_run=dry_run,
-        verbose=verbose,
+        verbose=bool(verbose),
         command=command,
         planner_model=cfg.model_for("planner").model,
         coder_model=cfg.model_for("coder").model,
@@ -642,10 +597,36 @@ async def create_main_agent(
     from rudra.context.usage import RunUsage
     from rudra.loop import Ledger, LoopContext
     from rudra.subagents import SubagentContext
+    from rudra.trace.sink import TraceSink, console_consumer, resolve_level
 
     # One per run, shared by reference: the planner stages and every
     # subagent record into the same object, and the panel reads it once.
     usage = RunUsage()
+
+    # One sink per run, shared by reference for the reason the gate, the
+    # FactStore and RunUsage are. The level is three-state because the CLI
+    # flag is (A1.15): --verbose wins, --no-verbose means errors only, and
+    # an absent flag consults [agent] verbose.
+    #
+    # Until Step 15a nothing consumed that flag at all (A1.90) and the
+    # subagents printed nothing, so a run was silent exactly while the
+    # coder was working.
+    trace_level = resolve_level(verbose, cfg.agent.verbose)
+    trace = TraceSink(level=trace_level)
+    trace.add(console_consumer(console, trace_level))
+
+    # --debug adds a second consumer on the SAME events (C9.7), so the
+    # file and the screen cannot disagree about what happened -- only
+    # about how much of it was drawn. A log that cannot be opened is
+    # reported as None and skipped, never raised: bookkeeping must not end
+    # a run (loop/engine.py:501-515).
+    if debug:
+        from rudra.trace.debug import configure_debug_logging, debug_consumer
+
+        if configure_debug_logging(paths.logs / "debug.jsonl", enabled=True) is not None:
+            trace.add(debug_consumer())
+        else:
+            console.print("[yellow]--debug: could not open .rudra/run/logs/debug.jsonl[/yellow]")
 
     # One store, shared by reference between the subagents and the loop --
     # the rule the gate, the FactStore and the Ledger all follow. Two
@@ -665,6 +646,7 @@ async def create_main_agent(
         usage=usage,
         mcp=mcp_client,
         memory=memory_store,
+        trace=trace,
     )
     loop_context = LoopContext(
         subagents=subagent_context,
@@ -731,6 +713,7 @@ async def create_main_agent(
             gate=gate,
             console=console,
             session_id=session_id,
+            trace=trace,
         )
 
     return RudraAgent(

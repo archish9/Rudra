@@ -75,6 +75,13 @@ class ModelConfig:
 class AgentConfig:
     """Agent execution settings."""
 
+    # Show every assistant message and untruncated tool payload in the run
+    # trace (Step 15a). Re-based from True to False when the key finally
+    # got a consumer: it had had none since Step 9c (A1.90), so `true` was
+    # a default nothing honoured -- and honouring it would have made
+    # untruncated output the shipped behaviour. False still prints tool
+    # calls, results and errors; it is `--verbose` that adds prose and the
+    # full payloads.
     verbose: bool
     # How many times the fix loop may retry one task before giving up
     # (C6.5a). Three matches the convention the deleted file-by-file
@@ -86,6 +93,13 @@ class AgentConfig:
     # where 0 would block every task without the coder running once, a
     # run that asks nothing is a legitimate unattended run.
     max_questions: int = 5
+    # Stream the model's prose token by token into the trace (C9.1).
+    # Off by default and deliberately so: it is unmeasured against D6's
+    # 32B floor, and this flag is how it gets measured. It changes only
+    # what the trace shows -- the chunk shape every parse loop depends on
+    # is unchanged, because the second stream mode never leaves
+    # permissions/approval.py.
+    stream_tokens: bool = False
 
 
 @dataclass(frozen=True)
@@ -217,7 +231,12 @@ DEFAULTS: dict[str, Any] = {
             "timeout": 300,
         }
     },
-    "agent": {"verbose": True, "max_fix_attempts": 3, "max_questions": 5},
+    "agent": {
+        "verbose": False,
+        "max_fix_attempts": 3,
+        "max_questions": 5,
+        "stream_tokens": False,
+    },
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},
     "tools": {

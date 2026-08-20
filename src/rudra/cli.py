@@ -544,24 +544,33 @@ def doctor_command(
     for column in ("Check", "Status", "Detail"):
         table.add_column(column, overflow="fold")
 
-    table.add_row("project", "ok", str(project_path))
+    # escape() on every data cell below, not just the ones that look
+    # risky: a Rich Table parses cell markup exactly the way console.print
+    # does, and a project path is user-controlled. A directory named
+    # "[draft] proj" otherwise renders as "proj" and doctor reports a path
+    # that does not exist (A1.91). Deliberate style tags -- see `rudra mcp
+    # test`'s "[red]fail[/red]" -- are the reason this is applied per cell
+    # rather than by wrapping add_row.
+    table.add_row("project", "ok", escape(str(project_path)))
     for layer in ("user", "project"):
         path = cfg.sources.get(layer)
         table.add_row(
-            f"config ({layer})", "ok" if path else "-", str(path) if path else "not present"
+            f"config ({layer})",
+            "ok" if path else "-",
+            escape(str(path)) if path else "not present",
         )
 
     dotenv = project_path / ".env"
     table.add_row(
         ".env",
         "ok" if dotenv.exists() else "-",
-        str(dotenv) if dotenv.exists() else "not present",
+        escape(str(dotenv)) if dotenv.exists() else "not present",
     )
 
     table.add_row(
         ".rudra layout",
         "ok" if paths.run.is_dir() else "missing",
-        str(paths.root) if paths.run.is_dir() else "run `rudra init`",
+        escape(str(paths.root)) if paths.run.is_dir() else "run `rudra init`",
     )
 
     # The MCP checks C2.3 deferred to Step 13. `--offline` changes nothing
@@ -574,26 +583,34 @@ def doctor_command(
     try:
         entries = read_mcp_json(mcp_file)
         detail = ", ".join(entry.name for entry in entries) or "no servers"
-        table.add_row(".mcp.json", "ok" if mcp_file.exists() else "-", detail)
+        table.add_row(".mcp.json", "ok" if mcp_file.exists() else "-", escape(detail))
     except McpConfigError as exc:
         entries = ()
-        table.add_row(".mcp.json", "error", str(exc))
+        table.add_row(".mcp.json", "error", escape(str(exc)))
 
     for entry in entries:
         if not cfg.mcp.enabled:
-            table.add_row(f"mcp: {entry.name}", "-", "[mcp] enabled = false")
+            table.add_row(f"mcp: {escape(entry.name)}", "-", escape("[mcp] enabled = false"))
         elif entry.name in cfg.mcp.disabled_servers:
-            table.add_row(f"mcp: {entry.name}", "-", "disabled in [mcp] disabled_servers")
+            table.add_row(
+                f"mcp: {escape(entry.name)}", "-", escape("disabled in [mcp] disabled_servers")
+            )
         elif entry.command and shutil.which(entry.command) is None:
-            table.add_row(f"mcp: {entry.name}", "missing", f"'{entry.command}' is not on PATH")
+            table.add_row(
+                f"mcp: {escape(entry.name)}", "missing", escape(f"'{entry.command}' is not on PATH")
+            )
         else:
-            table.add_row(f"mcp: {entry.name}", "ok", entry.url or entry.command or "")
+            table.add_row(
+                f"mcp: {escape(entry.name)}", "ok", escape(entry.url or entry.command or "")
+            )
 
     configured = {entry.name for entry in entries}
     unknown = [name for name in cfg.mcp.disabled_servers if name not in configured]
     if unknown:
         table.add_row(
-            "mcp policy", "warn", f"disabled_servers names unconfigured: {', '.join(unknown)}"
+            "mcp policy",
+            "warn",
+            escape(f"disabled_servers names unconfigured: {', '.join(unknown)}"),
         )
 
     stale = paths.root / "checkpoints.db"
@@ -601,7 +618,7 @@ def doctor_command(
         table.add_row(
             "stale checkpoints.db",
             "warn",
-            f"{stale} predates the run/ layout and is unused — safe to delete",
+            escape(f"{stale} predates the run/ layout and is unused — safe to delete"),
         )
 
     from rudra.memory.degrade import last_failure, reset_failures
@@ -621,21 +638,23 @@ def doctor_command(
             table.add_row(
                 "memory",
                 "fail",
-                f"unreadable at {paths.memory_palace} — {failure}",
+                escape(f"unreadable at {paths.memory_palace} — {failure}"),
             )
         else:
             table.add_row(
                 "memory",
                 "ok",
-                f"{count} memories in {paths.memory_palace} (backend: {cfg.memory.backend})",
+                escape(
+                    f"{count} memories in {paths.memory_palace} (backend: {cfg.memory.backend})"
+                ),
             )
     except TaxonomyError as exc:
-        table.add_row("memory", "warn", f"off for this project — {exc}")
+        table.add_row("memory", "warn", escape(f"off for this project — {exc}"))
 
     table.add_row(
         "memory model",
         "ok" if is_warm() else "warn",
-        f"{model_cache_dir()}"
+        escape(f"{model_cache_dir()}")
         if is_warm()
         else f"not fetched — ~{MODEL_SIZE_MB} MB downloads on first use. Run `rudra init`.",
     )
@@ -649,8 +668,10 @@ def doctor_command(
         table.add_row(
             "mempalace config",
             "warn",
-            f"{global_config} exists and is ignored — Rudra passes palace_path, "
-            f"collection_name and backend explicitly (C8.1b).",
+            escape(
+                f"{global_config} exists and is ignored — Rudra passes palace_path, "
+                f"collection_name and backend explicitly (C8.1b)."
+            ),
         )
 
     export_dir = paths.memory_export
@@ -658,9 +679,9 @@ def doctor_command(
     table.add_row(
         "memory export",
         "ok" if exported else "-",
-        f"{exported} room file(s) in {export_dir}"
+        escape(f"{exported} room file(s) in {export_dir}")
         if exported
-        else f"none — `rudra memory export` writes the durable copy to {export_dir}",
+        else escape(f"none — `rudra memory export` writes the durable copy to {export_dir}"),
     )
 
     installed = version("deepagents")
@@ -875,7 +896,10 @@ def mcp_list(
     try:
         entries = read_mcp_json(path)
     except McpConfigError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        # escape: the message interpolates the .mcp.json path and a server
+        # name, both user-controlled. A path like /tmp/[draft]/proj is Rich
+        # markup otherwise -- A1.48's class, on a second surface.
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
     if not entries:
@@ -1040,6 +1064,20 @@ def main(
     verbose: Optional[bool] = typer.Option(
         None, "--verbose/--no-verbose", "-V", help="Show detailed output"
     ),
+    stream: bool = typer.Option(
+        False,
+        "--stream",
+        help="Stream the model's prose token by token into the trace (implies --verbose)",
+    ),
+    debug: bool = typer.Option(
+        False,
+        "--debug",
+        help=(
+            "Write a machine-readable run log to .rudra/run/logs/debug.jsonl. "
+            "Pair with --verbose for a bug report: the log records what the "
+            "trace shows, so a quiet run logs errors only."
+        ),
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -1074,7 +1112,7 @@ def main(
     permission_mode = "auto" if auto else "plan" if plan else None
     cfg = get_config(
         project_path,
-        verbose=verbose,
+        verbose=True if stream else verbose,
         permission_mode=permission_mode,
         allow_shell=True if allow_shell else None,
         allow_mcp=True if allow_mcp else None,
@@ -1100,11 +1138,13 @@ def main(
     if floor_notice:
         console.print(f"[yellow]Warning:[/yellow] {floor_notice}")
 
-    # A default of `config.agent.verbose` here would be evaluated when this
-    # module is imported, which is the A1.15 defect. Three-state instead:
-    # absent -> consult config, --verbose -> True, --no-verbose -> False.
-    if verbose is None:
-        verbose = cfg.agent.verbose
+    # `verbose` stays THREE-STATE all the way to create_main_agent, which
+    # resolves it against [agent] verbose in one place (trace.resolve_level).
+    # It used to be collapsed here with `if verbose is None: verbose =
+    # cfg.agent.verbose`, which erased the difference between "the user
+    # asked for less" and "the user said nothing" -- the difference between
+    # QUIET and NORMAL. Resolving inside the factory also keeps A1.15's
+    # rule intact: no config value is read at import time.
 
     # Before any agent is built, so a bad --continue never constructs a
     # model, reads a key, or touches the network.
@@ -1145,6 +1185,7 @@ def main(
                 console=console,
                 dry_run=dry_run,
                 verbose=verbose,
+                debug=debug,
                 resume=continue_,
             )
             try:
@@ -1229,6 +1270,7 @@ def main(
                         console=console,
                         dry_run=dry_run,
                         verbose=verbose,
+                        debug=debug,
                     )
                     try:
                         result = await agent.run()
@@ -1311,7 +1353,9 @@ def _memory_store(project_dir: Optional[Path]):
     try:
         return MemoryStore(project_path, backend=cfg.memory.backend)
     except TaxonomyError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        # escape: the message quotes the project directory name, which is
+        # exactly the value that made this raise. Same class as A1.48.
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
 

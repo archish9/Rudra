@@ -16,6 +16,7 @@ thing that ends a run.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
@@ -34,15 +35,20 @@ class UsageMiddleware(AgentMiddleware):
         self.role = role
         self.usage = usage
 
-    def _record(self, response: Any) -> None:
+    def _record(self, response: Any, seconds: float) -> None:
         messages = getattr(response, "result", None) or []
         if not messages:
+            # No message means no token counts, but the call still took
+            # time -- and a provider that returns nothing slowly is
+            # exactly what somebody would be trying to diagnose.
+            self.usage.record(self.role, input_tokens=None, output_tokens=None, seconds=seconds)
             return
         metadata = getattr(messages[0], "usage_metadata", None) or {}
         self.usage.record(
             self.role,
             input_tokens=metadata.get("input_tokens"),
             output_tokens=metadata.get("output_tokens"),
+            seconds=seconds,
         )
 
     def _record_tool(self, request: Any) -> None:
@@ -51,14 +57,30 @@ class UsageMiddleware(AgentMiddleware):
             self.usage.record_compaction(self.role)
 
     def wrap_model_call(self, request, handler):
-        response = handler(request)
-        self._record(response)
+        started = time.perf_counter()
+        try:
+            response = handler(request)
+        except BaseException:
+            # A call that raised still cost the user the wait. Recorded
+            # before re-raising, because a run that dies slowly is when
+            # "where did the time go" is hardest to answer afterwards.
+            self._record_failure(time.perf_counter() - started)
+            raise
+        self._record(response, time.perf_counter() - started)
         return response
 
     async def awrap_model_call(self, request, handler):
-        response = await handler(request)
-        self._record(response)
+        started = time.perf_counter()
+        try:
+            response = await handler(request)
+        except BaseException:
+            self._record_failure(time.perf_counter() - started)
+            raise
+        self._record(response, time.perf_counter() - started)
         return response
+
+    def _record_failure(self, seconds: float) -> None:
+        self.usage.record(self.role, input_tokens=None, output_tokens=None, seconds=seconds)
 
     def wrap_tool_call(self, request, handler):
         self._record_tool(request)

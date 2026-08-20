@@ -405,6 +405,24 @@ Confirm it took effect in the `Ctx` column of `rudra models test`.
 
 ## Problems during a run
 
+### Rudra goes quiet for minutes and I can't tell what it's doing
+
+It shouldn't any more. Every agent — planner, coder, tester, reviewer —
+prints each tool call, result and error as it happens. If you see planning
+and then silence, you are either on a version before v0.2.1 or running with
+`--no-verbose`, which drops the trace to errors only.
+
+To see more rather than less:
+
+```bash
+rudra --verbose "…"     # adds the model's prose and untruncated payloads
+rudra --stream "…"      # streams that prose token by token as it arrives
+```
+
+A long gap on a single line is the model thinking, not Rudra hanging. The
+per-task timings in the final summary tell you afterwards where the time
+actually went.
+
 ### A traceback appears and Rudra exits, but files were written
 
 A model call failed and could not be recovered — rate limit, dropped connection, upstream error. Rudra retries transient failures three times with backoff, but only while nothing has been streamed back yet; once the model has started answering, a retry would re-emit the whole turn, so the run ends there and exits `1` even though earlier work succeeded.
@@ -510,6 +528,25 @@ rudra models test
 python3 --version
 env | grep RUDRA_ | sed -E 's/(KEY=).*/\1***/'      # masks any key values
 ```
+
+If the problem happened during a run, reproduce it once with the debug log
+on and attach the file:
+
+```bash
+rudra --debug --verbose "the thing that went wrong"
+cat .rudra/run/logs/debug.jsonl
+```
+
+One JSON object per line, covering both the trace and Rudra's internal log
+records. **`--verbose` matters here:** the log records exactly what the
+trace shows, so a quiet run produces a quiet file.
+
+Two more files in the same directory are usually worth attaching:
+`verify.log` (what the gate actually ran and what it said) and `usage.json`
+(tokens and wall clock per role).
+
+**Read the debug log before you post it.** It contains file paths and
+whatever your model wrote, which may include contents of your project.
 
 Then open an issue at [github.com/archish9/Rudra/issues](https://github.com/archish9/Rudra/issues).
 

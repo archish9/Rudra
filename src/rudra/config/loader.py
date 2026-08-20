@@ -47,7 +47,7 @@ from rudra.config.schema import (
 from rudra.state.paths import rudra_paths
 
 _TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills", "mcp", "memory")
-_AGENT_KEYS = frozenset({"verbose", "max_fix_attempts", "max_questions"})
+_AGENT_KEYS = frozenset({"verbose", "max_fix_attempts", "max_questions", "stream_tokens"})
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
 _SKILLS_KEYS = frozenset({"enabled"})
@@ -423,9 +423,10 @@ def build_config(
     permissions = merged.get("permissions", {})
     return Config(
         agent=AgentConfig(
-            verbose=bool(merged.get("agent", {}).get("verbose", True)),
+            verbose=bool(merged.get("agent", {}).get("verbose", False)),
             max_fix_attempts=int(merged.get("agent", {}).get("max_fix_attempts", 3)),
             max_questions=int(merged.get("agent", {}).get("max_questions", 5)),
+            stream_tokens=bool(merged.get("agent", {}).get("stream_tokens", False)),
         ),
         permissions=PermissionsConfig(
             mode=permissions.get("mode", "ask"),
