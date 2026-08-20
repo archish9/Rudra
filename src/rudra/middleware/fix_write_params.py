@@ -16,7 +16,8 @@ from langchain.agents.middleware.types import AgentMiddleware
 from rudra.compat.path_constants import SANDBOX_PREFIXES
 
 # Info string is anything up to the newline — matches the coverage that
-# compat/overwrite_backend.py:43 used to provide before U.3 deleted it.
+# compat/overwrite_backend.py used to provide before U.3 deleted it (its
+# regex was `^```[^\n]*\n(.*)\n```$`; the file is gone, so no line is cited).
 # See TODO.md U.15.
 _FENCE_RE = re.compile(r"^```[^\n]*\n?(.*?)```\s*$", re.DOTALL)
 
