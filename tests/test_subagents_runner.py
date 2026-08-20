@@ -190,3 +190,53 @@ async def test_an_explicit_thread_id_is_honoured(monkeypatch, patched):
     monkeypatch.setattr(runner, "run_with_approvals", capture)
     await run_subagent("coder", "one", context=patched, thread_id="fixed")
     assert seen == ["fixed"]
+
+
+# --- the total-call ceiling (A1.92) --------------------------------------
+
+
+async def test_a_subagent_stops_after_the_total_call_ceiling(monkeypatch, patched):
+    """A1.92: denied `bash`, a delegated subagent issued 204 successful
+    globs over 12 minutes hunting for a Python interpreter, and NO guard
+    could see it -- MAX_REPEATED_CALLS keys on (tool, target) so 204
+    different patterns are 204 firsts, and MAX_CONSECUTIVE_FAILURES never
+    fires because every glob succeeded. `No files found` is a success.
+
+    A ceiling on total calls is the only guard that catches spending
+    without failing.
+    """
+    from rudra.subagents.runner import MAX_TOTAL_CALLS
+
+    calls = [
+        {"name": "glob", "args": {"pattern": f"**/python{n}", "path": "/"}, "id": str(n)}
+        for n in range(MAX_TOTAL_CALLS + 10)
+    ]
+    messages = [ai(tool_calls=[call]) for call in calls]
+    chunks = [{"messages": messages[: n + 1]} for n in range(len(messages))]
+
+    monkeypatch.setattr("rudra.subagents.runner.run_with_approvals", stream_of(*chunks))
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert result.ok is False
+    assert "tool calls" in (result.halted_reason or "")
+
+
+async def test_an_ordinary_run_is_nowhere_near_the_ceiling(monkeypatch, patched):
+    """The ceiling must not fire on real work. Step 15c's acceptance shows
+    a healthy coder invocation at well under 20 calls; the runaway was 204."""
+    from rudra.subagents.runner import MAX_TOTAL_CALLS
+
+    assert MAX_TOTAL_CALLS >= 50
+
+    messages = [
+        ai(tool_calls=[{"name": "read_file", "args": {"file_path": f"{n}.py"}, "id": str(n)}])
+        for n in range(20)
+    ]
+    monkeypatch.setattr(
+        "rudra.subagents.runner.run_with_approvals",
+        stream_of(*[{"messages": messages[: n + 1]} for n in range(len(messages))]),
+    )
+
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert result.ok is True

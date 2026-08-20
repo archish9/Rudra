@@ -32,6 +32,24 @@ from rudra.trace.stream import looks_like_error as _looks_like_error
 MAX_CONSECUTIVE_FAILURES = 3
 MAX_REPEATED_CALLS = 3
 
+MAX_TOTAL_CALLS = 80
+"""Tool calls one subagent invocation may make, of any kind (A1.92).
+
+The other two guards catch *failing* and catch *repeating*. Neither
+catches spending. Measured on Step 15c's acceptance: denied a `bash` tool
+it never had, a delegated subagent issued **204 successful `glob` calls
+over 12 minutes** looking for a Python interpreter -- ending on
+`**/python` against `/` -- and nothing stopped it. `MAX_REPEATED_CALLS`
+keys on `(tool, target)`, so 204 different patterns are 204 firsts;
+`MAX_CONSECUTIVE_FAILURES` never fired because every glob *succeeded*
+(`No files found` is a successful result).
+
+80 is chosen against observed work, not guessed: a healthy coder
+invocation in that same acceptance ran to well under 20 calls, and the
+planner's busiest stage to about 30. It is a runaway bound, not a budget
+-- if real work ever approaches it, raise it rather than teaching people
+to expect halts."""
+
 # Tool calls worth counting repeats for. `task` is included and now
 # genuinely reachable, which is what closes A1.20.
 _WATCHED_TOOLS = frozenset({"write_file", "edit_file", "read_file", "task"})
@@ -175,6 +193,7 @@ async def run_subagent(
     seen: dict[tuple[str, ...], int] = {}
     state = StreamState(role=name)
     consecutive_failures = 0
+    total_calls = 0
     repeated: dict[tuple[str, str], int] = {}
     halted: str | None = None
     last_text = ""
@@ -215,6 +234,16 @@ async def run_subagent(
                     if text:
                         last_text = text
                     for tool_call in getattr(message, "tool_calls", []) or []:
+                        # Counted for EVERY tool, before the _WATCHED_TOOLS
+                        # filter: A1.92's runaway was 204 successful globs,
+                        # and glob is not watched and never failed.
+                        total_calls += 1
+                        if total_calls >= MAX_TOTAL_CALLS:
+                            halted = (
+                                f"{total_calls} tool calls in one invocation -- stopping. "
+                                f"The last was '{tool_call.get('name', '?')}'."
+                            )
+                            break
                         if tool_call.get("name") not in _WATCHED_TOOLS:
                             continue
                         key = _call_key(tool_call)
