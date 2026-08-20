@@ -103,6 +103,17 @@ src/rudra/
 │                           backend from the user's global config (A1.87);
 │                           prefetch.py warms chromadb's ONNX MiniLM through
 │                           mempalace's own code path (Step 14c)
+├── trace/                  The run trace (Step 15a). events · render · stream ·
+│                           sink · debug. Imports nothing from agent/, loop/ or
+│                           subagents/ — pinned by tests/test_trace_wiring.py.
+│                           ONE event vocabulary with three consumers: the
+│                           console, the --debug JSONL log, and (15c) the
+│                           transcript. stream.py keys its position by subgraph
+│                           NAMESPACE, which is what closed A1.20 — both stream
+│                           loops kept one counter across namespaces and
+│                           silently dropped messages. render.py escapes every
+│                           payload (A1.67, A1.48, A1.91): model and config text
+│                           printed raw through Rich loses anything in brackets
 ├── agent/
 │   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -171,6 +182,7 @@ only function that creates anything.
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
+| `run/logs/debug.jsonl` | volatile | `trace/debug.py`, only under `--debug` | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record. Written only with the flag; an unopenable file disables the log rather than failing the run (Step 15a, C9.7) |
 | `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens and compactions for the last run. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
 | `memory/export/` | durable | `rudra memory export` | `rudra memory import` | The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
@@ -244,6 +256,8 @@ inert before Step 12.
 | Per-run token accounting | **designed** | `src/rudra/context/usage.py`. Nothing upstream reports what a run cost |
 | Recalled memories in every prompt | **designed** | `memory/render.py` + `recall_limit`. **One number now feeds three consumers** — summarization, eviction, and recall. `usage.json` carries `recall_chars` per role so the fraction can be revised with evidence (Step 14b) |
 | Per-task memory in `AGENTS.md` | **designed** | `src/rudra/context/agents_md.py` + the two writers in `loop/engine.py`. Session Log capped at 20 entries (C7.3) |
+| Per-role and per-task wall clock | **designed** | `UsageMiddleware` times every model call; `run_task` times every task (Step 15a, C9.6). **No cost figure, ever — S15.2.** Latency is the one number a local backend always has: token counts are frequently `not reported`, and a failed call still costs the wait |
+| The run trace | **designed** | `src/rudra/trace/`. Before Step 15a the subagents printed nothing at all — `runner.py` consumed every chunk to drive its guards and rendered none — so a run went quiet exactly while the coder worked. `--verbose` reached nothing (A1.90) |
 
 **One number, two consumers.** `[model.<role>] context_tokens` feeds both
 the summarization trigger and the eviction threshold. That is deliberate:
@@ -314,6 +328,8 @@ base_url = "http://localhost:11434"
 model    = "qwen3-coder:30b"
 
 [agent]
+verbose = false                         # prose + untruncated payloads in the trace (Step 15a)
+stream_tokens = false                   # stream that prose token by token; --stream for one run
 max_fix_attempts = 3                    # fix-loop retries per task (C6.5a)
 max_questions = 5                       # clarification budget for the run; 0 never asks
 
@@ -385,6 +401,8 @@ git config core.hooksPath .githooks  # once per clone: run all three gates on pu
 .venv/bin/rudra verify --all --json  # whole project, machine-readable. Exit 0/1/2
 .venv/bin/rudra "build a flask app"  # single-shot; prompts before each write and command
 .venv/bin/rudra --auto "..."         # unattended: files yes, commands no (A1.49)
+.venv/bin/rudra --verbose "..."      # ...and the model's prose, untruncated
+.venv/bin/rudra --debug "..."        # + .rudra/run/logs/debug.jsonl for a bug report
 .venv/bin/rudra --auto --allow-shell "..."   # ...and commands too, opted in explicitly
 .venv/bin/rudra --plan "..."         # show the plan and stop — writes nothing
 .venv/bin/rudra                      # REPL

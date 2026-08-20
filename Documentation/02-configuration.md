@@ -65,7 +65,8 @@ model = "qwen3:32b"
 model = "qwen3-coder:32b"
 
 [agent]
-verbose = true
+verbose = false
+stream_tokens = false
 max_fix_attempts = 3
 max_questions = 5
 
@@ -279,9 +280,26 @@ this.
 
 | Key | Means |
 |---|---|
-| `verbose` | Show detailed tool-call output during a run |
+| `verbose` | Add the model's prose and untruncated payloads to the run trace. Default `false` |
+| `stream_tokens` | Stream that prose token by token as it arrives. Default `false` |
 | `max_fix_attempts` | How many times the fix loop retries one task before giving up. Default 3 |
 | `max_questions` | How many clarifying questions the planner may ask across one whole run. Default 5; `0` never asks |
+
+`verbose = false` does **not** mean a silent run. Every tool call, result and
+error is printed either way — verbose adds the prose and stops truncating.
+`--verbose` and `--no-verbose` override this per run, and `--no-verbose` drops
+to errors only. The levels are in the
+[CLI reference](04-cli-reference.md#what-the-trace-shows).
+
+> **This default changed in v0.2.1**, from `true` to `false`. Until then the
+> key had no effect at all — nothing read it — so nobody was getting the
+> verbose output it promised. Rather than switch every existing project to
+> untruncated output the day it started working, the default now matches what
+> people have actually been seeing. Set it `true` if you want the full stream.
+
+`stream_tokens` is off because it is unmeasured against the 32B models Rudra
+targets. `--stream` turns it on for one run; it changes only what the trace
+shows, never what the agent does.
 
 `max_fix_attempts` is an upper bound, not a target. The loop usually stops
 sooner: two attempts that fail *identically* count as no progress and stop

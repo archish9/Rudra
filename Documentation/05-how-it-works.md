@@ -72,7 +72,23 @@ The reviewer has no `write_file`, `edit_file`, `delete` or `execute` tool at all
 
 Every subagent goes through the same permission gate as the main agent, so the same approval prompts, allow/deny rules and deny floor apply inside them.
 
-**They are not wired into a run yet.** Today's flow is still the planner-and-coder loop described above; the subagents exist, are tested, and are called directly from Python. Connecting them to a real loop is the next step — see [Project Status](08-project-status.md).
+**They run every task.** `loop/engine.py` calls the coder for each task, the tester when the gate reports no test judgement, and the reviewer once at the end. (This paragraph used to say they were not wired into a run yet — that was true when they were built and stopped being true one step later.)
+
+### Watching them work
+
+Each of them prints what it is doing, tagged with its name:
+
+```
+[coder] → [4] CALL write_file  {'file_path': 'parser.py'}
+[coder] ✓ [5] write_file: Wrote parser.py
+[tester] → [2] CALL execute  {'command': 'pytest -q'}
+[tester] ✗ [3] ERROR from execute:
+Error: pytest exited 1
+```
+
+A tag with a colon in it — `[coder:task:1]` — means the line came from a subagent that agent delegated to, not from the agent itself.
+
+How much you see is `--verbose` / `--no-verbose`; the levels are in the [CLI reference](04-cli-reference.md#what-the-trace-shows).
 
 ---
 

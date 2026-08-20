@@ -95,23 +95,36 @@ Every finished run reports its usage:
 ✅ Complete
 Files created:  3
 Files modified: 1
-Tokens: planner  41,204 in / 3,118 out   (7 calls)
-        coder    88,930 in / 12,455 out  (19 calls, 2 compactions)
-        tester   14,002 in /  1,203 out  (4 calls)
+Tokens: planner  41,204 in / 3,118 out   (7 calls, 31.4s)
+        coder    88,930 in / 12,455 out  (19 calls, 402.7s, 2 compactions)
+        tester   14,002 in /  1,203 out  (4 calls, 55.1s)
 ```
 
 The same numbers, machine-readable, in `.rudra/run/logs/usage.json`:
 
 ```json
 {
-  "planner": {"calls": 7, "input_tokens": 41204, "output_tokens": 3118, "compactions": 0},
-  "coder":   {"calls": 19, "input_tokens": 88930, "output_tokens": 12455, "compactions": 2}
+  "planner": {"calls": 7, "input_tokens": 41204, "output_tokens": 3118,
+              "compactions": 0, "seconds": 31.4},
+  "coder":   {"calls": 19, "input_tokens": 88930, "output_tokens": 12455,
+              "compactions": 2, "seconds": 402.7}
 }
 ```
 
-Two things worth knowing about these numbers:
+The summary line also carries per-task wall clock, so "which task was slow"
+is answerable without reading the log:
+
+```
+  ✓ t1  write the ISO-8601 parser  (96.4s)
+  ✗ t2  add the CLI flag           (188.1s)
+      3 attempts exhausted
+```
+
+Four things worth knowing about these numbers:
 
 - **`not reported` is not zero.** Some local endpoints don't send usage data. Rudra says so rather than printing `0`, which would look like a free run.
+- **`seconds` is always there.** Rudra measures it rather than asking the provider, so it is the one figure a local backend can't leave out — including for a call that failed, which is when you most want it.
+- **There is no cost figure, and there will not be one.** Rudra is free; what you pay your provider is between you and them. A bundled price table would go stale silently and be wrong for OpenRouter, vLLM and every proxy, and a wrong number is worse than none.
 - **`compactions` counts only the deliberate kind** — the tool call above. Automatic summarisation happens outside Rudra's view and isn't in this figure.
 
 ---
