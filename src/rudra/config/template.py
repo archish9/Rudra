@@ -129,8 +129,14 @@ timeout     = 60         # seconds per MCP call
 # Servers themselves live in .mcp.json, in Claude Code's schema, so an
 # existing config can be pasted in unchanged. `rudra mcp add` writes it.
 
-# Not supported yet, listed so you know where they will go:
-#   [memory]  Step 14
+[memory]
+# Long-term memory: what this project decided, finished, was blocked by, and
+# prefers. Local, no API key, and read back into every agent's prompt.
+# `chroma` is the default and the tested one; the rest are MemPalace backends
+# passed straight through. One key only — memory cannot be switched off, and
+# the palace always lives at .rudra/memory/palace/. See
+# Documentation/15-memory.md.
+backend = "chroma"       # chroma | sqlite | milvus | qdrant | pgvector
 """
 
 __all__ = ["CONFIG_TEMPLATE"]

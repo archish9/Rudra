@@ -604,17 +604,31 @@ def doctor_command(
             f"{stale} predates the run/ layout and is unused — safe to delete",
         )
 
+    from rudra.memory.degrade import last_failure, reset_failures
     from rudra.memory.prefetch import MODEL_SIZE_MB, is_warm, model_cache_dir
     from rudra.memory.store import MemoryStore
     from rudra.memory.taxonomy import TaxonomyError
 
     try:
+        reset_failures()
         store = MemoryStore(project_path, backend=cfg.memory.backend)
-        table.add_row(
-            "memory",
-            "ok",
-            f"{store.count()} memories in {paths.memory_palace} (backend: {cfg.memory.backend})",
-        )
+        count = store.count()
+        # A1.89: `count()` degrades to 0, so without this the row said
+        # `ok — 0 memories` for a palace that could not be opened at all,
+        # which is the one place a user looks to find out.
+        failure = last_failure()
+        if failure:
+            table.add_row(
+                "memory",
+                "fail",
+                f"unreadable at {paths.memory_palace} — {failure}",
+            )
+        else:
+            table.add_row(
+                "memory",
+                "ok",
+                f"{count} memories in {paths.memory_palace} (backend: {cfg.memory.backend})",
+            )
     except TaxonomyError as exc:
         table.add_row("memory", "warn", f"off for this project — {exc}")
 
@@ -1287,16 +1301,37 @@ def _memory_store(project_dir: Optional[Path]):
     TaxonomyError is the constructor's, so it cannot degrade -- there is no
     store yet. Everything after construction degrades on its own.
     """
+    from rudra.memory.degrade import reset_failures
     from rudra.memory.store import MemoryStore
     from rudra.memory.taxonomy import TaxonomyError
 
     project_path = get_project_path(project_dir)
     cfg = _load_config_or_exit(project_dir)
+    reset_failures()
     try:
         return MemoryStore(project_path, backend=cfg.memory.backend)
     except TaxonomyError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
+
+
+def _exit_if_memory_failed() -> None:
+    """Turn a degraded call into a message and exit 1 (A1.89).
+
+    Every store method returns a safe default on failure, so without this
+    a broken palace reaches the user as "Nothing recorded for this project
+    yet" — a false statement about a store that was never read. `export`
+    is the worst of them: it would report success and write nothing while
+    the user believes they now hold a durable copy.
+    """
+    from rudra.memory.degrade import last_failure
+
+    failure = last_failure()
+    if failure is None:
+        return
+    console.print(f"[red]Memory is unavailable:[/red] {escape(failure)}")
+    console.print("[dim]Nothing was read or written. `rudra doctor` shows the palace path.[/dim]")
+    raise typer.Exit(1)
 
 
 def _memory_table(title: str, rows) -> Table:
@@ -1325,6 +1360,7 @@ def memory_list(
     """Show what this project has remembered."""
     store = _memory_store(project_dir)
     rows = store.list_entries(room=room, added_by=added_by, limit=limit)
+    _exit_if_memory_failed()
     if not rows:
         console.print("Nothing recorded for this project yet.")
         return
@@ -1341,6 +1377,7 @@ def memory_search(
     """Search this project's memory by meaning."""
     store = _memory_store(project_dir)
     hits = store.search(query, room=room, limit=limit)
+    _exit_if_memory_failed()
     if not hits:
         console.print("Nothing recorded on this project matches that.")
         return
@@ -1371,6 +1408,7 @@ def memory_forget(
 
     store = _memory_store(project_dir)
     rows = store.list_entries(room=room, added_by=added_by, limit=10_000)
+    _exit_if_memory_failed()
     if not rows:
         console.print("Nothing matches — nothing deleted.")
         return
@@ -1393,7 +1431,9 @@ def memory_forget(
             console.print("Nothing deleted.")
             return
 
-    console.print(f"[green]Deleted[/green] {store.delete([row.id for row in rows])} memories.")
+    deleted = store.delete([row.id for row in rows])
+    _exit_if_memory_failed()
+    console.print(f"[green]Deleted[/green] {deleted} memories.")
 
 
 @memory_app.command("export")
@@ -1408,6 +1448,7 @@ def memory_export(
     store = _memory_store(project_dir)
     target = out or rudra_paths(get_project_path(project_dir)).memory_export
     stats = export_memory(store, target)
+    _exit_if_memory_failed()
     if not stats["drawers"]:
         console.print("Nothing recorded for this project yet — nothing exported.")
         return
@@ -1424,6 +1465,7 @@ def memory_import(
 
     store = _memory_store(project_dir)
     stats = import_memory(store, source)
+    _exit_if_memory_failed()
     if not stats["drawers"]:
         console.print(f"Nothing to import from {source}.")
         return

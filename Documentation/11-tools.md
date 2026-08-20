@@ -26,6 +26,8 @@ You do not call these yourself. You read this page for three reasons: to underst
 | [`describe_mcp_tool`](#describe_mcp_tool) | One MCP tool's arguments | never |
 | [`call_mcp_tool`](#call_mcp_tool) | Run an MCP tool | **yes**, by tool id |
 | [`git_diff`](#git_diff) | Show working-tree changes | **yes**, as the command it runs |
+| [`remember`](#remember) | Record something for future runs | never — control plane |
+| [`search_memory`](#search_memory) | Search what earlier runs recorded | never |
 | [`record_fact`](#record_fact) | Record something established | never — control plane |
 | [`ask_user`](#ask_user) | Ask you a question | never — control plane |
 | [`add_tasks`](#add_tasks) | Add work to the ledger | never — control plane |
@@ -285,10 +287,10 @@ Four subagents ship, and their differences are structural rather than instructio
 
 | `subagent_type` | Can | Cannot |
 |---|---|---|
-| `coder` | read, write, edit, glob, grep | **run commands** — no `execute` |
+| `coder` | read, write, edit, glob, grep, remember and search memory | **run commands** — no `execute` |
 | `tester` | everything the coder can, plus `execute` and `run_tests` | — |
-| `reviewer` | read, glob, grep, `git_diff` | **write anything at all** |
-| `general-purpose` | read, glob, grep | write, execute |
+| `reviewer` | read, glob, grep, `git_diff` | **write anything at all**, and it sees no memory |
+| `general-purpose` | read, glob, grep, remember and search memory | write, execute |
 
 The reviewer cannot edit your code because the write tools are never registered for it — there is no prompt telling it to behave, and nothing to deny. If you ask the reviewer to apply a fix, it will tell you it cannot.
 
@@ -369,6 +371,52 @@ read_ledger()
 
 Counted as a read, not as control plane: it only reads `.rudra/run/ledger.json` and changes nothing.
 
+### `remember`
+
+Record one thing worth knowing on a **future** run of this project.
+
+```
+remember(
+    content="The user runs everything through uv, never pip — pip installs "
+            "into the wrong environment on their machine.",
+    room="preferences",
+)
+```
+
+`room` is one of `decisions`, `tasks`, `blockers`, `preferences`. An unknown room comes
+back as a `REJECTED:` sentence naming the valid four, so the model can fix the call
+rather than fail.
+
+This is for what **nothing else will record**: a preference you stated, a constraint the
+agent discovered, an API that behaves unlike its documentation. Completed and blocked
+tasks are already recorded automatically by Python, and the tool's own instructions say
+not to repeat them — models sometimes do anyway, which is what
+`rudra memory forget --added-by agent` is for.
+
+Everything this tool writes is tagged `added_by=agent`, so a model's judgement is always
+distinguishable from Rudra's deterministic record.
+
+Never gated: it writes under `.rudra/memory/` only, never into your project. If the store
+is unreachable it says so and tells the model to carry on — a memory failure never fails
+a task.
+
+### `search_memory`
+
+Search what earlier runs on this project recorded, by meaning.
+
+```
+search_memory(query="why did we pick this parser", room="decisions")
+```
+
+Returns up to five hits, each labelled with its room and who recorded it. `room` is
+optional and narrows the search.
+
+Agents already receive the most relevant memories in their prompt without asking
+([Memory](15-memory.md#6-how-a-memory-comes-back-recall)). This tool covers the case that
+block structurally cannot: history the model turns out to need mid-task.
+
+Counted as a read, not as control plane — it reads `.rudra/memory/` and changes nothing.
+
 ### The one thing no tool can do
 
 **Nothing in this list can mark a task complete.** There is no `finish_task`, no `mark_done`, no status argument anywhere.
@@ -419,6 +467,7 @@ eager model cannot compact a nearly-empty conversation.
 | `record_fact` | ✅ | ✅ | — | — | — | — | — |
 | `add_tasks` `drop_task` | — | — | ✅ | — | — | — | — |
 | `compact_conversation` | — | — | — | ✅ | ✅ | — | — |
+| `remember` `search_memory` | — | — | — | ✅ | ✅ | — | ✅ |
 | `list_mcp_tools` `describe_mcp_tool` `call_mcp_tool` | — | — | — | ✅ | — | ⚠️ | ✅ |
 
 ⚠️ The reviewer gets the MCP tools **filtered to `[mcp] readonly`**: a tool outside that
@@ -461,4 +510,5 @@ Full rule syntax and precedence: [Permissions](09-permissions.md).
 - **[How It Works](05-how-it-works.md)** — the loop these tools run inside
 - **[Skills](12-skills.md)** — the vendored superpowers methodology and how it maps onto these tools
 - **[MCP](14-mcp.md)** — attaching outside tool servers, and controlling what they may do
+- **[Memory](15-memory.md)** — what `remember` and `search_memory` write to and read from
 - **[CLI Reference](04-cli-reference.md)** — the commands *you* type

@@ -16,7 +16,9 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 | 10 | **[Verification](10-verification.md)** | Run the deterministic gate, read its verdict, install the per-stack tools |
 | 11 | **[Tools](11-tools.md)** | Look up what the agent can actually do — every tool, with examples and per-subagent grants |
 | 12 | **[Skills](12-skills.md)** | Understand the vendored superpowers library, why it's frozen, and what Rudra adapts |
+| 13 | **[Context and Memory](13-context-and-memory.md)** | Set `context_tokens`, see what a run cost, know what survives between runs |
 | 14 | **[MCP](14-mcp.md)** | Add an MCP server, control what it may do, and see a real one working |
+| 15 | **[Memory](15-memory.md)** | Learn what Rudra remembers about your project, how it comes back, and how to read, prune, export and restore it |
 
 ---
 
@@ -27,6 +29,8 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 **About to run it unattended** → [Permissions](09-permissions.md) → [Tools](11-tools.md) → [MCP](14-mcp.md) if you configured a server
 
 **Giving the agent tools Rudra doesn't ship** → [MCP](14-mcp.md)
+
+**Wondering what it remembers about your project — or wanting it to forget** → [Memory](15-memory.md)
 
 **Wondering what the agent can actually do to your machine** → [Tools](11-tools.md)
 

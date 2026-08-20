@@ -23,6 +23,7 @@ from rudra.context.usage import render_usage
 from rudra.git.core import is_repo, status
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
 from rudra.loop.ledger import Ledger, Task, TaskStatus
+from rudra.memory.degrade import last_failure
 from rudra.memory.entry import MemoryEntry
 from rudra.subagents import SubagentContext, run_subagent
 from rudra.verify import verify_project
@@ -539,6 +540,16 @@ def summarise(ledger: Ledger, console: Console, usage: Any = None) -> Any:
     if block:
         console.print(block)
         console.print()
+
+    # A1.89: `degrades` keeps a run alive through a broken palace, and this
+    # is the other half of C8.6 -- a mandatory subsystem that quietly did
+    # nothing is worse than one that failed. Printed after the tasks are
+    # counted and before they are listed, because it explains an empty
+    # `rudra memory list` the user is about to be surprised by.
+    failure = last_failure()
+    if failure:
+        console.print("[yellow]Long-term memory failed this run — nothing was recorded.[/yellow]")
+        console.print(f"[dim]{failure}[/dim]\n")
 
     for task in ledger.tasks:
         note = task.note

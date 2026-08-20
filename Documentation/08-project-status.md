@@ -111,12 +111,15 @@ In `ask` mode you can see the overlap in the plan and revise it away before it
 costs you anything. Under `--auto` you cannot, and re-running usually produces a
 cleaner breakdown.
 
-### Memory between runs is real, but narrow
+### Memory between runs is real, and now long-term
 
 What persists on disk: **`.rudra/facts.json`**, so a stack established last week
-is still known; **`.rudra/AGENTS.md`**, which now gains a line per completed
-task and a rewritten architecture summary at the end of each run; and the
-**task ledger**, which `rudra --continue` reads.
+is still known; **`.rudra/AGENTS.md`**, which gains a line per completed task and a
+rewritten architecture summary at the end of each run; the **task ledger**, which
+`rudra --continue` reads; and since Step 14 a **searchable long-term store** at
+`.rudra/memory/`, holding every decision, finished task, blocker and stated preference,
+and read back into each agent's prompt automatically. It runs locally, needs no API key,
+and is documented in full in [Memory](15-memory.md).
 
 What does not persist is the **conversation**. Checkpoints are written but never
 replayed, on purpose — a stable per-project thread would have every run inherit
@@ -124,11 +127,22 @@ every earlier run's history. So Rudra remembers *what your project is and what
 was done to it*, not *what it was thinking at the time*.
 
 The `AGENTS.md` session log keeps its most recent 20 entries. It is re-read on
-every planner call, so an unbounded one would be a tax that grows forever.
+every planner call, so an unbounded one would be a tax that grows forever — and that cap
+costs nothing now, because nothing ages out of the long-term store beside it.
 
-### No MCP, no plugins
+One rough edge, stated plainly: a model will sometimes re-record a task the deterministic
+half already recorded, and `rudra memory forget --added-by agent` prunes exactly that.
 
-Designed, not implemented.
+A palace that cannot be opened never fails your work — but it is no longer quiet about it
+either. The run summary says so, `rudra doctor`'s memory row reads `unreadable` rather
+than `0 memories`, and every `rudra memory` command exits `1` with the error instead of
+reporting an empty store.
+
+### MCP is real, and ships off
+
+Model Context Protocol servers work: `.mcp.json` in Claude Code's schema, three
+meta-tools instead of a bloated prompt, and per-tool gating. **No server ships enabled**,
+so with no `.mcp.json` Rudra behaves as it always did. See [MCP](14-mcp.md).
 
 ### No command sandbox
 
@@ -173,15 +187,13 @@ Older versions of the README described commands that never existed or were remov
 
 Built in order, because each depends on the last.
 
-**Shipped since this page last named them as "next":** the real agent loop — subagents, a tester, an advisory reviewer, and a completion gate that means *the tests pass* rather than *the file exists* — and better planning, which turned out to mean three staged agents, dynamic clarifying questions, and a plan you approve before any code is written. Both are described under [What works](#what-works).
+**Shipped since this page last named them as "next":** the real agent loop — subagents, a tester, an advisory reviewer, and a completion gate that means *the tests pass* rather than *the file exists*; better planning, which turned out to mean three staged agents, dynamic clarifying questions, and a plan you approve before any code is written; the [skills](12-skills.md) library with user-authored skills and `rudra skills validate`; [context management](13-context-and-memory.md), which made summarisation, eviction and per-run token accounting real; [MCP](14-mcp.md); and [long-term memory](15-memory.md).
 
 | Next | What it brings |
 |---|---|
-| **Skills, the rest** | User-authored skills, `rudra skills list/validate`, a session-start hook, and a measurement of how well a 32B model picks from the index. The library itself is already wired |
-| **Context management** | Checkpoints that resume, living project notes, token budgets |
-| **MCP support** | Model Context Protocol servers |
-| **Long-term memory** | Knowledge that persists across sessions |
-| **Release polish** | Streaming, cancellation, cost reporting, PyPI |
+| **Release polish** | Token-level streaming, Ctrl-C that cancels the turn rather than printing a hint, a better REPL (history, multiline, `@`-file mentions), structured `--debug` logging |
+| **OSS launch** | PyPI publish, CONTRIBUTING / SECURITY / issue templates, repo cleanup, a plainly stated security model for shell execution |
+| **Stack coverage** | An end-to-end acceptance case per stack — Rust, Python, Node, React, Angular — greenfield and brownfield. Detection itself already ships |
 
 `TODO.md` in the repository root is the live ledger — every item, its status, and the evidence behind it.
 

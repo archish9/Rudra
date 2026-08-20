@@ -508,10 +508,17 @@ def build_memory_store(project_path: Path, cfg: Any, console: Console) -> Any:
     project directory whose name yields no usable wing costs the run its
     memory, never the run itself (C8.6), and says so rather than going
     quiet (S14.2).
+
+    The recorded failure is reset here, not in `summarise`: it is
+    process-global, and the REPL builds a fresh agent per input (A1.89).
+    Without this, one broken turn would have every later turn report a
+    failure over a palace that is fine.
     """
+    from rudra.memory.degrade import reset_failures
     from rudra.memory.store import MemoryStore
     from rudra.memory.taxonomy import TaxonomyError
 
+    reset_failures()
     try:
         return MemoryStore(project_path, backend=cfg.memory.backend)
     except TaxonomyError as exc:

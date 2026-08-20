@@ -373,9 +373,8 @@ the same servers without starting them — it only checks that each command exis
 
 ## `rudra memory`
 
-What this project has learned, across runs. See
-[Context & Memory](13-context-and-memory.md#long-term-memory) for what gets stored
-and why.
+What this project has learned, across runs. **[Memory](15-memory.md)** is the full
+guide: what gets stored, how it reaches the model, and what happens when it breaks.
 
 ```bash
 rudra memory list                      # everything, newest first

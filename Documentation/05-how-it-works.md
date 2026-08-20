@@ -172,11 +172,13 @@ Rudra keeps its state inside your project:
 | `AGENTS.md` | Rudra | Project notes fed into the planner's prompt — a line per completed task, plus an architecture summary rewritten each run |
 | `facts.json` | planner | What this project's agents established, and why |
 | `checkpoints.db` | LangGraph | Conversation checkpoints. Written, but never replayed — see [Context and Memory](13-context-and-memory.md) |
+| `memory/palace/` | Rudra + the agents | Long-term memory: decisions, finished tasks, blockers, preferences — searchable, and read back into every prompt. See [Memory](15-memory.md) |
+| `memory/export/` | `rudra memory export` | The markdown copy of that store — the one worth committing |
 
-Deleting the folder is safe — Rudra recreates what it needs. You do lose the two
-things that carry forward: the facts it established about your project, and the
-notes in `AGENTS.md`. You also lose the task list, so a run interrupted before
-you delete it can no longer be continued.
+Deleting the folder is safe — Rudra recreates what it needs. You do lose everything
+that carries forward: the facts it established about your project, the notes in
+`AGENTS.md`, and its long-term memory. You also lose the task list, so a run interrupted
+before you delete it can no longer be continued.
 
 **Committing it is your call.** Rudra never touches your `.gitignore`. Add `.rudra/` if you'd rather keep it local.
 
@@ -249,6 +251,7 @@ Rudra adds a few of its own:
 | `record_fact` | Records something established about the project — value, why, and whether it was asked, inferred or detected |
 | `run_tests` | Works out your project's test command, runs it, reports counts and the failure tail |
 | `git_diff` | The working-tree diff, capped so a big one can't fill the context window |
+| `remember` / `search_memory` | This project's long-term memory — write one thing worth knowing next run, or search what earlier runs recorded |
 
 `run_tests` and `git_diff` are thin wrappers: underneath, both resolve a real command and hand it to the same permission gate as any other shell call. That's why a rule like `deny = ["execute:git push*"]` covers them without naming them, and why the audit log records `pytest -q` rather than a tool name.
 
@@ -256,21 +259,53 @@ Rudra adds a few of its own:
 
 ## Honest limitations
 
-Things worth knowing before you rely on it:
+Things worth knowing before you rely on it.
 
-**No review step.** Nothing checks the generated code for correctness before reporting success.
+**Review is advisory, and only the deterministic gate decides anything.** The reviewer
+runs once at the end, prints what it found, and blocks nothing. That is deliberate — an
+LLM verdict does not decide completion here — but it means its findings are yours to
+read and act on, not something Rudra has already handled.
 
-**Shell exists, but the loop doesn't use it.** Rudra's agents can run commands, and do. What's missing is the step that runs *your test suite* and acts on the result — so a failing test doesn't yet cause a retry.
+**The reviewer sees nothing on a brand-new project.** Its pass reads `git diff`, which
+shows changes to *tracked* files — so on a fresh repo, where everything is new and
+untracked, it reports nothing, and the summary gives no hint that it did.
 
-**Existence is the only success test.** As above — a file that exists counts as done.
+**Under `--auto` alone, Rudra writes code it cannot check.** Every verification stage
+except the syntax check and the stub scan is a command, and commands are denied in
+unattended runs unless you pass `--allow-shell`. So `--auto` on its own produces code
+that parses and has no placeholders, with nothing having run its tests. Pair the flags
+when you want the loop to actually verify itself.
 
-**The reviewer sees nothing on a brand-new project.** Its advisory pass reads the git diff, which shows changes to *tracked* files — so on a fresh repo, where everything is new and untracked, it reports nothing and the summary gives no hint that it did.
+**A shell command is not confined.** Writes are held inside your project by the backend;
+an approved command runs with your user's full access. In `ask` mode you read each one
+first, which is the real protection. Real containment would need OS-level isolation, and
+Rudra does not do that.
 
-**A failed model call ends the run.** A dropped connection or rate limit raises an error and exits `1`, even if files were already written. Check your directory before assuming nothing happened.
+**A mid-stream model failure ends the run.** Transient provider errors — `429`, `502`, a
+dropped connection — are retried three times with backoff, but only *before* the model
+starts answering; once the first chunk has arrived, a failure surfaces and the run stops.
+Files already written stay, tasks marked `done` genuinely passed the gate, and
+`rudra --continue` picks up the rest.
 
-**No memory between runs.** Each invocation starts fresh apart from what's on disk.
+**An empty diff counts as a failed attempt.** With no changed files the gate has nothing
+to judge, so a task that changed nothing is treated as an attempt that produced nothing.
+The common way to hit this is a plan with two tasks covering one edit: the coder finishes
+both under the first, and the second legitimately changes nothing and ends up `blocked`
+while the feature works. Revise the plan when you see the overlap; under `--auto`,
+re-running usually gives a cleaner breakdown.
 
-Everything above is tracked, and several items are next in line. See [Project Status](08-project-status.md).
+**The live trace is truncated, not streamed.** Output arrives per message rather than per
+token, and each line is cut at a few hundred characters. Long model replies are readable
+in outline only. `Ctrl-C` in the REPL interrupts the current input and returns you to the
+prompt; it does not cancel an agent turn already in flight.
+
+**Memory between runs is narrow, and it is not the conversation.** What carries forward
+is `facts.json`, `AGENTS.md`, and the long-term store in `.rudra/memory/` — decisions,
+finished tasks, blockers, preferences. Checkpoints are written but never replayed, so
+anything you explained in a dead run that never became a fact or a memory is gone. See
+[Memory](15-memory.md).
+
+Everything above is tracked. See [Project Status](08-project-status.md).
 
 ---
 

@@ -206,9 +206,8 @@ backend = "chroma"    # chroma | sqlite | milvus | qdrant | pgvector
 
 One key, and the two you might expect are deliberately absent.
 
-There is no `enabled`. Long-term memory is not optional — see
-[Context & Memory](13-context-and-memory.md#long-term-memory) for what it stores
-and how to purge it.
+There is no `enabled`. Long-term memory is not optional — see **[Memory](15-memory.md)**
+for what it stores, how it comes back, and how to purge it.
 
 There is no knob for how much of the context window recalled memories may use.
 It is 2%, a constant, because nobody has measured what it should be — and an
@@ -219,6 +218,10 @@ costs, which is what a future default would be argued from.
 The palace's location is not configurable either: it is always
 `<project>/.rudra/memory/palace/`, because that layout is what makes committing
 `.rudra/` safe.
+
+The setting that affects memory most is not in this section at all: it is
+`[model.<role>] context_tokens`. A role that declares none gets no recalled memories
+in its prompt — see [Memory](15-memory.md#6-how-a-memory-comes-back-recall).
 
 ## The skills section
 

@@ -195,61 +195,56 @@ The short version: it works the remaining tasks, reuses the original request so 
 
 Everything above is about one run. This is what survives between them.
 
-Rudra keeps a small searchable store per project at `.rudra/memory/palace/`.
-Every run reads from it before planning and writes to it as work finishes.
-
-### What gets stored
+Rudra keeps a small **searchable store per project** at `.rudra/memory/palace/`, built
+on [MemPalace](https://github.com/MemPalace/mempalace). Every run reads from it before
+planning and writes to it as work finishes. It is local, needs no API key, and is on for
+every project.
 
 Four categories, and nothing else:
 
 | Room | Holds |
 |---|---|
-| `decisions` | choices and the reasoning behind them — "language = Python (inferred: the request asks for greet.py)" |
+| `decisions` | choices and the reasoning behind them — `language = Python (inferred: the request asks for greet.py)` |
 | `tasks` | what finished, with the files git says changed |
 | `blockers` | what stopped a task, and why |
 | `preferences` | how you want work done |
 
-Every memory is tagged with **who recorded it**:
+Every memory is tagged with **who recorded it** — `rudra` when Python recorded it from a
+gate-passing task or an approved plan, `agent` when a model chose to. That tag is why
+`rudra memory forget --added-by agent` can prune the opinions and keep the proven record.
 
-- **`rudra`** — recorded automatically when a task passed the verification gate, or
-  when you approved a plan. Deterministic: no model decided it was worth keeping, and
-  the file list comes from git rather than from anything a model said.
-- **`agent`** — a model called the `remember` tool because it judged something worth
-  keeping. Useful, but it is a model's opinion, and worth reading as one.
+**Conversation transcripts are never stored.** What `rudra memory list` shows is the
+whole of it.
 
-`rudra memory list` shows both, so you can always tell them apart — and
-`rudra memory forget --added-by agent` prunes one without touching the other.
+### How it reaches the model
 
-### What is not stored
+Before each agent starts, Rudra searches this project's memory with the task text and
+injects the best matches into the prompt. That block is budgeted from the **same
+`context_tokens`** as everything else on this page — a fiftieth of the window, against
+eviction's tenth, because the block is paid on every call for the whole run while an
+evicted tool result is transient.
 
-**Conversation transcripts.** Rudra never mines the dialogue. What you see in
-`rudra memory list` is the whole of it.
+**A role that declares no `context_tokens` gets no recall block at all.** It is the same
+rule as eviction: guessing a budget for an unknown window is how a memory block crowds
+out the task itself.
 
-### Where it lives, and whether it leaves your machine
+`usage.json` records `recall_chars` per role, so what the block costs is measurable
+rather than assumed.
 
-`<project>/.rudra/memory/palace/` — project-local. A memory from one project is
-invisible to another, by design: a preference established in a Rust project may not
-hold in a Python one.
+### The rest of it
 
-**Nothing is transmitted anywhere.** Embedding runs locally with no API key. The only
-network access is a one-time model download (~167 MB), shared by every project on the
-machine, which `rudra init` does up front so no run discovers it mid-task. For an
-air-gapped install, `rudra doctor` prints the cache path to pre-seed.
-
-Disk cost is a few MB per project, plus that one shared model.
-
-### Keeping it, and throwing it away
+The write points, the two tools (`remember`, `search_memory`), the `rudra memory`
+commands, export and import, privacy, the internals, and what a failure looks like are
+all in **[Memory](15-memory.md)**.
 
 ```bash
-rudra memory export        # markdown into .rudra/memory/export/
+rudra memory list          # what this project remembers
+rudra memory export        # markdown into .rudra/memory/export/ — the durable copy
 rudra memory forget --all  # irreversible
 ```
 
-The palace is a binary store that churns on every write, so the export is the copy
-worth keeping. `.rudra/.gitignore` already excludes the palace and keeps the export —
-committing it is safe, and whether you do is your call.
-
-`rudra memory import` restores an exported tree exactly: same rooms, same authors.
+The palace is a binary store that churns on every write, so the export is the copy worth
+keeping. `.rudra/.gitignore` already excludes the palace and keeps the export.
 
 ---
 
@@ -267,7 +262,8 @@ committing it is safe, and whether you do is your call.
 | `doctor` says the embedding model is not fetched | First install, or `rudra init` was never run here | `rudra init`, or let it download on first use |
 | `doctor` warns your `~/.mempalace/config.json` is ignored | You use MemPalace yourself; Rudra deliberately does not read your settings | Nothing to fix — Rudra passes its own explicitly so your setup can't change its behaviour |
 | Memories from another project appear | They cannot — each project has its own store | Check which directory you ran in |
+| Memory is recorded but nothing changes | The role declares no `context_tokens`, so no recall block is injected | Set it — see [Memory](15-memory.md#6-how-a-memory-comes-back-recall) |
 
 ---
 
-**Back to:** [README](../README.md) · [Configuration](02-configuration.md) · [How It Works](05-how-it-works.md)
+**Back to:** [README](../README.md) · [Configuration](02-configuration.md) · [How It Works](05-how-it-works.md) · [Memory](15-memory.md)

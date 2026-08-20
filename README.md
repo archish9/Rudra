@@ -72,6 +72,8 @@ rudra init
 
 That writes a commented `.rudra/config.toml`. Edit the bits you care about.
 
+`rudra init` also fetches the embedding model Rudra's [memory](Documentation/15-memory.md) runs on — **~167 MB, once per machine, shared by every project**. It tells you the size before it starts, and it is the only thing Rudra ever downloads at run time.
+
 **Running models locally with Ollama** (nothing leaves your machine):
 
 ```toml
@@ -297,13 +299,16 @@ and summarising it mid-task, so a long fix loop doesn't run out of room.
   config.toml     your settings                     ← worth committing
   facts.json      what Rudra established, and why   ← worth committing
   AGENTS.md       project notes, updated as it works ← worth committing
+  memory/
+    export/       markdown copy of long-term memory ← worth committing
+    palace/       the searchable store itself         (binary, ignored)
   run/            ledger.json, checkpoints, artifacts,
                   logs/permissions.jsonl,
                   logs/tests.log,
                   logs/usage.json                     (regenerated every run)
 ```
 
-Two of those are worth knowing about:
+Three of those are worth knowing about:
 
 **`facts.json`** holds what Rudra established about your project and *why* it
 believes each thing — so the next run starts knowing your stack instead of
@@ -316,6 +321,12 @@ section into a short description of how the project is built. The planner reads
 it at the start of every run, so it is how yesterday's decisions reach
 tomorrow's. The log keeps the most recent 20 entries — it is re-read on every
 planner call, so it is not allowed to grow forever.
+
+**`memory/`** is the long-term store: everything this project has decided,
+finished, been blocked by, or been told you prefer, searchable by meaning. The
+20-entry cap above is a prompt budget rather than data loss precisely because
+nothing ages out of here. Section below, full guide in
+**[Memory](Documentation/15-memory.md)**.
 
 Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committing `.rudra/` is safe by default. It never touches your project's own `.gitignore` — whether you commit any of it is your call.
 
@@ -332,6 +343,7 @@ Everything Rudra does to your machine goes through a small, fixed set of tools. 
 | **Commands** | `execute` — always gated, and **denied under `--auto`** unless you pass `--allow-shell`. A write is confined; a shell command is not |
 | **Delegation** | `task` — hands work to `coder`, `tester`, `reviewer` or `general-purpose` |
 | **Checking** | `run_tests` · `git_diff` — these shell out, so they are judged as the command they really run |
+| **Memory** | `remember` · `search_memory` — write and read this project's long-term memory. Never gated: they touch `.rudra/memory/` and nothing else |
 | **Bookkeeping** | `record_fact` · `ask_user` · `add_tasks` · `drop_task` · `read_ledger` — these touch `.rudra/` only |
 
 The differences between subagents are structural, not instructional: the **coder has no `execute`**, and the **reviewer has no write tools at all** — they are never registered, so there is nothing to deny and no prompt to talk it out of.
@@ -355,6 +367,61 @@ The planner, coder and tester draw on it; the reviewer doesn't. Narrow the set w
 **You can write your own too** — drop a `SKILL.md` in `.rudra/skills/<name>/` and it joins the library, overriding a bundled skill of the same name. `rudra skills validate` tells you whether it will actually load, which matters because the loader skips a malformed one in silence.
 
 Details, the full skill list, and what Rudra adapts: **[Skills](Documentation/12-skills.md)**.
+
+---
+
+## Memory that outlives the run
+
+An agent with no memory meets your project fresh every morning. You explain the same
+constraint twice, it re-derives a decision you already made, and it walks into the wall
+that stopped it last week.
+
+Rudra keeps a **searchable memory per project**, powered by
+[**MemPalace**](https://github.com/MemPalace/mempalace) (MIT). It lives at
+`.rudra/memory/palace/`, runs entirely on your machine, needs no API key, and is on for
+every project — there is no switch to forget to flip.
+
+**Four kinds of thing, and nothing else:**
+
+| Room | Holds |
+|---|---|
+| `decisions` | a choice and why — `language = Python (inferred: the request names a .py file)` |
+| `tasks` | work that passed the gate, with the files **git** says changed |
+| `blockers` | what stopped a task, and why it stopped |
+| `preferences` | how you want work done |
+
+**Most of it is written by Python, not by a model.** A plan you approve files its facts;
+a task that passes the verification gate files itself; a blocked task files its blocker.
+Those are tagged `rudra`. On top of that, the coder, tester and general-purpose agents
+have a `remember` tool for what nothing else would record — a preference you stated, an
+API that behaves unlike its docs — and everything it writes is tagged `agent`, so you
+can always tell a proven record from a model's opinion, and prune one without the other:
+
+```bash
+rudra memory list                       # Room · By · Recorded · Memory
+rudra memory search "package manager"   # by meaning, not keyword
+rudra memory forget --added-by agent    # drop the opinions, keep the record
+```
+
+**It comes back without anyone asking for it.** Before each agent starts, Rudra searches
+this project's memory with the task text and pastes the best matches into the prompt
+under *"What this project has learned"* — because a model only calls a search tool when
+it thinks to, and recall cannot depend on that. The block is capped at a fiftieth of the
+model's context window and truncated by whole entries. The reviewer is the one agent that
+doesn't get it: it reads a diff, and history doesn't change what the diff says.
+
+**Nothing leaves your machine.** Embedding is local. No transcripts are ever stored — no
+dialogue, no reasoning, no file contents. Each project's memory is invisible to every
+other project. The single network access is the one-time model download that `rudra init`
+does up front.
+
+**Keep it in git without committing a binary.** `rudra memory export` writes plain
+markdown to `.rudra/memory/export/`, one file per room, which the shipped
+`.rudra/.gitignore` keeps while ignoring the store itself. `rudra memory import` restores
+it exactly, and repeating an import is safe.
+
+Everything above in detail — the write points, the recall budget, the CLI, privacy, the
+internals, and what happens when it breaks: **[Memory](Documentation/15-memory.md)**.
 
 ---
 
@@ -425,8 +492,9 @@ Setup, settings, a full worked example, and what to do when a server misbehaves:
 | **[12. Skills](Documentation/12-skills.md)** | The vendored superpowers library: what ships, why it's frozen, what Rudra adapts |
 | **[13. Context and Memory](Documentation/13-context-and-memory.md)** | The one setting that matters (`context_tokens`), what a run costs, and what Rudra remembers between runs |
 | **[14. MCP](Documentation/14-mcp.md)** | Attach an outside tool server, control what it may do, and see a real one working |
+| **[15. Memory](Documentation/15-memory.md)** | MemPalace: what Rudra remembers about your project, how it comes back, and how to read, prune, export and restore it |
 
-New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**. If the agent seems to lose track of what it was doing, read **[Context and Memory](Documentation/13-context-and-memory.md)** — it is almost always one unset setting. Want it to reach tools Rudra doesn't ship? **[MCP](Documentation/14-mcp.md)**.
+New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**. If the agent seems to lose track of what it was doing, read **[Context and Memory](Documentation/13-context-and-memory.md)** — it is almost always one unset setting — the same setting decides whether it recalls anything from earlier runs, which is **[Memory](Documentation/15-memory.md)**. Want it to reach tools Rudra doesn't ship? **[MCP](Documentation/14-mcp.md)**.
 
 ---
 
