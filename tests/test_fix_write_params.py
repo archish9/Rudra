@@ -1,7 +1,8 @@
 """Unit tests for markdown-fence stripping.
 
 This is the behavior compat/overwrite_backend.py used to provide at the
-backend layer (overwrite_backend.py:43, regex `^```[^\n]*\n(.*)\n```$`).
+backend layer, with the regex `^```[^\n]*\n(.*)\n```$`. That file no
+longer exists, so no line number is cited (A4.9).
 U.3 deletes that backend, so the middleware must cover at least as much.
 """
 
