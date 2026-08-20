@@ -22,6 +22,8 @@ from rich.console import Console
 from rudra.permissions.approval import run_with_approvals
 from rudra.subagents.build import build_agent
 from rudra.subagents.registry import REGISTRY
+from rudra.trace.stream import StreamState
+from rudra.trace.stream import looks_like_error as _looks_like_error
 
 # Carried from _stream_coder (main_agent.py:241-243), which Step 9c
 # deletes. These are per-invocation guards: one subagent looping on itself.
@@ -34,14 +36,9 @@ MAX_REPEATED_CALLS = 3
 # genuinely reachable, which is what closes A1.20.
 _WATCHED_TOOLS = frozenset({"write_file", "edit_file", "read_file", "task"})
 
-_ERROR_MARKERS = (
-    "Error:",
-    "Cannot write to",
-    "Traceback",
-    "Errno",
-    "BLOCKED:",
-    "not a valid tool",
-)
+# The error markers moved to rudra.trace.stream in Step 15a. Three copies
+# of this list existed and all three had drifted -- see that module's
+# ERROR_MARKERS docstring for what each one was missing.
 
 
 @dataclass(frozen=True)
@@ -84,6 +81,17 @@ class SubagentContext:
     # palace handle and one cached collection. Optional because the
     # subagent machinery must stay constructible without a run.
     memory: Any = None
+    # The run's TraceSink, or None when nothing is watching. Shared by
+    # reference for the reason the gate and the FactStore are: one run,
+    # one level and one record of it. Optional because the subagent
+    # machinery must stay constructible without a run -- every 9b-era
+    # test builds a context with no facts either.
+    #
+    # Before Step 15a there was no field here and no printing: this loop
+    # consumed every chunk to drive the guards below and rendered none of
+    # them, so the coder, tester and reviewer were invisible while they
+    # did the run's actual work.
+    trace: Any = None
 
 
 @dataclass(frozen=True)
@@ -104,11 +112,6 @@ class SubagentResult:
     ok: bool
     halted_reason: str | None = None
     error: str | None = None
-
-
-def _looks_like_error(content: str) -> bool:
-    first_line = content.split("\n")[0] if content else ""
-    return any(marker in first_line for marker in _ERROR_MARKERS)
 
 
 def _call_key(tool_call: dict) -> tuple[str, str]:
@@ -154,7 +157,12 @@ async def run_subagent(
     thread = thread_id or f"{context.session_id}-{name}-{uuid.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread}}
 
-    processed = 0
+    # One counter per subgraph namespace, not one for the run (A1.20).
+    # Parent and subagent carry separate `messages` lists, so a shared
+    # counter advances past the shorter one and the guards below stop
+    # seeing messages they are meant to count.
+    seen: dict[tuple[str, ...], int] = {}
+    state = StreamState(role=name)
     consecutive_failures = 0
     repeated: dict[tuple[str, str], int] = {}
     halted: str | None = None
@@ -171,11 +179,19 @@ async def run_subagent(
             if halted is not None:
                 break
 
-            _namespace, event = (
+            namespace, event = (
                 chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
             )
             messages = event.get("messages", []) if isinstance(event, dict) else []
 
+            if context.trace is not None:
+                context.trace.feed(chunk, state)
+
+            # `where`, not `key`: the guard body below binds `key` to a
+            # (tool, target) pair, and a shared name would file this
+            # namespace's position under a tool call.
+            where = tuple(namespace or ())
+            processed = seen.get(where, 0)
             while processed < len(messages):
                 message = messages[processed]
                 kind = type(message).__name__
@@ -205,6 +221,7 @@ async def run_subagent(
                 if halted is not None:
                     break
                 processed += 1
+            seen[where] = processed
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         return SubagentResult(name=name, text=last_text, ok=False, error=str(exc))
 

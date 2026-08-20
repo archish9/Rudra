@@ -36,10 +36,18 @@ _ANYWHERE_MARKERS = (
 arrives on the first line."""
 
 ERROR_MARKERS = _FIRST_LINE_MARKERS + _ANYWHERE_MARKERS
-"""The union of the two lists that had drifted apart: runner.py:37-46 held
-all seven, planner_agent.py:454-462 held four -- so the planner's
-consecutive-failure guard could not see `BLOCKED:` or either validation
-message. One list, one opinion."""
+"""The union of THREE copies that had drifted apart, counted 2026-08-20:
+
+* `runner.py:37-44` -- 6 markers, first line only (the subagent guard).
+* `planner_agent.py:555-560` -- 4 markers, first line only (the planner
+  guard). It cannot see `BLOCKED:` at all, so a denied tool call never
+  increments its consecutive-failure counter.
+* `planner_agent.py:454-462` -- 8 conditions, two of them scanning the
+  whole content (the planner renderer), so the planner *displayed* a
+  failure its own guard was not counting.
+
+One list, one opinion. The two whole-content markers stay whole-content
+because langchain buries them mid-message."""
 
 
 def looks_like_error(content: str) -> bool:
