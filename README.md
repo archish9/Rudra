@@ -498,6 +498,17 @@ New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then 
 
 ---
 
+## Contributing
+
+Rudra is free and open source, and developed by one person. **Code
+contributions are not accepted right now** — but bug reports and feature
+requests are genuinely welcome, and they are read.
+
+What to include in a report, and how to report a security problem instead:
+**[CONTRIBUTING.md](CONTRIBUTING.md)** and **[SECURITY.md](SECURITY.md)**.
+
+---
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
