@@ -9,6 +9,7 @@ tools cannot write DONE and this module is the only thing that can.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -38,6 +39,10 @@ class Outcome(StrEnum):
     DONE = "done"
     BLOCKED = "blocked"
     STOP_RUN = "stop_run"
+    # The user pressed Ctrl-C (C9.3). Distinct from STOP_RUN because
+    # nothing is wrong: the ledger is intact, the in-flight task is back
+    # at PENDING, and `rudra --continue` picks up exactly here.
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -531,7 +536,7 @@ def write_usage_log(path: Path, usage: Any) -> None:
         return
 
 
-def summarise(ledger: Ledger, console: Console, usage: Any = None) -> Any:
+def summarise(ledger: Ledger, console: Console, usage: Any = None, cancelled: bool = False) -> Any:
     """Print every task and return the run's result.
 
     A1.25 died here: there is no filter between what was declared and what
@@ -550,7 +555,14 @@ def summarise(ledger: Ledger, console: Console, usage: Any = None) -> Any:
     )
     if counts["pending"]:
         headline += f" · {counts['pending']} never attempted"
+    if cancelled:
+        headline = f"Cancelled — {headline}"
     console.print(f"\n[bold]{headline}[/bold]\n")
+    if cancelled:
+        # Said here rather than at the signal, because this is where the
+        # user learns how much was left: the ledger a cancel leaves is the
+        # ledger --continue already knows how to work.
+        console.print("[yellow]Stopped by you. Resume with:[/yellow] rudra --continue\n")
 
     block = render_usage(usage)
     if block:
@@ -645,6 +657,7 @@ async def work(
     have approved them.
     """
     consulted_on_empty = False
+    cancelled = False
 
     while True:
         task = ledger.next_pending()
@@ -655,7 +668,20 @@ async def work(
             await planner(ledger, request, stage="breakdown", reason="ledger_empty")
             continue
 
-        outcome = await run_task(task, ledger, context=context)
+        try:
+            outcome = await run_task(task, ledger, context=context)
+        except asyncio.CancelledError:
+            # A cooperative stop, not a teardown. The task goes back to
+            # PENDING because Ledger.resumable() excludes IN_PROGRESS on
+            # purpose (ledger.py:91-100) -- leaving it there is A1.93,
+            # where `--continue` silently skips the one task the user
+            # actually interrupted.
+            if task.status is TaskStatus.IN_PROGRESS:
+                task.status = TaskStatus.PENDING
+            task.note = "cancelled by the user"
+            ledger.save(context.paths.ledger_json)
+            cancelled = True
+            break
         ledger.save(context.paths.ledger_json)
 
         if outcome is Outcome.STOP_RUN:
@@ -668,12 +694,20 @@ async def work(
             consulted_on_empty = False
             await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
 
-    if any(task.status is TaskStatus.DONE for task in ledger.tasks):
-        await review_once(context, ledger)
-    await summarise_architecture(context, ledger)
     run_usage = getattr(context, "usage", None)
+
+    # Both of these are model calls, and somebody who just pressed Ctrl-C
+    # is not waiting through two more inferences to be told they succeeded
+    # in stopping. The usage log is still written: a cancelled run still
+    # cost tokens and wall clock, which is exactly when that is worth
+    # knowing.
+    if not cancelled:
+        if any(task.status is TaskStatus.DONE for task in ledger.tasks):
+            await review_once(context, ledger)
+        await summarise_architecture(context, ledger)
+
     write_usage_log(context.paths.logs / "usage.json", run_usage)
-    return summarise(ledger, context.console, run_usage)
+    return summarise(ledger, context.console, run_usage, cancelled=cancelled)
 
 
 async def run_loop(
