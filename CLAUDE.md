@@ -103,6 +103,13 @@ src/rudra/
 │                           backend from the user's global config (A1.87);
 │                           prefetch.py warms chromadb's ONNX MiniLM through
 │                           mempalace's own code path (Step 14c)
+├── cli_repl.py             The REPL's input layer (Step 15b): history,
+│                           multiline, `/` and `@` completion, mention
+│                           expansion. Every function is of (text,
+│                           project_path) and needs no terminal, which is
+│                           what makes it testable — the REPL had no tests
+│                           at all before. REPL_COMMANDS is ONE table, read
+│                           by both `_print_help` and the completer
 ├── trace/                  The run trace (Step 15a). events · render · stream ·
 │                           sink · debug. Imports nothing from agent/, loop/ or
 │                           subagents/ — pinned by tests/test_trace_wiring.py.
@@ -182,6 +189,7 @@ only function that creates anything.
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
+| `run/repl_history` | volatile | `cli_repl.build_session` | prompt_toolkit | Per project, because a Rust project's prompts are not a Python project's. A read-only project loses history, never the REPL (Step 15b) |
 | `run/logs/debug.jsonl` | volatile | `trace/debug.py`, only under `--debug` | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record. Written only with the flag; an unopenable file disables the log rather than failing the run (Step 15a, C9.7) |
 | `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens and compactions for the last run. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
@@ -407,6 +415,16 @@ git config core.hooksPath .githooks  # once per clone: run all three gates on pu
 .venv/bin/rudra --plan "..."         # show the plan and stop — writes nothing
 .venv/bin/rudra                      # REPL
 ```
+
+**Ctrl-C stops at a task boundary (Step 15b, C9.3).** SIGINT cancels the
+run's asyncio task; `work()` catches `CancelledError` between tasks,
+returns the in-flight task to `PENDING`, saves the ledger, and skips the
+reviewer and the AGENTS.md summary because both are model calls. Single-shot
+exits **130**. **`PENDING` and not `IN_PROGRESS` is the whole point:**
+`Ledger.resumable()` excludes `IN_PROGRESS` deliberately
+(`loop/ledger.py:91-100`), so the old behaviour left the interrupted task as
+the one task `--continue` would never retry (A1.93). The cancel path and the
+resume path are now the same path.
 
 **`mode = "ask"` needs a TTY.** Piped or redirected stdin exits 2 before any
 model call rather than hanging on a prompt nobody can answer. Use `--auto` for

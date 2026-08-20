@@ -73,7 +73,47 @@ rudra> /exit
 
 `exit` and `quit` work without the slash. Pressing `Esc` three times also quits.
 
-Each request is handled as its own task. Deep multi-turn memory across requests is still being built — see [Project Status](08-project-status.md).
+### Typing in the REPL
+
+| Key / syntax | Does |
+|---|---|
+| `↑` / `↓` | Walk your history for this project. Kept in `.rudra/run/repl_history` |
+| `Tab` after `/` | Complete a command |
+| `Tab` after `@` | Complete a project file path |
+| `@path/to/file.py` | Refer to a file. Expands to the plain path before the request is sent, and is left alone when no such file exists — so `bob@example.com` stays an email address |
+| trailing `\` | Continue on the next line |
+| `Ctrl-C` | Stop the current task. The session stays open |
+
+History is per project, because a Rust project's prompts are not a Python project's.
+
+Each request is handled as its own task, and each builds a fresh agent — so nothing accumulates between turns and there is no `/compact` to run. Deep multi-turn memory across requests is still being built — see [Project Status](08-project-status.md).
+
+---
+
+## Stopping a run
+
+Press **Ctrl-C once**. Rudra stops at the end of the current task rather than
+mid-write:
+
+- the task being worked goes back to `pending` in `.rudra/run/ledger.json`
+- the ledger is saved, and the token and timing report still prints
+- the reviewer and the AGENTS.md summary are skipped — both are model calls, and you are not waiting through two more inferences to be told you succeeded in stopping
+- single-shot exits `130`; the REPL returns to its prompt
+
+Then pick up where it stopped:
+
+```bash
+rudra --continue
+```
+
+**Press Ctrl-C twice** (within two seconds) to leave immediately, without
+waiting for the current task. Use it if the first press does not seem to
+take — a cancel that itself hangs should not need a second terminal.
+
+> **Before v0.2.1 this lost work.** Ctrl-C killed the process wherever it
+> was, leaving the interrupted task marked `in_progress` — and `--continue`
+> skips `in_progress` on purpose, so that one task was never retried and
+> nothing said so.
 
 ---
 
@@ -355,6 +395,7 @@ behaviour behind both spellings.
 |---|---|
 | `0` | Success |
 | `1` | Something failed |
+| `130` | You pressed Ctrl-C. `128 + SIGINT`, the shell convention — a wrapper script can tell "the user stopped it" from "it failed" without reading the output |
 | `2` | `mode = "ask"` was set but stdin is not a terminal — nothing ran. Also a `--continue` that cannot proceed. For `rudra verify`, also a denied command, a missing tool, or an internal error |
 
 If a model call fails and cannot be retried, Rudra exits `1` even though earlier files were written successfully. Nothing is lost: tasks marked `done` in `.rudra/run/ledger.json` genuinely passed the gate, and **`rudra --continue` works the rest**.

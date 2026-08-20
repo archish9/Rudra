@@ -423,6 +423,20 @@ A long gap on a single line is the model thinking, not Rudra hanging. The
 per-task timings in the final summary tell you afterwards where the time
 actually went.
 
+### I pressed Ctrl-C and lost the task it was working on
+
+Fixed in v0.2.1. Ctrl-C now stops at the end of the current task, returns
+that task to `pending`, and saves the ledger, so `rudra --continue` picks
+it up. Single-shot exits `130`.
+
+Before that, Ctrl-C killed the process wherever it happened to be and left
+the task marked `in_progress` — a status `--continue` skips deliberately,
+so the interrupted task was the one task a resume would never retry.
+
+If a ledger from an older version has a stuck task, edit
+`.rudra/run/ledger.json` and change that task's `"status": "in_progress"`
+to `"pending"`.
+
 ### A traceback appears and Rudra exits, but files were written
 
 A model call failed and could not be recovered — rate limit, dropped connection, upstream error. Rudra retries transient failures three times with backoff, but only while nothing has been streamed back yet; once the model has started answering, a retry would re-emit the whole turn, so the run ends there and exits `1` even though earlier work succeeded.
