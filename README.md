@@ -410,10 +410,14 @@ it thinks to, and recall cannot depend on that. The block is capped at a fiftiet
 model's context window and truncated by whole entries. The reviewer is the one agent that
 doesn't get it: it reads a diff, and history doesn't change what the diff says.
 
-**Nothing leaves your machine.** Embedding is local. No transcripts are ever stored — no
-dialogue, no reasoning, no file contents. Each project's memory is invisible to every
-other project. The single network access is the one-time model download that `rudra init`
-does up front.
+**Nothing leaves your machine.** Embedding is local. **Memory stores no transcripts** — no
+dialogue, no reasoning, no file contents; only the entries you can read with
+`rudra memory list`. Each project's memory is invisible to every other project. The single
+network access is the one-time model download that `rudra init` does up front.
+
+Rudra does keep a local record of each run at `.rudra/run/transcripts/<id>.jsonl` — capped,
+newest twenty runs only, redacted where each event is built, and never transmitted. It is
+for reading afterwards with `rudra log`, and it never re-enters a prompt.
 
 **Keep it in git without committing a binary.** `rudra memory export` writes plain
 markdown to `.rudra/memory/export/`, one file per room, which the shipped
