@@ -200,6 +200,19 @@ before you delete it can no longer be continued.
 
 ---
 
+## Where a Ctrl-C lands
+
+Between tasks, never mid-write. The signal cancels the asyncio task running
+the agent; the loop catches that at the point where it would otherwise pick
+up the next task, puts the interrupted one back to `pending`, and saves.
+
+That boundary is chosen rather than incidental. Cancelling mid-write could
+leave a half-written file the gate would then judge; cancelling between
+tasks leaves exactly the state a run that stopped early leaves — which is
+the state `rudra --continue` already knows how to work. One path, not two.
+
+---
+
 ## How Rudra decides it's finished
 
 > **A task is done when the verification gate passes.**

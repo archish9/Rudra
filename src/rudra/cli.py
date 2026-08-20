@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
+import signal
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 import typer
@@ -17,10 +21,36 @@ from rich.table import Table
 from typer.core import TyperGroup
 
 from rudra import __version__
-from rudra.agent import AgentResult, create_main_agent
+from rudra.cli_repl import REPL_COMMANDS, build_session, expand_mentions
 from rudra.config import get_config
 from rudra.context.usage import render_usage
 from rudra.filesystem import project_tree
+
+if TYPE_CHECKING:  # pragma: no cover -- annotations only
+    from rudra.agent import AgentResult
+
+# `rudra.agent` is NOT imported here (C9.8 / A1.94). That one line pulled
+# deepagents, langchain.agents and a provider package into every
+# invocation -- `--version`, `--help`, `config list`, shell completion --
+# and measured 0.58s of it. It is imported inside the two command bodies
+# that build an agent instead. `AgentResult` is used only in annotations,
+# which `from __future__ import annotations` (line 3) leaves unevaluated.
+# tests/test_cli_startup_imports.py asserts the absence on the import
+# graph rather than on the clock.
+
+
+async def create_main_agent(*args: Any, **kwargs: Any) -> Any:
+    """The factory, imported at call time rather than at import time.
+
+    A proxy rather than a local import at each call site, for two reasons:
+    the call sites stay readable, and `rudra.cli.create_main_agent`
+    remains a patchable name -- four test modules monkeypatch it, and a
+    function-local import would have made the seam disappear while
+    pretending the tests still covered it.
+    """
+    from rudra.agent import create_main_agent as _factory
+
+    return await _factory(*args, **kwargs)
 
 
 class TaskOrCommandGroup(TyperGroup):
@@ -151,36 +181,6 @@ def print_banner() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_prompt_toolkit_session():
-    """Create a prompt_toolkit PromptSession with a blinking cursor."""
-    try:
-        from prompt_toolkit import PromptSession
-        from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.styles import Style
-
-        style = Style.from_dict(
-            {
-                "prompt": "ansibrightcyan bold",
-                "": "ansiwhite",
-            }
-        )
-
-        bindings = KeyBindings()
-
-        @bindings.add("escape", "escape", "escape")
-        def _(event):
-            event.app.exit(result="/exit")
-
-        session = PromptSession(
-            style=style,
-            mouse_support=False,
-            key_bindings=bindings,
-        )
-        return session
-    except ImportError:
-        return None
-
-
 async def _prompt_input(session, prompt_text: str) -> str:
     """Read one line from the user, using prompt_toolkit if available.
 
@@ -190,8 +190,18 @@ async def _prompt_input(session, prompt_text: str) -> str:
     if session is not None:
         from prompt_toolkit.formatted_text import HTML
 
+        from rudra.cli_repl import wants_more_input
+
         # prompt_async is awaitable — safe to call inside a running event loop
-        return await session.prompt_async(HTML(f"<prompt>{prompt_text}</prompt> "))
+        line = await session.prompt_async(HTML(f"<prompt>{prompt_text}</prompt> "))
+        # A trailing backslash continues, shell-style. Kept here rather
+        # than in prompt_toolkit's own multiline mode because that makes
+        # Enter ambiguous for every ordinary one-line prompt, which is
+        # nearly all of them.
+        while wants_more_input(line):
+            more = await session.prompt_async(HTML("<prompt>...</prompt> "))
+            line = line[:-1] + "\n" + more
+        return line
     # Fallback: rich Prompt (blocking) — run it in a thread executor so we
     # don't block the event loop
     loop = asyncio.get_event_loop()
@@ -269,6 +279,64 @@ def models_test(
     console.print(table)
     if failed:
         raise typer.Exit(code=1)
+
+
+EXIT_CANCELLED = 130
+"""128 + SIGINT, the shell convention. A wrapper script can tell "the user
+stopped it" from "it failed" without reading the output."""
+
+_HARD_EXIT_WINDOW = 2.0
+"""Seconds within which a second Ctrl-C stops being polite. A cancel that
+itself hangs must not need a kill from another terminal."""
+
+
+@contextmanager
+def _cancel_on_sigint(task: asyncio.Task) -> Iterator[Callable[[], None]]:
+    """Route Ctrl-C to `task.cancel()` for as long as this is entered.
+
+    Yields the handler so a test can press the button without raising a
+    real signal; the second-press window is otherwise untestable without
+    depending on how pytest's own SIGINT handling interleaves with the
+    loop.
+
+    Installed per turn and removed on exit: the REPL builds a fresh agent
+    per input (S15.4), so a handler left behind would cancel the NEXT
+    turn's task rather than this one's.
+
+    `add_signal_handler` rather than `signal.signal`, because the default
+    handler raises KeyboardInterrupt on whatever frame the interpreter is
+    executing -- inside an event loop that means the exception surfaces
+    wherever it lands, including inside the checkpointer's own await.
+    Cancelling the task instead delivers it at an await point the loop
+    chose, which is what makes work()'s task-boundary catch reliable.
+    """
+    import time
+
+    pressed: list[float] = []
+
+    def handle() -> None:
+        now = time.monotonic()
+        if pressed and now - pressed[-1] < _HARD_EXIT_WINDOW:
+            # The graceful path did not take. os._exit, not sys.exit:
+            # SystemExit would be caught by the loop and become another
+            # hang, which is the thing the user is trying to escape.
+            os._exit(EXIT_CANCELLED)
+        pressed.append(now)
+        console.print("\n[yellow]Stopping after this task — press Ctrl-C again to force.[/yellow]")
+        task.cancel()
+
+    loop = asyncio.get_event_loop()
+    try:
+        loop.add_signal_handler(signal.SIGINT, handle)
+    except NotImplementedError:
+        # Windows has no add_signal_handler. Ctrl-C keeps its default
+        # meaning there rather than pretending to be graceful.
+        yield handle
+        return
+    try:
+        yield handle
+    finally:
+        loop.remove_signal_handler(signal.SIGINT)
 
 
 EXIT_NO_TTY = 2
@@ -1193,7 +1261,27 @@ def main(
             finally:
                 await agent.close()
 
-        result: AgentResult = asyncio.run(_run())
+        async def _guarded() -> AgentResult:
+            """Run under a SIGINT handler that cancels rather than raises.
+
+            The task exists so there is something to cancel: Ctrl-C used
+            to unwind out of asyncio.run wherever the interpreter happened
+            to be, which is A1.93 -- the ledger kept an IN_PROGRESS task
+            that `--continue` then refused to pick up.
+            """
+            task = asyncio.create_task(_run())
+            with _cancel_on_sigint(task):
+                return await task
+
+        try:
+            result: AgentResult = asyncio.run(_guarded())
+        except asyncio.CancelledError:
+            # The cancel landed outside work()'s task boundary -- during
+            # planning, or between tasks. Nothing is half-written and the
+            # ledger is whatever the last save left, which is exactly what
+            # `--continue` expects.
+            console.print("\n[yellow]Cancelled.[/yellow] Resume with: rudra --continue")
+            raise typer.Exit(EXIT_CANCELLED) from None
 
         if result.success:
             body = (
@@ -1207,14 +1295,17 @@ def main(
                 body += f"\n\n{block}"
             console.print(Panel(body, title="✅ Complete", border_style="green"))
         else:
+            cancelled = result.message.lower().startswith("cancelled")
             console.print(
                 Panel(
-                    f"[red]✗[/red] {result.message}",
-                    title="❌ Error",
-                    border_style="red",
+                    f"[red]✗[/red] {escape(result.message)}",
+                    title="⏹ Cancelled" if cancelled else "❌ Error",
+                    border_style="yellow" if cancelled else "red",
                 )
             )
-            raise typer.Exit(1)
+            # 130 rather than 1 when the user stopped it: a wrapper script
+            # should not have to parse prose to tell those apart.
+            raise typer.Exit(EXIT_CANCELLED if cancelled else 1)
 
     else:
         # ── Interactive REPL ───────────────────────────────────────────────
@@ -1222,7 +1313,7 @@ def main(
 
         console.print(f"  [dim]Working directory:[/dim] [bold white]{project_path}[/bold white]\n")
 
-        pt_session = _make_prompt_toolkit_session()
+        pt_session = build_session(project_path)
 
         async def _repl_session():
             while True:
@@ -1244,16 +1335,20 @@ def main(
                         continue
                     elif cmd.startswith("/"):
                         console.print(
-                            f"  [yellow]Unknown command:[/yellow] {cmd}  [dim](type /help)[/dim]"
+                            f"  [yellow]Unknown command:[/yellow] {escape(cmd)}  "
+                            f"[dim](type /help)[/dim]"
                         )
                         continue
 
                     if not user_input.strip():
                         continue
 
+                    # Before the Panel, so what is shown is what is sent.
+                    user_input = expand_mentions(user_input, project_path)
+
                     console.print(
                         Panel(
-                            f"[bold]{user_input}[/bold]\n"
+                            f"[bold]{escape(user_input)}[/bold]\n"
                             f"[dim]Path:[/dim] {project_path}\n"
                             f"[dim]Planner:[/dim] {cfg.model_for('planner').model}  "
                             f"[dim]│  Coder:[/dim] {cfg.model_for('coder').model}\n"
@@ -1272,8 +1367,10 @@ def main(
                         verbose=verbose,
                         debug=debug,
                     )
+                    turn = asyncio.create_task(agent.run())
                     try:
-                        result = await agent.run()
+                        with _cancel_on_sigint(turn):
+                            result = await turn
                     finally:
                         await agent.close()
 
@@ -1296,6 +1393,16 @@ def main(
                             )
                         )
 
+                # BEFORE KeyboardInterrupt, and separate from it: they mean
+                # different things now. A CancelledError is a turn the user
+                # stopped; a KeyboardInterrupt at the prompt is a line they
+                # want cleared. A cancelled TURN is not a cancelled SESSION
+                # -- getting the prompt back is the point of Ctrl-C here.
+                except asyncio.CancelledError:
+                    console.print(
+                        "\n  [yellow]Cancelled.[/yellow] "
+                        "[dim]The ledger is intact — `rudra --continue` picks it up.[/dim]"
+                    )
                 except KeyboardInterrupt:
                     console.print("\n  [dim]Interrupted — type /exit to quit[/dim]")
                 except EOFError:
@@ -1311,10 +1418,10 @@ def _print_help() -> None:
     table.add_column("cmd", style="bold cyan", no_wrap=True)
     table.add_column("desc", style="dim white")
 
-    rows = [
-        ("/help", "Show this help message"),
-        ("/tree", "Print the project file tree"),
-        ("/exit", "Quit Rudra"),
+    # The one table (cli_repl.REPL_COMMANDS), so help and completion
+    # cannot disagree about which commands exist.
+    rows = [*REPL_COMMANDS.items()]
+    rows += [
         ("", ""),
         ("Examples:", ""),
         ('"Build a FastAPI app with JWT"', "Creates a new project"),
