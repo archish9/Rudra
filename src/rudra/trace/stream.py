@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from rudra.trace.events import TraceEvent, TraceKind
+from rudra.trace.redact import redact
 
 _FIRST_LINE_MARKERS = (
     "Error:",
@@ -89,7 +90,12 @@ def _events_for(
             namespace=namespace,
             index=index,
             name=name,
-            payload=payload,
+            # Redacted HERE, where the event is built, so the console, the
+            # --debug log and 15c's transcript are covered by one rule
+            # (A1.95). Doing it in render.py would have cleaned the screen
+            # and left debug.jsonl holding the credential -- the more
+            # dangerous of the two, since the docs ask users to attach it.
+            payload=redact(payload),
             at=at,
         )
 

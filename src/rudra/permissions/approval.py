@@ -223,8 +223,9 @@ def _emit_token(chunk: Any, *, trace: Any, role: str) -> None:
     if not text.strip():
         return
     from rudra.trace.events import TraceEvent, TraceKind
+    from rudra.trace.redact import redact
 
-    trace.emit(TraceEvent(kind=TraceKind.AI_TEXT, role=role, payload=text))
+    trace.emit(TraceEvent(kind=TraceKind.AI_TEXT, role=role, payload=redact(text)))
 
 
 async def run_with_approvals(
