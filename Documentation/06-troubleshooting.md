@@ -423,6 +423,13 @@ A long gap on a single line is the model thinking, not Rudra hanging. The
 per-task timings in the final summary tell you afterwards where the time
 actually went.
 
+### Searching a large repo feels slow
+
+Check `rudra doctor` for the `ripgrep` row. Without `rg` on your `PATH`,
+searches fall back to a Python implementation that is noticeably slower on
+big trees. Installing ripgrep is the whole fix — Rudra picks it up
+automatically, with no configuration.
+
 ### I pressed Ctrl-C and lost the task it was working on
 
 Fixed in v0.2.1. Ctrl-C now stops at the end of the current task, returns
@@ -555,9 +562,11 @@ One JSON object per line, covering both the trace and Rudra's internal log
 records. **`--verbose` matters here:** the log records exactly what the
 trace shows, so a quiet run produces a quiet file.
 
-Two more files in the same directory are usually worth attaching:
-`verify.log` (what the gate actually ran and what it said) and `usage.json`
-(tokens and wall clock per role).
+Three more files are usually worth attaching: `verify.log` (what the gate
+ran and what it said), `usage.json` (tokens and wall clock per role), and
+`.rudra/run/transcripts/<run-id>.jsonl` — the run's own record, written
+whether or not `--debug` was set. `rudra log --last` shows you what is in
+it before you send it.
 
 **Read the debug log before you post it.** It contains file paths and
 whatever your model wrote, which may include contents of your project.

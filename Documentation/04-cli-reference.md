@@ -300,6 +300,27 @@ Nothing typed consults `[agent] verbose` in your config, which ships
 > A run showed planning, then went quiet for however long the work took.
 > If you remember that, this is what changed.
 
+### Reading a past run
+
+Every run writes a transcript to `.rudra/run/transcripts/<run-id>.jsonl`,
+whether or not you asked for one. Replay it:
+
+```bash
+rudra log                    # which runs are recorded?
+rudra log --last             # replay the most recent
+rudra log --run 450541f6cf10 # replay one by id
+rudra log --last --role coder   # only what the coder did
+```
+
+The replay goes through the same renderer the live run used, so it shows
+what you saw — including the lines that scrolled past. The newest 20 runs
+are kept; older ones are pruned automatically.
+
+Payloads over 2000 characters are truncated in the record with a `… +N chars`
+marker. The transcript is for reading afterwards, not for feeding back to a
+model: `rudra --continue` works from the ledger and never replays a
+conversation.
+
 ### Reporting a bug
 
 ```bash
