@@ -142,6 +142,7 @@ class RudraAgent:
         approve=None,
         resume: bool = False,
         mcp=None,
+        transcript=None,
     ):
         self.context = context
         self.planner_agent = planner_agent
@@ -166,11 +167,17 @@ class RudraAgent:
         # The run's MCP client, or None. Held so close() can release it and
         # so a caller can see what was configured without re-reading disk.
         self.mcp = mcp
+        # The run's TranscriptWriter, or None. Held so close() can flush
+        # and release it: an unflushed handle keeps the file locked on
+        # Windows, and a record nobody closed is one somebody finds empty.
+        self._transcript = transcript
         # A resume works the ledger already on disk and never plans (C7.2).
         self.resume = resume
         self.iterations = 0
 
     async def close(self) -> None:
+        if self._transcript is not None:
+            self._transcript.close()
         if self.mcp is not None:
             await self.mcp.aclose()
         if self._db_conn is not None:
@@ -598,6 +605,7 @@ async def create_main_agent(
     from rudra.loop import Ledger, LoopContext
     from rudra.subagents import SubagentContext
     from rudra.trace.sink import TraceSink, console_consumer, resolve_level
+    from rudra.trace.transcript import TranscriptWriter, prune_transcripts, transcript_path
 
     # One per run, shared by reference: the planner stages and every
     # subagent record into the same object, and the panel reads it once.
@@ -620,6 +628,19 @@ async def create_main_agent(
     # about how much of it was drawn. A log that cannot be opened is
     # reported as None and skipped, never raised: bookkeeping must not end
     # a run (loop/engine.py:501-515).
+    # The run's record (C9.5). NOT behind a flag, unlike --debug: the
+    # point of a record is that it exists when somebody wants it, which is
+    # always after the fact. Safe to write by default only because A1.95's
+    # redaction happens where the event is built, so what reaches this
+    # writer is already clean.
+    #
+    # Pruned once here rather than per event: retention is a per-run
+    # decision, and doing it per event would stat the directory thousands
+    # of times to reach the same answer.
+    prune_transcripts(paths.transcripts)
+    transcript = TranscriptWriter(transcript_path(paths, session_id))
+    trace.add(transcript)
+
     if debug:
         from rudra.trace.debug import configure_debug_logging, debug_consumer
 
@@ -733,4 +754,5 @@ async def create_main_agent(
         approve=ask_approval if interactive else auto_approve,
         resume=resume,
         mcp=mcp_client,
+        transcript=transcript,
     )

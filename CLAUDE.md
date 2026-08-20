@@ -190,6 +190,7 @@ only function that creates anything.
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
 | `run/repl_history` | volatile | `cli_repl.build_session` | prompt_toolkit | Per project, because a Rust project's prompts are not a Python project's. A read-only project loses history, never the REPL (Step 15b) |
+| `run/transcripts/<id>.jsonl` | volatile | `trace/transcript.py`, every run | humans, `rudra log` | One JSON object per `TraceEvent`, appended and flushed per event so a killed run still leaves a readable record. Payloads capped at 2000 chars, newest 20 runs kept. **Written by default**, which is safe only because redaction happens where the event is built (A1.95) — moving redaction into the renderer would silently refill this file with credentials (Step 15c, C9.5) |
 | `run/logs/debug.jsonl` | volatile | `trace/debug.py`, only under `--debug` | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record. Written only with the flag; an unopenable file disables the log rather than failing the run (Step 15a, C9.7) |
 | `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens and compactions for the last run. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
@@ -411,6 +412,7 @@ git config core.hooksPath .githooks  # once per clone: run all three gates on pu
 .venv/bin/rudra --auto "..."         # unattended: files yes, commands no (A1.49)
 .venv/bin/rudra --verbose "..."      # ...and the model's prose, untruncated
 .venv/bin/rudra --debug "..."        # + .rudra/run/logs/debug.jsonl for a bug report
+.venv/bin/rudra log --last           # replay a past run from its transcript
 .venv/bin/rudra --auto --allow-shell "..."   # ...and commands too, opted in explicitly
 .venv/bin/rudra --plan "..."         # show the plan and stop — writes nothing
 .venv/bin/rudra                      # REPL

@@ -54,6 +54,7 @@ class RudraPaths:
     session_id_txt: Path
     logs: Path
     artifacts: Path
+    transcripts: Path
 
 
 def rudra_paths(project_root: Path) -> RudraPaths:
@@ -78,6 +79,10 @@ def rudra_paths(project_root: Path) -> RudraPaths:
         ledger_json=run / "ledger.json",
         session_id_txt=run / "session_id.txt",
         logs=run / "logs",
+        # One JSONL file per run, written by trace/transcript.py (C9.5).
+        # Volatile: a transcript records what one run did, which is not a
+        # fact about the project the next run inherits.
+        transcripts=run / "transcripts",
         # deepagents evicts oversized tool results and offloads conversation
         # history to <artifacts_root>. That root defaults to the backend
         # root -- the user's project -- so Step 7 routes it here instead.
@@ -98,6 +103,7 @@ def ensure_layout(project_root: Path) -> RudraPaths:
         paths.run,
         paths.logs,
         paths.artifacts,
+        paths.transcripts,
         paths.memory_export,
         paths.memory_palace,
     ):

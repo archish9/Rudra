@@ -8,6 +8,7 @@ import shutil
 import signal
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -445,7 +446,14 @@ def config_list(
     for key, value in _flatten(cfg):
         if role and key.startswith("model.") and not key.startswith(f"model.{role}."):
             continue
-        table.add_row(key, "-" if value is None else str(value), _source_of(cfg, key))
+        # escape: a config value is user-written and a source label is
+        # built from one. A model name or path containing brackets would
+        # otherwise vanish from the column that exists to show it (A1.91).
+        table.add_row(
+            key,
+            "-" if value is None else escape(str(value)),
+            escape(_source_of(cfg, key)),
+        )
 
     console.print(table)
     for layer in ("user", "project"):
@@ -523,7 +531,7 @@ def skills_list(
             escape(name),
             label,
             "" if shadowed else state,
-            f"shadowed by {owner[name]}" if shadowed else "",
+            escape(f"shadowed by {owner[name]}") if shadowed else "",
         )
     console.print(table)
 
@@ -752,6 +760,21 @@ def doctor_command(
         else escape(f"none — `rudra memory export` writes the durable copy to {export_dir}"),
     )
 
+    # C9.9's disposition (S15.1). Rudra owns no grep tool -- deepagents'
+    # FilesystemBackend shells to ripgrep and falls back to a Python search
+    # (filesystem.py:72-86, :671-672), and the shipped LocalShellBackend
+    # inherits it. Implementing the row would mean overriding a method to
+    # re-do what it already does; what was actually worth having is a user
+    # being able to SEE which path they are on.
+    which_rg = shutil.which("rg")
+    table.add_row(
+        "ripgrep",
+        "ok" if which_rg else "-",
+        escape(which_rg)
+        if which_rg
+        else "not on PATH — deepagents falls back to a Python search (slower on large repos)",
+    )
+
     installed = version("deepagents")
     table.add_row(
         "deepagents",
@@ -823,6 +846,78 @@ def doctor_command(
         "[dim]MCP servers are checked here; `rudra mcp test` actually starts them. "
         "`rudra memory list` shows what has been remembered.[/dim]"
     )
+
+
+@app.command("log")
+def log_command(
+    project_dir: Optional[Path] = typer.Option(
+        None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
+    ),
+    last: bool = typer.Option(False, "--last", help="Replay the most recent run"),
+    run: Optional[str] = typer.Option(None, "--run", help="Replay one run by id"),
+    role: Optional[str] = typer.Option(
+        None, "--role", help="Only lines from one agent (planner, coder, tester, reviewer)"
+    ),
+) -> None:
+    """Replay a past run's trace from its transcript.
+
+    Rendered through the SAME renderer the live run used, so the replay
+    and what was on screen cannot drift apart -- and escaping (A1.67)
+    comes free rather than being re-implemented here and re-forgotten.
+
+    Read at VERBOSE: truncation already happened at write time (the
+    transcript caps payloads), and a replay is read deliberately rather
+    than watched going past.
+    """
+    from rudra.state.paths import rudra_paths
+    from rudra.trace import TraceLevel, render
+    from rudra.trace.transcript import read_transcript
+
+    project_path = get_project_path(project_dir)
+    directory = rudra_paths(project_path).transcripts
+    found = sorted(directory.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if not found:
+        console.print(
+            f"[yellow]No transcripts in[/yellow] {escape(str(directory))}\n"
+            "[dim]Every run writes one. If this project has never been run, there is "
+            "nothing to replay yet.[/dim]"
+        )
+        raise typer.Exit(1)
+
+    if run is not None:
+        match = next((path for path in found if path.stem == run), None)
+        if match is None:
+            # An error, not an empty replay: silence would read as "that
+            # run did nothing" rather than "there is no such run".
+            console.print(f"[red]No transcript for run[/red] {escape(run)}")
+            console.print(f"[dim]Known runs: {', '.join(path.stem for path in found)}[/dim]")
+            raise typer.Exit(1)
+        chosen = match
+    elif last:
+        chosen = found[0]
+    else:
+        # Bare `rudra log` is a question -- which runs are there? -- not a
+        # command to dump the newest one at somebody.
+        table = Table(title="Runs recorded for this project", header_style="bold")
+        for column in ("Run", "When", "Lines"):
+            table.add_column(column, overflow="fold")
+        for path in found:
+            when = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+            lines = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+            table.add_row(escape(path.stem), when, str(lines))
+        console.print(table)
+        console.print("[dim]Replay one with:[/dim] rudra log --last   [dim]or[/dim]  --run <id>")
+        return
+
+    events = read_transcript(chosen)
+    if role:
+        events = [event for event in events if event.role == role]
+
+    console.print(f"[dim]Run {escape(chosen.stem)} — {len(events)} line(s)[/dim]\n")
+    for event in events:
+        for line in render(event, level=TraceLevel.VERBOSE):
+            console.print(line)
 
 
 @app.command("verify")

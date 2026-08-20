@@ -98,3 +98,14 @@ def test_the_session_id_helper_is_gone():
 
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("rudra.state.checkpoint")
+
+
+def test_the_transcripts_directory_is_volatile_and_created(tmp_path):
+    """A transcript is a record of one run, not a fact about the project
+    (D15), so it belongs under run/ beside the ledger and the logs."""
+    from rudra.state.paths import ensure_layout, rudra_paths
+
+    paths = ensure_layout(tmp_path)
+
+    assert paths.transcripts == rudra_paths(tmp_path).run / "transcripts"
+    assert paths.transcripts.is_dir()

@@ -77,3 +77,24 @@ def test_no_spec_can_carry_middleware(name):
     # RudraSubagent has no middleware field on purpose: build.py owns
     # assembly so nothing can be declared without the gate (S9b.2).
     assert not hasattr(REGISTRY[name], "middleware")
+
+
+def test_the_agents_that_can_run_commands_name_the_real_tool():
+    """A1.92: three separate runs saw a subagent call a `bash` tool that
+    does not exist, once escalating to 204 filesystem globs hunting for an
+    interpreter. The tool is `execute`, and nothing said so."""
+    from rudra.subagents.registry import REGISTRY
+
+    for name in ("coder", "tester"):
+        prompt = REGISTRY[name].system_prompt
+        assert "execute" in prompt
+        assert "bash" in prompt, "the wrong name has to be named to be ruled out"
+
+
+def test_the_read_only_agent_is_told_what_to_do_when_asked_to_run_something():
+    """It has no shell tool at all, and the coder delegates "run the tests"
+    to it anyway. Without this it searches for a Python interpreter."""
+    prompt = REGISTRY["general-purpose"].system_prompt
+
+    assert "cannot" in prompt.lower()
+    assert "glob" in prompt, "the specific wrong move is worth naming"
