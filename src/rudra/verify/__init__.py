@@ -115,6 +115,11 @@ def changed_files_from_git(
     if not is_repo(project_path, gate=gate, console=console, cfg=cfg):
         return None
     entries = status(project_path, gate=gate, console=console, cfg=cfg)
+    if entries is None:
+        # git ran and failed. Same answer as "not a repo": the caller falls
+        # back to source_files rather than scanning nothing and calling it
+        # clean (CR-E12).
+        return None
     return tuple(sorted({entry.path for entry in entries if entry.path}))
 
 

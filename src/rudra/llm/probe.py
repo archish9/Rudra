@@ -16,6 +16,7 @@ from langchain_core.tools import tool
 from rudra.config import get_config
 from rudra.config.schema import BUILTIN_ROLES
 from rudra.llm.factory import build_model
+from rudra.llm.providers import effective_base_url
 
 # Kept for callers that want the historical pair. Prefer roles_to_probe,
 # which covers every role without probing one endpoint five times.
@@ -42,7 +43,7 @@ def roles_to_probe(cfg: Any) -> list[tuple[tuple[str, ...], Any]]:
 
     for role in BUILTIN_ROLES:
         model = cfg.models[role]
-        identity = (model.provider, model.base_url or "", model.model)
+        identity = (model.provider, effective_base_url(model) or "", model.model)
         if identity not in grouped:
             grouped[identity] = []
             configs[identity] = model
@@ -77,13 +78,24 @@ def _short(error: Exception) -> str:
     return text if len(text) <= 120 else f"{text[:117]}..."
 
 
-def probe_role(role: str) -> ProbeResult:
-    """Construct, reach, and tool-test one role. Never raises."""
-    settings = get_config().model_for(role)
+def probe_role(role: str, cfg: Any = None) -> ProbeResult:
+    """Construct, reach, and tool-test one role. Never raises.
+
+    Args:
+        role: The role to probe.
+        cfg: Config to read from. Defaults to the process-wide one, which is
+            built from the CWD -- so `models test --project-dir X` and
+            `doctor -d X` used to load X's config, then probe whatever the
+            *current directory* resolved to, and print a table about a
+            project they never read (CR-G2). Both callers now pass the
+            Config they already loaded.
+    """
+    config = cfg if cfg is not None else get_config()
+    settings = config.model_for(role)
     skipped = "skipped"
 
     try:
-        model = build_model(role)
+        model = build_model(role, config)
     except Exception as error:  # noqa: BLE001 — every failure is a reportable row
         return ProbeResult(
             role=role,

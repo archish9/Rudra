@@ -72,8 +72,32 @@ def _legacy(name: str) -> str | None:
     return value
 
 
-def _as_bool(raw: str) -> bool:
-    return raw.strip().lower() not in {"false", "0", "no", "off", ""}
+_TRUE_WORDS = frozenset({"true", "1", "yes", "on"})
+_FALSE_WORDS = frozenset({"false", "0", "no", "off", ""})
+
+
+def _as_bool(raw: str, name: str) -> bool:
+    """Parse a boolean env var, strictly.
+
+    Total, and it raises rather than guessing. This used to be
+    `raw.strip().lower() not in {"false","0","no","off",""}`, so anything
+    unrecognised was True -- and it backs RUDRA_SHELL_IN_AUTO, the single
+    opt-in that lets an unattended `--auto` run execute arbitrary shell.
+    `RUDRA_SHELL_IN_AUTO=flase` silently meant "yes". A typo must not fail
+    in the permissive direction, and the neighbouring paths already agree:
+    the TOML spelling of the same typo is a hard error, and
+    RUDRA_PERMISSIONS_MODE is validated against VALID_MODES (CR-D4).
+    """
+    word = raw.strip().lower()
+    if word in _TRUE_WORDS:
+        return True
+    if word in _FALSE_WORDS:
+        return False
+    raise ConfigError(
+        f"{name}: expected true or false, got {raw!r}. "
+        f"Accepted: {', '.join(sorted(_TRUE_WORDS))} / "
+        f"{', '.join(sorted(w for w in _FALSE_WORDS if w))}."
+    )
 
 
 def _as_number(raw: str) -> Any:
@@ -161,7 +185,7 @@ def env_layer(known_roles: Iterable[str]) -> dict[str, Any]:
             continue
         tail = name[len("RUDRA_") :]
         if tail == "VERBOSE":
-            put("agent", "verbose", value=_as_bool(raw))
+            put("agent", "verbose", value=_as_bool(raw, name))
             continue
         if tail == "PERMISSIONS_MODE":
             put("permissions", "mode", value=raw.strip())
@@ -169,13 +193,13 @@ def env_layer(known_roles: Iterable[str]) -> dict[str, Any]:
         # Before _split_role_and_suffix, which would otherwise read SHELL as
         # a role-and-suffix pair.
         if tail == "SHELL":
-            put("tools", "shell", value=_as_bool(raw))
+            put("tools", "shell", value=_as_bool(raw, name))
             continue
         if tail == "SHELL_IN_AUTO":
-            put("tools", "shell_in_auto", value=_as_bool(raw))
+            put("tools", "shell_in_auto", value=_as_bool(raw, name))
             continue
         if tail == "AUTO_BRANCH":
-            put("tools", "auto_branch", value=_as_bool(raw))
+            put("tools", "auto_branch", value=_as_bool(raw, name))
             continue
         # Also before _split_role_and_suffix: it would read TEST_TIMEOUT as
         # role "test" plus suffix "timeout", which IS a MODEL_KEY, and invent
@@ -214,7 +238,7 @@ def env_layer(known_roles: Iterable[str]) -> dict[str, Any]:
     if "RUDRA_VERBOSE" not in os.environ:
         legacy_verbose = _legacy("VERBOSE")
         if legacy_verbose is not None:
-            put("agent", "verbose", value=_as_bool(legacy_verbose))
+            put("agent", "verbose", value=_as_bool(legacy_verbose, "OLLAMA_VERBOSE"))
 
     return layer
 
@@ -225,11 +249,17 @@ def cli_layer(
     allow_shell: bool | None = None,
     *,
     allow_mcp: bool | None = None,
+    stream_tokens: bool | None = None,
 ) -> dict[str, Any]:
     """Layer 5. Only flags the user actually passed appear."""
     layer: dict[str, Any] = {}
+    agent: dict[str, Any] = {}
     if verbose is not None:
-        layer["agent"] = {"verbose": verbose}
+        agent["verbose"] = verbose
+    if stream_tokens is not None:
+        agent["stream_tokens"] = stream_tokens
+    if agent:
+        layer["agent"] = agent
     if permission_mode is not None:
         layer["permissions"] = {"mode": permission_mode}
     if allow_shell is not None:

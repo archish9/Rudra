@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 
 from rich.console import Console
 
@@ -115,3 +116,39 @@ def test_render_marks_stages_that_never_ran():
     text = console.export_text()
     assert "not run" in text
     assert "stopped at typecheck" in text
+
+
+def test_tool_output_with_brackets_is_neither_swallowed_nor_fatal():
+    """CR-E4: `finding.message` and `stage.output_tail` come straight from
+    mypy/ruff/eslint/pytest and were printed through Rich with markup on.
+    mypy emits `list[int]` constantly, and it rendered as `list` -- the
+    reader lost the part that matters. Worse, an output_tail containing
+    `[/dim]` raised MarkupError out of render() AFTER the table had printed,
+    so the user got no failure output at all. Same class as A1.67/A1.48/
+    A1.91, already escaped for in trace/render.py.
+    """
+    buffer = StringIO()
+    console = Console(file=buffer, width=120)
+    typecheck = StageResult(
+        name="typecheck",
+        outcome=FAILED,
+        blocking=True,
+        findings=(Finding("a.py", 3, 'incompatible type "list[int]"; expected "dict[str, Any]"'),),
+        detail="1 error",
+    )
+    test = StageResult(
+        name="test",
+        outcome=FAILED,
+        blocking=True,
+        output_tail="assert '[/dim]' in out",
+    )
+
+    render(
+        VerifyReport(passed=False, stages=(typecheck, test), blocker=typecheck, escalate=False),
+        console,
+    )
+
+    output = buffer.getvalue()
+    assert "list[int]" in output
+    assert "dict[str, Any]" in output
+    assert "[/dim]" in output

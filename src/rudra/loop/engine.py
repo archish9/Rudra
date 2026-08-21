@@ -126,6 +126,11 @@ def git_snapshot(context: LoopContext) -> dict[str, str] | None:
         cfg=context.cfg,
         all_untracked=True,
     )
+    if entries is None:
+        # git failed. None means "no snapshot", which run_task already
+        # handles -- returning {} would make the empty-diff guard read every
+        # attempt as "the coder wrote nothing" (CR-E12).
+        return None
     return {
         entry.path: _digest(context.project_path / entry.path)
         for entry in entries
@@ -190,9 +195,21 @@ def _blocker_text(report: Any) -> str:
     return "\n".join(lines)
 
 
-def _verify(task: Task, context: LoopContext) -> Any:
-    """Run the gate over what this task touched."""
-    return verify_project(
+async def _verify(task: Task, context: LoopContext) -> Any:
+    """Run the gate over what this task touched.
+
+    Off the event loop, because verify_project reaches subprocess.Popen
+    (shell/runner.py) with `[tools] test_timeout` -- 600 seconds by
+    default. `_cancel_on_sigint` installs its handler with
+    `loop.add_signal_handler`, whose callback only runs when the loop
+    regains control, so a synchronous call here meant that during a ten
+    minute pytest the first Ctrl-C did nothing AND the second press's
+    `os._exit` -- the escape hatch whose whole purpose is that a hung
+    cancel must not need a kill from another terminal -- was deferred
+    just as long (CR-C5).
+    """
+    return await asyncio.to_thread(
+        verify_project,
         context.project_path,
         changed_files=task.files_touched,
         gate=context.subagents.gate,
@@ -222,6 +239,14 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         # 0.0 -- never true of real work, but it also meant the stored
         # number was a display decision rather than a measurement.
         task.seconds = time.monotonic() - started
+        # A run that stops mid-task must leave that task PENDING, never
+        # IN_PROGRESS: Ledger.resumable() excludes IN_PROGRESS on purpose
+        # (ledger.py:91-100), so leaving it there makes `--continue` skip
+        # the one task that never finished. This is A1.93 on the STOP_RUN
+        # path -- the cancel handler below already does the same thing for
+        # the same reason, and the two paths must not disagree.
+        if outcome is Outcome.STOP_RUN and task.status is TaskStatus.IN_PROGRESS:
+            task.status = TaskStatus.PENDING
         ledger.save(context.paths.ledger_json)
         return outcome
 
@@ -255,7 +280,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             ledger.save(context.paths.ledger_json)
             continue
 
-        report = _verify(task, context)
+        report = await _verify(task, context)
 
         # The tester writes tests; it does not re-do the task. Re-verifying
         # in place rather than looping is deliberate: `continue` here would
@@ -270,7 +295,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                 thread_id=f"{context.subagents.session_id}-{task.id}-tester",
             )
             task.files_touched = changed_since(context, before)
-            report = _verify(task, context)
+            report = await _verify(task, context)
 
         if report.escalate:
             task.note = _blocker_text(report)
@@ -288,7 +313,14 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         blocker_text = _blocker_text(report)
         if signature is not None and signature == task.last_signature:
             task.status = TaskStatus.BLOCKED
-            task.note = "no progress: the same failure twice"
+            # The blocker, not just the shape of the failure. `task.note` is
+            # what consult_planner interpolates verbatim when it asks for a
+            # different approach (planner_agent.py), and what
+            # record_block_memory files in the palace -- so overwriting it
+            # with a content-free string meant the planner was asked to
+            # re-plan around a failure it was told nothing about, and the
+            # palace stored a bug with no bug in it (CR-C4).
+            task.note = f"no progress: the same failure twice\n\n{blocker_text}"
             outcome = _stop(Outcome.BLOCKED)
             record_block_memory(context, task)
             return outcome
@@ -296,7 +328,8 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
 
     task.status = TaskStatus.BLOCKED
     if "wrote nothing" not in task.note:
-        task.note = f"{task.attempts} attempts exhausted"
+        # Same reason as above (CR-C4): the count is not a blocker.
+        task.note = f"{task.attempts} attempts exhausted\n\n{blocker_text}".rstrip()
     outcome = _stop(Outcome.BLOCKED)
     record_block_memory(context, task)
     return outcome
@@ -390,7 +423,7 @@ def record_task_in_memory(paths: Any, task: Task) -> None:
     creating it, and inventing one here would produce a memory file for a
     project that never ran a plan.
     """
-    from rudra.context.agents_md import append_session_entry, format_entry
+    from rudra.context.agents_md import append_session_entry, format_entry, write_agents_md
 
     try:
         path = paths.agents_md
@@ -402,9 +435,10 @@ def record_task_in_memory(paths: Any, task: Task) -> None:
             task.description,
             tuple(task.files_touched),
         )
-        path.write_text(
-            append_session_entry(path.read_text(encoding="utf-8"), entry), encoding="utf-8"
-        )
+        # Atomic: AGENTS.md is durable and is the project's whole
+        # cross-session memory, and the `except OSError` below cannot
+        # restore a half-written one (CR-A5).
+        write_agents_md(path, append_session_entry(path.read_text(encoding="utf-8"), entry))
     except OSError:
         return
 
@@ -484,7 +518,7 @@ async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
     build_model("default"). Documented rather than hidden, because an
     undocumented seam is a trap for the next reader.
     """
-    from rudra.context.agents_md import replace_section, section_body
+    from rudra.context.agents_md import replace_section, section_body, write_agents_md
 
     if not any(task.status is TaskStatus.DONE for task in ledger.tasks):
         return
@@ -514,7 +548,7 @@ async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
         )
         notes = str(getattr(reply, "content", "")).strip()
         if notes:
-            path.write_text(replace_section(text, "Architecture Notes", notes), encoding="utf-8")
+            write_agents_md(path, replace_section(text, "Architecture Notes", notes))
     except Exception:  # noqa: BLE001 - memory is polish; a run must survive it
         context.console.print("[dim]Could not update AGENTS.md architecture notes.[/dim]")
 
@@ -643,6 +677,14 @@ async def plan(
     return ledger
 
 
+# How many times a run may block a task and ask the planner to try
+# something else before giving up. Small on purpose: each cycle costs
+# max_fix_attempts coder invocations plus a planner call, and a planner that
+# has not found a working approach in this many tries is not going to
+# (CR-C7).
+MAX_BLOCKED_CONSULTS = 5
+
+
 async def work(
     request: str,
     *,
@@ -657,6 +699,7 @@ async def work(
     have approved them.
     """
     consulted_on_empty = False
+    blocked_consults = 0
     cancelled = False
 
     while True:
@@ -691,6 +734,19 @@ async def work(
             break
         if outcome is Outcome.BLOCKED:
             # Only a stall consults the planner -- never an ordinary success.
+            blocked_consults += 1
+            if blocked_consults > MAX_BLOCKED_CONSULTS:
+                # Bounded. `consulted_on_empty` was the only loop bound and
+                # every block reset it, so a planner that answered each
+                # "take a DIFFERENT approach" with add_tasks produced a task
+                # that blocked, which consulted it again, indefinitely --
+                # max_fix_attempts coder calls plus a planner call per
+                # cycle, with Ctrl-C as the user's only exit (CR-C7).
+                context.console.print(
+                    f"\n[bold red]Stopping.[/bold red] [dim]{blocked_consults - 1} tasks "
+                    f"blocked and re-planning is not making progress.[/dim]"
+                )
+                break
             consulted_on_empty = False
             await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
 

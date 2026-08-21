@@ -67,13 +67,25 @@ def cache_key(bundles: Sequence[Bundle], enabled: frozenset[str]) -> str:
     anywhere: different bytes, different manifest, different key.
     """
     digest = hashlib.sha256()
-    digest.update(rudra.__version__.encode("utf-8"))
-    digest.update(str(TRANSFORM_VERSION).encode("utf-8"))
+
+    def feed(text: str) -> None:
+        """Hash one field, delimited. Without the separator two different
+        enabled sets whose sorted names concatenate to the same string share
+        a key, and one silently reuses the other's rendered `active/`. Not
+        reachable with the shipped corpus (all 2^14 subsets enumerated, no
+        collision), but registry.py is built so "shipping a second corpus is
+        a directory plus one line". mempalace guards this exact class the
+        same way, hashing `f"{wing}|{room}|{content}"` (CR-A3)."""
+        digest.update(text.encode("utf-8"))
+        digest.update(b"\x00")
+
+    feed(rudra.__version__)
+    feed(str(TRANSFORM_VERSION))
     for bundle in bundles:
-        digest.update(bundle.name.encode("utf-8"))
-        digest.update(manifest_root_hash(bundle.manifest_path).encode("utf-8"))
+        feed(bundle.name)
+        feed(manifest_root_hash(bundle.manifest_path))
     for name in sorted(enabled):
-        digest.update(name.encode("utf-8"))
+        feed(name)
     return digest.hexdigest()[:16]
 
 
@@ -106,13 +118,14 @@ def ensure_cache(
 ) -> SkillCache:
     """The rendered corpus for these inputs, building it if needed.
 
-    Falls back to a per-run temp directory when the cache root cannot be
-    written -- a read-only home, a locked-down CI box, a sandboxed
+    Falls back to a shared, key-named temp directory when the cache root
+    cannot be written -- a read-only home, a locked-down CI box, a sandboxed
     container. Rendering costs about 20ms for 550KB, so the fallback buys
     the property that matters: the same command produces the same agent
     whether or not the cache is writable.
     """
-    target = _cache_home(cache_home) / cache_key(bundles, enabled)
+    key = cache_key(bundles, enabled)
+    target = _cache_home(cache_home) / key
 
     if (target / SENTINEL).is_file():
         return SkillCache(root=target)
@@ -120,9 +133,18 @@ def ensure_cache(
     try:
         _build(bundles, enabled, target)
     except OSError:
-        scratch = Path(tempfile.mkdtemp(prefix="rudra-skills-"))
-        _build(bundles, enabled, scratch / "rendered")
-        return SkillCache(root=scratch / "rendered", fell_back=True)
+        # Deterministic, so repeat runs SHARE one scratch tree. mkdtemp
+        # minted a fresh directory per invocation and nothing ever removed
+        # it -- prune_stale only cleans the cache home -- so on exactly the
+        # boxes this path exists for (read-only home, locked-down CI,
+        # sandboxed container) every `rudra` invocation wrote a full render
+        # of every skill and abandoned it (CR-A6).
+        scratch = Path(tempfile.gettempdir()) / f"rudra-skills-{key}"
+        rendered = scratch / "rendered"
+        if (rendered / SENTINEL).is_file():
+            return SkillCache(root=rendered, fell_back=True)
+        _build(bundles, enabled, rendered)
+        return SkillCache(root=rendered, fell_back=True)
 
     return SkillCache(root=target)
 

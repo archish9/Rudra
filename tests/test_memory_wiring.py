@@ -8,10 +8,12 @@ during task 1 reaches task 2's coder with no plumbing.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from rich.console import Console
 
+from rudra.config.loader import build_config
 from rudra.memory.entry import MemoryEntry
 from rudra.memory.store import MemoryStore
 from rudra.subagents.build import _prompt_for, _tools_for
@@ -127,3 +129,32 @@ def test_the_planner_prompt_builds_without_a_store(tmp_path: Path) -> None:
     from rudra.agent.planner_agent import build_planner_prompt
 
     assert build_planner_prompt("add a feature", tmp_path, stage="breakdown")
+
+
+def test_the_recall_query_is_the_task_not_the_subagent_name(monkeypatch, tmp_path):
+    """CR-C3: the query read `getattr(context, "task", "")`, and
+    SubagentContext has no `task` field -- so it was always the literal
+    string "coder" / "tester" / "general-purpose". Every task in every run
+    recalled the 8 entries nearest the *word* "coder", while
+    usage.record_recall billed them as recall spend. run_subagent had the
+    real task text as `prompt` all along; it just never reached here.
+    """
+    asked: list[str] = []
+
+    class Store:
+        def search(self, query, limit=8):
+            asked.append(query)
+            return []
+
+    context = SimpleNamespace(
+        facts=None,
+        memory=Store(),
+        cfg=build_config(project_root=tmp_path),
+        usage=None,
+        mcp=None,
+        skills_sources=None,
+    )
+
+    _prompt_for(REGISTRY["coder"], context, "add retry logic to the HTTP client")
+
+    assert asked == ["add retry logic to the HTTP client"]

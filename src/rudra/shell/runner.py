@@ -88,6 +88,12 @@ def _permitted(
     return None
 
 
+# How long to wait for a killed process's pipes to close before giving up on
+# its output. Seconds, not minutes: by this point the process has been
+# SIGKILLed and we are only draining what it already wrote.
+_REAP_TIMEOUT = 5
+
+
 def run_gated(
     argv: Sequence[str],
     *,
@@ -123,6 +129,17 @@ def run_gated(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            # Lenient decoding, deliberately. `text=True` alone decodes
+            # strict UTF-8, so a single latin-1 byte from a linter, a test
+            # suite, or a commit subject raised UnicodeDecodeError out of
+            # communicate(). Inside run_pipeline the blanket `except
+            # Exception` then turned the user's byte into an *internal Rudra
+            # error* with escalate=True and stopped the run; outside it
+            # (changed_files_from_git, git_snapshot) it was an uncaught
+            # traceback. Every consumer here already treats this as
+            # best-effort text (CR-E7).
+            encoding="utf-8",
+            errors="replace",
             env=env,
             start_new_session=True,
         )
@@ -139,7 +156,15 @@ def run_gated(
             os.killpg(os.getpgid(process.pid), signal.SIGKILL)
         except (ProcessLookupError, PermissionError):  # pragma: no cover - race
             process.kill()
-        stdout, stderr = process.communicate()
+        try:
+            # Bounded, because the SIGKILL above is not a guarantee: a
+            # grandchild that called setsid() itself is outside the group we
+            # just killed and keeps the inherited pipe open, so an unbounded
+            # communicate() here hangs the run that `test_timeout` exists to
+            # end (CR-B9).
+            stdout, stderr = process.communicate(timeout=_REAP_TIMEOUT)
+        except subprocess.TimeoutExpired:  # pragma: no cover - needs a stray grandchild
+            stdout, stderr = "", ""
         return CommandResult(resolved, command, None, stdout, stderr, timed_out=True)
 
     return CommandResult(resolved, command, process.returncode, stdout, stderr)

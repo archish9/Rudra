@@ -17,11 +17,20 @@ ValueError"; that was false for 0.7.4 (TODO.md A4.11).  This shim's real job
 is to strip real-machine and sandbox prefixes so the resulting virtual path
 points at the intended file.
 
-``validate_path`` is only called inside ``deepagents.middleware.filesystem``
-(confirmed by grep across the full deepagents package).  We patch the
-module-level name there because ``FilesystemMiddleware`` uses
+``validate_path`` is imported by name in THREE modules of deepagents 0.7.4:
+``backends.utils`` (where it is defined), ``middleware.filesystem``, and
+``middleware._fs_interrupt``.  Each does
 ``from deepagents.backends.utils import validate_path``, so tool closures
-look up the name in that module's globals at call time.
+look up the name in their own module's globals at call time and patching
+one is not enough.  All three are rewritten below.
+
+This docstring used to say the function was called in one module only,
+"confirmed by grep across the full deepagents package" -- false for the
+pinned version, and the kind of claim a future maintainer trusts rather
+than re-checks.  ``_fs_interrupt`` is reached only when ``permissions=`` is
+passed, which Rudra deliberately never does (U.7/A1.46), so patching it
+changes nothing today; it is patched anyway so that the day U.7 reopens,
+this file is not quietly half-applied (CR-D8).
 
 NORMALIZATION LAYERS
 --------------------
@@ -86,13 +95,16 @@ def install_path_normalizer(
         require_deepagents_version,
     )
 
-    # This function rewrites a deepagents internal in two places. Fail here,
-    # naming the ledger item, rather than deep inside a tool call later.
+    # This function rewrites a deepagents internal in three places. Fail
+    # here, naming the ledger item, rather than deep inside a tool call
+    # later -- and fail if a site MOVES, which is what pins the count.
     require_deepagents_version("U.4")
     require_deepagents_attr("deepagents.backends.utils", "validate_path", "U.4")
     require_deepagents_attr("deepagents.middleware.filesystem", "validate_path", "U.4")
+    require_deepagents_attr("deepagents.middleware._fs_interrupt", "validate_path", "U.4")
 
     import deepagents.backends.utils as _utils
+    import deepagents.middleware._fs_interrupt as _fs_int
     import deepagents.middleware.filesystem as _fs_mw
 
     original = getattr(_utils, _ORIGINAL_KEY, None)
@@ -236,3 +248,4 @@ def install_path_normalizer(
 
     _utils.validate_path = _normalize
     _fs_mw.validate_path = _normalize
+    _fs_int.validate_path = _normalize

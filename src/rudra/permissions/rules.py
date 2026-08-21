@@ -12,6 +12,7 @@ compiled agent.
 from __future__ import annotations
 
 import fnmatch
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -86,6 +87,14 @@ ALL_GATED_TOOLS = (
     READ_ONLY_TOOLS | MUTATING_TOOLS | _OTHER_TOOLS | CONTROL_PLANE_TOOLS | WRAPPED_EXECUTE_TOOLS
 )
 
+# The names a permission rule may actually name. `decide` returns for the
+# control-plane and wrapped-execute sets BEFORE the user deny/allow loops,
+# so a rule naming one of them can never fire -- and accepting it silently
+# meant `deny = ["remember"]` validated, printed no warning, and did
+# nothing. Rejecting them here is what turns that into an error the user
+# can act on, and it is the set `parse_rule` reports as valid (CR-B5).
+RULEABLE_TOOLS = ALL_GATED_TOOLS - CONTROL_PLANE_TOOLS - WRAPPED_EXECUTE_TOOLS
+
 # Tools whose gated argument is not a path. `execute` carries a command,
 # `call_mcp_tool` a `server__tool` id; resolving either against the project
 # root would fabricate a spelling that a rule could match by accident.
@@ -103,6 +112,17 @@ _ARG_KEYS = {
     "ls": "path",
     "glob": "pattern",
     "grep": "pattern",
+}
+
+# Alternate spellings of the path argument that FixWriteParamsMiddleware
+# renames to `file_path` before the tool runs. The gate decides before that
+# rename, so it must recognise them too -- see gated_arg. `delete` is listed
+# even though the middleware does not repair it: an unrecognised spelling
+# there must fail closed, not fall through to the mode default.
+_ARG_ALIASES = {
+    "write_file": ("filename", "path"),
+    "edit_file": ("filename", "path"),
+    "delete": ("filename", "path"),
 }
 
 _WCMATCH_FLAGS = wcglob.GLOBSTAR | wcglob.DOTGLOB
@@ -144,24 +164,107 @@ def parse_rule(text: str) -> Rule:
     if tool not in ALL_GATED_TOOLS:
         raise ValueError(
             f"Unknown tool '{tool}' in permission rule {text!r}. "
-            f"Valid tools: {', '.join(sorted(ALL_GATED_TOOLS))}."
+            f"Valid tools: {', '.join(sorted(RULEABLE_TOOLS))}."
         )
     if separator and not pattern.strip():
         raise ValueError(f"Permission rule {text!r} has an empty pattern after ':'.")
+    # Refuse the names a rule cannot affect, rather than accepting them and
+    # doing nothing. `decide` returns for CONTROL_PLANE_TOOLS and
+    # WRAPPED_EXECUTE_TOOLS before the user-deny loop, but parse_rule
+    # accepted them because ALL_GATED_TOOLS includes both sets -- so
+    # `deny = ["remember"]`, written to stop the agent writing to the memory
+    # palace, validated, printed no warning, and had no effect (CR-B5).
+    if tool in CONTROL_PLANE_TOOLS:
+        raise ValueError(
+            f"'{tool}' in permission rule {text!r} is control plane -- it writes no file "
+            f"and runs no command, so it is never gated and a rule naming it does nothing."
+        )
+    if tool in WRAPPED_EXECUTE_TOOLS:
+        raise ValueError(
+            f"'{tool}' in permission rule {text!r} is gated as the command it runs. "
+            f"Write an `execute:` rule instead, e.g. 'execute:git diff*'."
+        )
     return Rule(tool=tool, pattern=pattern if separator else None)
 
 
 def gated_arg(tool: str, args: dict[str, Any]) -> str | None:
-    """The argument a pattern matches against, or None if absent."""
+    """The argument a pattern matches against, or None if absent.
+
+    The file tools are checked under every spelling
+    `FixWriteParamsMiddleware` will accept, in the order it tries them
+    (`middleware/fix_write_params.py:77-80`). This is not defensive
+    programming: the gate is installed as the OUTERMOST middleware
+    (`subagents/build.py:219`, `agent/planner_agent.py:386`, both
+    `insert(0, ...)`), so it decides on the model's raw spelling and the
+    rename happens *afterwards*, on the way to the tool. Reading only
+    `file_path` here meant `write_file(path=".git/config")` resolved to no
+    path at all, so the floor short-circuited on `path is not None`
+    (`floor.py:67`) and every patterned deny rule matched nothing -- while
+    the middleware renamed the key and the write went through (CR-B2).
+    """
     key = _ARG_KEYS.get(tool)
     if key is None:
         return None
-    value = args.get(key)
-    return value if isinstance(value, str) else None
+    for candidate in (key, *_ARG_ALIASES.get(tool, ())):
+        value = args.get(candidate)
+        if isinstance(value, str):
+            return value
+    return None
+
+
+# Shell metacharacters that chain a second command onto the first. `fnmatch`
+# `*` matches every one of them, so `execute:pytest*` matched
+# `pytest -q; rm -rf ~` -- and the backend runs the command through
+# `/bin/sh -c` (deepagents backends/local_shell.py:306, shell=True), so the
+# tail really executes. Splitting is deliberately naive: a separator inside
+# quotes over-splits, which can only make a permissive rule match LESS and a
+# deny rule match MORE. Both errors point the safe way (CR-B1).
+_SEGMENT_SPLIT = re.compile(r"(?:\|\||&&|[;\n|&])")
+
+# Command substitution smuggles a whole command into a segment that otherwise
+# looks innocent (`pytest $(rm -rf ~)`), so no permissive rule may match a
+# segment containing one.
+SUBSTITUTION_MARKS = ("$(", "${", "`")
+
+
+def command_segments(command: str) -> tuple[str, ...]:
+    """The individual commands a shell would run for this command string."""
+    return tuple(part.strip() for part in _SEGMENT_SPLIT.split(command) if part.strip())
+
+
+def _execute_matches(pattern: str, commands: tuple[str, ...], *, permissive: bool) -> bool:
+    """Match an `execute` pattern against every command that would run.
+
+    A permissive rule (`allow`, or a session grant) must cover EVERY
+    segment: consenting to `pytest` is not consenting to whatever was
+    chained after it. A deny rule needs only ONE segment, so chaining
+    cannot smuggle a denied command past it.
+    """
+    for command in commands:
+        segments = command_segments(command)
+        if not segments:
+            continue
+        if permissive:
+            if any(mark in command for mark in SUBSTITUTION_MARKS):
+                continue
+            if all(fnmatch.fnmatchcase(segment, pattern) for segment in segments):
+                return True
+        elif any(fnmatch.fnmatchcase(segment, pattern) for segment in segments):
+            return True
+        # A deny rule also fires on the command as written, so a pattern
+        # containing a separator itself (`execute:foo && bar`) still works.
+        if not permissive and fnmatch.fnmatchcase(command, pattern):
+            return True
+    return False
 
 
 def rule_matches(
-    rule: Rule, tool: str, absolute: tuple[str, ...], relative: tuple[str, ...]
+    rule: Rule,
+    tool: str,
+    absolute: tuple[str, ...],
+    relative: tuple[str, ...],
+    *,
+    permissive: bool = False,
 ) -> bool:
     """Does this rule cover this call?
 
@@ -188,7 +291,7 @@ def rule_matches(
     # command as one makes `execute:pytest*` fail against
     # `pytest -q tests/x` -- the exact case `always` exists to cover.
     if tool == "execute":
-        return any(fnmatch.fnmatchcase(subject, rule.pattern) for subject in absolute)
+        return _execute_matches(rule.pattern, absolute, permissive=permissive)
 
     candidates = absolute if rule.pattern.startswith("/") else (relative or absolute)
     return any(
@@ -233,7 +336,17 @@ class PermissionEngine:
 
         candidate = Path(arg)
         given = candidate if candidate.is_absolute() else self.project_root / candidate
-        resolved = given.resolve()
+        try:
+            resolved = given.resolve()
+        except (ValueError, OSError):
+            # A NUL byte raises `ValueError: embedded null character`, and
+            # nothing up the stack catches it -- not decide, not
+            # RudraPermissionMiddleware._check, not interrupts._predicate --
+            # so a malformed tool call killed the graph run instead of being
+            # denied. grep/glob PATTERNS come through here as if they were
+            # paths, so arbitrary model-authored search text reached
+            # Path.resolve() (CR-B7).
+            return None, (), ()
 
         absolute = {str(resolved), str(given)}
         relative: set[str] = set()
@@ -254,7 +367,20 @@ class PermissionEngine:
             return Decision("allow", None, "wrapped-execute")
 
         arg = gated_arg(tool, args)
+        # Fail closed. A mutating tool whose path argument is missing or is
+        # not a string cannot be matched against any rule, so the floor and
+        # every deny rule silently abstain and the call falls through to the
+        # mode default -- which under --auto is "allow". Denying instead
+        # costs a malformed call; allowing costs the whole policy (CR-B2).
+        if tool in MUTATING_TOOLS and tool not in _UNRESOLVED_TOOLS and arg is None:
+            return Decision("deny", "<unresolvable-path>", "fail-closed")
         resolved, absolute, relative = self._resolve(tool, arg)
+        # Same rule one step later: a path that cannot be resolved at all
+        # (a NUL byte, an OSError) leaves the floor and every deny rule with
+        # nothing to match, which is the CR-B2 shape. Deny rather than fall
+        # through to the mode default (CR-B7).
+        if tool in MUTATING_TOOLS and tool not in _UNRESOLVED_TOOLS and resolved is None:
+            return Decision("deny", "<unresolvable-path>", "fail-closed")
         if tool in _UNRESOLVED_TOOLS and arg is not None:
             absolute = (arg,)
 
@@ -267,7 +393,14 @@ class PermissionEngine:
             suppressed = hit
 
         def _final(effect: str, rule: str | None, source: str) -> Decision:
-            if suppressed is not None and effect == "allow":
+            # Every effect, not just allow. `disabled_floor_notice` promises
+            # "Calls they would have blocked are still recorded in the audit
+            # log", but the plan and ask branches returned without this
+            # wrapper -- and the middleware records nothing for an `ask`, so
+            # in ask mode the log held no trace that a floor rule had been
+            # violated and suppressed. Only the auto path was tested
+            # (CR-B6).
+            if suppressed is not None:
                 return Decision(effect, f"<floor:{suppressed}>", "floor-disabled")
             return Decision(effect, rule, source)
 
@@ -284,7 +417,7 @@ class PermissionEngine:
 
         # 4. user allow
         for rule in self.allow:
-            if rule_matches(rule, tool, absolute, relative):
+            if rule_matches(rule, tool, absolute, relative, permissive=True):
                 return _final("allow", str(rule), "allow")
 
         # 5. mode default
@@ -309,8 +442,8 @@ class PermissionEngine:
                 return Decision("deny", "<auto:mcp-not-opted-in>", "auto-mcp")
             return _final("allow", None, "mode-default")
         if self.mode == "plan":
-            return Decision("deny", None, "mode-default")
-        return Decision("ask", None, "mode-default")
+            return _final("deny", None, "mode-default")
+        return _final("ask", None, "mode-default")
 
 
 __all__ = [
@@ -318,10 +451,13 @@ __all__ = [
     "CONTROL_PLANE_TOOLS",
     "MUTATING_TOOLS",
     "READ_ONLY_TOOLS",
+    "RULEABLE_TOOLS",
+    "SUBSTITUTION_MARKS",
     "WRAPPED_EXECUTE_TOOLS",
     "Decision",
     "PermissionEngine",
     "Rule",
+    "command_segments",
     "gated_arg",
     "parse_rule",
     "rule_matches",

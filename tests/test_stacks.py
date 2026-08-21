@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 from rudra.stacks import ALL_SKIP_DIRS, PROFILES, detect, resolve_test_command
+from rudra.stacks.detect import _python_test_command
 
 
 def test_profile_is_immutable():
@@ -327,3 +328,25 @@ def test_no_fallback_names_a_bare_python(tmp_path: Path):
         command = resolve_test_command(tmp_path, _python())
         assert command[0] != "python", command
         assert shutil.which(command[0]) is not None, command
+
+
+def test_a_django_project_with_a_venv_gets_manage_py_not_pytest(tmp_path: Path) -> None:
+    """CR-D6: the venv branch returned `[python, "-m", "pytest"]` outright,
+    above the manage.py and _declares_pytest checks -- so a Django project
+    with a virtualenv but no pytest installed got `No module named pytest`
+    on every run and `manage.py test` was never reached. The test stage
+    blocks, so the fix loop saw a permanent non-test failure it could not
+    repair. Interpreter and runner are separate questions.
+    """
+    (tmp_path / "manage.py").write_text("", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("Django>=5\n", encoding="utf-8")
+    venv_bin = tmp_path / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    python = venv_bin / "python"
+    python.write_text("#!/bin/sh\n", encoding="utf-8")
+    python.chmod(0o755)
+
+    command = _python_test_command(tmp_path)
+
+    # The venv interpreter is still preferred -- that part was right.
+    assert command == [str(python), "manage.py", "test"]

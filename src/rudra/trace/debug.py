@@ -48,6 +48,12 @@ class _JsonLines(logging.Formatter):
             "level": record.levelname,
             "payload": record.getMessage(),
         }
+        # The traceback, when there is one. memory/degrade.py logs with
+        # exc_info=True and this dropped it, so the line a user attached to
+        # a bug report -- as the troubleshooting docs ask -- carried the
+        # message and none of the diagnosis (CR-G8).
+        if record.exc_info and "traceback" not in payload:
+            payload = {**payload, "traceback": self.formatException(record.exc_info)}
         return json.dumps(payload)
 
 
@@ -70,6 +76,20 @@ def configure_debug_logging(path: Path, *, enabled: bool) -> logging.Handler | N
     handler.setFormatter(_JsonLines())
     logger = logging.getLogger(LOGGER_NAME)
     logger.setLevel(logging.DEBUG)
+    # Replace, never accumulate. The REPL builds a fresh agent per input, so
+    # this ran once per turn with no removal path and nothing detaching the
+    # previous handler -- at turn N the logger held N handlers on the same
+    # file, wrote every record N times, and kept N descriptors open. That
+    # file is the one the docs tell users to attach to a bug report
+    # (CR-G5). Matching by the resolved filename rather than by identity so
+    # a handler left by an earlier agent is also cleared.
+    resolved = str(Path(handler.baseFilename).resolve())
+    for existing in list(logger.handlers):
+        if isinstance(existing, logging.FileHandler) and (
+            str(Path(existing.baseFilename).resolve()) == resolved
+        ):
+            logger.removeHandler(existing)
+            existing.close()
     logger.addHandler(handler)
     # Rudra's own records stop here rather than climbing to the root
     # logger, whose handlers belong to whoever embedded Rudra.

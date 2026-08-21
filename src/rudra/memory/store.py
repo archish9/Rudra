@@ -87,6 +87,51 @@ class MemoryRecord:
     filed_at: str
 
 
+def _reassemble(triples: Any) -> list[MemoryRecord]:
+    """One MemoryRecord per logical memory, not per stored drawer.
+
+    `write` splits content over CHUNK_CHARS-sized drawers whose ids are
+    `<base>_chunk_NNNNNN`, but this returned one row per drawer with no
+    reassembly -- and export_memory consumes exactly these rows. Measured on
+    a real palace: one 2300-char memory (well under MAX_CONTENT, and typical
+    of the summaries `remember` files) stored as 3 drawers, exported as 3,
+    and re-imported into the SAME palace as 3 more, because import re-hashes
+    each fragment as a whole entry so its id no longer matches. So the
+    documented idempotency was false for any memory over CHUNK_CHARS,
+    re-importing a backup silently doubled the palace, and a restore into a
+    fresh palace produced unrelated mid-sentence fragments (CR-A2).
+
+    Grouped by the id prefix and ordered by the `chunk_index` metadata that
+    `write` already records.
+    """
+    grouped: dict[str, list[tuple[int, str, Any]]] = {}
+    order: list[str] = []
+    for drawer_id, doc, meta in triples:
+        text = str(drawer_id)
+        base, marker, suffix = text.partition("_chunk_")
+        key = base if marker and suffix.isdigit() else text
+        index = int(suffix) if marker and suffix.isdigit() else 0
+        if key not in grouped:
+            grouped[key] = []
+            order.append(key)
+        grouped[key].append((index, str(doc), meta))
+
+    records: list[MemoryRecord] = []
+    for key in order:
+        pieces = sorted(grouped[key], key=lambda piece: piece[0])
+        meta = pieces[0][2]
+        records.append(
+            MemoryRecord(
+                id=key,
+                content="".join(piece[1] for piece in pieces),
+                room=str(meta.get("room", "")),
+                added_by=str(meta.get("added_by", "")),
+                filed_at=str(meta.get("filed_at", "")),
+            )
+        )
+    return records
+
+
 class MemoryStore:
     """One project's palace.
 
@@ -237,21 +282,14 @@ class MemoryStore:
         filter dialect is a second thing to get right per backend.
         """
         got = self._open().get(include=["documents", "metadatas"])
-        rows = [
-            MemoryRecord(
-                id=str(drawer_id),
-                content=str(doc),
-                room=str(meta.get("room", "")),
-                added_by=str(meta.get("added_by", "")),
-                filed_at=str(meta.get("filed_at", "")),
-            )
-            for drawer_id, doc, meta in zip(
+        rows = _reassemble(
+            zip(
                 got.get("ids") or [],
                 got.get("documents") or [],
                 got.get("metadatas") or [],
                 strict=False,
             )
-        ]
+        )
         if room is not None:
             rows = [r for r in rows if r.room == room]
         if added_by is not None:
@@ -261,15 +299,24 @@ class MemoryStore:
 
     @degrades(default=0)
     def delete(self, ids: Sequence[str]) -> int:
-        """Remove drawers by id. Returns how many were named.
+        """Remove memories by id. Returns how many were named.
 
         Irreversible, which is why the confirmation lives in the CLI and
         not here: a library call that prompts cannot be scripted.
+
+        Takes the ids `list_entries` reports, which are per MEMORY, so an id
+        naming a chunked entry must take every one of its drawers with it --
+        otherwise `rudra memory forget` on a memory over CHUNK_CHARS would
+        silently delete nothing and leave the fragments behind (CR-A2).
         """
         ids = list(ids)
         if not ids:
             return 0
-        self._open().delete(ids=ids)
+        collection = self._open()
+        named = set(ids)
+        stored = [str(one) for one in (collection.get(include=[]).get("ids") or [])]
+        doomed = [one for one in stored if one in named or one.partition("_chunk_")[0] in named]
+        collection.delete(ids=doomed or ids)
         return len(ids)
 
     @degrades(default=0)

@@ -79,7 +79,12 @@ class FixWriteParamsMiddleware(AgentMiddleware):
             elif "path" in args and "file_path" not in args:
                 args["file_path"] = args.pop("path")
             # Strip markdown fences from file content
-            if "content" in args:
+            if isinstance(args.get("content"), str):
+                # isinstance, not `in`: a model emitting a list for
+                # `content` raised AttributeError inside wrap_tool_call
+                # instead of the tool returning a validation error it could
+                # correct. The sandbox branch below already guards this way
+                # (CR-E11).
                 args["content"] = _strip_fences(args["content"])
 
         # Strip sandbox prefixes from all path-bearing args (second defense

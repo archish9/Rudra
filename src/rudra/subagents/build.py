@@ -22,7 +22,7 @@ from typing import Any
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
 
-from rudra.context.budget import evict_kwargs
+from rudra.context.budget import evict_kwargs, execute_kwargs
 from rudra.facts import facts_block
 from rudra.llm import build_model
 from rudra.middleware import FixWriteParamsMiddleware
@@ -101,7 +101,7 @@ def _mcp_tools_for(spec: RudraSubagent, context: Any) -> list:
     return create_mcp_tools(client, allow=allow, deny=mcp_cfg.deny)
 
 
-def _prompt_for(spec: RudraSubagent, context: Any) -> str:
+def _prompt_for(spec: RudraSubagent, context: Any, task: str = "") -> str:
     """The spec's prompt, plus whatever this project has established.
 
     Rendered here rather than baked into the spec because build_agent runs
@@ -131,7 +131,13 @@ def _prompt_for(spec: RudraSubagent, context: Any) -> str:
         from rudra.context.budget import recall_limit
         from rudra.memory.render import recall_block
 
-        query = getattr(context, "task", "") or spec.name
+        # The task text, which is what the recall is supposed to be about.
+        # This read `getattr(context, "task", "")`, and SubagentContext has
+        # no `task` field -- so the query was always the literal string
+        # "coder" / "tester" / "general-purpose", and every task in every
+        # run got the same 8 entries nearest the *word* "coder" while
+        # usage.record_recall billed them as recall spend (CR-C3).
+        query = task.strip() or spec.name
         block = recall_block(store.search(query, limit=8), recall_limit(context.cfg, spec.role))
         if block:
             parts.append(block)
@@ -186,6 +192,9 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             # an explicit None disables eviction outright rather than
             # restoring the default (see evict_kwargs).
             **evict_kwargs(context.cfg, spec.role),
+            # CR-F2: otherwise a command hangs for upstream's 3600s default
+            # while `[tools] test_timeout` says 600.
+            **execute_kwargs(context.cfg),
         ),
     ]
     if getattr(context, "usage", None) is not None:
@@ -238,7 +247,7 @@ def _skills_for(spec: RudraSubagent, context: Any) -> list[str] | None:
     return list(sources)
 
 
-def build_agent(spec: RudraSubagent, context: Any) -> Any:
+def build_agent(spec: RudraSubagent, context: Any, task: str = "") -> Any:
     """A compiled deep agent for this spec, ready to invoke directly.
 
     Goes through create_deep_agent so the subagent inherits upstream's
@@ -265,7 +274,7 @@ def build_agent(spec: RudraSubagent, context: Any) -> Any:
     return create_deep_agent(
         model=model,
         tools=_tools_for(spec, context),
-        system_prompt=_prompt_for(spec, context),
+        system_prompt=_prompt_for(spec, context, task),
         backend=context.backend,
         checkpointer=context.checkpointer or InMemorySaver(),
         middleware=_middleware_for(spec, context, model),

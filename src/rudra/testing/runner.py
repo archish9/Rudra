@@ -79,11 +79,23 @@ def _collected_nothing(stack: str | None, exit_code: int | None, total: int | No
 
     Two signals, because neither covers both cases: pytest's exit 5 is
     definitive but stack-specific, and a parsed total of zero catches the
-    runners that exit non-zero with a summary line instead.
+    runners that report a summary line instead.
+
+    A parsed total of zero means "collected nothing" whatever the exit code.
+    Requiring a non-zero exit missed `cargo test` on a crate with no tests,
+    which exits **0** printing `test result: ok. 0 passed; 0 failed` -- so
+    the stage reported PASSED "0 run", the verdict line said "all 5 stages
+    ran clean", and `tests_produced_no_judgement` (which fires only on
+    NOT_APPLICABLE) never dispatched the tester. The task was marked DONE
+    with no test ever written (CR-E5). `total is None` means the output
+    could not be parsed at all, which is not the same claim, so the exit
+    code remains the only signal there.
     """
     if stack == "python" and exit_code == _PYTEST_NO_TESTS_EXIT:
         return True
-    return exit_code != 0 and total == 0
+    if total is None:
+        return exit_code != 0
+    return total == 0
 
 
 def _tail(text: str, limit: int = MAX_TAIL_CHARS) -> str:

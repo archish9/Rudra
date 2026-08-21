@@ -102,7 +102,16 @@ def _project_files(project_path: Path) -> list[str]:
         listing = project_tree(project_path)
     except Exception:  # noqa: BLE001 -- completion must never break input
         return []
-    return [line.strip() for line in listing.splitlines() if line.strip()]
+    # project_tree appends a non-path footer when it truncates
+    # (filesystem/tree.py: "… N more entries omitted (cap: M)"), and it was
+    # offered as a completion -- accepting it inserted that sentence into
+    # the prompt, where expand_mentions left it and it went to the model
+    # verbatim (CR-G11).
+    return [
+        stripped
+        for line in listing.splitlines()
+        if (stripped := line.strip()) and not stripped.startswith("…")
+    ]
 
 
 def build_completer(project_path: Path) -> Any:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import signal
 from collections.abc import Callable, Iterator
@@ -263,16 +264,20 @@ def models_test(
     failed = False
     for roles, _model in entries:
         # One probe per distinct endpoint; the Roles column says who shares it.
-        result = probe_role(roles[0])
+        result = probe_role(roles[0], cfg)
         failed = failed or not result.ok
         style = "green" if result.ok else "red"
+        # Every cell but Roles is model- or provider-derived: a model id
+        # like `vendor/model[preview]` lost its suffix to Rich markup, and
+        # probe.py puts raw provider error text into `reach`/`construct`,
+        # where an unbalanced tag raises MarkupError (CR-G4).
         table.add_row(
             ", ".join(roles),
-            result.provider,
-            result.model,
-            result.construct,
-            result.reach,
-            result.tools,
+            escape(result.provider),
+            escape(result.model),
+            escape(result.construct),
+            escape(result.reach),
+            escape(result.tools),
             str(result.context_tokens) if result.context_tokens else "-",
             style=style,
         )
@@ -403,9 +408,11 @@ def _flatten(cfg) -> list[tuple[str, object]]:
     for role in sorted(cfg.models):
         model = cfg.models[role]
         for field in fields(model):
-            rows.append((f"model.{role}.{field.name}", getattr(model, field.name)))
+            rows.append(
+                (f"model.{role}.{field.name}", _safe_value(field.name, getattr(model, field.name)))
+            )
 
-    for section in ("agent", "permissions", "tools", "compat"):
+    for section in _config_sections():
         block = getattr(cfg, section)
         for field in fields(block):
             value = getattr(block, field.name)
@@ -673,7 +680,7 @@ def doctor_command(
             )
         elif entry.command and shutil.which(entry.command) is None:
             table.add_row(
-                f"mcp: {escape(entry.name)}", "missing", escape(f"'{entry.command}' is not on PATH")
+                f"mcp: {escape(entry.name)}", "fail", escape(f"'{entry.command}' is not on PATH")
             )
         else:
             table.add_row(
@@ -834,11 +841,11 @@ def doctor_command(
 
         # Distinct endpoints, not roles — same reason as `models test`.
         for roles, _model in roles_to_probe(cfg):
-            result = probe_role(roles[0])
+            result = probe_role(roles[0], cfg)
             table.add_row(
                 f"model ({', '.join(roles)})",
                 "ok" if result.ok else "fail",
-                f"{result.provider} {result.model} — {result.reach}, tools: {result.tools}",
+                escape(f"{result.provider} {result.model} — {result.reach}, tools: {result.tools}"),
             )
 
     console.print(table)
@@ -846,6 +853,92 @@ def doctor_command(
         "[dim]MCP servers are checked here; `rudra mcp test` actually starts them. "
         "`rudra memory list` shows what has been remembered.[/dim]"
     )
+
+    # Exit 1 if any check actually failed. `doctor` had no exit-code path at
+    # all -- it printed `model (...) | fail | Connection refused` and
+    # returned 0 -- while the CLI reference states both `models test` and
+    # `doctor` "exit 1 when a check fails, which makes them usable in a
+    # setup script". A script gating on it proceeded against a dead model
+    # (CR-G3). Read back off the rendered Status column so a row added later
+    # is covered without anyone remembering to update a flag; `warn` and `-`
+    # are deliberately not failures.
+    status_cells = list(table.columns[1].cells) if len(table.columns) > 1 else []
+    if any(_strip_markup(cell) in _DOCTOR_FAILURE_STATUSES for cell in status_cells):
+        raise typer.Exit(code=1)
+
+
+# Statuses that mean a check failed, as opposed to warned or did not apply.
+# "fail" and "error" only. A `.rudra layout` of "missing" is the normal
+# state of a project that has not run `rudra init` yet -- diagnosing that is
+# what doctor is FOR, so it must not make the command exit non-zero. A
+# server whose command is not on PATH says "fail" for the same reason: the
+# status column is what decides the exit code, so it has to mean one thing.
+def _safe_value(name: str, value: object) -> object:
+    """A config value, masked if it is a key pasted where a name belongs.
+
+    `api_key_env` names an environment variable, but pasting the key itself
+    there is a real, observed mistake -- llm/errors.py masks it in
+    MissingApiKeyError for exactly that reason. `config list` printed the
+    same value straight to the terminal, from the command the
+    troubleshooting docs point at and whose output people paste into bug
+    reports (CR-D9).
+    """
+    if name != "api_key_env" or not isinstance(value, str):
+        return value
+    from rudra.llm.errors import _looks_like_a_secret
+
+    if _looks_like_a_secret(value):
+        return "<redacted — this looks like a key, not a variable name>"
+    return value
+
+
+def _config_sections() -> tuple[str, ...]:
+    """Every settings section on Config, derived rather than listed.
+
+    The field loop below was made structural so no key could be accepted,
+    honoured, and never printed -- but the SECTION tuple stayed hand-written
+    and had not grown since Step 7, so `[skills]`, `[mcp]` and `[memory]`
+    were invisible to `config list` and unknown to `config get`. With no
+    `config set` (S6.1), `config list` is the only way to see which layer
+    set a value, so `[mcp] deny`, `mcp_in_auto` and the enabled skill set --
+    all policy-bearing -- could not be inspected at all. A1.54 one level up
+    (CR-D7).
+    """
+    from dataclasses import fields
+
+    from rudra.config.loader import Config
+
+    skip = {"models", "provenance", "sources", "project_root"}
+    return tuple(field.name for field in fields(Config) if field.name not in skip)
+
+
+def _read_mcp_or_exit(path: Path) -> list:
+    """`.mcp.json` entries, or a clean error and exit 1.
+
+    `mcp_list` and `doctor` both catch McpConfigError; `mcp add`, `remove`
+    and `test` did not, so a malformed file dumped a Python traceback
+    instead of the message the exception was written to carry -- and for
+    `add` that meant the user could not repair the file through the CLI
+    that is supposed to manage it (CR-G10).
+    """
+    from rudra.mcp import read_mcp_json
+    from rudra.mcp.config import McpConfigError
+
+    try:
+        return list(read_mcp_json(path))
+    except McpConfigError as exc:
+        # escape: the message interpolates a user-controlled path and
+        # server name -- A1.48's class.
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+
+_DOCTOR_FAILURE_STATUSES = frozenset({"fail", "error"})
+
+
+def _strip_markup(cell: object) -> str:
+    """A table cell's text, with any Rich style tags removed."""
+    return re.sub(r"\[/?[a-z ]+\]", "", str(cell)).strip().lower()
 
 
 @app.command("log")
@@ -1095,11 +1188,11 @@ def mcp_add(
     project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
 ) -> None:
     """Add a server to .mcp.json."""
-    from rudra.mcp import ServerEntry, mcp_json_path, read_mcp_json, write_mcp_json
+    from rudra.mcp import ServerEntry, mcp_json_path, write_mcp_json
 
     project_path = get_project_path(project_dir)
     path = mcp_json_path(project_path)
-    existing = [entry for entry in read_mcp_json(path) if entry.name != name]
+    existing = [entry for entry in _read_mcp_or_exit(path) if entry.name != name]
 
     argv = list(command or [])
     if not argv and url is None:
@@ -1126,10 +1219,10 @@ def mcp_remove(
     project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
 ) -> None:
     """Remove a server from .mcp.json."""
-    from rudra.mcp import mcp_json_path, read_mcp_json, write_mcp_json
+    from rudra.mcp import mcp_json_path, write_mcp_json
 
     path = mcp_json_path(get_project_path(project_dir))
-    entries = read_mcp_json(path)
+    entries = _read_mcp_or_exit(path)
     kept = [entry for entry in entries if entry.name != name]
     if len(kept) == len(entries):
         known = ", ".join(entry.name for entry in entries) or "none"
@@ -1146,14 +1239,14 @@ def mcp_test(
     """Start each enabled server and list what it offers."""
     import asyncio
 
-    from rudra.mcp import McpClient, mcp_json_path, read_mcp_json
+    from rudra.mcp import McpClient, mcp_json_path
     from rudra.mcp.client import McpUnavailable
 
     project_path = get_project_path(project_dir)
     cfg = _load_config_or_exit(project_dir)
     entries = [
         entry
-        for entry in read_mcp_json(mcp_json_path(project_path))
+        for entry in _read_mcp_or_exit(mcp_json_path(project_path))
         if entry.name not in cfg.mcp.disabled_servers
     ]
     if not entries:
@@ -1276,6 +1369,12 @@ def main(
     cfg = get_config(
         project_path,
         verbose=True if stream else verbose,
+        # --stream was a dead flag: it set verbose and nothing else, because
+        # no layer accepted stream_tokens at all. Both consumers
+        # (subagents/runner.py, agent/planner_agent.py) read config, so
+        # `rudra --stream` behaved exactly like `--verbose` while three
+        # documents said it turned token streaming on (CR-G1).
+        stream_tokens=True if stream else None,
         permission_mode=permission_mode,
         allow_shell=True if allow_shell else None,
         allow_mcp=True if allow_mcp else None,
@@ -1330,8 +1429,8 @@ def main(
         print_banner()
         console.print(
             Panel(
-                f"[bold]{prompt}[/bold]\n"
-                f"[dim]Path:[/dim] {project_path}\n"
+                f"[bold]{escape(prompt)}[/bold]\n"
+                f"[dim]Path:[/dim] {escape(str(project_path))}\n"
                 f"[dim]Planner:[/dim] {cfg.model_for('planner').model}  "
                 f"[dim]│  Coder:[/dim] {cfg.model_for('coder').model}\n"
                 f"[yellow]{_permission_notice(cfg)}[/yellow]",
@@ -1380,7 +1479,7 @@ def main(
 
         if result.success:
             body = (
-                f"[green]✓[/green] {result.message}\n\n"
+                f"[green]✓[/green] {escape(result.message)}\n\n"
                 f"Files created:  {len(result.files_created)}\n"
                 f"Files modified: {len(result.files_modified)}\n"
                 f"Iterations:     {result.iterations}"
@@ -1471,7 +1570,7 @@ def main(
 
                     if result.success:
                         body = (
-                            f"[green]✓[/green] {result.message}\n\n"
+                            f"[green]✓[/green] {escape(result.message)}\n\n"
                             f"Files created:  {len(result.files_created)}\n"
                             f"Files modified: {len(result.files_modified)}"
                         )
@@ -1482,7 +1581,7 @@ def main(
                     else:
                         console.print(
                             Panel(
-                                f"[red]✗[/red] {result.message}",
+                                f"[red]✗[/red] {escape(result.message)}",
                                 title="❌ Error",
                                 border_style="red",
                             )

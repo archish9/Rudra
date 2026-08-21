@@ -98,20 +98,40 @@ def syntax_stage(
             detail="covered by typecheck -- this stack has no cheaper parse step",
         )
 
-    if stack != "python":
+    # Suffix-driven, NOT stack-driven. `detect()` returns nothing until a
+    # marker file (pyproject.toml/setup.py/requirements.txt) exists, so on a
+    # greenfield tree -- `rudra "build a flask app"`, task 1 -- a .py file
+    # used to be routed to the JavaScript checker, come back NOT_APPLICABLE
+    # ("no JavaScript files changed"), and pass the whole gate while every
+    # other stage abstained for want of a stack. `stubs` could not catch it
+    # either: _scan_python swallows SyntaxError precisely because this stage
+    # is supposed to have blocked first. A file's language is a property of
+    # the file, not of whether the project has been scaffolded yet (CR-E1).
+    python_files = [
+        relative for relative in changed_files if Path(relative).suffix.lower() in _PYTHON_SUFFIXES
+    ]
+
+    if stack != "python" and not python_files:
         return _node_syntax_stage(project_path, changed_files, gate, console, cfg, stack)
 
-    findings: list[Finding] = []
-    for relative in changed_files:
-        path = Path(project_path) / relative
-        if path.suffix.lower() not in _PYTHON_SUFFIXES:
-            continue
-        try:
-            ast.parse(path.read_text(encoding="utf-8"))
-        except SyntaxError as exc:
-            findings.append(Finding(relative, exc.lineno, exc.msg or "syntax error"))
-        except (OSError, UnicodeDecodeError, ValueError) as exc:
-            findings.append(Finding(relative, None, str(exc)))
+    findings = _parse_python_files(Path(project_path), python_files)
+
+    if stack != "python":
+        # A non-Python stack with Python files in the diff: both checks are
+        # real, so run the node stage too rather than silently dropping it.
+        node = _node_syntax_stage(project_path, changed_files, gate, console, cfg, stack)
+        combined = tuple(findings) + node.findings
+        if combined:
+            return StageResult(
+                name="syntax",
+                outcome=FAILED,
+                blocking=True,
+                stack=stack,
+                findings=combined,
+                detail=f"{len(combined)} file(s) do not parse",
+            )
+        if node.outcome not in (PASSED, NOT_APPLICABLE):
+            return node
 
     if findings:
         return StageResult(
@@ -127,8 +147,33 @@ def syntax_stage(
         outcome=PASSED,
         blocking=True,
         stack=stack,
-        detail=f"{len(changed_files)} file(s) parsed",
+        detail=f"{len(python_files) if stack != 'python' else len(changed_files)} file(s) parsed",
     )
+
+
+def _parse_python_files(project_path: Path, relatives: Sequence[str]) -> list[Finding]:
+    """ast.parse every named file. A file that is gone is not a failure.
+
+    A deleted or renamed path reaches here by design -- changed_since keeps
+    deletions (loop/engine.py:92-93, :254) and `git status` reports them as
+    ` D path`. Reading one raises OSError, which used to be recorded as
+    "does not parse": a blocking, non-escalating failure whose message was
+    an absolute host path, repeated identically until the task went BLOCKED.
+    stubs._read already skips missing files, and the two native stages must
+    not disagree about what a deletion means (CR-E2).
+    """
+    findings: list[Finding] = []
+    for relative in relatives:
+        path = project_path / relative
+        if not path.is_file():
+            continue
+        try:
+            ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError as exc:
+            findings.append(Finding(relative, exc.lineno, exc.msg or "syntax error"))
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            findings.append(Finding(relative, None, str(exc)))
+    return findings
 
 
 def stubs_stage(project_path: Path, changed_files: Sequence[str]) -> StageResult:
@@ -435,7 +480,26 @@ def _node_syntax_stage(
                 stack=stack,
                 detail=result.denial_reason or "denied by the permission gate",
             )
-        if result.exit_code not in (0, None):
+        if result.exit_code is None:
+            # No verdict: the command timed out, or node could not be
+            # started between shutil.which() above and here. "Never ran" is
+            # not "parsed clean" -- excluding None from the check below made
+            # a killed `node --check` return PASSED "N file(s) parsed" over
+            # a file nobody checked, and the loop marked the task DONE. The
+            # command-stage path already treats this as MISSING_TOOL with
+            # escalate=True; this stage must agree (CR-E6).
+            return StageResult(
+                name="syntax",
+                outcome=MISSING_TOOL,
+                blocking=True,
+                escalate=True,
+                stack=stack,
+                detail=(
+                    f"`node --check` produced no verdict for {relative}: "
+                    f"{result.stderr.strip() or 'timed out'}"
+                ),
+            )
+        if result.exit_code != 0:
             complaint = result.stderr.strip().splitlines()
             findings.append(Finding(relative, None, complaint[0] if complaint else "parse error"))
 

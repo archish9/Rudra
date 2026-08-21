@@ -15,7 +15,7 @@ import pytest
 
 from rudra.memory.entry import MemoryEntry
 from rudra.memory.export import export_memory, import_memory
-from rudra.memory.store import MemoryStore
+from rudra.memory.store import CHUNK_CHARS, MemoryStore
 
 
 @pytest.fixture
@@ -120,3 +120,35 @@ def test_a_hand_edited_export_skips_the_bad_entry_and_keeps_the_rest(
     contents = {r.content for r in fresh.list_entries()}
     assert "we chose uv over pip" in contents
     assert "bad author" not in contents
+
+
+def test_a_memory_longer_than_one_chunk_round_trips_as_one_entry(tmp_path):
+    """CR-A2: `write` splits content into CHUNK_CHARS drawers, but
+    list_entries returned one row PER DRAWER with no reassembly -- and
+    export_memory consumes exactly those rows. So a 2300-char memory (well
+    under MAX_CONTENT, and typical of the summaries `remember` files)
+    exported as 3 fragments and re-imported as 3 NEW entries, because import
+    re-hashes each fragment as a whole entry and its id no longer matches
+    `<base>_chunk_NNNNNN`. Re-importing a backup silently doubled the
+    palace, and restoring into a fresh one gave unrelated mid-sentence
+    fragments.
+    """
+    store = MemoryStore(tmp_path)
+    content = ("The retry policy is exponential backoff. " * 58).strip()
+    assert len(content) > CHUNK_CHARS * 2, "the fixture must actually chunk"
+    store.write(MemoryEntry(content=content, room="decisions", source="s", added_by="agent"))
+
+    # Stored as several drawers...
+    assert store.count() > 1
+    # ...and reported as ONE memory, whole.
+    rows = store.list_entries(limit=100)
+    assert len(rows) == 1
+    assert rows[0].content == content
+
+    out = tmp_path / "export"
+    assert export_memory(store, out) == {"drawers": 1, "rooms": 1}
+
+    before = store.count()
+    import_memory(store, out)
+    assert store.count() == before, "re-importing a backup must not duplicate"
+    assert len(store.list_entries(limit=100)) == 1

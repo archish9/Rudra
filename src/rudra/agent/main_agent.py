@@ -595,164 +595,178 @@ async def create_main_agent(
 
     checkpoints_db = str(paths.checkpoints_db)
     db_conn = await aiosqlite.connect(checkpoints_db)
-    checkpointer = AsyncSqliteSaver(conn=db_conn)
-    await checkpointer.setup()
+    # Everything after this connect can raise -- checkpointer.setup(),
+    # TranscriptWriter, or create_planner_agent via build_model, which raises
+    # on any configuration error. RudraAgent.close() is the only thing that
+    # closes db_conn, the MCP client and the transcript, and it is unreachable
+    # if this factory never returns. The REPL builds a fresh agent per input
+    # and its except clauses catch only CancelledError/KeyboardInterrupt/
+    # EOFError, so a misconfigured run leaked a connection, its aiosqlite
+    # thread and an open transcript handle PER ATTEMPT (CR-C9).
+    try:
+        checkpointer = AsyncSqliteSaver(conn=db_conn)
+        await checkpointer.setup()
 
-    session_id = uuid.uuid4().hex[:12]
+        session_id = uuid.uuid4().hex[:12]
 
-    from rudra.agent.planner_agent import STAGES, consult_planner, create_planner_agent
-    from rudra.context.usage import RunUsage
-    from rudra.loop import Ledger, LoopContext
-    from rudra.subagents import SubagentContext
-    from rudra.trace.sink import TraceSink, console_consumer, resolve_level
-    from rudra.trace.transcript import TranscriptWriter, prune_transcripts, transcript_path
+        from rudra.agent.planner_agent import STAGES, consult_planner, create_planner_agent
+        from rudra.context.usage import RunUsage
+        from rudra.loop import Ledger, LoopContext
+        from rudra.subagents import SubagentContext
+        from rudra.trace.sink import TraceSink, console_consumer, resolve_level
+        from rudra.trace.transcript import TranscriptWriter, prune_transcripts, transcript_path
 
-    # One per run, shared by reference: the planner stages and every
-    # subagent record into the same object, and the panel reads it once.
-    usage = RunUsage()
+        # One per run, shared by reference: the planner stages and every
+        # subagent record into the same object, and the panel reads it once.
+        usage = RunUsage()
 
-    # One sink per run, shared by reference for the reason the gate, the
-    # FactStore and RunUsage are. The level is three-state because the CLI
-    # flag is (A1.15): --verbose wins, --no-verbose means errors only, and
-    # an absent flag consults [agent] verbose.
-    #
-    # Until Step 15a nothing consumed that flag at all (A1.90) and the
-    # subagents printed nothing, so a run was silent exactly while the
-    # coder was working.
-    trace_level = resolve_level(verbose, cfg.agent.verbose)
-    trace = TraceSink(level=trace_level)
-    trace.add(console_consumer(console, trace_level))
+        # One sink per run, shared by reference for the reason the gate, the
+        # FactStore and RunUsage are. The level is three-state because the CLI
+        # flag is (A1.15): --verbose wins, --no-verbose means errors only, and
+        # an absent flag consults [agent] verbose.
+        #
+        # Until Step 15a nothing consumed that flag at all (A1.90) and the
+        # subagents printed nothing, so a run was silent exactly while the
+        # coder was working.
+        trace_level = resolve_level(verbose, cfg.agent.verbose)
+        trace = TraceSink(level=trace_level)
+        trace.add(console_consumer(console, trace_level))
 
-    # --debug adds a second consumer on the SAME events (C9.7), so the
-    # file and the screen cannot disagree about what happened -- only
-    # about how much of it was drawn. A log that cannot be opened is
-    # reported as None and skipped, never raised: bookkeeping must not end
-    # a run (loop/engine.py:501-515).
-    # The run's record (C9.5). NOT behind a flag, unlike --debug: the
-    # point of a record is that it exists when somebody wants it, which is
-    # always after the fact. Safe to write by default only because A1.95's
-    # redaction happens where the event is built, so what reaches this
-    # writer is already clean.
-    #
-    # Pruned once here rather than per event: retention is a per-run
-    # decision, and doing it per event would stat the directory thousands
-    # of times to reach the same answer.
-    prune_transcripts(paths.transcripts)
-    transcript = TranscriptWriter(transcript_path(paths, session_id))
-    trace.add(transcript)
+        # --debug adds a second consumer on the SAME events (C9.7), so the
+        # file and the screen cannot disagree about what happened -- only
+        # about how much of it was drawn. A log that cannot be opened is
+        # reported as None and skipped, never raised: bookkeeping must not end
+        # a run (loop/engine.py:501-515).
+        # The run's record (C9.5). NOT behind a flag, unlike --debug: the
+        # point of a record is that it exists when somebody wants it, which is
+        # always after the fact. Safe to write by default only because A1.95's
+        # redaction happens where the event is built, so what reaches this
+        # writer is already clean.
+        #
+        # Pruned once here rather than per event: retention is a per-run
+        # decision, and doing it per event would stat the directory thousands
+        # of times to reach the same answer.
+        prune_transcripts(paths.transcripts)
+        transcript = TranscriptWriter(transcript_path(paths, session_id))
+        trace.add(transcript)
 
-    if debug:
-        from rudra.trace.debug import configure_debug_logging, debug_consumer
+        if debug:
+            from rudra.trace.debug import configure_debug_logging, debug_consumer
 
-        if configure_debug_logging(paths.logs / "debug.jsonl", enabled=True) is not None:
-            trace.add(debug_consumer())
-        else:
-            console.print("[yellow]--debug: could not open .rudra/run/logs/debug.jsonl[/yellow]")
+            if configure_debug_logging(paths.logs / "debug.jsonl", enabled=True) is not None:
+                trace.add(debug_consumer())
+            else:
+                console.print(
+                    "[yellow]--debug: could not open .rudra/run/logs/debug.jsonl[/yellow]"
+                )
 
-    # One store, shared by reference between the subagents and the loop --
-    # the rule the gate, the FactStore and the Ledger all follow. Two
-    # MemoryStores would hold two ChromaDB handles on one palace.
-    memory_store = build_memory_store(project_path, cfg, console)
+        # One store, shared by reference between the subagents and the loop --
+        # the rule the gate, the FactStore and the Ledger all follow. Two
+        # MemoryStores would hold two ChromaDB handles on one palace.
+        memory_store = build_memory_store(project_path, cfg, console)
 
-    subagent_context = SubagentContext(
-        project_path=project_path,
-        backend=filesystem_backend,
-        gate=gate,
-        console=console,
-        cfg=cfg,
-        checkpointer=checkpointer,
-        session_id=session_id,
-        facts=facts,
-        skills_sources=skills_sources,
-        usage=usage,
-        mcp=mcp_client,
-        memory=memory_store,
-        trace=trace,
-    )
-    loop_context = LoopContext(
-        subagents=subagent_context,
-        project_path=project_path,
-        console=console,
-        cfg=cfg,
-        paths=paths,
-        usage=usage,
-        memory=memory_store,
-    )
-
-    # One Ledger, shared by reference: the planner's tools mutate it and the
-    # loop reads it back. Two objects would leave the loop with no tasks.
-    #
-    # A resume loads what the last run left (C7.2). The CLI has already
-    # called check_resumable, so this file exists and has pending work --
-    # loading again here rather than passing the object in keeps
-    # create_main_agent constructible without one.
-    ledger = Ledger.load(paths.ledger_json) if resume else Ledger()
-    # One agent per stage (S10b.1). Construction is cheap -- build_model
-    # makes no network call (llm/factory.py:64-68) and create_deep_agent
-    # only compiles a graph -- and building all three up front keeps the
-    # callback a lookup rather than a factory.
-    #
-    # Every stage shares the SAME ledger and fact store: those are the
-    # only channel between stages, and a copy would leave the coder with
-    # an architecture nobody recorded.
-    planners = {
-        stage: create_planner_agent(
-            task=task,
+        subagent_context = SubagentContext(
             project_path=project_path,
-            filesystem_backend=filesystem_backend,
+            backend=filesystem_backend,
+            gate=gate,
+            console=console,
+            cfg=cfg,
             checkpointer=checkpointer,
-            console=console,
-            gate=gate,
-            ledger=ledger,
-            paths=paths,
-            facts=facts,
-            interactive=interactive,
-            stage=stage,
-            skills_sources=skills_sources,
-            skills_cache_root=skill_cache.root if skill_cache else None,
-            usage=usage,
-            # C8.4 names "before planning" as a retrieval trigger. The same
-            # store the loop and the subagents hold -- one run, one palace.
-            memory=memory_store,
-        )
-        for stage in STAGES
-    }
-
-    async def planner_callback(
-        run_ledger, request, *, stage, reason="initial", task=None, feedback=""
-    ):
-        # `feedback` carries a plan revision's wording (C6.9). Without it
-        # a revision reaches consult_planner empty and raises.
-        await consult_planner(
-            planners[stage],
-            run_ledger,
-            request,
-            stage=stage,
-            reason=reason,
-            task=task,
-            feedback=feedback,
-            gate=gate,
-            console=console,
             session_id=session_id,
+            facts=facts,
+            skills_sources=skills_sources,
+            usage=usage,
+            mcp=mcp_client,
+            memory=memory_store,
             trace=trace,
         )
+        loop_context = LoopContext(
+            subagents=subagent_context,
+            project_path=project_path,
+            console=console,
+            cfg=cfg,
+            paths=paths,
+            usage=usage,
+            memory=memory_store,
+        )
 
-    return RudraAgent(
-        context=context,
-        # The breakdown stage: the one that outlives planning, since it is
-        # the only stage re-entered on a block (S10b.3).
-        planner_agent=planners["breakdown"],
-        session_id=session_id,
-        db_conn=db_conn,
-        loop_context=loop_context,
-        planner_callback=planner_callback,
-        ledger=ledger,
-        gate=gate,
-        facts=facts,
-        # Only prompt when a human can answer. `interactive` is the same
-        # flag that decides whether ask_user is registered (S10a.5).
-        approve=ask_approval if interactive else auto_approve,
-        resume=resume,
-        mcp=mcp_client,
-        transcript=transcript,
-    )
+        # One Ledger, shared by reference: the planner's tools mutate it and the
+        # loop reads it back. Two objects would leave the loop with no tasks.
+        #
+        # A resume loads what the last run left (C7.2). The CLI has already
+        # called check_resumable, so this file exists and has pending work --
+        # loading again here rather than passing the object in keeps
+        # create_main_agent constructible without one.
+        ledger = Ledger.load(paths.ledger_json) if resume else Ledger()
+        # One agent per stage (S10b.1). Construction is cheap -- build_model
+        # makes no network call (llm/factory.py:64-68) and create_deep_agent
+        # only compiles a graph -- and building all three up front keeps the
+        # callback a lookup rather than a factory.
+        #
+        # Every stage shares the SAME ledger and fact store: those are the
+        # only channel between stages, and a copy would leave the coder with
+        # an architecture nobody recorded.
+        planners = {
+            stage: create_planner_agent(
+                task=task,
+                project_path=project_path,
+                filesystem_backend=filesystem_backend,
+                checkpointer=checkpointer,
+                console=console,
+                gate=gate,
+                ledger=ledger,
+                paths=paths,
+                facts=facts,
+                interactive=interactive,
+                stage=stage,
+                skills_sources=skills_sources,
+                skills_cache_root=skill_cache.root if skill_cache else None,
+                usage=usage,
+                # C8.4 names "before planning" as a retrieval trigger. The same
+                # store the loop and the subagents hold -- one run, one palace.
+                memory=memory_store,
+            )
+            for stage in STAGES
+        }
+
+        async def planner_callback(
+            run_ledger, request, *, stage, reason="initial", task=None, feedback=""
+        ):
+            # `feedback` carries a plan revision's wording (C6.9). Without it
+            # a revision reaches consult_planner empty and raises.
+            await consult_planner(
+                planners[stage],
+                run_ledger,
+                request,
+                stage=stage,
+                reason=reason,
+                task=task,
+                feedback=feedback,
+                gate=gate,
+                console=console,
+                session_id=session_id,
+                trace=trace,
+            )
+
+        return RudraAgent(
+            context=context,
+            # The breakdown stage: the one that outlives planning, since it is
+            # the only stage re-entered on a block (S10b.3).
+            planner_agent=planners["breakdown"],
+            session_id=session_id,
+            db_conn=db_conn,
+            loop_context=loop_context,
+            planner_callback=planner_callback,
+            ledger=ledger,
+            gate=gate,
+            facts=facts,
+            # Only prompt when a human can answer. `interactive` is the same
+            # flag that decides whether ask_user is registered (S10a.5).
+            approve=ask_approval if interactive else auto_approve,
+            resume=resume,
+            mcp=mcp_client,
+            transcript=transcript,
+        )
+    except BaseException:
+        await db_conn.close()
+        raise

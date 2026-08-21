@@ -144,14 +144,25 @@ def _python_test_command(project_path: Path) -> list[str]:
     if pytest_bin is not None:
         return [str(pytest_bin)]
 
+    # Interpreter and runner are two separate questions, and conflating them
+    # was the bug: the venv branch used to `return [python, "-m", "pytest"]`
+    # outright, above the manage.py and _declares_pytest checks -- so a
+    # Django project with a virtualenv but no pytest got
+    # `.venv/bin/python -m pytest` and `No module named pytest` on every
+    # run, and `manage.py test` was never reached. Same for a stdlib
+    # unittest project with a venv. The test stage blocks, so the fix loop
+    # saw a permanent non-test failure it could not repair (CR-D6).
     python_bin = _venv_executable(project_path, "python")
-    if python_bin is not None:
-        return [str(python_bin), "-m", "pytest"]
+    interpreter = str(python_bin) if python_bin is not None else _system_interpreter()
 
-    interpreter = _system_interpreter()
     if (project_path / "manage.py").is_file():
         return [interpreter, "manage.py", "test"]
     if _declares_pytest(project_path):
+        return [interpreter, "-m", "pytest"]
+    # A venv with no pytest installed and no declaration either: pytest is
+    # still the likelier intent for a project that built a venv at all, and
+    # `unittest discover` on a pytest layout finds nothing.
+    if python_bin is not None:
         return [interpreter, "-m", "pytest"]
     return [interpreter, "-m", "unittest", "discover"]
 

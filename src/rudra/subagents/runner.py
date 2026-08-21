@@ -179,7 +179,10 @@ async def run_subagent(
     spec = REGISTRY[name]
 
     try:
-        agent = build_agent(spec, context)
+        # The prompt IS the task: passing it through is what makes the
+        # subagent's memory recall about the work rather than about its own
+        # name (CR-C3).
+        agent = build_agent(spec, context, prompt)
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         return SubagentResult(name=name, text="", ok=False, error=str(exc))
 

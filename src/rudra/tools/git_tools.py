@@ -60,6 +60,8 @@ def _untracked_note(project_path: Path, *, gate: Any, console: Console, cfg: Any
     model has read_file for anything it wants to see.
     """
     entries = core.status(project_path, gate=gate, console=console, cfg=cfg, all_untracked=True)
+    if entries is None:
+        return "git status failed, so untracked files could not be listed."
     paths = [
         entry.path
         for entry in entries
@@ -137,7 +139,10 @@ def create_git_tools(project_path: Path, *, gate: Any, console: Console, cfg: An
                     f"Reading a diff outside the project was not permitted: "
                     f"{result.denial_reason}. Do not retry this call."
                 )
-            return result.stdout or "No changes."
+            # Capped like the in-root branch. This is the whole reason the
+            # tool exists rather than the model calling `git diff` through
+            # execute (CR-B8).
+            return core.cap_diff(result.stdout, MAX_DIFF_LINES) or "No changes."
 
         text = core.diff(
             project_path, path=target, staged=staged, max_lines=MAX_DIFF_LINES, **common

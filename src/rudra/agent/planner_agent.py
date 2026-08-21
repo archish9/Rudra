@@ -9,7 +9,7 @@ only loop/engine.py writes that, and only when the gate passes.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
@@ -121,6 +121,7 @@ def build_planner_prompt(
     max_questions: int = 5,
     memory: Any = None,
     recall_tokens: int | None = None,
+    usage: Any = None,
 ) -> str:
     """The system prompt for one planning stage (S10b.1).
 
@@ -152,6 +153,16 @@ def build_planner_prompt(
         recalled = recall_block(memory.search(task, limit=8), recall_tokens)
         if recalled:
             prompt += f"\n{recalled}"
+            # Billed here, where the search already happened. The caller
+            # used to re-render this block to measure it, on the stated
+            # grounds that "the search is already cached by the store's
+            # open collection" -- it is not: _open() caches the collection
+            # HANDLE, and every search re-runs a ChromaDB/ONNX MiniLM
+            # embedding. create_main_agent builds all three stages up
+            # front, so a run paid 6 embeddings instead of 3, synchronously
+            # (CR-C8).
+            if usage is not None:
+                usage.record_recall("planner", len(recalled))
 
     prompt += f"""
 ## REQUEST
@@ -213,7 +224,17 @@ def build_planner_middleware(
     middleware: list = [FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths)]
     if backend is not None:
         evict = {} if evict_tokens is None else {"tool_token_limit_before_evict": evict_tokens}
-        middleware.append(FilesystemMiddleware(backend=backend, **evict))
+        # Read-only, explicitly. `tools=None` means EVERY filesystem tool --
+        # measured against the installed deepagents: delete, edit_file,
+        # execute, glob, grep, ls, read_file, write_file -- on the full
+        # CompositeBackend(default=LocalShellBackend), so `execute` is
+        # functional, not the inert stub. Under --auto the mode default is
+        # `allow`, so all three planner stages could write into the user's
+        # project BEFORE the approval gate ran, contradicting plan()'s
+        # "touches nothing" docstring and _tools_for_stage's "absence is the
+        # enforcement". The planner prompt only ever asks it to read
+        # (CR-C2).
+        middleware.append(FilesystemMiddleware(backend=backend, tools=PLANNER_FS_TOOLS, **evict))
     if usage is not None:
         middleware.append(UsageMiddleware("planner", usage))
     if compat_task_anchor:
@@ -315,6 +336,22 @@ def _strip_frontmatter(text: str) -> str:
     return parts[2].lstrip("\n") if len(parts) == 3 else text
 
 
+# What the planner may do to the filesystem: look, never touch. Named here
+# rather than inlined so a reader of the module sees the boundary without
+# reading the middleware wiring (CR-C2).
+# Typed with deepagents' full literal set rather than the four names, because
+# `list` is invariant: a list[Literal["ls", ...4 names]] is not a
+# list[Literal[...8 names]] as far as the type checker is concerned.
+PLANNER_FS_TOOLS: list[
+    Literal["ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute"]
+] = [
+    "ls",
+    "read_file",
+    "glob",
+    "grep",
+]
+
+
 def create_planner_agent(
     task: str,
     project_path: Path,
@@ -401,17 +438,8 @@ def create_planner_agent(
         max_questions=cfg.agent.max_questions,
         memory=memory,
         recall_tokens=recall_limit(cfg, "planner"),
+        usage=usage,
     )
-    # Account for the planner's recall block the same way build.py does for
-    # the subagents. Measured by re-rendering rather than threaded back out
-    # of build_planner_prompt, which stays a pure string function -- the
-    # search is already cached by the store's open collection.
-    if memory is not None and usage is not None:
-        from rudra.memory.render import recall_block
-
-        recalled = recall_block(memory.search(task, limit=8), recall_limit(cfg, "planner"))
-        if recalled:
-            usage.record_recall("planner", len(recalled))
     # C5.3: the index alone is inert. This is the instruction block that
     # makes the model reach for a skill, and it chains onward -- it tells
     # the model to read its harness's reference file, which is Rudra's

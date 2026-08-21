@@ -59,9 +59,14 @@ def _parse_pytest(text: str) -> Counts:
         tally: dict[str, int] = {}
         for number, label in pairs:
             tally[label.rstrip("s") if label.startswith("error") else label] = int(number)
-        passed = tally.get("passed", 0)
+        # xfailed/xpassed are matched by _PYTEST_PAIR but were added
+        # nowhere, so a real run of "1 failed, 1 passed, 1 skipped, 1
+        # xfailed, 1 error" -- five tests -- reported total=4. Cosmetic in
+        # the detail line, but the total also feeds _collected_nothing
+        # (CR-E10).
+        passed = tally.get("passed", 0) + tally.get("xpassed", 0)
         failed = tally.get("failed", 0) + tally.get("error", 0)
-        skipped = tally.get("skipped", 0)
+        skipped = tally.get("skipped", 0) + tally.get("xfailed", 0)
         return Counts(total=passed + failed + skipped, failed=failed, skipped=skipped)
     return _UNKNOWN
 

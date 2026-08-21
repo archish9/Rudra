@@ -9,7 +9,7 @@ Context loaded into every fresh Claude Code session. Read `TODO.md` next — it 
 Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first alternative to Claude Code. It plans work, writes code, tests it, reviews it, and fixes it, while the user stays in control.
 
 - **Language:** Python 3.12+
-- **Agent framework:** [LangChain `deepagents`](https://github.com/langchain-ai/deepagents) — installed `0.4.12`, **target `0.7.4`** (upgrade is TODO Phase U, step 1). Anything you read in `.venv` is the *old* version; check `TODO.md` §F for what changed.
+- **Agent framework:** [LangChain `deepagents`](https://github.com/langchain-ai/deepagents) — **`0.7.4`, installed and pinned exactly** (`pyproject.toml:30`), because `compat/deepagents_path.py` monkeypatches internals and `middleware/task_anchor.py` imports a private module. The upgrade from 0.4.12 is **done**; `TODO.md` §F records what changed. Corrected 2026-08-21 (CR-F3) — this line claimed 0.4.12 was installed and the upgrade was pending, and it is read by every session.
 - **CLI:** Typer + Rich + prompt_toolkit
 - **Package:** `rudra`, entry point `rudra.cli:app` (`pyproject.toml:62`)
 - **License:** Apache-2.0 declared in `pyproject.toml:10`; full text on disk at `LICENSE` (added 2026-08-10, A4.2). `NOTICE` landed with Step 11a (A4.7), generated from the bundle registry; `CONTRIBUTING.md` and `SECURITY.md` landed with Step 16
@@ -140,6 +140,18 @@ src/rudra/
 ├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
 ├── state/                  paths.py (D15 layout), session id (unused).
 │                           ProjectConfigManager died with C6.8a
+├── mcp/                    MCP client + config (Step 13). `.mcp.json` in
+│                           Claude Code's schema, so an existing config
+│                           pastes in unchanged; three meta-tools rather
+│                           than one tool per server, so a server's whole
+│                           surface is not a fixed prompt cost
+├── skills/                 The vendored superpowers corpus and its delivery
+│                           (Step 11/11a): bundle · registry · manifest ·
+│                           transform · validate · cache · sources · notice.
+│                           Rendered into a user-level cache and reached
+│                           through a CompositeBackend route, because skills
+│                           live outside the project root while the backend
+│                           is rooted at it (D13)
 └── compat/                 monkeypatches + version guard into deepagents internals
 ```
 
@@ -207,7 +219,7 @@ tools, so **no prompt names a state path at all**.
 
 ## 4. What deepagents Already Provides (and Rudra ignores)
 
-Table below is verified against **installed 0.4.12** (`.venv/.../deepagents/graph.py`). For the 0.7.4 delta — new `permissions=`, `RubricMiddleware`, provider/harness profiles, `TodoListMiddleware` no longer auto-added, `write()` now overwrites — see `TODO.md` §F. `create_deep_agent()` accepts:
+Table below is verified against **installed 0.7.4**. The 0.4.12 → 0.7.4 delta — new `permissions=`, `RubricMiddleware`, provider/harness profiles, `TodoListMiddleware` no longer auto-added, `write()` now overwrites — is recorded in `TODO.md` §F. `create_deep_agent()` accepts:
 
 | Param | What it gives | Rudra uses it? |
 |---|---|---|
@@ -382,8 +394,8 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 
 ## 7. Hard-Won Knowledge (don't relearn)
 
-- `install_path_normalizer` (`compat/deepagents_path.py`) monkeypatches `deepagents.backends.utils.validate_path` **and** `deepagents.middleware.filesystem.validate_path` because the middleware does `from ... import validate_path` — patching one is not enough. This will break on any deepagents upgrade; `pyproject.toml:27` uses `>=`, not `==`.
-- `OverwriteFilesystemBackend` (`compat/overwrite_backend.py`) exists because **0.4.12's** `FilesystemBackend.write()` refuses to overwrite, sending small local models into a `write → error → edit no-op → write` infinite loop. **In 0.7.4 `write()` overwrites by default** (`backends/filesystem.py:489`) → the subclass is obsolete; only its markdown-fence stripping still matters.
+- `install_path_normalizer` (`compat/deepagents_path.py`) monkeypatches `validate_path` in **three** modules — `deepagents.backends.utils`, `deepagents.middleware.filesystem`, and `deepagents.middleware._fs_interrupt` — because each does `from ... import validate_path` and resolves the name in its own globals, so patching one is not enough. Corrected 2026-08-21 (CR-D8): this said two, and the module docstring claimed a grep had confirmed there were only two. `_fs_interrupt` is reached only when `permissions=` is passed, which Rudra never does (U.7), so patching it changes nothing today — it is patched so that U.7 does not reopen onto a half-applied file. `pyproject.toml:30` pins `deepagents==0.7.4` **exactly**, for this reason.
+- `OverwriteFilesystemBackend` **no longer exists** — `ls src/rudra/compat/` is `__init__.py`, `deepagents_path.py`, `path_constants.py`, `version_guard.py`. It was deleted with the 0.7.4 upgrade, whose `write()` overwrites by default (`backends/filesystem.py:489`); 0.4.12's refusal to overwrite was what sent small local models into a `write → error → edit no-op → write` loop. Its markdown-fence stripping lives on in `middleware/fix_write_params.py`. Corrected 2026-08-21 (CR-F4) — this bullet described the deleted module as live.
 - The 6 middlewares are all patches for qwen3:14b failure modes documented in their own docstrings. Minimum target model is now **32B** → 4 of the 6 were deleted in Step 2, and the 2 survivors are **opt-in behind `[compat]`, default off, as of Step 6** (C1.8). Disposition table: `TODO.md` §0.1. `FixWriteParamsMiddleware` is split rather than gated wholesale: fence-stripping and `filename`/`path` → `file_path` aliasing are **always on** (required since U.3 — 0.7.4's `write()` no longer strips), while sandbox-prefix stripping sits behind `[compat] sandbox_paths` because `/src/` and `/tmp/` are sandbox prefixes *and* ordinary absolute directories.
 - **Configuration precedence lives in exactly one function**, `config/loader.py::deep_merge`, and every value records the layer that set it. This shape was chosen because A5.1 and A5.2 were both "which source won?" defects that a per-field `x or y or default` chain structurally cannot answer. Do not reintroduce per-field resolution.
 - **Role inheritance runs after the cross-layer merge**, not inside a layer. Inside a layer, a project-level `[model.planner]` would fail to inherit a user-level `[model.default]`.
@@ -396,7 +408,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-uv run pytest -q                     # 955 passed, 2 skipped at Step 10a; must never go down
+uv run pytest -q                     # 1713 passed, 2 skipped; must never go down
 git config core.hooksPath .githooks  # once per clone: run all three gates on push (A3.7)
 .venv/bin/rudra --version            # Rudra v0.2.0
 
@@ -469,5 +481,5 @@ only control, and real containment would need OS-level isolation.
 
 - 341 files tracked. The root noise this line used to list — `q-dev-chat-2026-03-20.md`, `filesystem-context.txt`, `improvements.txt`, `llms.txt`, `road-map.md`, `context_management_implementation_plan.md` — moved to the gitignored `docs/archive/` in Step 16 (A4.3, S16.6); `execution_tools.py` was deleted with D17 in Step 2.
 - `.env` and `.rudra/` are gitignored (verified via `git check-ignore`).
-- ~~No LICENSE file, no CI, no CONTRIBUTING, no tests.~~ Stale as written, and stale again in the other direction. `LICENSE` landed with A4.2 and the suite is at **1696 passed / 2 skipped**. **There is no CI**: A3.3 added `.github/workflows/ci.yml`, A3.9 narrowed it to `pull_request` only, and S16.5 deleted it — no PRs are accepted (S16.3), so it could never fire again. `.githooks/pre-push` is the only gate; `--no-verify` or a clone that never set `core.hooksPath` is checked by nothing. `CONTRIBUTING.md` and `SECURITY.md` shipped in Step 16 (C10.4, C10.6).
+- ~~No LICENSE file, no CI, no CONTRIBUTING, no tests.~~ Stale as written, and stale again in the other direction. `LICENSE` landed with A4.2 and the suite is at **1713 passed / 2 skipped**. **There is no CI**: A3.3 added `.github/workflows/ci.yml`, A3.9 narrowed it to `pull_request` only, and S16.5 deleted it — no PRs are accepted (S16.3), so it could never fire again. `.githooks/pre-push` is the only gate; `--no-verify` or a clone that never set `core.hooksPath` is checked by nothing. `CONTRIBUTING.md` and `SECURITY.md` shipped in Step 16 (C10.4, C10.6).
 - **A local `.venv` drifts from `uv.lock` and will lie to you.** Measured 2026-08-11 on unmodified `main`: `.venv/bin/pytest -q` → `14 failed, 502 passed`, against `520 passed, 2 skipped` on a clean `uv sync` clone; the venv was missing `langchain_openai`, which `pyproject.toml:47` requires. Two defects reached `main` under that noise (A3.5, A1.51). Run `uv sync` before believing a local failure, and prefer `uv run` — which reconciles first — when the answer matters.

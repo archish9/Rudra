@@ -147,11 +147,26 @@ def _inject_platform_reference(skill_root: Path, bundle: Bundle) -> bool:
 
     head, _, tail = body.partition(bundle.platform_ref_section)
     lines = tail.split("\n")
-    last_entry = max(
-        (index for index, line in enumerate(lines) if line.startswith("- ")),
-        default=0,
+    # Bounded to THIS section. The scan ran over the entire rest of the
+    # document, so it worked only because the bundled bootstrap skill
+    # happens to end its last `- ` bullet inside Platform Adaptation. Add one
+    # bullet under a later section -- an ordinary upstream edit, and S11a.3
+    # defines the workflow as hand-updating the vendored corpus -- and
+    # Rudra's reference landed under that section instead, while the
+    # function still returned True and RenderReport.platform_refs_injected
+    # reported success (CR-A4).
+    section_end = next(
+        (index for index, line in enumerate(lines) if index and line.startswith("## ")),
+        len(lines),
     )
-    lines.insert(last_entry + 1, PLATFORM_REF_LINE)
+    bullets = [index for index, line in enumerate(lines[:section_end]) if line.startswith("- ")]
+    if not bullets:
+        msg = (
+            f"bundle '{bundle.name}' section '{bundle.platform_ref_section}' in "
+            f"{bundle.bootstrap_skill}/SKILL.md has no '- ' entry to insert after"
+        )
+        raise ValueError(msg)
+    lines.insert(max(bullets) + 1, PLATFORM_REF_LINE)
     skill_md.write_text(head + bundle.platform_ref_section + "\n".join(lines), encoding="utf-8")
     return True
 

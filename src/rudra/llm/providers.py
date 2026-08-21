@@ -52,6 +52,19 @@ class ProviderEntry:
     extra_kwargs: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     """Always-on kwargs for this provider."""
 
+    default_base_url: str | None = None
+    """Endpoint to use when the role declares none. Provider-specific, so it
+    lives here and NOT in DEFAULTS: a value in DEFAULTS survives per-leaf
+    merging that a user table cannot clear (TOML has no null), so an Ollama
+    URL there reached every hosted provider and the documented Anthropic
+    config talked to localhost:11434 (CR-D1)."""
+
+    default_max_output_tokens: int | None = None
+    """Output cap to use when the role declares none. Here for CR-D1's
+    reason: 131072 is an Ollama `num_predict` value, and forwarding it as
+    `max_tokens` exceeds every current Anthropic and OpenAI model's cap
+    (CR-D2)."""
+
     def build_kwargs(self, settings: ModelConfig) -> dict[str, Any]:
         """Emit exactly the kwargs this provider accepts.
 
@@ -59,18 +72,38 @@ class ProviderEntry:
         applies rather than an explicit `None` being sent over the wire.
         """
         kwargs: dict[str, Any] = {}
-        if settings.base_url is not None:
-            kwargs["base_url"] = settings.base_url
+        base_url = settings.base_url if settings.base_url is not None else self.default_base_url
+        if base_url is not None:
+            kwargs["base_url"] = base_url
         if settings.temperature is not None:
             kwargs["temperature"] = settings.temperature
-        if self.max_output_kwarg is not None and settings.max_output_tokens is not None:
-            kwargs[self.max_output_kwarg] = settings.max_output_tokens
+        max_output = (
+            settings.max_output_tokens
+            if settings.max_output_tokens is not None
+            else self.default_max_output_tokens
+        )
+        if self.max_output_kwarg is not None and max_output is not None:
+            kwargs[self.max_output_kwarg] = max_output
         if self.context_kwarg is not None and settings.context_tokens is not None:
             kwargs[self.context_kwarg] = settings.context_tokens
         if self.supports_timeout and settings.timeout is not None:
             kwargs["timeout"] = settings.timeout
         kwargs.update(self.extra_kwargs)
         return kwargs
+
+
+def effective_base_url(settings: ModelConfig) -> str | None:
+    """The endpoint this role will actually reach.
+
+    `settings.base_url` alone is not the answer: a provider may supply its
+    own default when the role declares none (see ProviderEntry), so anything
+    that reports or groups by endpoint must resolve it the same way
+    `build_kwargs` does.
+    """
+    if settings.base_url is not None:
+        return settings.base_url
+    entry = PROVIDERS.get(settings.provider)
+    return entry.default_base_url if entry is not None else None
 
 
 PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
@@ -83,6 +116,8 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             supports_timeout=False,
             context_kwarg="num_ctx",
             extra_kwargs=MappingProxyType({"reasoning": True}),
+            default_base_url="http://localhost:11434",
+            default_max_output_tokens=131072,
         ),
         "openai_compatible": ProviderEntry(
             name="openai_compatible",

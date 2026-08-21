@@ -77,10 +77,18 @@ def test_status_reports_the_new_name_of_a_rename(repo: Path, env: dict):
     assert "renamed.txt" in {entry.path for entry in core.status(repo, **env)}
 
 
-def test_status_of_a_plain_directory_is_empty(tmp_path: Path, env: dict):
+def test_status_of_a_plain_directory_is_unknown_not_empty(tmp_path: Path, env: dict):
+    """CR-E12: git failing and "nothing changed" are different answers.
+
+    This returned [], so a caller could not tell a clean tree from a git
+    that never ran -- and on that reading `rudra verify` scanned zero files
+    and reported "all 5 stages ran clean" over an unexamined tree, while
+    the loop read every attempt as "the coder wrote nothing". None is the
+    answer the callers already handle for the not-a-repo case.
+    """
     plain = tmp_path / "plain"
     plain.mkdir()
-    assert core.status(plain, **env) == []
+    assert core.status(plain, **env) is None
 
 
 def test_diff_shows_working_tree_changes(repo: Path, env: dict):
@@ -144,3 +152,19 @@ def test_every_read_only_subcommand_is_one_rudra_composes(repo: Path, env: dict)
     """The bypass covers reads only. A writing subcommand must not be in it."""
     for writing in ("checkout", "commit", "push", "reset", "clean", "merge"):
         assert writing not in core.READ_ONLY_SUBCOMMANDS
+
+
+def test_status_decodes_a_c_quoted_non_ascii_path(repo: Path, env: dict):
+    """CR-E3: git C-quotes any path needing it, so `café.py` arrives as
+    `"caf\\303\\251.py"`. Stripping the quotes alone yielded the literal
+    backslash form, which does not exist on disk -- so `rudra verify` fed a
+    nonexistent path to the syntax stage, and in the loop `git_snapshot`
+    digested an absent file, making a real edit invisible and every attempt
+    read as "the coder wrote nothing" (the A1.66 class).
+    """
+    (repo / "café.py").write_text("x = 1\n", encoding="utf-8")
+
+    paths = {entry.path for entry in core.status(repo, **env)}
+
+    assert "café.py" in paths
+    assert (repo / "café.py").exists()

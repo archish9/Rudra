@@ -125,3 +125,45 @@ def test_an_internal_error_in_a_stage_does_not_kill_the_run(tmp_path, monkeypatc
     assert last.outcome == FAILED
     assert last.escalate is True
     assert "internal error" in last.detail
+
+
+def test_a_python_file_is_parsed_even_before_the_project_has_a_marker_file(tmp_path):
+    """CR-E1: the stage dispatched on the DETECTED STACK, and detect()
+    returns nothing until pyproject.toml/setup.py/requirements.txt exists.
+    So on a greenfield tree -- `rudra "build a flask app"`, task 1 -- a .py
+    file was routed to the JavaScript checker, came back NOT_APPLICABLE
+    ("no JavaScript files changed"), and passed the whole gate while lint,
+    typecheck and test all abstained for want of a stack. stubs could not
+    catch it either: _scan_python swallows SyntaxError precisely because
+    this stage is supposed to have blocked first. The loop then marked the
+    task DONE on report.passed.
+    """
+    (tmp_path / "app.py").write_text("def main(:\n    retur\n", encoding="utf-8")
+
+    result = syntax_stage(tmp_path, None, ["app.py"], gate=None, console=None, cfg=None)
+
+    assert result.outcome == FAILED
+    assert result.findings[0].file == "app.py"
+
+
+def test_a_valid_python_file_still_passes_with_no_stack(tmp_path):
+    (tmp_path / "app.py").write_text("def main():\n    return 1\n", encoding="utf-8")
+
+    result = syntax_stage(tmp_path, None, ["app.py"], gate=None, console=None, cfg=None)
+
+    assert result.outcome == PASSED
+
+
+def test_a_deleted_file_is_skipped_not_failed(tmp_path):
+    """CR-E2: a missing file raised OSError inside the parse loop and was
+    recorded as "does not parse" -- a blocking failure whose message was an
+    absolute host path, handed to the fix loop verbatim until the signature
+    repeated and the task went BLOCKED. Deletions reach here by design:
+    changed_since keeps them and `git status` reports them as ` D path`.
+    verify/stubs.py already skips missing files; the two native stages must
+    not disagree about what a deletion means.
+    """
+    result = syntax_stage(tmp_path, PYTHON, ["gone.py"], gate=None, console=None, cfg=None)
+
+    assert result.outcome == PASSED
+    assert result.findings == ()

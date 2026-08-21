@@ -223,11 +223,18 @@ DEFAULTS: dict[str, Any] = {
         "default": {
             "provider": "ollama",
             "model": "qwen3:32b",
-            "base_url": "http://localhost:11434",
+            # base_url and max_output_tokens are deliberately None here and
+            # carry their Ollama values in PROVIDERS["ollama"] instead.
+            # deep_merge merges per LEAF, and TOML has no null, so a value
+            # left here cannot be cleared by a user table that names only
+            # `provider`/`model` -- which is how the documented Anthropic
+            # config ended up pointed at localhost:11434 with an Ollama-sized
+            # max_tokens (CR-D1, CR-D2).
+            "base_url": None,
             "api_key_env": None,
             "temperature": 0.3,
             "context_tokens": None,
-            "max_output_tokens": 131072,
+            "max_output_tokens": None,
             "timeout": 300,
         }
     },

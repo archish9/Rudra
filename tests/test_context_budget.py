@@ -109,7 +109,14 @@ def test_evict_kwargs_omits_the_argument_when_no_window_is_declared():
 
 
 def test_evict_kwargs_passes_the_derived_limit_when_there_is_one():
-    assert evict_kwargs(_cfg(coder=131072), "coder") == {"tool_token_limit_before_evict": 13107}
+    # Both thresholds, since CR-F1: the human-message one was never set
+    # anywhere, so every agent took upstream's fixed 50 000 -- larger than
+    # the whole window of the 32B model D6 makes the design center, so that
+    # eviction path could never fire.
+    assert evict_kwargs(_cfg(coder=131072), "coder") == {
+        "tool_token_limit_before_evict": 13107,
+        "human_message_token_limit_before_evict": 32767,
+    }
 
 
 def test_none_really_does_disable_eviction_upstream():

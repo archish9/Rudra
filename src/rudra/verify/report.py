@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from rudra.verify.result import (
@@ -70,8 +71,18 @@ def verdict_line(report: VerifyReport) -> str:
     absent = [name for name in STAGE_ORDER if name not in accounted]
 
     skipped = len(inconclusive) + len(absent)
-    if skipped == 0:
+    advisory = [stage for stage in report.stages if stage.outcome == FAILED and not stage.blocking]
+    if skipped == 0 and not advisory:
         return f"passed — all {len(STAGE_ORDER)} stages ran clean"
+    if skipped == 0:
+        # _INCONCLUSIVE covers NOT_APPLICABLE and COVERED_BY only, so a
+        # non-blocking FAILED stage counted as clean and the verdict said
+        # "all 5 stages ran clean" over a lint stage reporting 12 problems.
+        # The module's own rule -- a gate reporting success while stages
+        # were skipped is A1.57 at report level -- was broken by the
+        # sentence itself, and this verdict heads verify.log (CR-E9).
+        names = ", ".join(f"{stage.name} ({stage.detail})" for stage in advisory)
+        return f"passed — {names} failed (advisory)"
 
     reasons = [f"{stage.name}: {stage.detail or stage.outcome}" for stage in inconclusive]
     reasons.extend(f"{name}: did not run" for name in absent)
@@ -117,7 +128,9 @@ def render(report: VerifyReport, console: Console) -> None:
         detail = stage.detail
         if stage.docs_anchor:
             detail = f"{detail} — see {stage.docs_anchor}" if detail else f"see {stage.docs_anchor}"
-        table.add_row(name, f"[{style}]{outcome}[/{style}]" if style else outcome, detail)
+        # escape: for MISSING_TOOL, `detail` IS the tool's stderr
+        # (pipeline.py:347). See the loop below for why that matters.
+        table.add_row(name, f"[{style}]{outcome}[/{style}]" if style else outcome, escape(detail))
 
     console.print(table)
 
@@ -130,9 +143,17 @@ def render(report: VerifyReport, console: Console) -> None:
         console.print(f"\n[bold]{stage.name}[/bold]")
         for finding in stage.findings[:_MAX_RENDERED_FINDINGS]:
             location = f"{finding.file}:{finding.line}" if finding.line else finding.file
-            console.print(f"  {location}: {finding.message}")
+            # Every payload here comes straight from mypy/ruff/eslint/pytest
+            # and is printed through Rich with markup enabled. Unescaped,
+            # mypy's `list[int]` rendered as `list` -- the reader lost the
+            # part that matters -- and an output_tail containing `[/dim]`
+            # raised MarkupError out of render() AFTER the table printed, so
+            # the user saw no failure output at all. Same class as A1.67 /
+            # A1.48 / A1.91, which trace/render.py already escapes for
+            # (CR-E4).
+            console.print(f"  {escape(location)}: {escape(finding.message)}")
         if not stage.findings and stage.output_tail:
-            console.print(stage.output_tail)
+            console.print(escape(stage.output_tail))
 
 
 __all__ = ["exit_code", "render", "to_dict", "verdict_line"]

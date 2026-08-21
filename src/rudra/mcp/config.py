@@ -84,7 +84,17 @@ def _entry(path: Path, name: str, body: Any) -> ServerEntry:
         msg = f"{path}: server '{name}' declares neither 'command' (stdio) nor 'url' (http/sse)."
         raise McpConfigError(msg)
 
-    transport = body.get("transport") or ("stdio" if command is not None else "http")
+    # `type` is what Claude Code actually writes -- verified against a real
+    # ~/.claude.json, whose server keys are ['type','command','args','env'].
+    # This module's contract is that a user pastes an existing config in
+    # unchanged, so ignoring it meant a pasted `{"type": "sse"}` server was
+    # recorded as "http" and routed to the streamable-HTTP session against
+    # an SSE endpoint. stdio and http happen to coincide with the inference
+    # below, so only sse broke -- silently, with an error the user could not
+    # explain from their own file (CR-G7).
+    transport = (
+        body.get("transport") or body.get("type") or ("stdio" if command is not None else "http")
+    )
     if transport not in VALID_TRANSPORTS:
         msg = (
             f"{path}: server '{name}' has transport {transport!r}; "
@@ -124,6 +134,8 @@ def write_mcp_json(path: Path, entries: Sequence[ServerEntry]) -> None:
             if entry.headers:
                 body["headers"] = dict(entry.headers)
         body["transport"] = entry.transport
+        # Both spellings, so a file Rudra writes is one Claude Code reads.
+        body["type"] = entry.transport
         servers[entry.name] = body
 
     path = Path(path)

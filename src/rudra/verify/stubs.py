@@ -43,6 +43,12 @@ _EXTRA_SKIP_DIRS = frozenset({".git", ".rudra", ".idea", ".vscode"})
 SKIP_DIRS = ALL_SKIP_DIRS | _EXTRA_SKIP_DIRS
 _SKIP_DIRS = SKIP_DIRS
 
+# Mirrors filesystem/tree.py's split, and for the same measured reason
+# (A1.29). Kept as its own pair rather than imported so this module stays
+# readable on its own; tests/test_verify_stubs.py checks the two agree.
+_ROOT_ANCHORED_SKIP_DIRS = frozenset({"out", "build", "dist", "target", "coverage"})
+_ALWAYS_SKIP_DIRS = SKIP_DIRS - _ROOT_ANCHORED_SKIP_DIRS
+
 
 def _read(path: Path) -> str | None:
     try:
@@ -165,7 +171,18 @@ def source_files(project_path: Path) -> tuple[str, ...]:
         if not path.is_file() or path.suffix.lower() not in _SCANNED_SUFFIXES:
             continue
         relative = path.relative_to(project_path)
-        if any(part in _SKIP_DIRS for part in relative.parts[:-1]):
+        # Root-anchored for the five ambiguous names, any-depth for the
+        # rest -- the split filesystem/tree.py already makes, and for its
+        # reason (A1.29): `build`, `out`, `dist`, `target` and `coverage`
+        # are build output by convention AT THE PROJECT ROOT and ordinary
+        # English words anywhere else. Matched at every depth here, they
+        # hid `src/out/handler.py` from the gate while project_tree showed
+        # it to the model, and dropped such files from files_touched on the
+        # first task of a non-git project (CR-E8).
+        parts = relative.parts[:-1]
+        if any(part in _ALWAYS_SKIP_DIRS for part in parts):
+            continue
+        if parts and parts[0] in _ROOT_ANCHORED_SKIP_DIRS:
             continue
         found.append(str(relative))
 

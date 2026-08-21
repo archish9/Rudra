@@ -20,6 +20,9 @@ import pytest
 
 import rudra.config
 from rudra.config import get_config, reset_config
+from rudra.config.layers import ConfigError
+from rudra.config.loader import build_config
+from rudra.llm.providers import effective_base_url
 
 OLLAMA_ENV_VARS = (
     "OLLAMA_BASE_URL",
@@ -181,7 +184,13 @@ def test_defaults_are_ollama_at_32b(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     assert settings.provider == "ollama"
     assert settings.model == "qwen3:32b"
-    assert settings.base_url == "http://localhost:11434"
+    # The endpoint is the provider's default, not a value in DEFAULTS. It
+    # moved there with CR-D1: deep_merge merges per leaf and TOML has no
+    # null, so an Ollama URL sitting in DEFAULTS could not be cleared by a
+    # user table naming only `provider`/`model` -- and reached ChatAnthropic.
+    # What a user cares about is unchanged, so assert the effective value.
+    assert settings.base_url is None
+    assert effective_base_url(settings) == "http://localhost:11434"
 
 
 def test_role_specific_keys_beat_the_bare_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -315,3 +324,53 @@ def test_dotenv_still_defaults_to_the_cwd(tmp_path: Path, monkeypatch: pytest.Mo
 def test_ollama_config_is_gone() -> None:
     """C1.3: the class is deleted, not deprecated in place."""
     assert not hasattr(rudra.config, "OllamaConfig")
+
+
+def test_an_agent_boolean_must_actually_be_a_boolean(tmp_path: Path) -> None:
+    """CR-D3: `verbose` and `stream_tokens` were the only [agent] values
+    never type-checked, and they are coerced with bare bool() -- so
+    `verbose = "false"` was True, because a non-empty string is truthy. The
+    quoted spelling of "off" meant "on", silently turning on
+    untruncated-payload tracing and token streaming.
+    """
+    (tmp_path / ".rudra").mkdir()
+    for key in ("verbose", "stream_tokens"):
+        (tmp_path / ".rudra" / "config.toml").write_text(
+            f'[agent]\n{key} = "false"\n', encoding="utf-8"
+        )
+        with pytest.raises(ConfigError, match=f"{key} in .agent. must be true or false"):
+            build_config(project_root=tmp_path)
+
+
+def test_a_scalar_where_a_table_belongs_is_a_config_error_not_a_traceback(tmp_path: Path) -> None:
+    """CR-D5: `model = 5` raised `TypeError: 'int' object is not iterable`
+    from loader.py *before* validate() ran, and _load_config_or_exit catches
+    only ConfigError -- so `rudra config list` printed a full Rich traceback
+    for a malformed config file, which its own docstring forbids.
+    """
+    (tmp_path / ".rudra").mkdir()
+    for body, expected in (
+        ("model = 5\n", "must be a table of roles"),
+        ("agent = 5\n", "must be a table of settings"),
+    ):
+        (tmp_path / ".rudra" / "config.toml").write_text(body, encoding="utf-8")
+        with pytest.raises(ConfigError, match=expected):
+            build_config(project_root=tmp_path)
+
+
+def test_an_unrecognised_boolean_env_var_is_refused_not_read_as_true(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """CR-D4: _as_bool was `raw not in {"false","0","no","off",""}`, so
+    anything unrecognised was True -- and it backs RUDRA_SHELL_IN_AUTO, the
+    single opt-in that lets an unattended --auto run execute arbitrary
+    shell. `RUDRA_SHELL_IN_AUTO=flase` silently meant yes. A typo must not
+    fail in the permissive direction.
+    """
+    monkeypatch.setenv("RUDRA_SHELL_IN_AUTO", "flase")
+    with pytest.raises(ConfigError, match="expected true or false"):
+        build_config(project_root=tmp_path)
+
+    for word, expected in (("true", True), ("on", True), ("off", False), ("0", False)):
+        monkeypatch.setenv("RUDRA_SHELL_IN_AUTO", word)
+        assert build_config(project_root=tmp_path).tools.shell_in_auto is expected

@@ -35,9 +35,17 @@ _SECRET_NAME = r"[A-Za-z0-9_.-]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL)[
 _ASSIGNMENT = re.compile(
     rf"(?P<name>\b{_SECRET_NAME}\b)"
     r"(?P<sep>\s*[:=]\s*)"
-    r"(?P<quote>['\"]?)"
+    r"(?:"
+    # Quoted: the value may contain spaces. A passphrase or a connection
+    # string is exactly the kind of secret that does, and the unquoted
+    # branch's `[^\s'\"]+` could never match one -- so
+    # `PASSWORD = "hunter two"` passed through untouched into the console,
+    # the transcript and debug.jsonl. A quoted value is the one case where
+    # the delimiters say unambiguously where the secret ends (CR-G9).
+    r"(?P<quote>['\"])(?P<qvalue>[^'\"\n]+)(?P=quote)"
+    r"|"
     r"(?P<value>[^\s'\"]+)"
-    r"(?P=quote)",
+    r")",
     re.IGNORECASE,
 )
 """`NAME=value`, `NAME: value`, quoted or not. The NAME is kept: redacting
@@ -91,7 +99,10 @@ def redact(text: str) -> str:
         return text
 
     def _assignment(match: re.Match[str]) -> str:
-        if _is_numeric(match.group("value")):
+        # Either branch of the pattern may have matched; only one carries a
+        # value (CR-G9).
+        value = match.group("qvalue") or match.group("value") or ""
+        if _is_numeric(value):
             return match.group(0)
         return f"{match.group('name')}{match.group('sep')}{REDACTED}"
 

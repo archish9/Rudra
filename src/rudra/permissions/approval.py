@@ -21,7 +21,13 @@ from rich.panel import Panel
 from rudra.permissions.audit import AuditLog
 from rudra.permissions.diff import render
 from rudra.permissions.grants import SessionGrants
-from rudra.permissions.rules import PermissionEngine, Rule, gated_arg
+from rudra.permissions.rules import (
+    SUBSTITUTION_MARKS,
+    PermissionEngine,
+    Rule,
+    command_segments,
+    gated_arg,
+)
 
 MAX_APPROVAL_ROUNDS = 50
 
@@ -46,6 +52,12 @@ def suggest_grant(tool: str, arg: str | None) -> Rule:
     if arg is None:
         return Rule(tool, None)
     if tool == "execute":
+        # A chained command gets a grant for the exact string and nothing
+        # more. `{first}*` on `pytest -q; rm -rf ~` would mint a rule whose
+        # own prefix is innocent, and the user approved this command, not
+        # this command's first word plus anything (CR-B1).
+        if len(command_segments(arg)) > 1 or any(mark in arg for mark in SUBSTITUTION_MARKS):
+            return Rule(tool, arg.strip())
         first = arg.strip().split()
         return Rule(tool, f"{first[0]}*") if first else Rule(tool, None)
     return Rule(tool, arg)
@@ -165,6 +177,8 @@ async def _stream_with_retry(
     last: BaseException | None = None
 
     mode: Any = ["values", "messages"] if stream_tokens else "values"
+    # Partial line per role, so redaction sees whole credentials (CR-G6).
+    held: dict[str, str] = {}
 
     for attempt in range(len(delays) + 1):
         yielded = False
@@ -176,10 +190,12 @@ async def _stream_with_retry(
                         continue
                     kind, chunk = tagged
                     if kind == "messages":
-                        _emit_token(chunk, trace=trace, role=role)
+                        _emit_token(chunk, trace=trace, role=role, held=held)
                         continue
                 yielded = True
                 yield chunk
+            # Whatever the last line never terminated.
+            _flush_tokens(held.pop(role, ""), trace=trace, role=role)
             return
         except Exception as error:  # noqa: BLE001 -- re-raised below
             if yielded or not is_transient(error) or attempt == len(delays):
@@ -209,18 +225,61 @@ def _tagged(chunk: Any) -> tuple[str, Any] | None:
     return "values", chunk
 
 
-def _emit_token(chunk: Any, *, trace: Any, role: str) -> None:
-    """Turn one streamed message delta into an AI_TEXT event.
+# A secret never spans a newline, so a line is the smallest unit that can be
+# redacted correctly -- see _emit_token.
+_MAX_HELD_CHARS = 4000
+
+
+def _emit_token(chunk: Any, *, trace: Any, role: str, held: dict[str, str] | None = None) -> None:
+    """Turn streamed message deltas into AI_TEXT events, one line at a time.
 
     Deltas arrive as (message_chunk, metadata). Empty content is dropped:
     a tool-calling turn streams empty deltas, and one blank line each
     would bury the trace this exists to improve.
+
+    Buffered to a line boundary because redaction happens here, and
+    redacting each delta in isolation does not work: the patterns need the
+    whole credential in one string. Measured -- one key split across three
+    deltas gave `OPENROUTER_API_KEY=<redacted>` then `-or-v1-dead` then
+    `beefcafebabe1234` unchanged, so the rendered trace carried all but two
+    characters of the key into the console, the always-on transcript and
+    debug.jsonl. Transcripts are safe to write by default ONLY because
+    redaction happens where the event is built, and this was the second
+    build site (CR-G6). A line is the right unit: redact.py's patterns
+    (`sk-...`, `NAME = value`) cannot span a newline, and holding less than
+    a line is what let the key through.
     """
     if trace is None:
         return
     message = chunk[0] if isinstance(chunk, tuple) and chunk else chunk
     text = str(getattr(message, "content", "") or "")
-    if not text.strip():
+    if not text:
+        return
+
+    if held is None:
+        _flush_tokens(text, trace=trace, role=role)
+        return
+
+    buffered = held.get(role, "") + text
+    # A provider that streams a very long line must not be buffered without
+    # bound; flushing early risks a split credential, so the cut is made at
+    # the last whitespace, which no pattern's value crosses.
+    if "\n" not in buffered and len(buffered) > _MAX_HELD_CHARS:
+        cut = buffered.rfind(" ")
+        if cut > 0:
+            _flush_tokens(buffered[:cut], trace=trace, role=role)
+            held[role] = buffered[cut:]
+            return
+
+    lines = buffered.split("\n")
+    held[role] = lines.pop()
+    if lines:
+        _flush_tokens("\n".join(lines) + "\n", trace=trace, role=role)
+
+
+def _flush_tokens(text: str, *, trace: Any, role: str) -> None:
+    """Redact one complete span of streamed text and emit it."""
+    if trace is None or not text.strip():
         return
     from rudra.trace.events import TraceEvent, TraceKind
     from rudra.trace.redact import redact

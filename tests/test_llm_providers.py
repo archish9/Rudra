@@ -14,9 +14,11 @@ it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
+from rudra.config.loader import build_config
 from rudra.llm.errors import (
     MissingApiKeyError,
     ModelCapabilityError,
@@ -176,3 +178,31 @@ def test_all_errors_share_one_base() -> None:
     assert issubclass(UnknownProviderError, ModelConfigError)
     assert issubclass(MissingApiKeyError, ModelConfigError)
     assert issubclass(ModelCapabilityError, ModelConfigError)
+
+
+def test_a_hosted_provider_never_inherits_the_ollama_endpoint(tmp_path: Path) -> None:
+    """CR-D1: DEFAULTS carried `base_url = http://localhost:11434`, and
+    deep_merge merges per LEAF -- so a user table naming only provider,
+    model and api_key_env (exactly the Anthropic config the docs publish,
+    saying "No base_url needed") kept the Ollama URL and sent every request
+    from every role to the local port. TOML has no null, so there was no way
+    to unset it. Same story for max_output_tokens: 131072 is an Ollama
+    num_predict value, forwarded as `max_tokens` above every Anthropic and
+    OpenAI model's cap (CR-D2).
+    """
+    (tmp_path / ".rudra").mkdir()
+    (tmp_path / ".rudra" / "config.toml").write_text(
+        "[model.default]\n"
+        'provider = "anthropic"\n'
+        'model = "claude-sonnet-4-5"\n'
+        'api_key_env = "ANTHROPIC_API_KEY"\n',
+        encoding="utf-8",
+    )
+
+    settings = build_config(project_root=tmp_path).model_for("default")
+    kwargs = PROVIDERS[settings.provider].build_kwargs(settings)
+
+    assert "base_url" not in kwargs
+    assert "max_tokens" not in kwargs
+    # ...while an Ollama role still reaches the local daemon.
+    assert PROVIDERS["ollama"].default_base_url == "http://localhost:11434"

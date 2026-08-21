@@ -117,6 +117,16 @@ def validate(
             raise ConfigError(f"[{section}] is {RESERVED_SECTIONS[section]}.")
         if section not in _TOP_LEVEL:
             raise ConfigError(f"Unknown section [{section}].{_suggest(section, _TOP_LEVEL)}")
+        # Shape, not just name. Everything below iterates these as tables,
+        # so a scalar (`model = 5`) raised `TypeError: 'int' object is not
+        # iterable` out of validate() -- and _load_config_or_exit catches
+        # only ConfigError, so the user got a full traceback for a
+        # malformed config file, which its own docstring says must never
+        # happen (CR-D5).
+        if not isinstance(merged[section], dict):
+            raise ConfigError(
+                f"[{section}] must be a table of settings, not {type(merged[section]).__name__}."
+            )
 
     for role, settings in merged.get("model", {}).items():
         if not isinstance(settings, dict):
@@ -152,6 +162,16 @@ def validate(
     for key in agent:
         if key not in _AGENT_KEYS:
             raise ConfigError(f"Unknown key '{key}' in [agent].{_suggest(key, _AGENT_KEYS)}")
+
+    # The two booleans were the only [agent] values never type-checked, and
+    # they are coerced with bare bool() -- so `verbose = "false"` was True,
+    # because a non-empty string is truthy. The quoted spelling of "off"
+    # meant "on", silently enabling untruncated-payload tracing and token
+    # streaming. Every other section already rejects a wrong type (CR-D3).
+    for key in ("verbose", "stream_tokens"):
+        value = agent.get(key)
+        if value is not None and not isinstance(value, bool):
+            raise ConfigError(f"{key} in [agent] must be true or false, got {value!r}.")
 
     attempts = agent.get("max_fix_attempts")
     if attempts is not None and (
@@ -385,6 +405,7 @@ def build_config(
     permission_mode: str | None = None,
     allow_shell: bool | None = None,
     allow_mcp: bool | None = None,
+    stream_tokens: bool | None = None,
 ) -> Config:
     """Read all five layers, merge, validate, construct."""
     root = Path(project_root) if project_root is not None else Path.cwd()
@@ -398,6 +419,18 @@ def build_config(
     project = project_toml_layer(root)
 
     # Roles the env layer must recognise = builtin plus whatever TOML declared.
+    # Guarded, because this runs BEFORE validate(): a scalar `model = 5` in
+    # either file raised `TypeError: 'int' object is not iterable` here,
+    # never reaching the ConfigError that _load_config_or_exit knows how to
+    # print (CR-D5). Naming the file is worth the extra branch -- the user
+    # has two config files and the error must say which one is wrong.
+    for label, layer in (("user", user), ("project", project)):
+        section = layer.get("model")
+        if section is not None and not isinstance(section, dict):
+            raise ConfigError(
+                f"[model] in the {label} config must be a table of roles, "
+                f"not {type(section).__name__}."
+            )
     declared = {*BUILTIN_ROLES, *user.get("model", {}), *project.get("model", {})}
 
     ordered = [
@@ -405,7 +438,16 @@ def build_config(
         ("user", user),
         ("project", project),
         ("env", env_layer(declared)),
-        ("cli", cli_layer(verbose, permission_mode, allow_shell, allow_mcp=allow_mcp)),
+        (
+            "cli",
+            cli_layer(
+                verbose,
+                permission_mode,
+                allow_shell,
+                allow_mcp=allow_mcp,
+                stream_tokens=stream_tokens,
+            ),
+        ),
     ]
     merged, provenance = deep_merge(ordered)
 
@@ -456,6 +498,7 @@ def get_config(
     permission_mode: str | None = None,
     allow_shell: bool | None = None,
     allow_mcp: bool | None = None,
+    stream_tokens: bool | None = None,
 ) -> Config:
     """Return the process-wide Config, loading it on first use.
 
@@ -471,6 +514,7 @@ def get_config(
             permission_mode=permission_mode,
             allow_shell=allow_shell,
             allow_mcp=allow_mcp,
+            stream_tokens=stream_tokens,
         )
     return _config
 

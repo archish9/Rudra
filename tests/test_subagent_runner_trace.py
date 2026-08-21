@@ -30,7 +30,9 @@ def _context(sink, monkeypatch, chunks):
             yield chunk
 
     monkeypatch.setattr("rudra.subagents.runner.run_with_approvals", fake_stream)
-    monkeypatch.setattr("rudra.subagents.runner.build_agent", lambda spec, context: object())
+    monkeypatch.setattr(
+        "rudra.subagents.runner.build_agent", lambda spec, context, task="": object()
+    )
 
     return SubagentContext(
         project_path=Path("."),

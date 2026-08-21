@@ -143,6 +143,24 @@ async def test_an_escalating_gate_stops_the_whole_run(monkeypatch, context):
     outcome, task, _ = await run_one(context)
     assert outcome is Outcome.STOP_RUN
     assert task.status is not TaskStatus.DONE
+    # CR-C1: and specifically PENDING, not IN_PROGRESS. Ledger.resumable()
+    # excludes IN_PROGRESS on purpose, so a task left there is the one task
+    # `--continue` will never retry -- A1.93 on the STOP_RUN path. The
+    # cancel handler already does this; the two paths must not disagree.
+    assert task.status is TaskStatus.PENDING
+
+
+async def test_a_stopped_run_leaves_its_task_resumable(monkeypatch, context):
+    """CR-C1, measured where it bites: on disk, through Ledger.resumable()."""
+
+    async def broken(name, prompt, *, context, thread_id=None):
+        return SubagentResult(name=name, text="", ok=False, error="provider unreachable")
+
+    monkeypatch.setattr(engine, "run_subagent", broken)
+    outcome, task, ledger = await run_one(context)
+
+    assert outcome is Outcome.STOP_RUN
+    assert [t.id for t in ledger.resumable()] == [task.id]
 
 
 async def test_a_subagent_error_stops_the_whole_run(monkeypatch, context):

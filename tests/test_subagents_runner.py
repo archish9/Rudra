@@ -61,7 +61,7 @@ def call(name, **args):
 
 @pytest.fixture
 def patched(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context: object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
     return make_context(tmp_path)
 
 
@@ -96,7 +96,7 @@ async def test_the_last_non_empty_message_wins(monkeypatch, patched):
 
 
 async def test_a_build_failure_is_reported_not_raised(monkeypatch, patched):
-    def boom(spec, context):
+    def boom(spec, context, task=""):
         raise RuntimeError("no provider package installed")
 
     monkeypatch.setattr(runner, "build_agent", boom)

@@ -89,8 +89,32 @@ def _parse_status(text: str) -> list[FileStatus]:
         path = line[3:]
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
-        entries.append(FileStatus(index=line[0], worktree=line[1], path=path.strip('"')))
+        entries.append(FileStatus(index=line[0], worktree=line[1], path=_unquote(path)))
     return entries
+
+
+def _unquote(field: str) -> str:
+    """Decode git's C-quoting, which `.strip('"')` did not.
+
+    `git status --porcelain` C-quotes any path needing it, so `café.py`
+    arrives as `"caf\303\251.py"`. Stripping the quotes alone yielded the
+    literal `caf\303\251.py`, which does not exist on disk -- so `rudra
+    verify` handed a nonexistent path to the syntax stage, and in the loop
+    `git_snapshot` digested an absent file, making a real edit invisible and
+    every attempt read as "the coder wrote nothing" (the A1.66 class, on any
+    project with a non-ASCII filename). filesystem/tree.py already gets this
+    right by using -z (CR-E3).
+    """
+    if not (field.startswith('"') and field.endswith('"') and len(field) >= 2):
+        return field
+    inner = field[1:-1]
+    try:
+        # The octal escapes are UTF-8 BYTES, so decode the escapes to
+        # latin-1 code points first, then reinterpret those bytes as UTF-8.
+        raw = inner.encode("latin-1", "backslashreplace").decode("unicode_escape")
+        return raw.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return inner
 
 
 def _is_users_change(path: str) -> bool:
@@ -172,7 +196,7 @@ def status(
     console: Console,
     cfg: Any,
     all_untracked: bool = False,
-) -> list[FileStatus]:
+) -> list[FileStatus] | None:
     """Parsed `git status --porcelain`, including Rudra's own `.rudra/`.
 
     Unfiltered on purpose: this reports what git reports. `is_clean` is the
@@ -191,7 +215,14 @@ def status(
     if all_untracked:
         argv.append("--untracked-files=all")
     result = _run(project_path, argv, gate=gate, console=console, cfg=cfg)
-    return _parse_status(result.stdout) if result.ok else []
+    # None, not [] -- "git failed" and "nothing changed" are different
+    # answers and the callers already distinguish them for the not-a-repo
+    # case. Returning [] on a corrupt index, a `dubious ownership` refusal
+    # that still lets rev-parse through, or an ENOMEM made `rudra verify`
+    # scan zero files and report "all 5 stages ran clean" over an unexamined
+    # tree, and made every loop attempt read as "the coder wrote nothing"
+    # (CR-E12).
+    return _parse_status(result.stdout) if result.ok else None
 
 
 def diff(
@@ -222,9 +253,21 @@ def diff(
     if not result.ok:
         return result.stderr.strip() or "git diff failed."
 
-    lines = result.stdout.splitlines()
+    return cap_diff(result.stdout, max_lines)
+
+
+def cap_diff(text: str, max_lines: int) -> str:
+    """Bound a diff to `max_lines`, saying how much was dropped.
+
+    Shared, because git_tools.git_diff has a second branch -- the one for a
+    path outside the project root -- that returned `result.stdout` raw. The
+    module docstring says the tool earns its place solely by bounding
+    output ("an uncapped diff is exactly what raw `execute` does badly"),
+    and that branch did not (CR-B8).
+    """
+    lines = text.splitlines()
     if len(lines) <= max_lines:
-        return result.stdout
+        return text
     kept = "\n".join(lines[:max_lines])
     return f"{kept}\n\n[diff truncated: {len(lines) - max_lines} more lines]"
 

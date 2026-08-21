@@ -30,7 +30,9 @@ class SessionGrants:
         `allow` entry would.
         """
         for rule in self._rules:
-            if rule_matches(rule, tool, absolute, relative):
+            # permissive: a grant is consent, and consent to `pytest` is not
+            # consent to whatever a `;` chains after it (CR-B1).
+            if rule_matches(rule, tool, absolute, relative, permissive=True):
                 return rule
         return None
 
