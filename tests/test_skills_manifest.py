@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+import pytest
+
 from rudra.skills.manifest import compute_manifest, verify_manifest, write_manifest
 
 BUNDLE_ROOT = Path(__file__).parent.parent / "src" / "rudra" / "skills" / "bundles" / "superpowers"
@@ -74,3 +76,42 @@ def test_vendored_license_is_present_and_mit() -> None:
     text = (BUNDLE_ROOT / "LICENSE").read_text(encoding="utf-8")
     assert "MIT License" in text
     assert "Jesse Vincent" in text
+
+
+def test_the_vendored_corpus_is_pinned_to_lf_line_endings():
+    """CR-X2: the manifest hashes RAW BYTES, so line endings are content.
+
+    Git's default on Windows is core.autocrlf=true, which rewrites LF to
+    CRLF on checkout. Without a .gitattributes saying otherwise, every file
+    under skills/bundles/ hashed differently on a Windows clone, so
+    verify_manifest reported all 55 as `content changed:` and the cache key
+    moved -- a checkout artefact read as tampering.
+
+    This asserts the protection rather than the symptom, because the
+    symptom only appears on a platform this suite has never run on (CR-X3).
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    attributes = repo_root / ".gitattributes"
+
+    assert attributes.is_file(), ".gitattributes is what pins this; it is missing"
+    text = attributes.read_text(encoding="utf-8")
+    assert "src/rudra/skills/bundles/** text eol=lf" in text
+
+
+def test_no_vendored_file_currently_holds_a_crlf_line_ending():
+    """The other half: the bytes on disk must match what the rule promises.
+
+    A file committed with CRLF before the rule existed would still hash
+    wrong everywhere, and .gitattributes alone would not fix it.
+    """
+    bundles = Path(__file__).resolve().parent.parent / "src" / "rudra" / "skills" / "bundles"
+    if not bundles.is_dir():  # pragma: no cover - corpus always ships
+        pytest.skip("no vendored corpus")
+
+    offenders = [
+        str(path.relative_to(bundles))
+        for path in bundles.rglob("*")
+        if path.is_file() and b"\r\n" in path.read_bytes()
+    ]
+
+    assert offenders == []

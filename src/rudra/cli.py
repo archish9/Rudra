@@ -1027,6 +1027,7 @@ def verify_command(
     """Run the deterministic verification gate: syntax, lint, typecheck, tests, stubs."""
     import json as json_module
 
+    from rudra.agent.main_agent import route_prefixes
     from rudra.permissions import build_gate
     from rudra.state.paths import ensure_layout
     from rudra.verify import (
@@ -1046,7 +1047,10 @@ def verify_command(
     project_path = get_project_path(project_dir)
     cfg = _load_config_or_exit(project_dir)
     ensure_layout(project_path)
-    gate = build_gate(cfg, project_path)
+    # `rudra verify` mounts no skill routes -- it runs commands and reads
+    # changed files, it does not build an agent -- so the artifacts route is
+    # the whole set here (CR-B4).
+    gate = build_gate(cfg, project_path, route_prefixes())
     quiet = Console(quiet=True) if as_json else console
 
     if changed:

@@ -78,6 +78,22 @@ deny  = []
 # Rudra itself never commits. The agent can still reach git through the shell,
 # so uncomment this if you would rather it could not:
 # deny = ["execute:git commit*", "execute:git push*", "execute:git reset --hard*"]
+#
+# What a deny pattern like that does and does not catch. It is matched
+# against every command in a chain, and against a canonicalised spelling of
+# each -- so all of these are caught:
+#   git push ...              git  push ...          (extra whitespace)
+#   /usr/bin/git push ...     git.exe push ...       (path, .exe)
+#   sh -c 'git push ...'      env FOO=1 git push     (wrapper, env(1))
+#   GIT_DIR=.git git push     echo hi && git push    (assignment, chaining)
+# It does NOT catch a global flag written before the subcommand:
+#   git -C . push ...   git --git-dir=.git push ...
+# Flags are left alone on purpose -- stripping them would make an
+# allow = ["execute:git status"] match `git -C /other/repo status`, which is
+# a different repository. Write those spellings out if you need them:
+#   deny = ["execute:git push*", "execute:git -* push*", "execute:git --* push*"]
+# A patternless deny = ["execute"] blocks the shell outright, and
+# [tools] shell = false removes the tool.
 
 # Built-in rules denied in every mode, including --auto. Name one here to
 # switch it off; the run prints which are disabled, and calls they would

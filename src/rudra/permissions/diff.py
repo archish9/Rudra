@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rudra.compat.virtual_paths import virtual_to_host
+
 MAX_RENDER_BYTES = 1_000_000
 NEW_FILE_PREVIEW_LINES = 10
 
@@ -30,8 +32,17 @@ class DiffPreview:
 
 
 def _resolve(project_root: Path, raw: str) -> Path:
-    candidate = Path(raw)
-    return candidate if candidate.is_absolute() else Path(project_root) / candidate
+    """The real file this tool call will touch.
+
+    Mirrors PermissionEngine._resolve through the same shared function, and
+    must: the backend is virtual_mode=True, so `/src/app.py` is
+    `<project>/src/app.py`, not the host's. Reading it as a host path made
+    the approval panel stat and preview a DIFFERENT file from the one the
+    write would change -- the user was shown one thing and approved
+    another (CR-B4).
+    """
+    host = virtual_to_host(raw, Path(project_root))
+    return host if host is not None else Path(raw)
 
 
 def _read(path: Path) -> str | None:

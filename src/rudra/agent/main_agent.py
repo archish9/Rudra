@@ -562,13 +562,16 @@ async def create_main_agent(
     # 9c, so the normalizer's planned-filename hint has nothing to read
     # (A1.65). Route prefixes are real mount points, not hallucinated
     # absolute paths (A1.79).
-    install_path_normalizer(project_path, route_prefixes=route_prefixes(sources))
+    routes = route_prefixes(sources)
+    install_path_normalizer(project_path, route_prefixes=routes)
     filesystem_backend = build_backend(cfg, project_path, sources)
 
     # Shell and the permission layer are constructed together, and neither
     # is optional. Section E hard gate 2: LocalShellBackend must never ship
     # without the gate in the same step.
-    gate = build_gate(cfg, project_path)
+    # Same `routes` the backend mounts and the normalizer is told to leave
+    # alone, so all three resolve a path identically (CR-B4).
+    gate = build_gate(cfg, project_path, routes)
 
     # MCP is opt-in and no server ships enabled (S13.4). A malformed
     # .mcp.json warns and disables MCP rather than failing the run: D19

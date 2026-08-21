@@ -12,6 +12,7 @@ from rudra.permissions.rules import (
     WRAPPED_EXECUTE_TOOLS,
     PermissionEngine,
     Rule,
+    canonical_command,
     gated_arg,
     parse_rule,
 )
@@ -180,8 +181,52 @@ def test_the_floor_beats_a_user_allow_rule(tmp_path):
 
 
 def test_the_floor_holds_under_auto_mode(tmp_path):
-    decision = engine(tmp_path, mode="auto").decide("write_file", {"file_path": "/etc/hosts"})
+    """A real escape, not a virtual absolute path.
+
+    CR-B4 changed what `outside-root` means. Every backend Rudra builds is
+    virtual_mode=True, so `/etc/hosts` is `<project>/etc/hosts` and the
+    host's file is untouched -- measured against the pinned backend. The
+    gate now agrees with the backend, so the floor fires on paths that
+    genuinely leave the root: traversal, and symlinks pointing out.
+    """
+    decision = engine(tmp_path, mode="auto").decide("write_file", {"file_path": "../../etc/hosts"})
     assert (decision.effect, decision.source) == ("deny", "floor")
+
+
+def test_a_virtual_absolute_path_is_inside_the_project(tmp_path):
+    """The other half of CR-B4: what the floor must NOT deny any more.
+
+    deepagents' own tool description tells the model "Absolute path where
+    the file should be written. Must be absolute, not relative." A model
+    that obeyed it was denied `<floor:outside-root>` -- the one floor rule
+    config refuses to let you disable -- for a write that would have landed
+    safely inside the project.
+    """
+    decision = engine(tmp_path, mode="auto").decide("write_file", {"file_path": "/src/app.py"})
+    assert decision.effect == "allow"
+
+
+def test_windows_and_posix_spellings_of_the_same_file_agree(tmp_path):
+    """Rudra runs on Windows, macOS and Linux, and the model guesses its
+    path style from training data rather than from the host OS -- so a
+    backslash spelling arrives on a mac and a forward-slash one on Windows.
+    Each must resolve to the same project-relative file on every platform,
+    or a deny rule fires for one spelling and not the other.
+    """
+    eng = engine(tmp_path, mode="auto", deny=("write_file:src/app.py",))
+
+    for spelling in ("src/app.py", r"src\app.py", "/src/app.py", "\\src\\app.py"):
+        assert eng.decide("write_file", {"file_path": spelling}).effect == "deny", spelling
+
+
+def test_a_foreign_drive_path_lands_inside_the_project(tmp_path):
+    """`C:\\other\\x.py` is not our root, so the backend keeps everything after
+    the drive anchor and writes `<project>/other/x.py`. The gate must say the
+    same -- neither denying it as an escape (it is not one) nor matching a
+    rule written for a different file."""
+    eng = engine(tmp_path, mode="auto", deny=("write_file:src/app.py",))
+
+    assert eng.decide("write_file", {"file_path": r"C:\other\x.py"}).effect == "allow"
 
 
 # -- floor_disable ---------------------------------------------------------
@@ -189,7 +234,7 @@ def test_the_floor_holds_under_auto_mode(tmp_path):
 
 def test_a_disabled_floor_rule_stops_denying(tmp_path):
     decision = engine(tmp_path, mode="auto", floor_disable=("outside-root",)).decide(
-        "write_file", {"file_path": "/tmp/sibling/out.txt"}
+        "write_file", {"file_path": "../sibling/out.txt"}
     )
     assert decision.effect == "allow"
 
@@ -197,7 +242,7 @@ def test_a_disabled_floor_rule_stops_denying(tmp_path):
 def test_a_disabled_floor_rule_is_still_reported_in_the_source(tmp_path):
     """Turning a rule off changes what Rudra blocks, not what it tells you."""
     decision = engine(tmp_path, mode="auto", floor_disable=("outside-root",)).decide(
-        "write_file", {"file_path": "/tmp/sibling/out.txt"}
+        "write_file", {"file_path": "../sibling/out.txt"}
     )
     assert decision.source == "floor-disabled"
     assert decision.rule == "<floor:outside-root>"
@@ -411,6 +456,120 @@ def test_a_deny_rule_fires_on_any_command_in_a_chain(tmp_path: Path) -> None:
     assert engine.decide("execute", {"command": "ls"}).effect == "allow"
     for chained in ("rm -rf ~", "echo hi; rm -rf ~", "true && rm -rf /tmp/x"):
         assert engine.decide("execute", {"command": chained}).effect == "deny", chained
+
+
+def test_a_deny_rule_fires_on_respellings_of_the_same_command(tmp_path: Path) -> None:
+    """OPEN-1: a shell does not care how a command was written, so neither
+    may the gate. `fnmatch` against the raw text does care -- measured
+    2026-08-21, five of these six evaded `execute:git push*`, and it is the
+    deny block Rudra's own template ships (`config/template.py`).
+    """
+    engine = PermissionEngine(
+        mode="auto",
+        allow=(),
+        deny=("execute:git push*",),
+        floor_disable=(),
+        project_root=tmp_path,
+        shell_in_auto=True,
+    )
+
+    for spelling in (
+        "git push origin main",  # the spelling the rule was written for
+        "git  push origin main",  # runs of whitespace
+        "/usr/bin/git push origin main",  # absolute binary
+        "sh -c 'git push origin main'",  # wrapper shell
+        'bash -c "git push origin main"',  # ...and its cousins
+        "GIT_DIR=.git git push origin main",  # leading env assignment
+        "env GIT_DIR=.git git push origin main",  # ...via env(1)
+        "git 'push' origin main",  # quoting a bare word
+    ):
+        assert engine.decide("execute", {"command": spelling}).effect == "deny", spelling
+
+    # Unrelated commands are still allowed: canonicalising must widen the
+    # deny rule, not turn it into a blanket ban on the binary.
+    for allowed in ("git status", "/usr/bin/git status", "sh -c 'git status'"):
+        assert engine.decide("execute", {"command": allowed}).effect == "allow", allowed
+
+
+def test_a_global_flag_before_the_subcommand_still_evades_deny(tmp_path: Path) -> None:
+    """The one spelling OPEN-1 leaves open, asserted so it is recorded rather
+    than forgotten.
+
+    `git -C . push` canonicalises to itself: canonicalisation normalises the
+    *binary* and the wrapper, never the flags. Dropping flags would fix this
+    case and break the allow side -- `git -C /other/repo status` would
+    canonicalise to `git status`, so an `allow = ["execute:git status"]`
+    would silently authorise a different repository. A deny that reaches
+    this spelling needs `execute:git -C * push*` written explicitly, or a
+    patternless `execute` rule.
+
+    If a future change makes this deny, that is an improvement: delete this
+    test rather than working around it.
+    """
+    engine = PermissionEngine(
+        mode="auto",
+        allow=(),
+        deny=("execute:git push*",),
+        floor_disable=(),
+        project_root=tmp_path,
+        shell_in_auto=True,
+    )
+
+    assert engine.decide("execute", {"command": "git -C . push origin main"}).effect == "allow"
+
+
+def test_canonicalisation_never_widens_a_permissive_rule(tmp_path: Path) -> None:
+    """OPEN-1's whole design constraint: canonicalisation drops information,
+    so it can only ADD matches. Added to deny that is strictly safer; added
+    to allow it would hand out consent the user never gave.
+    """
+    # `ask`, not `auto`: under `auto` the mode default allows everything, so
+    # every command comes back "allow" and the test would pass without
+    # measuring anything.
+    engine = PermissionEngine(
+        mode="ask",
+        allow=("execute:git status",),
+        deny=(),
+        floor_disable=(),
+        project_root=tmp_path,
+    )
+
+    assert engine.decide("execute", {"command": "git status"}).effect == "allow"
+    # Respellings do NOT inherit the grant -- each of these is a different
+    # command, and `git -C /other/repo status` is a different repository.
+    for respelling in (
+        "git  status",
+        "/usr/bin/git status",
+        "sh -c 'git status'",
+        "git -C /other/repo status",
+    ):
+        assert engine.decide("execute", {"command": respelling}).effect != "allow", respelling
+
+
+def test_canonical_command_normalises_by_shape_not_by_platform() -> None:
+    """CLAUDE.md §1 goal 8: branch on the shape of the input, never on
+    `sys.platform`. A Windows spelling has to canonicalise the same way on
+    macOS, or the rule that fires on one machine misses on another.
+    """
+    assert canonical_command("git  push   origin main") == "git push origin main"
+    assert canonical_command("/usr/bin/git push") == "git push"
+    assert canonical_command(r"C:\tools\git.exe push") == "git push"
+    assert canonical_command(r'"C:\Program Files\Git\git.exe" push') == "git push"
+    assert canonical_command(r"\\server\share\git.exe push") == "git push"
+    assert canonical_command("GIT_DIR=.git PAGER=cat git push") == "git push"
+    assert canonical_command("sh -c 'git push origin main'") == "git push origin main"
+    assert canonical_command("env FOO=1 git push") == "git push"
+
+
+def test_canonical_command_falls_back_to_the_raw_segment() -> None:
+    """Unbalanced quotes are what the naive segment split produces from a
+    quoted separator (`sh -c 'ls; git push'` splits mid-quote), so this path
+    is reached in normal operation, not just on malformed input. The raw
+    segment is still matched, so falling back loses nothing.
+    """
+    assert canonical_command("git push'") == "git push'"
+    assert canonical_command("") == ""
+    assert canonical_command("FOO=1") == "FOO=1"
 
 
 def test_a_path_alias_cannot_dodge_the_floor_or_a_deny_rule(tmp_path: Path) -> None:

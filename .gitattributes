@@ -1,0 +1,39 @@
+# Line endings, pinned. Rudra runs on Windows, macOS and Linux.
+#
+# Git's default on Windows is core.autocrlf=true, which rewrites LF to CRLF
+# on checkout. That is normally harmless, and here it was not: the vendored
+# skill corpus is verified by hashing each file's RAW BYTES
+# (src/rudra/skills/manifest.py), so a Windows clone changed all 55 files
+# under src/rudra/skills/bundles/ and `verify_manifest` reported every one
+# of them as `content changed:` -- reading a checkout artefact as tampering
+# and rebuilding the rendered corpus under a different cache key. Measured:
+# the same content as LF and as CRLF hashes to 0fc546b8… vs 8647ac91….
+# See TODO.md CR-X2.
+#
+# `text=auto eol=lf` means: detect text, normalise to LF in the repository,
+# and check out LF on every platform regardless of core.autocrlf.
+* text=auto eol=lf
+
+# Belt and braces for the corpus the manifest actually hashes. Stating it
+# explicitly means a future `* text=auto` change cannot silently reintroduce
+# CRLF here, which is the one place it breaks a correctness check rather
+# than just producing a noisy diff.
+src/rudra/skills/bundles/** text eol=lf
+
+# Shell scripts must keep LF even on Windows: a CRLF shebang line makes the
+# interpreter path unfindable (`/bin/sh\r: no such file or directory`).
+*.sh text eol=lf
+.githooks/* text eol=lf
+
+# Windows batch files are the converse -- cmd.exe wants CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary: never touch these.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.whl binary

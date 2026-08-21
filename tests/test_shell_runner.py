@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from rich.console import Console
 
 from rudra.permissions.audit import AuditLog
 from rudra.permissions.rules import PermissionEngine
-from rudra.shell.runner import CommandResult, run_gated
+from rudra.shell.runner import CommandResult, _kill_tree, _process_group_kwargs, run_gated
 
 
 class _Gate:
@@ -195,3 +197,51 @@ def test_a_deny_rule_matches_the_rendered_command(tmp_path: Path):
     )
     assert result.denied is True
     assert "definitely-blocked" in (result.denial_reason or "")
+
+
+def test_the_process_group_kwarg_matches_the_platform():
+    """CR-X1: POSIX and Windows spell this differently and neither accepts
+    the other's spelling.
+
+    Windows names the POSIX parameter `unused_start_new_session` in its own
+    `_execute_child` -- it accepts and silently ignores it -- so passing
+    only that left Windows with no process group to kill. Chosen by
+    capability (`CREATE_NEW_PROCESS_GROUP` exists only on Windows) rather
+    than by `sys.platform`, so the check is the same question as the OS.
+    """
+    kwargs = _process_group_kwargs()
+
+    if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        assert kwargs == {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        assert kwargs == {"start_new_session": True}
+
+
+def test_a_timeout_kills_the_child_even_without_posix_apis(tmp_path, monkeypatch):
+    """CR-X1: `os.killpg` and `os.getpgid` DO NOT EXIST on Windows.
+
+    The old reaper called them inside `except (ProcessLookupError,
+    PermissionError)`, which does not catch AttributeError -- so on Windows
+    a timeout raised out of run_gated, run_pipeline's blanket handler turned
+    it into an internal Rudra error, and the timeout ended the run it
+    existed to rescue. Simulated here by removing the POSIX APIs, because
+    the suite has never run on Windows (CR-X3).
+    """
+    monkeypatch.delattr(os, "killpg", raising=False)
+    monkeypatch.delattr(os, "getpgid", raising=False)
+    invoked: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        invoked.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+
+    try:
+        _kill_tree(process)  # must not raise
+    finally:
+        process.kill()
+        process.wait(timeout=5)
+
+    assert invoked and invoked[0][:2] == ["taskkill", "/F"]

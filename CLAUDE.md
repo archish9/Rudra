@@ -2,6 +2,16 @@
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is done and what is pending.
 
+**Two ledgers, and they are not interchangeable.** `TODO.md` is the *current*
+one: the 2026-08-21 code-review findings (`CR-*`), their evidence, and what
+was done about each. `TODO-old.md` is the Steps 0–16 build ledger — it owns
+**§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution
+order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item
+this file cites. When a reference below says §0, §F, U.7 or A1.46, it means
+`TODO-old.md`. Corrected 2026-08-21 (CR-DOC1): this file used to send every
+session to `TODO.md` §E for "which step to do next", and that section has not
+been in `TODO.md` since the ledger was replaced.
+
 ---
 
 ## 1. What Rudra Is
@@ -9,7 +19,7 @@ Context loaded into every fresh Claude Code session. Read `TODO.md` next — it 
 Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first alternative to Claude Code. It plans work, writes code, tests it, reviews it, and fixes it, while the user stays in control.
 
 - **Language:** Python 3.12+
-- **Agent framework:** [LangChain `deepagents`](https://github.com/langchain-ai/deepagents) — **`0.7.4`, installed and pinned exactly** (`pyproject.toml:30`), because `compat/deepagents_path.py` monkeypatches internals and `middleware/task_anchor.py` imports a private module. The upgrade from 0.4.12 is **done**; `TODO.md` §F records what changed. Corrected 2026-08-21 (CR-F3) — this line claimed 0.4.12 was installed and the upgrade was pending, and it is read by every session.
+- **Agent framework:** [LangChain `deepagents`](https://github.com/langchain-ai/deepagents) — **`0.7.4`, installed and pinned exactly** (`pyproject.toml:30`), because `compat/deepagents_path.py` monkeypatches internals and `middleware/task_anchor.py` imports a private module. The upgrade from 0.4.12 is **done**; `TODO-old.md` §F records what changed. Corrected 2026-08-21 (CR-F3) — this line claimed 0.4.12 was installed and the upgrade was pending, and it is read by every session.
 - **CLI:** Typer + Rich + prompt_toolkit
 - **Package:** `rudra`, entry point `rudra.cli:app` (`pyproject.toml:62`)
 - **License:** Apache-2.0 declared in `pyproject.toml:10`; full text on disk at `LICENSE` (added 2026-08-10, A4.2). `NOTICE` landed with Step 11a (A4.7), generated from the bundle registry; `CONTRIBUTING.md` and `SECURITY.md` landed with Step 16
@@ -24,21 +34,42 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 5. **Ship [obra/superpowers](https://github.com/obra/superpowers)** as a default, integrated methodology layer (MIT, Jesse Vincent).
 6. **Ship [MemPalace](https://github.com/MemPalace/mempalace)** as default long-term memory (MIT; `pip install mempalace`; ChromaDB/SQLite/Milvus/Qdrant/pgvector backends; exposes 36 MCP tools).
 7. **Local-first**, with Claude Code-grade capability for production work.
+8. **Runs on Windows, macOS and Linux.** Owner requirement, stated 2026-08-21
+   and non-negotiable. Portability is a correctness property, not a
+   nice-to-have, and the way it is kept is *structural* rather than tested:
+   path handling resolves by **shape** rather than host OS
+   (`compat/virtual_paths.py` — `C:\...`, UNC, `\x` and `/x` all resolve
+   the same everywhere), process control picks its spelling by **capability**
+   rather than `sys.platform` (`shell/runner.py` asks whether
+   `CREATE_NEW_PROCESS_GROUP` exists, which is the same question as asking
+   the OS), and `.gitattributes` pins line endings because the vendored skill
+   corpus is verified by hashing raw bytes.
+
+   **Write new code the same way: branch on capability or on the shape of
+   the input, never on `sys.platform`.** A capability check is testable on
+   every machine — the Windows branch of `shell/runner.py` is exercised on
+   macOS by deleting `os.killpg` — and a `sys.platform` branch is not.
+
+   **The honest limit:** the suite has only ever been executed on macOS, and
+   there is **no CI and none is planned** (the owner declined it on
+   2026-08-21; `CONTRIBUTING.md` accepts no pull requests, so a PR-triggered
+   gate would guard nothing). Portability here is held by construction and by
+   simulation, not by execution on three platforms — see `TODO.md` CR-X3.
 
 ---
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session.** It is the single source of truth for status. §0 = locked decisions, §E = execution order (which step to do next), §F = deepagents 0.7.4 upgrade findings.
+1. **Read `TODO.md` at the start of every session** — the current ledger, for what is open now. For the historical decisions and step order, read `TODO-old.md`: §0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings. See the note at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
-5. **Planning sessions produce self-contained implementation plans** that a fresh session can execute without this conversation's context. Write them under `plans/`.
+5. **Planning sessions produce self-contained implementation plans** that a fresh session can execute without this conversation's context. Write them under `docs/superpowers/plans/`, which is where the existing ones live — `plans/` was named here for a directory that has never existed (CR-DOC6).
 6. When done with a work item, update `TODO.md` in the same commit as the code.
 
 ---
 
-## 3. Current Architecture (as of 2026-08-13, Step 10a)
+## 3. Current Architecture (through Step 16, plus the 2026-08-21 review)
 
 ```
 src/rudra/
@@ -152,7 +183,14 @@ src/rudra/
 │                           through a CompositeBackend route, because skills
 │                           live outside the project root while the backend
 │                           is rooted at it (D13)
-└── compat/                 monkeypatches + version guard into deepagents internals
+└── compat/                 monkeypatches + version guard into deepagents
+                            internals, and virtual_paths.py — the ONE
+                            function that says which real file a
+                            model-written path names, shared by the gate,
+                            the approval preview and the backend so they
+                            cannot disagree (CR-B4). Cross-platform by
+                            shape, not by host OS: `C:\...`, UNC, `\x`
+                            and `/x` all resolve on every platform
 ```
 
 **Permission flow (Step 7).** `build_gate(cfg, project_path)` returns a `Gate`
@@ -219,13 +257,13 @@ tools, so **no prompt names a state path at all**.
 
 ## 4. What deepagents Already Provides (and Rudra ignores)
 
-Table below is verified against **installed 0.7.4**. The 0.4.12 → 0.7.4 delta — new `permissions=`, `RubricMiddleware`, provider/harness profiles, `TodoListMiddleware` no longer auto-added, `write()` now overwrites — is recorded in `TODO.md` §F. `create_deep_agent()` accepts:
+Table below is verified against **installed 0.7.4**. The 0.4.12 → 0.7.4 delta — new `permissions=`, `RubricMiddleware`, provider/harness profiles, `TodoListMiddleware` no longer auto-added, `write()` now overwrites — is recorded in `TODO-old.md` §F. `create_deep_agent()` accepts:
 
 | Param | What it gives | Rudra uses it? |
 |---|---|---|
 | `model: str \| BaseChatModel` | `provider:model` resolved via `init_chat_model` (`_models.py:11`) | ⚠️ passes a `BaseChatModel` instance from `llm/factory.py` (Step 5) |
-| `skills: list[str]` | `SkillsMiddleware` — Anthropic Agent Skills spec, `<dir>/SKILL.md` + YAML frontmatter | ❌ **never used** — Step 11 |
-| `subagents: list[SubAgent]` | `SubAgentMiddleware` + the `task` tool | ✅ Step 9b: four specs in `subagents/registry.py`. **Rudra ships its own `general-purpose` to suppress the ungated one deepagents auto-adds** (`graph.py:751`). Nothing passes `subagents=` to a live agent yet — 9c owns the parent that delegates |
+| `skills: list[str]` | `SkillsMiddleware` — Anthropic Agent Skills spec, `<dir>/SKILL.md` + YAML frontmatter | ✅ Step 11/11a: `subagents/build.py:282` and `agent/planner_agent.py:463`. Corrected 2026-08-21 (CR-DOC4) — this read "never used" |
+| `subagents: list[SubAgent]` | `SubAgentMiddleware` + the `task` tool | ✅ Step 9b: four specs in `subagents/registry.py`. **Rudra ships its own `general-purpose` to suppress the ungated one deepagents auto-adds** (`graph.py:751`). Passed at `agent/main_agent.py:687`. Corrected 2026-08-21 (CR-DOC5) — this read "nothing passes `subagents=` yet", which stopped being true when 9c shipped |
 | `memory: list[str]` | `MemoryMiddleware`, AGENTS.md into system prompt | ⚠️ planner only |
 | `permissions: list[FilesystemPermission]` | `allow` / `deny` / `interrupt` path rules | ❌ **cannot be used** — raises on any execute-capable backend (U.7) |
 | `interrupt_on: dict` | `HumanInTheLoopMiddleware` — approval gates | ✅ Step 7: one entry per mutating tool, `when` calling Rudra's `PermissionEngine` |
@@ -237,7 +275,7 @@ Table below is verified against **installed 0.7.4**. The 0.4.12 → 0.7.4 delta 
 
 **Since Step 7 Rudra ships `CompositeBackend(default=LocalShellBackend(...))`, so `execute` works** and agents can run tests, linters, builds, and git. The composite also carries an `/artifacts/` route with `artifacts_root="/artifacts"`, because that root otherwise defaults to the backend root and deepagents would write `large_tool_results/` and `conversation_history/` into the user's project (**A1.45**).
 
-**`permissions=` is deliberately never passed.** It raises `NotImplementedError` on any execute-capable backend, and its `FilesystemOperation` is `('read','write')` only, so it never covered `execute` regardless. Rudra's own gate in `src/rudra/permissions/` does the whole job. See `TODO.md` **U.7** and **A1.46**; `tests/test_deepagents_contract.py::test_permissions_still_rejected_with_execute_backend` is the trigger that reopens U.7 if upstream lifts the restriction.
+**`permissions=` is deliberately never passed.** It raises `NotImplementedError` on any execute-capable backend, and its `FilesystemOperation` is `('read','write')` only, so it never covered `execute` regardless. Rudra's own gate in `src/rudra/permissions/` does the whole job. See `TODO-old.md` **U.7** and **A1.46**; `tests/test_deepagents_contract.py::test_permissions_still_rejected_with_execute_backend` is the trigger that reopens U.7 if upstream lifts the restriction.
 
 **Skills compatibility:** superpowers skills (`skills/<name>/SKILL.md` with `name:` + `description:` frontmatter — verified in the local plugin cache) match the format `SkillsMiddleware` parses. Superpowers can be dropped in as a skills source with no format conversion.
 
@@ -311,7 +349,7 @@ compact. Making the REPL session persistent is Step 15's call (`C9.1`–`C9.7`).
 
 ## 6. Configuration Design (decided 2026-08-05, shipped in Step 6)
 
-Owner decisions are recorded in `TODO.md` §0. Summary: TOML config, vendored superpowers, MemPalace Python API, permission mode `ask` by default with an `--auto` escape hatch, minimum local model 32B, `VirtualFileSystem` deleted.
+Owner decisions are recorded in `TODO-old.md` §0. Summary: TOML config, vendored superpowers, MemPalace Python API, permission mode `ask` by default with an `--auto` escape hatch, minimum local model 32B, `VirtualFileSystem` deleted.
 
 **Layered TOML, later layers override earlier:**
 1. Built-in defaults (shipped in package)
@@ -320,19 +358,25 @@ Owner decisions are recorded in `TODO.md` §0. Summary: TOML config, vendored su
 4. Environment variables (`RUDRA_*`)
 5. CLI flags
 
-**Live as of Step 7:** `[model.*]`, `[agent]`, `[permissions]`, `[compat]`,
-`[tools]`. `[skills]` and `[memory]` are **reserved** — writing one is a hard
-error naming the step that implements it (11 and 14). MCP stays in `.mcp.json`
-(Step 13). Unknown keys are fatal and suggest the nearest valid name, because
-the common case is a typo.
+**Every section is live:** `[model.*]`, `[agent]`, `[permissions]`,
+`[compat]`, `[tools]`, `[skills]`, `[mcp]`, `[memory]`. Nothing is reserved
+any more — `RESERVED_SECTIONS` is `{}`. Corrected 2026-08-21 (CR-DOC2): this
+said `[skills]` and `[memory]` were reserved and writing one was a hard
+error, which stopped being true when Steps 11 and 14 shipped. MCP *servers*
+still live in `.mcp.json` (Step 13); the `[mcp]` config section is about
+which of them Rudra will use. Unknown keys are fatal and suggest the nearest
+valid name, because the common case is a typo.
 
-`[tools]` carries `shell` and nothing else. The oversized-tool-result
-threshold that would naturally sit beside it is unreachable through
-`create_deep_agent` (**A1.47**), and an inert config key is worse than no key.
+`[tools]` carries `shell`, `shell_in_auto`, `auto_branch` and `test_timeout`
+— corrected 2026-08-21 (CR-DOC3), which said "`shell` and nothing else" a
+dozen lines above a block listing all four. The oversized-tool-result
+threshold that would naturally sit beside them is unreachable through
+`create_deep_agent` (**A1.47**), and an inert config key is worse than no
+key.
 
 `rudra init` scaffolds the file; `rudra config list` shows every effective
 value and the layer that set it. There is no `rudra config set` — see
-TODO.md S6.1.
+TODO-old.md S6.1.
 
 ```toml
 # .rudra/config.toml
@@ -365,9 +409,17 @@ mode  = "ask"                           # ask | auto | plan
 
 # Rules are "tool" or "tool:pattern", using REAL tool names:
 #   read_file  ls  glob  grep  write_file  edit_file  delete  execute  task
-# A pattern starting with / matches the resolved absolute path; otherwise
-# the project-relative path. For execute it matches the command string.
-# deny beats allow.
+# A pattern is matched against THREE spellings of the path -- the model's
+# own, the project-relative one, and the resolved host one -- so a rule
+# fires however the model wrote it. For execute it matches each shell
+# segment of the command. deny beats allow.
+#
+# Paths are VIRTUAL (CR-B4). Every backend is virtual_mode=True, so the
+# model's "/src/app.py" is <project>/src/app.py and its "C:\x\y.py" is
+# <project>/x/y.py -- the host's files are never reachable through the file
+# tools, on any OS. `compat/virtual_paths.py` is the single function that
+# answers this, and the gate, the approval preview and the backend all use
+# it, so they cannot disagree about which file a call touches.
 allow = ["execute:pytest*", "execute:git status"]
 deny  = ["execute:rm -rf *", "write_file:.env"]
 
@@ -375,7 +427,10 @@ deny  = ["execute:rm -rf *", "write_file:.env"]
 # it off; the run says so, and calls it would have blocked are still audited.
 #   git-dir · catastrophic-command
 # ("outside-root" is rejected here: the backend confines writes, not this
-#  rule, so disabling it would change nothing — see A1.50)
+#  rule, so disabling it would change nothing — see A1.50. Since CR-B4 it
+#  fires only on a REAL escape — `../..` traversal, or a symlink inside the
+#  project pointing out — never on a virtual absolute path, because those
+#  do not leave the project in the first place)
 floor_disable = []
 
 # Reserved, not yet accepted — listed to show where they will go:
@@ -396,7 +451,7 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 
 - `install_path_normalizer` (`compat/deepagents_path.py`) monkeypatches `validate_path` in **three** modules — `deepagents.backends.utils`, `deepagents.middleware.filesystem`, and `deepagents.middleware._fs_interrupt` — because each does `from ... import validate_path` and resolves the name in its own globals, so patching one is not enough. Corrected 2026-08-21 (CR-D8): this said two, and the module docstring claimed a grep had confirmed there were only two. `_fs_interrupt` is reached only when `permissions=` is passed, which Rudra never does (U.7), so patching it changes nothing today — it is patched so that U.7 does not reopen onto a half-applied file. `pyproject.toml:30` pins `deepagents==0.7.4` **exactly**, for this reason.
 - `OverwriteFilesystemBackend` **no longer exists** — `ls src/rudra/compat/` is `__init__.py`, `deepagents_path.py`, `path_constants.py`, `version_guard.py`. It was deleted with the 0.7.4 upgrade, whose `write()` overwrites by default (`backends/filesystem.py:489`); 0.4.12's refusal to overwrite was what sent small local models into a `write → error → edit no-op → write` loop. Its markdown-fence stripping lives on in `middleware/fix_write_params.py`. Corrected 2026-08-21 (CR-F4) — this bullet described the deleted module as live.
-- The 6 middlewares are all patches for qwen3:14b failure modes documented in their own docstrings. Minimum target model is now **32B** → 4 of the 6 were deleted in Step 2, and the 2 survivors are **opt-in behind `[compat]`, default off, as of Step 6** (C1.8). Disposition table: `TODO.md` §0.1. `FixWriteParamsMiddleware` is split rather than gated wholesale: fence-stripping and `filename`/`path` → `file_path` aliasing are **always on** (required since U.3 — 0.7.4's `write()` no longer strips), while sandbox-prefix stripping sits behind `[compat] sandbox_paths` because `/src/` and `/tmp/` are sandbox prefixes *and* ordinary absolute directories.
+- The 6 middlewares are all patches for qwen3:14b failure modes documented in their own docstrings. Minimum target model is now **32B** → 4 of the 6 were deleted in Step 2, and the 2 survivors are **opt-in behind `[compat]`, default off, as of Step 6** (C1.8). Disposition table: `TODO-old.md` §0.1. `FixWriteParamsMiddleware` is split rather than gated wholesale: fence-stripping and `filename`/`path` → `file_path` aliasing are **always on** (required since U.3 — 0.7.4's `write()` no longer strips), while sandbox-prefix stripping sits behind `[compat] sandbox_paths` because `/src/` and `/tmp/` are sandbox prefixes *and* ordinary absolute directories.
 - **Configuration precedence lives in exactly one function**, `config/loader.py::deep_merge`, and every value records the layer that set it. This shape was chosen because A5.1 and A5.2 were both "which source won?" defects that a per-field `x or y or default` chain structurally cannot answer. Do not reintroduce per-field resolution.
 - **Role inheritance runs after the cross-layer merge**, not inside a layer. Inside a layer, a project-level `[model.planner]` would fail to inherit a user-level `[model.default]`.
 - Retired planning material lives in `docs/archive/`, which is **gitignored** — if you cannot find these files, that is why, not because they were deleted (Step 16, `S16.6`). `road-map.md` argues against trajectory fine-tuning and for planning-data fine-tuning; `improvements.txt` and `context_management_implementation_plan.md` are prior planning docs, partially implemented.
@@ -405,10 +460,26 @@ Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools
 
 ## 8. Commands
 
+**`Documentation/07-development.md` owns the development workflow** — setup,
+running the tests, the pre-push gate, the layout, the house rules.
+`CONTRIBUTING.md` deliberately does not repeat it, for a stated reason: *"One
+fact, one owner — a second copy would drift, which this project has a ledger
+full of examples of."* This section is the agent-facing cheat sheet for
+*driving Rudra*; when it and `Documentation/07-development.md` disagree about
+the workflow, that file wins. Corrected 2026-08-21 (CR-DOC9) — the test count
+below had already drifted twice, which is that warning coming true.
+
+**Contributions: pull requests are not accepted** (`CONTRIBUTING.md`). Bug
+reports and feature requests are welcome as issues; security problems go
+privately via `SECURITY.md`, never an issue. Do not propose a PR-based
+workflow, and do not add CI to gate one — the owner declined CI on
+2026-08-21, and with no PRs there is nothing for a `pull_request` trigger to
+guard.
+
 ```bash
 .venv/bin/ruff check src/ tests/     # must print "All checks passed!" — absolute gate since Step 3
 .venv/bin/ruff format --check src/ tests/
-uv run pytest -q                     # 1713 passed, 2 skipped; must never go down
+uv run pytest -q                     # must never go down; see Documentation/07-development.md
 git config core.hooksPath .githooks  # once per clone: run all three gates on push (A3.7)
 .venv/bin/rudra --version            # Rudra v0.2.0
 
@@ -479,7 +550,7 @@ only control, and real containment would need OS-level isolation.
 
 ## 9. Repo Hygiene Facts
 
-- 341 files tracked. The root noise this line used to list — `q-dev-chat-2026-03-20.md`, `filesystem-context.txt`, `improvements.txt`, `llms.txt`, `road-map.md`, `context_management_implementation_plan.md` — moved to the gitignored `docs/archive/` in Step 16 (A4.3, S16.6); `execution_tools.py` was deleted with D17 in Step 2.
+- The root noise this line used to list — `q-dev-chat-2026-03-20.md`, `filesystem-context.txt`, `improvements.txt`, `llms.txt`, `road-map.md`, `context_management_implementation_plan.md` — moved to the gitignored `docs/archive/` in Step 16 (A4.3, S16.6); `execution_tools.py` was deleted with D17 in Step 2.
 - `.env` and `.rudra/` are gitignored (verified via `git check-ignore`).
-- ~~No LICENSE file, no CI, no CONTRIBUTING, no tests.~~ Stale as written, and stale again in the other direction. `LICENSE` landed with A4.2 and the suite is at **1713 passed / 2 skipped**. **There is no CI**: A3.3 added `.github/workflows/ci.yml`, A3.9 narrowed it to `pull_request` only, and S16.5 deleted it — no PRs are accepted (S16.3), so it could never fire again. `.githooks/pre-push` is the only gate; `--no-verify` or a clone that never set `core.hooksPath` is checked by nothing. `CONTRIBUTING.md` and `SECURITY.md` shipped in Step 16 (C10.4, C10.6).
+- ~~No LICENSE file, no CI, no CONTRIBUTING, no tests.~~ Stale as written, and stale again in the other direction. `LICENSE` landed with A4.2 and the suite is large and green — the number is not restated here, because it drifted twice in one day and `Documentation/07-development.md` owns it (CR-DOC8). **There is no CI, and none is planned**: A3.3 added `.github/workflows/ci.yml`, A3.9 narrowed it to `pull_request` only, S16.5 deleted it, and the owner declined re-adding it on 2026-08-21. That is consistent rather than an oversight — `CONTRIBUTING.md` does not accept pull requests, so a PR-triggered gate would guard nothing. `.githooks/pre-push` is the only gate; `--no-verify` or a clone that never set `core.hooksPath` is checked by nothing. `CONTRIBUTING.md` and `SECURITY.md` shipped in Step 16 (C10.4, C10.6).
 - **A local `.venv` drifts from `uv.lock` and will lie to you.** Measured 2026-08-11 on unmodified `main`: `.venv/bin/pytest -q` → `14 failed, 502 passed`, against `520 passed, 2 skipped` on a clean `uv sync` clone; the venv was missing `langchain_openai`, which `pyproject.toml:47` requires. Two defects reached `main` under that noise (A3.5, A1.51). Run `uv sync` before believing a local failure, and prefer `uv run` — which reconciles first — when the answer matters.

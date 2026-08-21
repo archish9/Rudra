@@ -94,6 +94,56 @@ def _permitted(
 _REAP_TIMEOUT = 5
 
 
+def _process_group_kwargs() -> dict[str, Any]:
+    """Popen kwargs that give the child its own killable process group.
+
+    Platform-specific by necessity, and by *capability* rather than by name:
+    `CREATE_NEW_PROCESS_GROUP` only exists in `subprocess` on Windows, so
+    asking for the attribute is the same question as asking the OS.
+    """
+    flag = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", None)
+    if flag is not None:
+        return {"creationflags": flag}
+    return {"start_new_session": True}
+
+
+def _kill_tree(process: subprocess.Popen) -> None:
+    """Kill a timed-out child and everything it spawned.
+
+    Killing only the child leaves a test runner's workers alive -- the Karma
+    case C11.3 describes -- so both branches target the tree.
+
+    POSIX kills the process group. Windows has no `os.killpg` or
+    `os.getpgid` **at all**: they are POSIX-only, so the previous code
+    raised `AttributeError` there, which `except (ProcessLookupError,
+    PermissionError)` did not catch. It escaped `run_gated`, and
+    `run_pipeline`'s blanket handler turned it into an internal Rudra error
+    that stopped the run -- the timeout mechanism ending the run it existed
+    to rescue (CR-X1). `taskkill /F /T` is the Windows equivalent, and
+    `process.kill()` is the last resort on either platform.
+    """
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            return
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            capture_output=True,
+            check=False,
+            timeout=_REAP_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - race
+        pass
+    finally:
+        # Unconditional: taskkill may have missed, and on POSIX the killpg
+        # above returns early only when it succeeded.
+        if process.poll() is None:
+            try:
+                process.kill()
+            except OSError:  # pragma: no cover - already gone
+                pass
+
+
 def run_gated(
     argv: Sequence[str],
     *,
@@ -141,7 +191,14 @@ def run_gated(
             encoding="utf-8",
             errors="replace",
             env=env,
-            start_new_session=True,
+            # Put the child in its own group so the whole tree can be killed
+            # on timeout. The two platforms spell this differently and
+            # neither accepts the other's spelling: POSIX takes
+            # start_new_session (setsid), Windows takes a creation flag and
+            # names the POSIX parameter `unused_start_new_session` in its own
+            # _execute_child -- i.e. it accepts and silently ignores it, so
+            # passing only that left Windows with no group to kill (CR-X1).
+            **_process_group_kwargs(),
         )
     except (FileNotFoundError, NotADirectoryError, PermissionError, OSError) as exc:
         return CommandResult(resolved, command, None, "", f"{resolved[0]}: {exc}")
@@ -152,10 +209,7 @@ def run_gated(
         # start_new_session put the child in its own process group, so the
         # whole tree dies. Killing only the child would leave a test
         # runner's workers alive -- the Karma case C11.3 describes.
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):  # pragma: no cover - race
-            process.kill()
+        _kill_tree(process)
         try:
             # Bounded, because the SIGKILL above is not a guarantee: a
             # grandchild that called setsid() itself is outside the group we

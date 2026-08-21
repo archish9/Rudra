@@ -77,7 +77,7 @@ class Gate:
         )
 
 
-def build_gate(cfg: Config, project_path: Path) -> Gate:
+def build_gate(cfg: Config, project_path: Path, routes: tuple[str, ...] = ()) -> Gate:
     """Construct the permission layer for one project run.
 
     Malformed rules raise here, at construction, rather than at the first
@@ -86,6 +86,11 @@ def build_gate(cfg: Config, project_path: Path) -> Gate:
     """
     grants = SessionGrants()
     engine = PermissionEngine(
+        # The backend's mount points, so the gate resolves a path the same
+        # way the backend will. Supplied by route_prefixes(), which the
+        # backend and the path normalizer also read -- three consumers, one
+        # answer, which is what stops them disagreeing (CR-B4).
+        routes=routes,
         mode=cfg.permissions.mode,
         allow=cfg.permissions.allow,
         deny=cfg.permissions.deny,

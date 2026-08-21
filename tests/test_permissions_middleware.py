@@ -95,8 +95,15 @@ def test_an_allowed_write_reaches_the_disk(tmp_path):
 
 
 def test_the_floor_denies_even_in_auto_mode(tmp_path):
+    """CR-B4: the escape has to be a real one.
+
+    `/etc/hosts` used to stand in for "outside the root", but every backend
+    Rudra builds is virtual_mode=True, so that path is `<project>/etc/hosts`
+    and the host's file is never touched. Traversal still leaves the root,
+    and that is what the floor is for.
+    """
     (message,) = build(
-        tmp_path, tool="write_file", args={"file_path": "/etc/hosts", "content": "x"}
+        tmp_path, tool="write_file", args={"file_path": "../../etc/hosts", "content": "x"}
     )
     assert message.status == "error"
     assert "outside-root" in message.content

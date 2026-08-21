@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import fnmatch
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from wcmatch import glob as wcglob
 
+from rudra.compat.virtual_paths import virtual_to_relative
 from rudra.permissions.floor import floor_hit
 
 if TYPE_CHECKING:  # pragma: no cover - broken at runtime to avoid a cycle
@@ -232,6 +234,77 @@ def command_segments(command: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in _SEGMENT_SPLIT.split(command) if part.strip())
 
 
+# A wrapper shell is the inner command wearing a costume: `sh -c 'git push'`
+# pushes. `env` wraps the same way without a `-c`.
+_WRAPPER_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ash", "ksh"})
+_ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+# A path separator on ANY platform. Splitting on both spellings everywhere is
+# what makes `C:\Git\git.exe push` canonicalise on macOS too -- branching on
+# `sys.platform` here would give a rule that fires on one machine and misses
+# on another (CLAUDE.md §1 goal 8).
+_PATH_SEP = re.compile(r"[\\/]")
+# A drive-letter or UNC prefix, optionally quoted. This is a SHAPE, not a
+# platform: `shlex` reads `\` as an escape (correct for `/bin/sh`, which is
+# what the backend runs), so `C:\tools\git.exe` would otherwise collapse to
+# `C:toolsgit.exe` and never canonicalise. Recognising the shape first keeps
+# a Windows spelling matching the same rule on every host.
+_WINDOWS_PATH = re.compile(r"""^["']?(?:[A-Za-z]:[\\/]|\\\\)""")
+# Wrappers nest (`sh -c "bash -c '...'"`). Recursion terminates on its own --
+# each level strips a wrapper -- but the bound keeps a pathological nest from
+# costing anything, and matching is on the hot path of every gated call.
+_MAX_WRAPPER_DEPTH = 4
+
+
+def canonical_command(segment: str, *, _depth: int = 0) -> str:
+    """One command segment, respelled the way a shell would understand it.
+
+    Whitespace collapses, quotes resolve, leading `NAME=value` assignments
+    and the binary's directory fall away, a trailing `.exe` goes with them,
+    and a wrapper shell is replaced by the command it wraps. `git push`,
+    `git  push`, `/usr/bin/git push`, `GIT_DIR=.git git push` and
+    `sh -c 'git push'` all canonicalise to `git push`.
+
+    **Matched against deny rules only** (`_execute_matches`), and that is the
+    whole design. Canonicalisation DROPS information, so a pattern matched
+    against it can only match MORE. On the deny side more is strictly safer:
+    no command that is blocked today becomes allowed. On the permissive side
+    it would hand out consent the user never gave -- which is also why flags
+    are left in place even here: dropping `-C` would canonicalise
+    `git -C /other/repo status` to `git status`, and this function must stay
+    safe to reach for from the allow side later. The cost of that choice is
+    that `git -C . push` still evades `execute:git push*`
+    (`tests/test_permissions_rules.py::test_a_global_flag_before_the_subcommand_still_evades_deny`).
+
+    Falls back to the raw segment whenever parsing cannot answer -- the raw
+    segment is matched too, so a fallback loses nothing. This is a normal
+    path, not a guard: `_SEGMENT_SPLIT` is naive about quotes, so a quoted
+    separator hands this function a segment with an unbalanced quote.
+    """
+    text = segment.replace("\\", "/") if _WINDOWS_PATH.match(segment.strip()) else segment
+    try:
+        argv = shlex.split(text)
+    except ValueError:  # unbalanced quotes -- the raw spelling is all there is
+        return segment
+    while argv and _ENV_ASSIGNMENT.match(argv[0]):
+        argv.pop(0)
+    if not argv:
+        return segment
+
+    head = _PATH_SEP.split(argv[0])[-1]
+    if head.lower().endswith(".exe"):
+        head = head[: -len(".exe")]
+
+    if _depth < _MAX_WRAPPER_DEPTH:
+        if head.lower() == "env" and len(argv) > 1:
+            return canonical_command(shlex.join(argv[1:]), _depth=_depth + 1)
+        if head.lower() in _WRAPPER_SHELLS:
+            for index, argument in enumerate(argv[1:], start=1):
+                if argument == "-c" and index + 1 < len(argv):
+                    return canonical_command(argv[index + 1], _depth=_depth + 1)
+
+    return " ".join([head, *argv[1:]])
+
+
 def _execute_matches(pattern: str, commands: tuple[str, ...], *, permissive: bool) -> bool:
     """Match an `execute` pattern against every command that would run.
 
@@ -239,6 +312,11 @@ def _execute_matches(pattern: str, commands: tuple[str, ...], *, permissive: boo
     segment: consenting to `pytest` is not consenting to whatever was
     chained after it. A deny rule needs only ONE segment, so chaining
     cannot smuggle a denied command past it.
+
+    A deny rule is additionally matched against `canonical_command` of each
+    segment, so respelling the same command does not evade it (OPEN-1). The
+    permissive branch is deliberately NOT canonicalised: see
+    `canonical_command`, where the asymmetry is the design.
     """
     for command in commands:
         segments = command_segments(command)
@@ -249,13 +327,20 @@ def _execute_matches(pattern: str, commands: tuple[str, ...], *, permissive: boo
                 continue
             if all(fnmatch.fnmatchcase(segment, pattern) for segment in segments):
                 return True
-        elif any(fnmatch.fnmatchcase(segment, pattern) for segment in segments):
+        elif any(_denied_segment(pattern, segment) for segment in segments):
             return True
         # A deny rule also fires on the command as written, so a pattern
         # containing a separator itself (`execute:foo && bar`) still works.
-        if not permissive and fnmatch.fnmatchcase(command, pattern):
+        if not permissive and _denied_segment(pattern, command):
             return True
     return False
+
+
+def _denied_segment(pattern: str, segment: str) -> bool:
+    """Does a deny pattern cover this text, as written or as canonicalised?"""
+    return fnmatch.fnmatchcase(segment, pattern) or fnmatch.fnmatchcase(
+        canonical_command(segment), pattern
+    )
 
 
 def rule_matches(
@@ -312,6 +397,7 @@ class PermissionEngine:
         grants: SessionGrants | None = None,
         shell_in_auto: bool = False,
         mcp_in_auto: bool = False,
+        routes: tuple[str, ...] = (),
     ) -> None:
         self.mode = mode
         self.shell_in_auto = shell_in_auto
@@ -321,6 +407,12 @@ class PermissionEngine:
         self.floor_disable = frozenset(floor_disable)
         self.project_root = Path(project_root).resolve()
         self.grants = grants
+        # Backend routes are mounted OUTSIDE the project root on purpose
+        # (`/artifacts/`, `/skills/`), so a path under one is a real mount
+        # point the model was told about -- not a virtual project path to be
+        # rewritten. Supplied by the same route_prefixes() the backend and
+        # the path normalizer use, so all three agree (CR-B4).
+        self.routes = tuple(routes)
 
     def _resolve(
         self, tool: str, arg: str | None
@@ -334,8 +426,21 @@ class PermissionEngine:
         if tool in _UNRESOLVED_TOOLS or arg is None:
             return None, (), ()
 
-        candidate = Path(arg)
-        given = candidate if candidate.is_absolute() else self.project_root / candidate
+        # What the BACKEND will do with this spelling, not what the host
+        # would. Every backend Rudra builds is virtual_mode=True, so a
+        # leading `/` means the project root: `/src/app.py` is
+        # `<project>/src/app.py`, and `/etc/passwd` is `<project>/etc/passwd`
+        # with the host's file untouched -- measured against the pinned
+        # backend. Reading these as host paths denied writes that were
+        # always safe, and previewed the wrong file in the approval panel
+        # (CR-B4). Windows spellings (`C:\...`, UNC, `src\app.py`) are
+        # handled on every platform, because the model guesses from training
+        # data rather than from the host OS.
+        if any(arg.startswith(prefix) for prefix in self.routes):
+            given = Path(arg)
+        else:
+            relative = virtual_to_relative(arg, self.project_root)
+            given = self.project_root / relative if relative is not None else Path(arg)
         try:
             resolved = given.resolve()
         except (ValueError, OSError):
@@ -348,7 +453,15 @@ class PermissionEngine:
             # Path.resolve() (CR-B7).
             return None, (), ()
 
-        absolute = {str(resolved), str(given)}
+        # Three spellings, not two: the resolved host path, the path as
+        # built, and the model's own spelling. The third is what keeps a
+        # rule authored as `write_file:/etc/**` matching after CR-B4 --
+        # under virtual_mode that write lands at `<project>/etc/...`, so
+        # matching only host spellings would silently stop firing a rule
+        # the user still means. Rules can only GAIN matches from this, so
+        # deny gets strictly stronger; the floor is unaffected because it
+        # is handed `resolved` alone and never a spelling.
+        absolute = {str(resolved), str(given), arg}
         relative: set[str] = set()
         for form in (resolved, given):
             try:
