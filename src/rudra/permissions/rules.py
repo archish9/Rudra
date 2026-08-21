@@ -12,8 +12,10 @@ compiled agent.
 from __future__ import annotations
 
 import fnmatch
+import itertools
 import re
 import shlex
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -305,6 +307,118 @@ def canonical_command(segment: str, *, _depth: int = 0) -> str:
     return " ".join([head, *argv[1:]])
 
 
+# An option's ambiguity is per option, not per command: `git -C . --no-pager
+# push` mixes one that takes a value with one that does not, so a single
+# all-or-nothing switch cannot express it. One reading per combination can,
+# and this bounds how many combinations are worth generating -- 6 ambiguous
+# options is 64 readings, well past any real command line, and beyond it the
+# two extreme readings are used instead.
+_MAX_AMBIGUOUS_FLAGS = 6
+
+
+def _flag_positions(argv: list[str]) -> tuple[list[int], list[int]]:
+    """Where the options are, split by whether they might take a value.
+
+    Shape rules only, never a table of any tool's options: a token is an
+    option if it starts with `-` and is longer than one character (a bare
+    `-` is an operand -- it means stdin); an option containing `=` carries
+    its own value; an option followed by another option cannot be taking
+    one; and a bare `--` ends option processing, so everything after it is
+    an operand however it is spelled.
+    """
+    ambiguous: list[int] = []
+    settled: list[int] = []
+    for index, token in enumerate(argv):
+        if token == "--":
+            break
+        if not (token.startswith("-") and len(token) > 1):
+            continue
+        following = argv[index + 1] if index + 1 < len(argv) else None
+        if "=" in token or following is None or following.startswith("-"):
+            settled.append(index)
+        else:
+            ambiguous.append(index)
+    return ambiguous, settled
+
+
+def _reading(argv: list[str], *, drop: set[int], eaters: set[int]) -> list[str]:
+    """One reading of `argv`: options at `drop` removed, `eaters` also
+    taking the token after them."""
+    skip = set(drop) | {index + 1 for index in eaters}
+    end = argv.index("--") if "--" in argv else len(argv)
+    kept = [token for index, token in enumerate(argv) if index >= end or index not in skip]
+    return [token for token in kept if token != "--"]
+
+
+def deny_spellings(segment: str) -> Iterator[str]:
+    """Every respelling of one command segment that a DENY rule may match.
+
+    Yields the raw segment, its `canonical_command`, and two flagless
+    readings of the canonical form. A deny pattern matching any of them
+    denies. Lazy, because a rule that matches the raw spelling -- the common
+    case -- must not pay for the rest, and this is on the hot path of every
+    gated call.
+
+    **One flagless reading per combination of ambiguous options, because
+    nothing in the string says whether an option takes a value.**
+    `git -C . push` needs the `.` consumed or it reads `git . push`;
+    `git --no-pager push` must NOT have `push` consumed or the subcommand
+    disappears. The ambiguity is per OPTION, so a single all-or-nothing
+    switch cannot express `git -C . --no-pager push`, which mixes the two --
+    that is the mistake this generator was written to fix. Telling them
+    apart needs per-command knowledge the gate does not have and should not
+    acquire, so every reading is generated and any may match. A few extra
+    `fnmatch` calls buys what a table of every CLI's options would have
+    cost.
+
+    **Deny only, and that is the whole design (OPEN-4).** Dropping options
+    loses information, so a pattern matched against these can only match
+    MORE. On the deny side more is strictly safer: nothing blocked today
+    becomes allowed. On the permissive side it would hand out consent the
+    user never gave -- `git -C /other/repo status` reduces to `git status`,
+    and an `allow = ["execute:git status"]` would authorise a different
+    repository. That is why this is separate from `canonical_command`
+    rather than folded into it: that function stays safe to reach for from
+    the allow side, and this one must never be reached from there.
+
+    The accepted cost is over-denial -- `deny = ["execute:git status"]` also
+    denies `git -C /other/repo status`. That is the correct reading, and
+    where it is not, the user sees a denial they can narrow rather than a
+    silent authorisation.
+    """
+    seen = {segment}
+    yield segment
+
+    canonical = canonical_command(segment)
+    if canonical not in seen:
+        seen.add(canonical)
+        yield canonical
+
+    try:
+        argv = shlex.split(canonical)
+    except ValueError:  # unbalanced quotes -- the spellings above are all there is
+        return
+    if not argv:
+        return
+
+    head, rest = argv[0], argv[1:]
+    ambiguous, settled = _flag_positions(rest)
+    if len(ambiguous) > _MAX_AMBIGUOUS_FLAGS:
+        combinations: list[set[int]] = [set(), set(ambiguous)]
+    else:
+        combinations = [
+            {index for index, chosen in zip(ambiguous, choice, strict=True) if chosen}
+            for choice in itertools.product((False, True), repeat=len(ambiguous))
+        ]
+
+    drop = set(ambiguous) | set(settled)
+    for eaters in combinations:
+        candidate = " ".join([head, *_reading(rest, drop=drop, eaters=eaters)])
+        if candidate not in seen:
+            seen.add(candidate)
+            yield candidate
+
+
 def _execute_matches(pattern: str, commands: tuple[str, ...], *, permissive: bool) -> bool:
     """Match an `execute` pattern against every command that would run.
 
@@ -337,10 +451,8 @@ def _execute_matches(pattern: str, commands: tuple[str, ...], *, permissive: boo
 
 
 def _denied_segment(pattern: str, segment: str) -> bool:
-    """Does a deny pattern cover this text, as written or as canonicalised?"""
-    return fnmatch.fnmatchcase(segment, pattern) or fnmatch.fnmatchcase(
-        canonical_command(segment), pattern
-    )
+    """Does a deny pattern cover this text, in any spelling it may wear?"""
+    return any(fnmatch.fnmatchcase(spelling, pattern) for spelling in deny_spellings(segment))
 
 
 def rule_matches(

@@ -491,20 +491,19 @@ def test_a_deny_rule_fires_on_respellings_of_the_same_command(tmp_path: Path) ->
         assert engine.decide("execute", {"command": allowed}).effect == "allow", allowed
 
 
-def test_a_global_flag_before_the_subcommand_still_evades_deny(tmp_path: Path) -> None:
-    """The one spelling OPEN-1 leaves open, asserted so it is recorded rather
-    than forgotten.
+def test_a_global_flag_before_the_subcommand_now_denies(tmp_path: Path) -> None:
+    """OPEN-4. The spelling OPEN-1 recorded as a deliberate cost, now closed.
 
-    `git -C . push` canonicalises to itself: canonicalisation normalises the
-    *binary* and the wrapper, never the flags. Dropping flags would fix this
-    case and break the allow side -- `git -C /other/repo status` would
-    canonicalise to `git status`, so an `allow = ["execute:git status"]`
-    would silently authorise a different repository. A deny that reaches
-    this spelling needs `execute:git -C * push*` written explicitly, or a
-    patternless `execute` rule.
+    This replaces `test_a_global_flag_before_the_subcommand_still_evades_deny`,
+    whose docstring said to delete it rather than work around it if a later
+    change made this deny. `deny_spellings` drops flags on the DENY side
+    only, so `canonical_command` keeps the property that made OPEN-1 refuse
+    this -- see the allow-side test below, which is the other half.
 
-    If a future change makes this deny, that is an improvement: delete this
-    test rather than working around it.
+    Three flag shapes, because they behave differently: `-C .` takes a
+    separate value, `--git-dir=` carries its own, and `--no-pager` takes
+    none. Nothing in the string distinguishes them, which is why two
+    flagless readings are generated and either may match.
     """
     engine = PermissionEngine(
         mode="auto",
@@ -515,7 +514,111 @@ def test_a_global_flag_before_the_subcommand_still_evades_deny(tmp_path: Path) -
         shell_in_auto=True,
     )
 
-    assert engine.decide("execute", {"command": "git -C . push origin main"}).effect == "allow"
+    for spelling in (
+        "git -C . push origin main",
+        "git --git-dir=.git push",
+        "git --no-pager push",
+        "git -C . --no-pager push origin main",
+        r"C:\tools\git.exe -C . push",
+    ):
+        assert engine.decide("execute", {"command": spelling}).effect == "deny", spelling
+
+
+def test_dropping_flags_does_not_turn_a_deny_into_a_ban_on_the_binary(
+    tmp_path: Path,
+) -> None:
+    """OPEN-4's real risk. Flagless readings must WIDEN the rule, not blur it.
+
+    `git log --oneline push_branch` contains the word the pattern looks for
+    and must still run; so must a `pip download` whose argument merely names
+    an install file. If a later change makes the flag rule greedier, these
+    fail here rather than in somebody's working tree.
+    """
+    engine = PermissionEngine(
+        mode="auto",
+        allow=(),
+        deny=("execute:git push*", "execute:pip install*"),
+        floor_disable=(),
+        project_root=tmp_path,
+        shell_in_auto=True,
+    )
+
+    for allowed in (
+        "git log --oneline push_branch",
+        "git status",
+        "git -C . status",
+        "pip download -r install.txt",
+    ):
+        assert engine.decide("execute", {"command": allowed}).effect == "allow", allowed
+
+
+def test_the_allow_side_never_sees_a_flagless_spelling(tmp_path: Path) -> None:
+    """OPEN-4's whole safety argument, and the reason OPEN-1 refused this.
+
+    If flag-dropping ever reached the permissive branch,
+    `git -C /other/repo status` would reduce to `git status` and this allow
+    rule would authorise a DIFFERENT repository. It must come back `ask`.
+
+    Written in `ask` mode on purpose: OPEN-1 recorded that the equivalent
+    test in `auto` mode measured nothing, because the mode default allows
+    every command there, so it passed before the fix and after.
+    """
+    engine = PermissionEngine(
+        mode="ask",
+        allow=("execute:git status",),
+        deny=(),
+        floor_disable=(),
+        project_root=tmp_path,
+        shell_in_auto=True,
+    )
+
+    assert engine.decide("execute", {"command": "git status"}).effect == "allow"
+    for elsewhere in (
+        "git -C /other/repo status",
+        "git --git-dir=/other/repo/.git status",
+    ):
+        assert engine.decide("execute", {"command": elsewhere}).effect == "ask", elsewhere
+
+
+def test_flag_stripping_stops_at_a_double_dash_and_ignores_a_bare_dash(
+    tmp_path: Path,
+) -> None:
+    """OPEN-4's two shape rules, each of which would silently mis-parse.
+
+    A bare `-` is an operand -- it means stdin, not a flag -- and everything
+    after a bare `--` is an operand too, however it is spelled.
+    """
+    engine = PermissionEngine(
+        mode="auto",
+        allow=(),
+        deny=("execute:cat -",),
+        floor_disable=(),
+        project_root=tmp_path,
+        shell_in_auto=True,
+    )
+
+    assert engine.decide("execute", {"command": "cat -"}).effect == "deny"
+    assert engine.decide("execute", {"command": "cat -- --weird"}).effect == "allow"
+
+
+def test_an_unbalanced_quote_falls_back_to_the_raw_segment(tmp_path: Path) -> None:
+    """A segment shlex cannot parse must deny nothing NEW, and must not raise.
+
+    `_SEGMENT_SPLIT` is naive about quotes, so a quoted separator hands the
+    matcher a segment with an unbalanced quote. That is a normal path, not a
+    guard.
+    """
+    engine = PermissionEngine(
+        mode="auto",
+        allow=(),
+        deny=("execute:git push*",),
+        floor_disable=(),
+        project_root=tmp_path,
+        shell_in_auto=True,
+    )
+
+    assert engine.decide("execute", {"command": "git push 'unclosed"}).effect == "deny"
+    assert engine.decide("execute", {"command": "echo 'unclosed"}).effect == "allow"
 
 
 def test_canonicalisation_never_widens_a_permissive_rule(tmp_path: Path) -> None:

