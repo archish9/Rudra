@@ -40,6 +40,7 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import threading
 
 import pytest
 
@@ -520,3 +521,80 @@ async def test_plan_mode_presents_and_stops(monkeypatch, tmp_path):
 
     assert worked == [], "--plan must never execute"
     assert result.success is True
+
+
+async def test_the_approval_prompt_does_not_block_the_event_loop(monkeypatch, tmp_path):
+    """OPEN-2. `_approve` blocks on a terminal, so it must not run on the loop.
+
+    While it is open the loop has to stay live: `_cancel_on_sigint` installs
+    its handler with `loop.add_signal_handler`, whose callback only runs when
+    the loop regains control. Blocking in `Prompt.ask` on the loop thread is
+    what made Ctrl-C print nothing until after the user answered.
+    """
+    import asyncio
+
+    monkeypatch.setattr("rudra.agent.main_agent.plan", _fake_plan())
+    _record_work(monkeypatch)
+
+    prompt_open = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    released = threading.Event()
+
+    def blocking_approve(console):
+        loop.call_soon_threadsafe(prompt_open.set)
+        released.wait(5)
+        raise AssertionError("the prompt should have been cancelled, not answered")
+
+    agent, _ = _agent(tmp_path, approve=blocking_approve)
+    task = asyncio.create_task(agent.run())
+    try:
+        # If the prompt ran on the loop thread this await would never resume.
+        await asyncio.wait_for(prompt_open.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        released.set()
+
+
+async def test_the_approval_thread_is_a_daemon(monkeypatch, tmp_path):
+    """OPEN-2(a). Measured: a non-daemon prompt thread hangs the exit.
+
+    `asyncio.run` closes the loop through `shutdown_default_executor`, which
+    JOINS its workers -- so a cancelled run whose prompt thread is still
+    blocked in `input()` waits `THREAD_JOIN_TIMEOUT` (300 s) before the
+    process leaves. That is why this is a dedicated daemon thread and not
+    `asyncio.to_thread`, and asserting the flag is how that stays true
+    without needing a terminal or a real SIGINT.
+    """
+    monkeypatch.setattr("rudra.agent.main_agent.plan", _fake_plan())
+    _record_work(monkeypatch)
+
+    seen = {}
+
+    def approve(console):
+        from rudra.loop.plan_view import PlanAnswer, PlanDecision
+
+        current = threading.current_thread()
+        seen["daemon"] = current.daemon
+        seen["off_main"] = current is not threading.main_thread()
+        return PlanAnswer(PlanDecision.APPROVE)
+
+    agent, _ = _agent(tmp_path, approve=approve)
+    await agent.run()
+
+    assert seen["off_main"], "the prompt must not run on the loop's thread"
+    assert seen["daemon"], "a non-daemon prompt thread is joined at exit and hangs it"
+
+
+async def test_an_approval_that_raises_still_surfaces(monkeypatch, tmp_path):
+    """The thread hop must not swallow the failure it was handed."""
+    monkeypatch.setattr("rudra.agent.main_agent.plan", _fake_plan())
+    _record_work(monkeypatch)
+
+    def approve(console):
+        raise RuntimeError("terminal exploded")
+
+    agent, _ = _agent(tmp_path, approve=approve)
+    with pytest.raises(RuntimeError, match="terminal exploded"):
+        await agent.run()

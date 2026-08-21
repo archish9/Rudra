@@ -181,3 +181,73 @@ def test_an_ordinary_failure_is_still_reported_as_an_error(monkeypatch, tmp_path
 
     assert "the model refused" in result.output
     assert "Cancelled" not in result.output
+
+
+# --- the single-shot half ------------------------------------------------
+
+
+def _single_shot_with(monkeypatch, agent_factory):
+    """Run one non-interactive `rudra "..."` and return the result."""
+    from typer.testing import CliRunner
+
+    from rudra import cli as cli_module
+    from rudra.cli import app
+
+    monkeypatch.setattr(cli_module, "create_main_agent", agent_factory)
+    return CliRunner().invoke(app, ["--auto", "build it"])
+
+
+def test_a_keyboard_interrupt_is_a_cancel_not_a_traceback(monkeypatch, tmp_path):
+    """OPEN-2(b). A platform with no `add_signal_handler` still raises.
+
+    `_cancel_on_sigint` falls back to the default SIGINT handler when
+    `loop.add_signal_handler` raises NotImplementedError (Windows), and that
+    handler raises KeyboardInterrupt on the MAIN thread. Since the approval
+    prompt moved off that thread, the exception now surfaces at the `await`
+    in `_settle_plan` rather than inside `Prompt.ask` -- so this path, not
+    `plan_view.py`'s own `except`, is what covers Ctrl-C there.
+
+    The exit code was already right and is not the point: typer maps
+    KeyboardInterrupt to Exit(130) itself (`typer/core.py:202`). What was
+    missing is that the user was told NOTHING -- no cancel line, no way
+    back -- while the CancelledError sibling below prints both. The two
+    mean the same thing to the user and must read the same.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    class _Agent:
+        async def run(self):
+            raise KeyboardInterrupt
+
+        async def close(self):
+            return None
+
+    async def factory(**kwargs):
+        return _Agent()
+
+    result = _single_shot_with(monkeypatch, factory)
+
+    assert result.exit_code == EXIT_CANCELLED
+    assert "Cancelled" in result.output
+    assert "--continue" in result.output, "the user needs the way back"
+
+
+def test_a_cancelled_run_still_exits_130(monkeypatch, tmp_path):
+    """The sibling path, so the KeyboardInterrupt branch cannot be the only
+    one that works -- these two must stay identical in what they print."""
+    monkeypatch.chdir(tmp_path)
+
+    class _Agent:
+        async def run(self):
+            raise asyncio.CancelledError
+
+        async def close(self):
+            return None
+
+    async def factory(**kwargs):
+        return _Agent()
+
+    result = _single_shot_with(monkeypatch, factory)
+
+    assert result.exit_code == EXIT_CANCELLED
+    assert "Cancelled" in result.output

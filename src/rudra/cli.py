@@ -1473,11 +1473,21 @@ def main(
 
         try:
             result: AgentResult = asyncio.run(_guarded())
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, KeyboardInterrupt):
             # The cancel landed outside work()'s task boundary -- during
             # planning, or between tasks. Nothing is half-written and the
             # ledger is whatever the last save left, which is exactly what
             # `--continue` expects.
+            #
+            # KeyboardInterrupt is the same event reaching us by the other
+            # road: where `add_signal_handler` is unavailable the default
+            # SIGINT handler stays, and it raises on the MAIN thread -- which
+            # since OPEN-2 is no longer the thread the approval prompt blocks
+            # on, so `plan_view.py`'s own `except` no longer sees it. typer
+            # already maps it to exit 130 (`typer/core.py:202`); what it does
+            # not do is tell the user the ledger survived. Caught here rather
+            # than branched on `sys.platform`, because "the handler was not
+            # installed" is the real condition and it is testable anywhere.
             console.print("\n[yellow]Cancelled.[/yellow] Resume with: rudra --continue")
             raise typer.Exit(EXIT_CANCELLED) from None
 

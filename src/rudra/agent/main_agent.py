@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -13,7 +15,13 @@ from rudra.facts import FactStore, facts_block
 from rudra.git.core import auto_branch
 from rudra.llm.retry import ProviderUnavailable
 from rudra.loop import plan, work
-from rudra.loop.plan_view import PlanDecision, ask_approval, auto_approve, render_plan
+from rudra.loop.plan_view import (
+    PlanAnswer,
+    PlanDecision,
+    ask_approval,
+    auto_approve,
+    render_plan,
+)
 from rudra.state import ensure_layout
 
 # How many times a user may send the plan back before Rudra stops
@@ -297,6 +305,47 @@ class RudraAgent:
             getattr(self._loop_context, "memory", None), self._facts, self._ledger.tasks
         )
 
+    async def _approve_off_loop(self) -> PlanAnswer:
+        """Run the (blocking, synchronous) approval prompt off the loop thread.
+
+        `_approve` blocks on a terminal, and `_cancel_on_sigint` installs its
+        handler with `loop.add_signal_handler`, whose callback only runs when
+        the loop regains control. Blocking here is what made Ctrl-C at the
+        plan prompt print nothing until after the user answered, and deferred
+        the second, force-exit press just as long (TODO.md OPEN-2).
+
+        A dedicated **daemon** thread rather than `asyncio.to_thread`, which
+        was measured to trade the prompt hang for an exit hang: `asyncio.run`
+        closes the loop through `shutdown_default_executor`, which JOINS its
+        workers, so a cancelled run whose prompt thread still sits in
+        `input()` waits `THREAD_JOIN_TIMEOUT` -- 300 seconds -- before the
+        process leaves. A private ThreadPoolExecutor does not help either;
+        `concurrent.futures` registers its own atexit join. A daemon thread
+        is joined by nobody and dies with the interpreter.
+
+        The cancelled prompt keeps the terminal until then. That is fine and
+        deliberate: the only thing that cancels it is the user leaving.
+        """
+        loop = asyncio.get_running_loop()
+        answered: asyncio.Future[PlanAnswer] = loop.create_future()
+
+        def settle(setter, value) -> None:
+            # The future is already cancelled if Ctrl-C landed first; setting
+            # a cancelled future raises, and there is nobody left to tell.
+            if not answered.done():
+                setter(value)
+
+        def ask() -> None:
+            try:
+                answer = self._approve(self.console)
+            except BaseException as exc:  # noqa: BLE001 - re-raised on the loop
+                loop.call_soon_threadsafe(settle, answered.set_exception, exc)
+            else:
+                loop.call_soon_threadsafe(settle, answered.set_result, answer)
+
+        threading.Thread(target=ask, name="rudra-plan-approval", daemon=True).start()
+        return await answered
+
     async def _settle_plan(self, ledger) -> PlanDecision:
         """Show the plan and find out whether to run it (C6.9).
 
@@ -313,7 +362,7 @@ class RudraAgent:
             return PlanDecision.CANCEL
 
         for attempt in range(MAX_REVISIONS + 1):
-            answer = self._approve(self.console)
+            answer = await self._approve_off_loop()
             if answer.decision is not PlanDecision.REVISE:
                 return answer.decision
             if attempt == MAX_REVISIONS:

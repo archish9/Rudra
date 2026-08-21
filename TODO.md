@@ -15,7 +15,7 @@ Status: `PENDING` · `IN PROGRESS` · `DONE` · `WONTFIX`
 > break, and the definition of done. You do not need any earlier session's
 > context to execute them.
 >
-> Everything below SECTION OPEN is the closed record — 73 of 75 findings,
+> Everything below SECTION OPEN is the closed record — **all 75 findings**,
 > kept for the reasoning and the evidence, not because anything is owed.
 
 **Baseline at review start (measured, not assumed):**
@@ -37,24 +37,25 @@ turned out to be deliberate, test-asserted behaviour were dropped rather than re
 
 ## SECTION OPEN — what is left to do (read this first)
 
-**Everything else in this file is closed.** 73 of 75 findings are `DONE`; the
-items below are the whole of the remaining work. Each is written to be
+**Everything in this file is now closed.** All 75 findings are `DONE`; the
+items below are kept as the record of the last three. Each is written to be
 executed by a session that has none of the context that produced it: the
 symptom, a runnable reproduction, the exact files, the decision that was
 deferred, the change to make, the tests that will break, and what "done"
 means.
 
-**OPEN-1 closed 2026-08-21** — it is kept below with its `DONE` row rather
-than moved, because the reproduction is the thing worth keeping and one
-spelling is deliberately still open. **OPEN-3 closed 2026-08-21**, kept the
-same way. **One item remains: OPEN-2.**
+**OPEN-1, OPEN-2 and OPEN-3 all closed 2026-08-21.** Each is kept below
+with its `DONE` row rather than moved, because the reproductions are the
+thing worth keeping — and OPEN-1 leaves one spelling evading deliberately,
+while OPEN-2 records three ways its own prescribed fix was wrong.
+**Nothing is open. All 75 findings are `DONE`.**
 
 **Before starting anything here**, read `CLAUDE.md` §2 (session rules — in
 particular: record in this file *before* fixing, cite `file:line`, verify by
 running the command) and confirm the baseline is green:
 
 ```bash
-uv run pytest -q                     # 1740 passed, 2 skipped as of 2026-08-21
+uv run pytest -q                     # 1745 passed, 2 skipped as of 2026-08-21
 .venv/bin/ruff check src/ tests/     # All checks passed!
 ```
 
@@ -220,8 +221,13 @@ noted only so a future session that sees it does not chase it here.)
 
 ---
 
-### OPEN-2 · The plan approval prompt blocks the event loop
+### OPEN-2 · The plan approval prompt blocks the event loop — **`DONE`**
 *(the remaining half of CR-C6; the other half was fixed by CR-C5)*
+
+> **Closed 2026-08-21.** Kept in place rather than moved, because the
+> prescribed fix turned out to be necessary but not sufficient and the
+> three corrections below are the part worth keeping. What shipped is
+> recorded at the end of this row.
 
 **Severity:** Minor — the safety property holds, but by accident rather than
 by design, and the prompt is unresponsive while it does.
@@ -266,11 +272,90 @@ there (a closed pipe), and it becomes reachable again for Ctrl-C on Windows,
 where `add_signal_handler` raises `NotImplementedError` and the default
 handler stays (`cli.py:337`).
 
+> **Two corrections to the paragraphs above, measured 2026-08-21 before
+> implementing.** The prescribed one-liner is necessary but not sufficient.
+>
+> **(a) `asyncio.to_thread` trades the prompt hang for an exit hang.**
+> Probed under a real pty: the stopping message *does* print while the
+> prompt is open, but the process then sits for **300 s** —
+> `asyncio.run` closes the loop via `shutdown_default_executor`, which
+> joins the worker thread still blocked in `input()`, and
+> `asyncio.constants.THREAD_JOIN_TIMEOUT` is 300. The probe printed
+> `CANCELLED-CAUGHT` and then failed to exit inside 12 s. A dedicated
+> **daemon** thread awaited through `loop.create_future()` gives the same
+> responsiveness and exits in **0.3 s**, because a daemon thread is not
+> joined at interpreter shutdown. A private `ThreadPoolExecutor` does not
+> help: its threads are non-daemon and `concurrent.futures`' own atexit
+> hook joins them.
+>
+> **(b) The "Watch for" note has the Windows case backwards.** A
+> SIGINT-derived `KeyboardInterrupt` is delivered to the **main** thread
+> only. Today it lands inside `Prompt.ask` and *is* caught at
+> `plan_view.py:100`; after a thread hop it lands at the `await` in
+> `_settle_plan` and is not — so the hop *removes* that coverage rather
+> than restoring it. `cli.py:1476` catches only `asyncio.CancelledError`,
+> so on a platform with no `add_signal_handler` Ctrl-C at the prompt would
+> become a traceback and the wrong exit code. The REPL path already
+> catches both (`cli.py:1599-1603`); the single-shot path must too.
+
 **Done when:** Ctrl-C at the approval prompt prints the stopping message
 *while the prompt is open*, a second press force-exits, EOF still cancels,
 and the full suite is green. Verify the interactive part by hand with a pty
 (`rudra --plan` is not enough — that path returns CANCEL before the prompt);
 state in the row how it was verified.
+
+**FIXED 2026-08-21.** Three changes, not the one prescribed:
+
+1. `RudraAgent._approve_off_loop` (`agent/main_agent.py`) runs the blocking
+   prompt on a **daemon** thread and awaits a `loop.create_future()` settled
+   through `call_soon_threadsafe`; `_settle_plan` awaits it. Not
+   `asyncio.to_thread`, for correction (a) above.
+2. `cli.py`'s single-shot path catches `KeyboardInterrupt` alongside
+   `asyncio.CancelledError`, for correction (b). Not a `sys.platform`
+   branch — the real condition is "the handler was not installed", which is
+   testable on any machine (`CLAUDE.md` §1.8). The REPL path already did.
+3. **A third stale line, found while implementing.** The row above says
+   "`asyncio` is already imported there". It is not: `grep -n "import
+   asyncio" src/rudra/agent/main_agent.py` returned nothing before this
+   change. `asyncio` and `threading` were both added.
+
+`plan_view.py` is **untouched**: `ask_approval` and `auto_approve` stay
+synchronous — which is what keeps them testable without a terminal — and
+their `except (EOFError, KeyboardInterrupt)` is kept, because EOF still
+raises inside the thread.
+
+**How it was verified.** By hand under a real pty, driving the *real*
+`_cancel_on_sigint` + `ask_approval` + `_settle_plan` with a stub planner
+callback and no model — stated plainly because that is narrower than a full
+`rudra` run, and `--plan` returns CANCEL before the prompt so it could not
+be used.
+
+| case | before | after |
+|---|---|---|
+| one Ctrl-C at the prompt | nothing printed, process never exited (killed at 15 s) | `Stopping after this task — press Ctrl-C again to force.` printed **with the prompt still open and unanswered**, then `CANCELLED-AT-TASK`, `EXITED after 0.2s`, status 0 |
+| `asyncio.to_thread` variant | — | message printed, but **no exit inside 12 s** — the hang in (a) |
+| EOF (`stdin < /dev/null`) | `No answer — cancelled.` → `DECISION cancel` | unchanged |
+
+The second-press force path is not exercised by the pty runs and does not
+need to be: the graceful cancel now completes in 0.2 s, so there is nothing
+left to force. It is covered directly by
+`tests/test_cli_cancel.py::test_a_second_press_inside_the_window_leaves_immediately`,
+which calls the handler rather than depending on signal timing.
+
+**Regressions added.** `tests/test_agent_wiring.py`:
+`test_the_approval_prompt_does_not_block_the_event_loop` (a prompt that
+blocks forever is still cancellable — it would deadlock on the old code),
+`test_the_approval_thread_is_a_daemon` (asserts the daemon flag from inside
+the approve callable, which is how (a) stays fixed without a terminal), and
+`test_an_approval_that_raises_still_surfaces`. `tests/test_cli_cancel.py`:
+`test_a_keyboard_interrupt_is_a_cancel_not_a_traceback` and
+`test_a_cancelled_run_still_exits_130`. The existing monkeypatch at
+`test_agent_wiring.py:445` is a sync callable and was unaffected by the hop,
+as the row predicted.
+
+Measured: `uv run pytest -q` → **1745 passed, 2 skipped**;
+`.venv/bin/ruff check src/ tests/` → `All checks passed!`;
+`ruff format --check` → `260 files already formatted`.
 
 ---
 
