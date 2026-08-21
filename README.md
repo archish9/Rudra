@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="rudra_logo.jpg" alt="Rudra" width="200">
+</p>
+
 # Rudra
 
 > **Rudra** (रुद्र) — the fierce, storm-like form of Shiva; the howler, the roarer.
