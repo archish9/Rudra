@@ -19,7 +19,14 @@ from rudra.compat.path_constants import SANDBOX_PREFIXES
 # compat/overwrite_backend.py used to provide before U.3 deleted it (its
 # regex was `^```[^\n]*\n(.*)\n```$`; the file is gone, so no line is cited).
 # See TODO.md U.15.
-_FENCE_RE = re.compile(r"^```[^\n]*\n?(.*?)```\s*$", re.DOTALL)
+_FENCE_RE = re.compile(r"^```([^\n]*)\n?(.*?)```\s*$", re.DOTALL)
+
+# Info strings that mark the outer fence as a *wrapper* around a whole
+# document rather than one code block inside it. A markup info string is
+# the only thing that distinguishes "model wrapped my README in ```markdown"
+# from "this README's own first line is a ```bash block" -- both shapes open
+# and close with a fence and carry fences inside. See TODO.md OPEN-3.
+_MARKUP_INFO = {"markdown", "md", "mdx", "rst", "text", "txt", ""}
 
 # Tools that use file_path but model sometimes passes filename/path instead
 _FILE_TOOLS = {"write_file", "edit_file"}
@@ -32,8 +39,21 @@ _PATH_ARG_KEYS = ("file_path", "path", "pattern")
 
 
 def _strip_fences(content: str) -> str:
+    """Remove an outer ```lang ... ``` wrapper, but never real fenced content.
+
+    Strip only when the interior carries no fence of its own, or when the
+    info string names a markup type -- that is exactly what separates a
+    wrapper the model added from a Markdown file whose own content opens
+    and closes with fences (TODO.md OPEN-3).
+    """
     m = _FENCE_RE.match(content.strip())
-    return m.group(1) if m else content
+    if m is None:
+        return content
+    info, inner = m.group(1).strip().lower(), m.group(2)
+    first = info.split()[0] if info else ""
+    if "```" in inner and first not in _MARKUP_INFO:
+        return content
+    return inner
 
 
 def _strip_sandbox_prefix(path: str) -> str:

@@ -43,3 +43,17 @@ def test_keeps_inner_fences_when_stripping_outer():
 def test_leaves_unterminated_fence_alone():
     source = '```python\nprint("hi")\n'
     assert _strip_fences(source) == source
+
+
+def test_keeps_a_readme_that_legitimately_opens_and_closes_with_a_fence():
+    """The mirror image of test_keeps_inner_fences_when_stripping_outer.
+
+    Both inputs start with ``` and end with ```, and both contain further
+    fences inside. What separates them is the info string: a model that
+    wraps a whole markdown file announces that with ```markdown, so the
+    outer fence is a wrapper and comes off. A README's own first line is
+    a ```bash block -- the fences are the content, and stripping them
+    deletes the file's first opening fence and last closing fence.
+    """
+    readme = "```bash\nnpm i\n```\n\nSome text\n\n```js\nconst a = 1;\n```"
+    assert _strip_fences(readme) == readme

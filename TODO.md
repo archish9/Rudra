@@ -46,14 +46,15 @@ means.
 
 **OPEN-1 closed 2026-08-21** — it is kept below with its `DONE` row rather
 than moved, because the reproduction is the thing worth keeping and one
-spelling is deliberately still open. **Two items remain: OPEN-2 and OPEN-3.**
+spelling is deliberately still open. **OPEN-3 closed 2026-08-21**, kept the
+same way. **One item remains: OPEN-2.**
 
 **Before starting anything here**, read `CLAUDE.md` §2 (session rules — in
 particular: record in this file *before* fixing, cite `file:line`, verify by
 running the command) and confirm the baseline is green:
 
 ```bash
-uv run pytest -q                     # 1734 passed, 2 skipped as of 2026-08-21
+uv run pytest -q                     # 1740 passed, 2 skipped as of 2026-08-21
 .venv/bin/ruff check src/ tests/     # All checks passed!
 ```
 
@@ -273,8 +274,12 @@ state in the row how it was verified.
 
 ---
 
-### OPEN-3 · Fence stripping corrupts a Markdown file that legitimately opens with a fence
+### OPEN-3 · Fence stripping corrupts a Markdown file that legitimately opens with a fence — **`DONE`**
 *(the remaining half of CR-E11; the crash half is fixed)*
+
+> **Closed 2026-08-21.** The rule sketched below shipped as written. The
+> reproduction and the reasoning are kept as-is so the before/after is
+> comparable; what was actually changed is recorded at the end of this row.
 
 **Severity:** Minor, but it silently corrupts a file the agent writes, and
 this path is **always on** (D4 — not behind `[compat]`).
@@ -337,6 +342,25 @@ docstring saying why the two differ.
 
 **Done when:** the README round-trips byte-identical, all five existing fence
 tests still pass, and the full suite is green.
+
+**FIXED 2026-08-21.** Fixed: `_FENCE_RE` now captures the info string as a
+second group and `_strip_fences` returns `content` unchanged when the
+interior holds a fence of its own **and** the info string is not a markup
+type (`_MARKUP_INFO`) — `src/rudra/middleware/fix_write_params.py`. Both
+call sites of `_FENCE_RE` are in that one file, so the group renumber is
+contained (`grep -n _FENCE_RE src/ tests/`).
+
+Verified: the OPEN-3 README reproduction now round-trips byte-identical, and
+`test_keeps_inner_fences_when_stripping_outer` still passes **unchanged** —
+the ```markdown wrapper is still stripped, because `markdown` is in
+`_MARKUP_INFO`. The row above says "all five existing fence tests"; there
+are in fact **seven**, and all seven pass. Regression:
+`tests/test_fix_write_params.py::test_keeps_a_readme_that_legitimately_opens_and_closes_with_a_fence`,
+whose docstring states why the two shapes differ.
+
+Measured: `uv run pytest -q` → **1740 passed, 2 skipped** (was 1739 before
+the new test); `.venv/bin/ruff check src/ tests/` → `All checks passed!`;
+`ruff format --check` → `260 files already formatted`.
 
 ---
 
