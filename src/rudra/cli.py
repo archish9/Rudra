@@ -24,7 +24,7 @@ from typer.core import TyperGroup
 
 from rudra import __version__
 from rudra.cli_repl import REPL_COMMANDS, build_session, expand_mentions
-from rudra.config import get_config
+from rudra.config import get_config, reset_config
 from rudra.context.usage import render_usage
 from rudra.filesystem import project_tree
 
@@ -1607,6 +1607,23 @@ def main(
 
                     if not user_input.strip():
                         continue
+
+                    # Re-read config.toml for every task turn (not /help,
+                    # /tree, etc.) -- get_config() otherwise caches for the
+                    # whole process, so an edit made while the REPL is
+                    # already running was invisible until restart. The
+                    # CLI-flag overrides from process startup still win:
+                    # reset only drops the cache, this rebuild passes the
+                    # same overrides get_config() was seeded with above.
+                    reset_config()
+                    cfg = get_config(
+                        project_path,
+                        verbose=True if stream else verbose,
+                        stream_tokens=True if stream else None,
+                        permission_mode=permission_mode,
+                        allow_shell=True if allow_shell else None,
+                        allow_mcp=True if allow_mcp else None,
+                    )
 
                     # Before the Panel, so what is shown is what is sent.
                     user_input = expand_mentions(user_input, project_path)

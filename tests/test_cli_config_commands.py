@@ -290,3 +290,66 @@ def test_bare_invocation_warms_the_embedding_model_and_reports_the_result(
 
     assert calls == [True]
     assert "downloaded to /fake/cache" in result.output
+
+
+# --------------------------------------------------------------------------
+# the REPL re-reads config.toml every turn
+# --------------------------------------------------------------------------
+
+
+def _repl_with(monkeypatch: pytest.MonkeyPatch, inputs: list[str], agent_factory):
+    """Run the REPL over a scripted input list and return the output."""
+    from rudra import cli as cli_module
+
+    remaining = list(inputs)
+
+    async def scripted(session, prompt_text):
+        if not remaining:
+            raise EOFError
+        return remaining.pop(0)
+
+    monkeypatch.setattr(cli_module, "_prompt_input", scripted)
+    monkeypatch.setattr(cli_module, "create_main_agent", agent_factory)
+    monkeypatch.setattr(cli_module, "print_banner", lambda: None)
+    return runner.invoke(app, ["--auto"])
+
+
+def test_editing_config_toml_mid_session_takes_effect_next_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """get_config() caches for the process (A5.2): without a reload, an
+    edit made while the REPL is already running was invisible until the
+    session was closed and reopened. Each task turn now re-reads the file,
+    so the SECOND turn should see an edit made during the first."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("rudra.memory.prefetch.is_warm", lambda: True)
+
+    init_result = runner.invoke(app, ["init", "-d", str(tmp_path)])
+    assert init_result.exit_code == 0, init_result.output
+    config_path = tmp_path / ".rudra" / "config.toml"
+    assert 'model = "qwen3-coder:32b"' in config_path.read_text()
+
+    from rudra.agent.main_agent import AgentResult
+
+    class _Agent:
+        async def run(self):
+            return AgentResult(success=True, message="done")
+
+        async def close(self):
+            return None
+
+    edited = False
+
+    async def factory(**kwargs):
+        nonlocal edited
+        if not edited:
+            text = config_path.read_text()
+            config_path.write_text(text.replace("qwen3-coder:32b", "edited-coder-model"))
+            edited = True
+        return _Agent()
+
+    result = _repl_with(monkeypatch, ["turn one", "turn two", "/exit"], factory)
+
+    assert "qwen3-coder:32b" in result.output, result.output
+    assert "edited-coder-model" in result.output, result.output
+    assert result.output.index("qwen3-coder:32b") < result.output.index("edited-coder-model")
