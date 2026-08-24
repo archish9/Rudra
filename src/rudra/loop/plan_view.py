@@ -12,6 +12,7 @@ with the same exposure, escaped at the point of rendering.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -21,6 +22,8 @@ from rich.markup import escape
 from rich.prompt import Prompt
 
 from rudra.loop.ledger import Ledger, TaskStatus
+from rudra.ui import Cancelled, Choice, Chosen, initial
+from rudra.ui.prompt import ask as ask_selection
 
 # What a user is being asked to approve: work not yet attempted. A
 # dropped task is history, and a done one cannot be un-approved.
@@ -78,39 +81,48 @@ def auto_approve(console: Console) -> PlanAnswer:
     return PlanAnswer(PlanDecision.APPROVE)
 
 
-def ask_approval(console: Console) -> PlanAnswer:
+_PLAN_CHOICES = (
+    Choice(value="approve", label="Approve", description="run the plan", hotkey="a"),
+    Choice(value="revise", label="Revise", description="say what should change", hotkey="r"),
+    Choice(value="cancel", label="Cancel", description="change nothing", hotkey="c"),
+)
+
+
+def ask_approval(console: Console, *, reader: Callable[[], str] | None = None) -> PlanAnswer:
     """Ask the user to approve, revise, or cancel the plan.
 
     EOF and Ctrl-C are cancel, never approve (S10c.5): a plan must not
     execute because a pipe closed or a user gave up. That asymmetry is
-    the one safety property this function has.
+    the one safety property this function has, and routing through the
+    shared selector does not change it -- `Cancelled` is mapped HERE, per
+    call site, precisely so it cannot be flattened into one shared
+    default that happens to be permissive.
+
+    The `a`/`r`/`c` hotkeys still work as single keystrokes, so nobody who
+    knew them got slower.
     """
-    # The key hints are escaped (A1.76). Unescaped, Rich reads [a], [r]
-    # and [c] as style tags and shows "pprove evise ancel" -- eating
-    # precisely the letters that say which key does what. The rule is not
-    # "escape model output"; it is "escape anything with brackets", and a
-    # literal in Rudra's own source is no safer than a fact value.
-    hints = escape("[a]pprove [r]evise [c]ancel")
-    try:
-        choice = Prompt.ask(
-            f"[bold]Proceed?[/bold] [dim]{hints}[/dim]",
-            choices=["a", "r", "c"],
-            default="a",
-        )
-    except (EOFError, KeyboardInterrupt):
+    console.print("\n[bold]Proceed?[/bold]")
+    outcome = ask_selection(initial(_PLAN_CHOICES), console=console, reader=reader)
+
+    if isinstance(outcome, Cancelled) or not isinstance(outcome, Chosen) or not outcome.values:
         console.print("[dim]No answer — cancelled.[/dim]")
         return _CANCEL
 
-    if choice == "a":
+    choice = outcome.values[0]
+    if choice == "approve":
         return PlanAnswer(PlanDecision.APPROVE)
-    if choice == "c":
+    if choice == "cancel":
         return _CANCEL
 
     # Revise. An empty answer is a slip and costs one re-prompt; a second
     # empty answer is someone who does not want to revise after all.
     for _ in range(2):
         try:
-            feedback = Prompt.ask("[bold]What should change?[/bold]", default="").strip()
+            feedback = (
+                reader()
+                if reader is not None
+                else Prompt.ask("[bold]What should change?[/bold]", default="")
+            ).strip()
         except (EOFError, KeyboardInterrupt):
             return _CANCEL
         if feedback:
