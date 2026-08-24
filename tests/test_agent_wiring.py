@@ -205,7 +205,15 @@ def test_coder_puts_the_permission_gate_first(monkeypatch, tmp_path):
         captured = _record_create_deep_agent(monkeypatch, "rudra.subagents.build")
         build_agent(REGISTRY["coder"], _subagent_context(tmp_path, cfg, gate))
         assert captured["middleware"][0] is gate.middleware
-        assert captured["interrupt_on"] is gate.interrupt_on
+        # The gate's entries, narrowed to the tools the coder holds
+        # (OPEN-15). It used to be `is gate.interrupt_on` -- the whole map,
+        # `execute` included, on an agent with no shell, so an `execute`
+        # call raised an approval panel and then failed as an unknown tool.
+        assert set(captured["interrupt_on"]) == {"write_file", "edit_file"}
+        assert all(
+            captured["interrupt_on"][name] is gate.interrupt_on[name]
+            for name in captured["interrupt_on"]
+        )
     finally:
         reset_config()
 

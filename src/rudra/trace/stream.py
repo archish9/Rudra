@@ -24,19 +24,24 @@ _FIRST_LINE_MARKERS = (
     "Cannot write to",
     "Traceback",
     "Errno",
+    "[Errno",
     "BLOCKED:",
 )
-"""Markers a failure leads with. Checked against the first line only, so a
-tool that merely *mentions* an error in its output is not miscounted."""
+"""Markers a failure LEADS WITH. Matched as a prefix of the first line,
+stripped, so a tool that merely *mentions* an error in its output is not
+miscounted.
 
-_ANYWHERE_MARKERS = (
-    "not a valid tool",
-    "Input should be a valid string",
-)
-"""Markers langchain buries inside a validation message, which never
-arrives on the first line."""
+Prefix rather than `in`, since OPEN-16: `read_file` numbers the lines it
+returns, so a file whose own first line reads `Error: ...` arrives as
+`  1  Error: ...` and does not match, while a genuine unnumbered
+`Error: File '/a.py' not found` from the tool itself still does. The
+numbering does the disambiguating for free -- but only under a prefix
+match.
 
-ERROR_MARKERS = _FIRST_LINE_MARKERS + _ANYWHERE_MARKERS
+`[Errno` is listed beside `Errno` because an OSError renders as
+`[Errno 2] No such file`, and the bracket is part of the first token."""
+
+ERROR_MARKERS = _FIRST_LINE_MARKERS
 """The union of THREE copies that had drifted apart, counted 2026-08-20:
 
 * `runner.py:37-44` -- 6 markers, first line only (the subagent guard).
@@ -47,16 +52,49 @@ ERROR_MARKERS = _FIRST_LINE_MARKERS + _ANYWHERE_MARKERS
   whole content (the planner renderer), so the planner *displayed* a
   failure its own guard was not counting.
 
-One list, one opinion. The two whole-content markers stay whole-content
-because langchain buries them mid-message."""
+One list, one opinion.
+
+It used to carry two more -- `"not a valid tool"` and `"Input should be a
+valid string"` -- matched against the WHOLE content on the grounds that
+langchain buries them mid-message. That made any file containing either
+phrase read as a failure, and Rudra writes one: the run transcript records
+every tool error verbatim, so `read_file` on
+`.rudra/run/transcripts/<id>.jsonl` came back as an ERROR with the file's
+own contents as the payload, and three such reads halted the subagent on
+`MAX_CONSECUTIVE_FAILURES` (OPEN-16). Both cases are covered structurally
+by `message_is_error` instead."""
 
 
 def looks_like_error(content: str) -> bool:
-    """Does this tool result read as a failure?"""
-    first_line = content.split("\n")[0] if content else ""
-    if any(marker in first_line for marker in _FIRST_LINE_MARKERS):
+    """Does this tool result read as a failure, judging by its text alone?
+
+    First line only, deliberately -- a tool that merely *mentions* an error
+    in its output must not be miscounted, and Rudra's own logs mention
+    plenty. Content is the fallback signal; `message_is_error` is the one
+    to prefer where a whole message is in hand.
+    """
+    first_line = content.split("\n")[0].strip() if content else ""
+    return first_line.startswith(_FIRST_LINE_MARKERS)
+
+
+def message_is_error(message: Any) -> bool:
+    """Did this ToolMessage fail?
+
+    `status` is the structural answer and needs no string matching:
+    langgraph sets `status="error"` on the invalid-tool-name message
+    (`prebuilt/tool_node.py:1276-1278`) and on every tool exception, and
+    langchain's own middleware does the same. Measured against the pinned
+    versions; `status` defaults to `"success"`, so a tool that does not set
+    it is not misread.
+
+    The text check stays as a fallback because a deepagents filesystem tool
+    reports a missing file by RETURNING `"Error: ... not found"` with a
+    successful status, and Rudra's deny middleware returns `"BLOCKED: ..."`
+    the same way. Those are failures the model must see counted.
+    """
+    if getattr(message, "status", None) == "error":
         return True
-    return any(marker in content for marker in _ANYWHERE_MARKERS)
+    return looks_like_error(str(getattr(message, "content", "") or ""))
 
 
 @dataclass
@@ -116,7 +154,7 @@ def _events_for(
 
     if kind == "ToolMessage":
         name = str(getattr(message, "name", "") or "?")
-        which = TraceKind.TOOL_ERROR if looks_like_error(content) else TraceKind.TOOL_RESULT
+        which = TraceKind.TOOL_ERROR if message_is_error(message) else TraceKind.TOOL_RESULT
         return [event(which, name, content)]
 
     if kind == "HumanMessage":
@@ -145,4 +183,4 @@ def consume(chunk: Any, state: StreamState) -> list[TraceEvent]:
     return produced
 
 
-__all__ = ["ERROR_MARKERS", "StreamState", "consume", "looks_like_error"]
+__all__ = ["ERROR_MARKERS", "StreamState", "consume", "looks_like_error", "message_is_error"]

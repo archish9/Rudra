@@ -226,7 +226,14 @@ the ledger tools *cannot express* `DONE`, not because a prompt asks nicely.
 
 Two edges worth knowing before touching it: an **empty diff is a failed attempt**
 (with no changed files the gate reports "0 files parsed" and would pass an
-untouched task), and `files_touched` comes from **git**, not from the model.
+untouched task), and `files_touched` comes from the **filesystem**, not from the
+model — `git status` where there is a repo, a fingerprinted `source_files` walk
+where there is not. Corrected 2026-08-24 (OPEN-12/OPEN-13): this said "from
+**git**", full stop, and the code agreed — `git_snapshot` returned `None`
+outside a repo and the empty-diff guard was written `before is not None and
+not files_touched`, so in a project with no `.git` the guard above never ran
+and two tasks were marked `DONE` having created no file. `attempt_snapshot`
+is now the single entry point and never returns `None`.
 
 ### `.rudra/` state directory
 

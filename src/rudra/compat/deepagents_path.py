@@ -39,7 +39,12 @@ NORMALIZATION LAYERS
    a. Strip actual project root prefix (matches real machine path)
    b. Strip known sandbox prefix (/testbed/, /workspace/, etc.)
    c. Plan-aware suffix matching against PLAN.md filenames
-   d. Last resort: bogus-dir-aware basename stripping
+   d. Last resort: bogus-dir-aware basename stripping, and ONLY for a path
+      whose leading component is itself a bogus dir (``/home/...``,
+      ``/var/...``).  A path that reaches (d) without that shape is left
+      alone: it is far likelier to be a real project layout than a
+      hallucination, and trimming it wrote files to the wrong place in
+      silence (OPEN-12).
 
    (a) precedes (b) deliberately — see the ordering note in ``_normalize``.
 """
@@ -233,11 +238,27 @@ def install_path_normalizer(
             if match is not None:
                 return original(match, allowed_prefixes=allowed_prefixes)
 
-        # Step 2d: Last resort — strip "/" then apply bogus-dir trimming.
-        # Avoids creating deep bogus directories from hallucinated paths.
+        # Step 2d: Last resort — strip "/", and trim only a path that is
+        # SHAPED like a container's own directory tree.
+        #
+        # The trimming below used to run on every absolute path deeper than
+        # three components, which is not a hallucination signal -- it is an
+        # ordinary project layout. `/todoapp/src/models/todo.py` came back as
+        # `/models/todo.py` and `/.rudra/run/transcripts/x.jsonl` as
+        # `/transcripts/x.jsonl`: the write succeeded, at the wrong path, with
+        # nothing reporting a discrepancy, and the approval panel had already
+        # previewed the untrimmed one (OPEN-12).
+        #
+        # Every earlier step matches against something knowable -- the real
+        # root (2a), a listed sandbox prefix (2b), PLAN.md (2c). This one
+        # matched against nothing, so the leading component now has to be a
+        # directory a container owns and a project root is not: `/home/...`,
+        # `/var/...`, `/workspace/...`. Anything else is returned as written,
+        # which deepagents reads as project-relative -- the correct answer,
+        # and the one `virtual_mode=True` is built on.
         path = pp.relative_to("/").as_posix()
         path_parts = path.split("/")
-        if len(path_parts) > 3:
+        if len(path_parts) > 3 and path_parts[0] in BOGUS_DIRS:
             second_to_last = path_parts[-2]
             if second_to_last in BOGUS_DIRS:
                 path = path_parts[-1]

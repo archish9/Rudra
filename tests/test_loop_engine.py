@@ -9,6 +9,8 @@ from rich.console import Console
 
 from rudra.loop import engine
 from rudra.loop.engine import LoopContext, Outcome, run_task
+from rudra.loop.engine import changed_since as real_changed_since
+from rudra.loop.engine import git_snapshot as real_git_snapshot
 from rudra.loop.ledger import Ledger, TaskStatus
 from rudra.state.paths import rudra_paths
 from rudra.subagents import SubagentResult
@@ -217,6 +219,53 @@ async def test_a_coder_that_writes_nothing_is_a_failed_attempt(monkeypatch, cont
     assert outcome is Outcome.BLOCKED
     assert task.status is not TaskStatus.DONE
     assert "wrote nothing" in task.note
+
+
+async def test_a_coder_that_writes_nothing_outside_a_repo_is_a_failed_attempt(monkeypatch, context):
+    """OPEN-13, end to end and without patching the answer.
+
+    The test above monkeypatches `changed_since`, so it never exercised the
+    guard's own condition. That condition was
+    `before is not None and not files_touched`, and outside a git repository
+    `before` was None -- so the guard never ran, the gate saw zero changed
+    files and passed vacuously ("0 changed file(s) scanned"), and the task
+    was marked DONE. Measured on the owner's 2026-08-24 run in
+    `test-rudra`: two tasks `done`, `files_touched: []`, no file written.
+
+    `context.project_path` is a bare tmp_path with no `.git`, and the real
+    snapshot functions are restored over the autouse fakes.
+    """
+    monkeypatch.setattr(engine, "git_snapshot", real_git_snapshot)
+    monkeypatch.setattr(engine, "changed_since", real_changed_since)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.status is not TaskStatus.DONE
+    assert "wrote nothing" in task.note
+
+
+async def test_a_coder_that_writes_outside_a_repo_is_seen(monkeypatch, context):
+    """The other direction: real work in a non-repo project must still pass."""
+    monkeypatch.setattr(engine, "git_snapshot", real_git_snapshot)
+    monkeypatch.setattr(engine, "changed_since", real_changed_since)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+
+    project = context.project_path
+
+    async def writing_coder(name, prompt, *, context, thread_id=None):
+        # `context` here is the SubagentContext, not the LoopContext, so the
+        # project path is closed over rather than read off it.
+        (project / "app.py").write_text("x = 1\n", encoding="utf-8")
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", writing_coder)
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.files_touched == ("app.py",)
 
 
 async def test_no_test_judgement_dispatches_the_tester_once(monkeypatch, context, default_fakes):

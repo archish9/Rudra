@@ -40,9 +40,16 @@ def route_prefixes(sources=()) -> tuple[str, ...]:
 
     One function because two things need this and must not disagree:
     build_backend mounts these, and install_path_normalizer must be told to
-    leave them alone. A route the normalizer does not know about gets its
-    path trimmed to the last two segments, so the model can list the files
-    and never read one (A1.79). A test asserts the two agree.
+    leave them alone. A route the normalizer does not know about used to get
+    its path trimmed to the last two segments, so the model could list the
+    files and never read one (A1.79). A test asserts the two agree.
+
+    OPEN-12 narrowed that trimming to paths whose leading component is a
+    container's own directory, which no route is, so this list is now belt
+    and braces rather than the only thing standing between `/skills/` and a
+    truncated path. It stays because it states the intent -- a route is a
+    real mount point, not a hallucination -- and because the trimming rule
+    is a heuristic that may be widened again.
     """
     from rudra.skills.sources import routes_for
 

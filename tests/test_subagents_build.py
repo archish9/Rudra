@@ -203,8 +203,33 @@ def test_the_delegation_spec_has_every_required_key(name, context):
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
 def test_the_delegation_spec_inherits_the_gate_interrupts(name, context):
+    """Inherits, narrowed to what the spec can actually call (OPEN-15).
+
+    It used to be the gate's whole map on every spec, which is how the
+    coder -- with no `execute` -- raised an approval panel for
+    `execute pwd` and then failed with "execute is not a valid tool".
+    """
     spec = to_subagent_spec(REGISTRY[name], context)
-    assert spec["interrupt_on"] == context.gate.interrupt_on
+    assert set(spec["interrupt_on"]) <= set(context.gate.interrupt_on)
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_no_subagent_is_gated_on_a_tool_it_does_not_hold(name, context):
+    """OPEN-15: an entry for an unregistered tool is a prompt for a phantom."""
+    spec = REGISTRY[name]
+    built = to_subagent_spec(spec, context)
+    granted = set(spec.fs_tools) | {tool.name for tool in built["tools"]}
+
+    assert set(built["interrupt_on"]) <= granted
+
+
+def test_a_writing_subagent_keeps_its_interrupts(context):
+    """The filter must not become "no subagent is gated"."""
+    assert to_subagent_spec(REGISTRY["coder"], context)["interrupt_on"] == {"write_file": True}
+
+
+def test_a_read_only_subagent_has_nothing_to_interrupt_on(context):
+    assert to_subagent_spec(REGISTRY["reviewer"], context)["interrupt_on"] == {}
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
@@ -224,6 +249,60 @@ def test_both_paths_agree_on_tools(name, context):
     direct = [t.name for t in _tools_for(REGISTRY[name], context)]
     delegated = [t.name for t in to_subagent_spec(REGISTRY[name], context)["tools"]]
     assert direct == delegated
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_supplies_its_own_general_purpose(name, context, monkeypatch):
+    """OPEN-14: upstream auto-adds an ungated one when we supply none.
+
+    `create_deep_agent` adds its own `general-purpose` subagent unless a
+    spec of that name is passed (graph.py:745-751), built with a fresh
+    `FilesystemMiddleware` carrying the unrestricted tool set and inheriting
+    only middleware whose `.name` matches a default slot -- which Rudra's
+    gate does not (graph.py:752-778). Every Rudra subagent holds `task`, so
+    that nested agent was reachable from the coder with write and shell and
+    no deny middleware.
+
+    Asserted at the `create_deep_agent` boundary because that is where the
+    decision is made; the nested graph is upstream's to compile.
+    """
+    import rudra.subagents.build as build
+    from rudra.subagents.build import build_agent
+
+    captured: dict[str, Any] = {}
+
+    def record(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(build, "create_deep_agent", record)
+    build_agent(REGISTRY[name], context)
+
+    specs = captured["subagents"]
+    assert [s["name"] for s in specs] == ["general-purpose"], (
+        "a spec named general-purpose is what suppresses upstream's auto-add"
+    )
+    assert context.gate.middleware in specs[0]["middleware"], (
+        "the nested agent must carry the same gate as its parent"
+    )
+    # Narrowed by OPEN-15 to what the nested spec holds, which for the
+    # read-only general-purpose is nothing.
+    assert set(specs[0]["interrupt_on"]) <= set(context.gate.interrupt_on)
+
+
+def test_the_nested_general_purpose_cannot_write(context, monkeypatch):
+    """It is the read-only registry spec, not a fresh permissive one."""
+    import rudra.subagents.build as build
+    from rudra.subagents.build import build_agent
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(build, "create_deep_agent", lambda **kw: captured.update(kw) or object())
+    build_agent(REGISTRY["coder"], context)
+
+    nested = captured["subagents"][0]
+    assert nested["system_prompt"].startswith(REGISTRY["general-purpose"].system_prompt[:40])
+    granted = {tool.name for tool in nested["tools"]}
+    assert not ({"write_file", "edit_file", "delete", "execute"} & granted)
 
 
 def test_the_reviewers_compiled_graph_has_no_write_tools(tmp_path, monkeypatch):

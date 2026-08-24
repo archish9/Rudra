@@ -23,7 +23,7 @@ from rudra.permissions.approval import run_with_approvals
 from rudra.subagents.build import build_agent
 from rudra.subagents.registry import REGISTRY
 from rudra.trace.stream import StreamState
-from rudra.trace.stream import looks_like_error as _looks_like_error
+from rudra.trace.stream import message_is_error as _message_is_error
 
 # Carried from _stream_coder (main_agent.py:241-243), which Step 9c
 # deletes. These are per-invocation guards: one subagent looping on itself.
@@ -257,7 +257,7 @@ async def run_subagent(
                             )
                             break
                 elif kind == "ToolMessage":
-                    if _looks_like_error(str(getattr(message, "content", ""))):
+                    if _message_is_error(message):
                         consecutive_failures += 1
                         if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                             halted = f"{consecutive_failures} consecutive tool failures -- stopping"

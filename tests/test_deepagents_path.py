@@ -115,10 +115,37 @@ def test_plan_matching_is_language_agnostic(normalizer):
     assert validate("/home/user/repos/myproj/Cargo.toml") == "/Cargo.toml"
 
 
-def test_unknown_deep_path_keeps_only_the_last_two_segments(normalizer):
-    """Last resort: avoid materialising deep hallucinated directory trees."""
+def test_a_container_shaped_deep_path_keeps_only_the_last_two_segments(normalizer):
+    """Last resort: avoid materialising deep hallucinated directory trees.
+
+    Narrowed by OPEN-12 to paths whose LEADING component is a directory a
+    container owns. `/home` qualifies; a project's own top-level name does
+    not, which is the case below.
+    """
     validate = normalizer()
-    assert validate("/a/b/c/d/e.py") == "/d/e.py"
+    assert validate("/home/someone/proj/e.py") == "/proj/e.py"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/todoapp/src/models/todo.py",
+        "/.rudra/run/transcripts/a5aa4552c9ab.jsonl",
+        "/a/b/c/d/e.py",
+    ],
+)
+def test_a_deep_project_path_is_not_truncated(normalizer, path: str):
+    """OPEN-12: depth alone is not a hallucination signal.
+
+    Before this, any absolute path more than three components deep came back
+    as its last two, so `write_file("/todoapp/src/models/todo.py")` created
+    `<project>/models/todo.py` and reported success. The gate had already
+    previewed the untruncated path (`compat/virtual_paths.py` does not
+    mirror this trimming), so the approval and the write named two different
+    files.
+    """
+    validate = normalizer()
+    assert validate(path) == path
 
 
 def test_install_is_idempotent(normalizer, tmp_path: Path):

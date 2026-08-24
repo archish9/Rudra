@@ -22,7 +22,7 @@ import pytest
 from rich.console import Console
 
 from rudra.config.loader import build_config
-from rudra.loop.engine import changed_since, git_snapshot
+from rudra.loop.engine import attempt_snapshot, changed_since, git_snapshot
 from tests.conftest_git import AutoGate, git, make_repo
 
 
@@ -136,15 +136,67 @@ def test_a_deleted_file_is_reported(context: FakeContext):
     assert changed_since(context, before) == ("a.txt",)
 
 
-def test_outside_a_repository_the_caller_gets_none(tmp_path: Path):
-    """None is a real answer: without git, fall back to scanning everything."""
-    context = FakeContext(
+@pytest.fixture
+def no_repo(tmp_path: Path) -> FakeContext:
+    """A project directory that is not a git repository."""
+    return FakeContext(
         subagents=FakeSubagents(gate=AutoGate(tmp_path)),
         project_path=tmp_path,
         console=Console(quiet=True),
         cfg=build_config(tmp_path),
     )
-    assert git_snapshot(context) is None
+
+
+def test_outside_a_repository_the_caller_gets_none(no_repo: FakeContext):
+    """None is git_snapshot's own answer, and stays that way.
+
+    `attempt_snapshot` is what the loop calls, and it turns this None into a
+    tree walk (OPEN-13). This test pins the lower-level contract so the two
+    do not get merged by accident.
+    """
+    assert git_snapshot(no_repo) is None
+
+
+def test_outside_a_repository_an_attempt_still_has_a_snapshot(no_repo: FakeContext):
+    """OPEN-13: no git must not mean no answer."""
+    (no_repo.project_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+
+    before = attempt_snapshot(no_repo)
+    assert "app.py" in before
+    assert changed_since(no_repo, before) == ()
+
+
+def test_outside_a_repository_a_written_file_is_reported(no_repo: FakeContext):
+    """The half that was missing: writes are visible without git."""
+    before = attempt_snapshot(no_repo)
+    (no_repo.project_path / "src").mkdir()
+    (no_repo.project_path / "src" / "main.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ("src/main.py",)
+
+
+def test_outside_a_repository_a_rewrite_is_reported(no_repo: FakeContext):
+    """A fix-loop retry rewrites a file it already wrote. Same file, new
+    content, and the fingerprint is the only thing that says so."""
+    target = no_repo.project_path / "app.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+
+    before = attempt_snapshot(no_repo)
+    target.write_text("x = 2\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ("app.py",)
+
+
+def test_outside_a_repository_build_output_is_not_attributed_to_the_coder(
+    no_repo: FakeContext,
+):
+    """`source_files` prunes it, and the tree snapshot inherits that."""
+    before = attempt_snapshot(no_repo)
+    build = no_repo.project_path / "node_modules" / "pkg"
+    build.mkdir(parents=True)
+    (build / "index.js").write_text("module.exports = 1;\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ()
 
 
 def test_a_path_with_spaces_survives(context: FakeContext):

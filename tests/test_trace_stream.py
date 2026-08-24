@@ -15,7 +15,7 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from rudra.trace import TraceKind
-from rudra.trace.stream import StreamState, consume, looks_like_error
+from rudra.trace.stream import StreamState, consume, looks_like_error, message_is_error
 
 
 def _chunk(namespace, messages):
@@ -102,8 +102,52 @@ def test_the_error_markers_are_one_list_not_two():
     conditions. The planner's guard could not see BLOCKED: at all."""
     assert looks_like_error("Error: boom")
     assert looks_like_error("BLOCKED: permission denied")
-    assert looks_like_error("some preamble\nInput should be a valid string")
     assert not looks_like_error("Wrote a.py")
+
+
+def test_a_failed_tool_is_read_from_its_status_not_its_text():
+    """OPEN-16: langgraph sets status="error"; no string matching needed."""
+    failed = ToolMessage(content="anything at all", tool_call_id="1", name="x", status="error")
+    assert message_is_error(failed)
+
+
+def test_a_tool_that_returns_an_error_string_still_counts():
+    """deepagents' filesystem tools report a missing file by returning the
+    text with a successful status, and the deny middleware returns
+    "BLOCKED:" the same way. The text fallback is what catches those."""
+    assert message_is_error(
+        ToolMessage(content="Error: File '/a.py' not found", tool_call_id="1", name="read_file")
+    )
+    assert message_is_error(
+        ToolMessage(content="BLOCKED: permission denied", tool_call_id="1", name="execute")
+    )
+
+
+def test_reading_a_file_that_quotes_a_tool_error_is_not_an_error():
+    """OPEN-16, the defect itself.
+
+    `"not a valid tool"` and `"Input should be a valid string"` used to be
+    matched against the whole content. Rudra's own transcript records every
+    tool error verbatim, so reading
+    `.rudra/run/transcripts/<id>.jsonl` came back as an ERROR whose payload
+    was the file -- and `runner.py`'s MAX_CONSECUTIVE_FAILURES counted it,
+    so three successful reads halted the subagent.
+    """
+    transcript_line = (
+        '{"kind": "tool_error", "role": "coder", "name": "execute", "payload": '
+        '"Error: execute is not a valid tool, try one of [ls, read_file]."}'
+    )
+    quoting = ToolMessage(
+        content=f"  1  {transcript_line}\n  2  Input should be a valid string\n",
+        tool_call_id="1",
+        name="read_file",
+    )
+
+    assert not message_is_error(quoting)
+
+    state = StreamState(role="tester")
+    (event,) = consume(_chunk((), [quoting]), state)
+    assert event.kind is TraceKind.TOOL_RESULT
 
 
 def test_prose_and_tool_calls_in_one_message_both_survive():

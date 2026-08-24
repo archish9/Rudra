@@ -138,22 +138,60 @@ def git_snapshot(context: LoopContext) -> dict[str, str] | None:
     }
 
 
+def tree_snapshot(context: LoopContext) -> dict[str, str]:
+    """Every scannable source file in the project, each with a fingerprint.
+
+    What `git_snapshot` is for a project that has no git. `source_files`
+    already prunes build output and non-source suffixes (verify/stubs.py),
+    so this reads the project's code, not the project -- the same bound
+    `git_snapshot` gets from git plus `_is_build_output`.
+
+    It is a whole-tree walk where the git path is a `git status` call, and
+    that is the price of the answer: without it there is no answer at all,
+    which is OPEN-13.
+    """
+    root = Path(context.project_path)
+    return {path: _digest(root / path) for path in source_files(root)}
+
+
+def attempt_snapshot(context: LoopContext) -> dict[str, str]:
+    """The before/after fingerprint for one attempt. Never None.
+
+    OPEN-13: `git_snapshot` returns None outside a repo, and the empty-diff
+    guard in `run_task` was written as `before is not None and not
+    files_touched` -- so in a project with no `.git` the guard never ran,
+    an attempt that wrote nothing reached a gate with zero changed files,
+    the gate passed it vacuously ("0 changed file(s) scanned"), and the
+    task was marked DONE. Measured on the owner's 2026-08-24 run: two tasks
+    `done`, `files_touched: []`, no file created.
+
+    None was never a third state the caller wanted -- it was "ask the
+    filesystem instead", which is what this does, once, in one place, so
+    the before and the after cannot come from different sources.
+    """
+    snapshot = git_snapshot(context)
+    return tree_snapshot(context) if snapshot is None else snapshot
+
+
 def changed_since(context: LoopContext, before: dict[str, str] | None) -> tuple[str, ...]:
     """What this attempt touched.
 
-    Read from git rather than from the model. Asking the coder what it
-    wrote invites a wrong answer at exactly the moment the answer matters,
-    because it feeds 9a's stub scan.
+    Read from git -- or from the tree, outside a repo -- rather than from
+    the model. Asking the coder what it wrote invites a wrong answer at
+    exactly the moment the answer matters, because it feeds 9a's stub scan.
 
     A path counts when it is new, gone, or its fingerprint moved. The last
     case is what makes a retry that rewrites an untracked file visible
     (A1.66).
+
+    `before is None` still means "no snapshot was taken", and still answers
+    with the whole project. Nothing in the loop passes it any more --
+    `run_task` uses `attempt_snapshot`, which always has one -- but the
+    contract is kept for callers outside it.
     """
     if before is None:
         return source_files(context.project_path)
-    after = git_snapshot(context)
-    if after is None:  # pragma: no cover - a repo cannot stop being one mid-run
-        return source_files(context.project_path)
+    after = attempt_snapshot(context)
     touched = {path for path, digest in after.items() if before.get(path) != digest}
     touched |= {path for path in before if path not in after}
     return tuple(sorted(touched))
@@ -255,7 +293,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         task.status = TaskStatus.IN_PROGRESS
         ledger.save(context.paths.ledger_json)
 
-        before = git_snapshot(context)
+        before = attempt_snapshot(context)
         result = await run_subagent(
             "coder",
             _coder_prompt(task, blocker_text),
@@ -275,7 +313,10 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             task.note = result.halted_reason
 
         task.files_touched = changed_since(context, before)
-        if before is not None and not task.files_touched:
+        # No `before is not None` qualifier any more: `attempt_snapshot`
+        # always has one, and the qualifier was what disabled this guard
+        # outside a git repository (OPEN-13).
+        if not task.files_touched:
             task.note = "the coder wrote nothing"
             ledger.save(context.paths.ledger_json)
             continue
@@ -798,8 +839,10 @@ async def run_loop(
 __all__ = [
     "LoopContext",
     "Outcome",
+    "attempt_snapshot",
     "changed_since",
     "git_snapshot",
+    "tree_snapshot",
     "plan",
     "review_once",
     "run_loop",

@@ -29,7 +29,7 @@ from rudra.middleware import (
 )
 from rudra.permissions import run_with_approvals
 from rudra.tools.interaction_tools import create_interaction_tools
-from rudra.trace.stream import StreamState, looks_like_error
+from rudra.trace.stream import StreamState, message_is_error
 
 _COMMON_HEADER = """You are a senior software architect and planning agent for Rudra.
 
@@ -573,10 +573,13 @@ async def _stream_planner_turn(
                     break
 
             elif msg_type == "ToolMessage":
-                # The shared list, not a fourth private copy. This guard's
-                # own four markers could not see "BLOCKED:", so three
-                # consecutive denials never tripped it.
-                if looks_like_error(str(getattr(msg, "content", ""))):
+                # The shared predicate, not a fourth private copy. This
+                # guard's own four markers could not see "BLOCKED:", so
+                # three consecutive denials never tripped it. It reads the
+                # whole message rather than the content since OPEN-16:
+                # `status` says whether a tool failed without guessing from
+                # text that may simply quote a failure.
+                if message_is_error(msg):
                     consecutive_failures += 1
                     if consecutive_failures >= 3:
                         console.print(

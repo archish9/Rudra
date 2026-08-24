@@ -251,6 +251,62 @@ def _skills_for(spec: RudraSubagent, context: Any) -> list[str] | None:
     return list(sources)
 
 
+def _interrupt_on_for(spec: RudraSubagent, context: Any, tools: list) -> dict | None:
+    """The gate's interrupt map, narrowed to tools this subagent holds.
+
+    `build_interrupt_on` returns an entry for every name in MUTATING_TOOLS
+    and knows nothing about any spec (permissions/interrupts.py:36-44); the
+    whole map used to be handed to every subagent. deepagents'
+    HumanInTheLoopMiddleware matches on the tool-call NAME in the assistant
+    message, which happens before the tool node discovers the name is not
+    registered -- so the coder, which has no `execute`, still raised a full
+    approval panel for `execute pwd`, took the user's answer, wrote their
+    "Always" grant to the audit log, and only then failed with "execute is
+    not a valid tool" (OPEN-15).
+
+    Filtering here rather than in `build_interrupt_on` because the engine's
+    map is correct: it describes what the GATE covers. What a given agent
+    can call is the spec's business, and this is where the two meet.
+
+    Read from the built tool list rather than from `spec.rudra_tools`, so an
+    MCP-holding spec keeps its `call_mcp_tool` entry and one that resolved
+    no servers does not.
+    """
+    if context.gate is None:
+        return None
+    granted = set(spec.fs_tools) | {tool.name for tool in tools}
+    return {name: cfg for name, cfg in context.gate.interrupt_on.items() if name in granted}
+
+
+def _nested_subagents(context: Any) -> list[dict]:
+    """The gated `general-purpose` spec every subagent must carry (OPEN-14).
+
+    `create_deep_agent` auto-adds its OWN `general-purpose` subagent unless
+    a spec with that name is supplied (graph.py:745-751), and the one it
+    adds is built from a fresh middleware stack: a `FilesystemMiddleware`
+    with no `tools=` restriction -- so write_file, edit_file and execute --
+    plus summarization and PatchToolCalls (graph.py:752-760). Only
+    middleware whose `.name` matches a default slot is inherited from the
+    parent (graph.py:776-778), and Rudra's gate reports
+    `RudraPermissionMiddleware`, which matches none. So the deny middleware,
+    the repeat guard and the param fixer were all absent from it.
+
+    `interrupt_on` IS inherited (graph.py:807-811), which is why `ask` mode
+    still prompted and this was not worse than it was. Under `--auto` the
+    engine answers `allow`, no prompt is raised, and the deny middleware --
+    `permissions.deny`, the `git-dir` and `catastrophic-command` floor, the
+    `auto-shell` block from A1.49 -- was simply not in the stack.
+
+    `registry.py:196-199` already documents this mechanism and defends
+    against it for the MAIN agent. This is the same defence for the subagent
+    path, which never had it: every Rudra subagent holds `task` (its own
+    error messages list it) and nothing said where that led.
+    """
+    from rudra.subagents.registry import GENERAL_PURPOSE
+
+    return [to_subagent_spec(GENERAL_PURPOSE, context)]
+
+
 def build_agent(spec: RudraSubagent, context: Any, task: str = "") -> Any:
     """A compiled deep agent for this spec, ready to invoke directly.
 
@@ -275,15 +331,19 @@ def build_agent(spec: RudraSubagent, context: Any, task: str = "") -> Any:
     from langgraph.checkpoint.memory import InMemorySaver
 
     model = _model_for(spec, context.cfg)
+    tools = _tools_for(spec, context)
     return create_deep_agent(
         model=model,
-        tools=_tools_for(spec, context),
+        tools=tools,
         system_prompt=_prompt_for(spec, context, task),
         backend=context.backend,
         checkpointer=context.checkpointer or InMemorySaver(),
         middleware=_middleware_for(spec, context, model),
-        interrupt_on=context.gate.interrupt_on if context.gate is not None else None,
+        interrupt_on=_interrupt_on_for(spec, context, tools),
         skills=_skills_for(spec, context),
+        # Not "delegation Rudra wants" -- suppression of delegation Rudra
+        # did not choose. See _nested_subagents (OPEN-14).
+        subagents=_nested_subagents(context),
     )
 
 
@@ -299,14 +359,15 @@ def to_subagent_spec(spec: RudraSubagent, context: Any) -> dict:
     without them (subagents.py:358-363).
     """
     _spec_model = _model_for(spec, context.cfg)
+    _spec_tools = _tools_for(spec, context)
     return {
         "name": spec.name,
         "description": spec.description,
         "system_prompt": _prompt_for(spec, context),
         "model": _spec_model,
-        "tools": _tools_for(spec, context),
+        "tools": _spec_tools,
         "middleware": _middleware_for(spec, context, _spec_model),
-        "interrupt_on": context.gate.interrupt_on if context.gate is not None else None,
+        "interrupt_on": _interrupt_on_for(spec, context, _spec_tools),
         # Only when the spec wants them: create_sub_agent reads this key
         # (graph.py:676-678), and the delegated path must grant exactly
         # what the direct one does.
