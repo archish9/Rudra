@@ -221,3 +221,72 @@ def test_config_list_prints_the_step_8_tools_keys(tmp_path: Path) -> None:
     result = runner.invoke(app, ["config", "list", "-d", str(tmp_path)])
     assert "auto_branch" in result.stdout
     assert "test_timeout" in result.stdout
+
+
+# --------------------------------------------------------------------------
+# bare `rudra` auto-init — first run scaffolds, later runs don't
+# --------------------------------------------------------------------------
+
+
+def test_bare_invocation_scaffolds_an_uninitialized_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No task, no existing config.toml: it writes one before doing anything else."""
+    monkeypatch.setattr("rudra.memory.prefetch.is_warm", lambda: True)
+    result = runner.invoke(app, ["-d", str(tmp_path)])
+    assert (tmp_path / ".rudra" / "config.toml").exists()
+    assert "No .rudra/config.toml found" in result.output
+
+
+def test_bare_invocation_does_not_rescaffold_an_initialized_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Second bare run: the gate is the file's own existence, nothing else."""
+    monkeypatch.setattr("rudra.memory.prefetch.is_warm", lambda: True)
+    runner.invoke(app, ["init", "-d", str(tmp_path)])
+    written_at = (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8")
+
+    result = runner.invoke(app, ["-d", str(tmp_path)])
+
+    assert "No .rudra/config.toml found" not in result.output
+    assert (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8") == written_at
+
+
+def test_a_task_prompt_does_not_trigger_auto_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scope is bare `rudra` only — `rudra "task"` on an uninitialized project
+
+    stays on defaults rather than silently scaffolding files the user never
+    asked for.
+    """
+    monkeypatch.setattr("rudra.memory.prefetch.is_warm", lambda: True)
+    result = runner.invoke(app, ["-d", str(tmp_path), "do a thing"])
+    assert not (tmp_path / ".rudra" / "config.toml").exists()
+    assert "No .rudra/config.toml found" not in result.output
+
+
+def test_bare_invocation_warms_the_embedding_model_and_reports_the_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The download is silent at the library level (prefetch.py:44) -- Rudra
+
+    must call it and report the result itself, or a slow first run gives no
+    sign anything happened. (The in-progress spinner is real-terminal-only
+    by Rich's own design -- CliRunner has no TTY to show it on, so it isn't
+    asserted here; what's stably testable is that warm_model() runs and its
+    result reaches the user.)
+    """
+    calls: list[bool] = []
+
+    def _fake_warm() -> tuple[bool, str]:
+        calls.append(True)
+        return True, "downloaded to /fake/cache"
+
+    monkeypatch.setattr("rudra.memory.prefetch.is_warm", lambda: False)
+    monkeypatch.setattr("rudra.memory.prefetch.warm_model", _fake_warm)
+
+    result = runner.invoke(app, ["-d", str(tmp_path)])
+
+    assert calls == [True]
+    assert "downloaded to /fake/cache" in result.output

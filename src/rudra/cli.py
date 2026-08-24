@@ -1078,6 +1078,77 @@ def verify_command(
     raise typer.Exit(code=exit_code(report))
 
 
+def _warm_embedding_model() -> None:
+    """Fetch the embedding model if it isn't cached yet, saying why the wait is happening.
+
+    C8.5 / D12: fetch it now, so no run discovers a 167 MB download mid-task.
+    Saying the size *before* starting matters -- an unexplained download
+    during what looks like a config-file command is the surprise D12 exists
+    to prevent. The spinner matters too: `warm_model()`
+    (memory/prefetch.py:44) is one blocking call with no progress callback,
+    and silence during a slow first download reads as Rudra being stuck
+    rather than working.
+    """
+    from rudra.memory.prefetch import MODEL_SIZE_MB, is_warm, warm_model
+
+    if is_warm():
+        console.print("[dim]Embedding model already present.[/dim]")
+        return
+
+    with console.status(
+        f"[dim]Downloading embedding model (~{MODEL_SIZE_MB} MB, once per machine, "
+        f"shared by every project)…[/dim]"
+    ):
+        ok, detail = warm_model()
+    console.print(
+        f"[green]Embedding model ready[/green] — {detail}"
+        if ok
+        else f"[yellow]Embedding model not fetched[/yellow] — {detail}. "
+        f"It will download on first use instead."
+    )
+
+
+def _write_mcp_scaffold(project_path: Path) -> None:
+    """Write an empty `.mcp.json` if this project doesn't have one yet.
+
+    No MCP server ships enabled (S13.4): every candidate duplicates
+    something Rudra already gates natively, and a shipped default is an
+    unrequested subprocess. The empty file exists so `rudra mcp add` has
+    somewhere obvious to write, and so the schema is discoverable. JSON
+    carries no comments, so the explanation goes to the console instead of
+    into an invalid file.
+    """
+    mcp_file = project_path / ".mcp.json"
+    if not mcp_file.exists():
+        mcp_file.write_text('{\n  "mcpServers": {}\n}\n', encoding="utf-8")
+        console.print(f"[green]Wrote[/green] {mcp_file} [dim](no servers configured)[/dim]")
+
+
+def _run_first_time_setup(project_path: Path) -> None:
+    """Scaffold an uninitialized project before its first bare `rudra` run.
+
+    Same scaffold `rudra init` writes, run automatically so a first-time
+    user is never told to go run a setup command before Rudra will do
+    anything. The gate against running twice is the config file's own
+    existence -- checked by the caller in `main()` -- so nothing extra is
+    tracked here.
+    """
+    from rudra.config.template import CONFIG_TEMPLATE
+    from rudra.state.paths import ensure_layout
+
+    console.print(
+        "[dim]No .rudra/config.toml found — running first-time setup (same as `rudra init`)…[/dim]"
+    )
+    target = ensure_layout(project_path).config_toml
+    target.write_text(CONFIG_TEMPLATE, encoding="utf-8")
+    console.print(f"[green]Wrote[/green] {target}")
+
+    _warm_embedding_model()
+    _write_mcp_scaffold(project_path)
+
+    console.print("[dim]Setup complete — starting Rudra.[/dim]")
+
+
 @app.command("init")
 def init_command(
     project_dir: Optional[Path] = typer.Option(
@@ -1090,7 +1161,6 @@ def init_command(
 ) -> None:
     """Scaffold a commented config.toml and create the .rudra/ layout."""
     from rudra.config import user_toml_path
-    from rudra.config.template import CONFIG_TEMPLATE
     from rudra.state.paths import ensure_layout
 
     if global_:
@@ -1103,41 +1173,15 @@ def init_command(
         console.print(f"[red]{target} already exists.[/red] Pass --force to overwrite it.")
         raise typer.Exit(code=1)
 
+    from rudra.config.template import CONFIG_TEMPLATE
+
     target.write_text(CONFIG_TEMPLATE, encoding="utf-8")
     console.print(f"[green]Wrote[/green] {target}")
 
-    # C8.5 / D12: fetch the embedding model now, so no run discovers a
-    # 167 MB download mid-task. Saying the size *before* starting matters --
-    # an unexplained download during what looks like a config-file command
-    # is the surprise D12 exists to prevent.
-    from rudra.memory.prefetch import MODEL_SIZE_MB, is_warm, warm_model
+    _warm_embedding_model()
 
-    if is_warm():
-        console.print("[dim]Embedding model already present.[/dim]")
-    else:
-        console.print(
-            f"[dim]Fetching the embedding model (~{MODEL_SIZE_MB} MB, once per machine, "
-            f"shared by every project)…[/dim]"
-        )
-        ok, detail = warm_model()
-        console.print(
-            f"[green]Embedding model ready[/green] — {detail}"
-            if ok
-            else f"[yellow]Embedding model not fetched[/yellow] — {detail}. "
-            f"It will download on first use instead."
-        )
-
-    # No MCP server ships enabled (S13.4): every candidate duplicates
-    # something Rudra already gates natively, and a shipped default is an
-    # unrequested subprocess. The empty file exists so `rudra mcp add` has
-    # somewhere obvious to write, and so the schema is discoverable. JSON
-    # carries no comments, so the explanation goes to the console instead of
-    # into an invalid file.
     if not global_:
-        mcp_file = get_project_path(project_dir) / ".mcp.json"
-        if not mcp_file.exists():
-            mcp_file.write_text('{\n  "mcpServers": {}\n}\n', encoding="utf-8")
-            console.print(f"[green]Wrote[/green] {mcp_file} [dim](no servers configured)[/dim]")
+        _write_mcp_scaffold(get_project_path(project_dir))
 
     console.print("[dim]Edit it, then run `rudra models test` to check your model.[/dim]")
 
@@ -1369,6 +1413,19 @@ def main(
     # --verbose or --no-verbose is passed, leaving the first downstream
     # get_config() to fall back to the cwd. See TODO.md A5.2.
     project_path = get_project_path(project_dir)
+
+    # Bare `rudra` only (prompt is None) -- a task prompt stays on defaults
+    # rather than silently scaffolding files the user never asked for. The
+    # gate is config.toml's own existence, checked fresh every call, so this
+    # never fires a second time for a project that has one. Must run before
+    # get_config() below: the file it writes has to exist in time to be the
+    # one that call reads, not the next one.
+    if prompt is None:
+        from rudra.state.paths import rudra_paths
+
+        if not rudra_paths(project_path).config_toml.exists():
+            _run_first_time_setup(project_path)
+
     permission_mode = "auto" if auto else "plan" if plan else None
     cfg = get_config(
         project_path,
