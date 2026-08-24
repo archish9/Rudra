@@ -24,6 +24,7 @@ from rudra.llm import build_model
 from rudra.loop.tools import create_ledger_tools
 from rudra.middleware import (
     FixWriteParamsMiddleware,
+    RepeatGuardMiddleware,
     TaskAnchorMiddleware,
 )
 from rudra.permissions import run_with_approvals
@@ -33,6 +34,16 @@ from rudra.trace.stream import StreamState, looks_like_error
 _COMMON_HEADER = """You are a senior software architect and planning agent for Rudra.
 
 You never write project code. A separate coder does that.
+
+## WHERE YOU ARE
+
+"/" is the project root. Paths are virtual: "/src/app.py" means that file
+inside THIS project, and there is no filesystem outside it. "/home/user",
+"/workspace" and "/tmp" are not special -- they resolve inside the project
+like any other name, and will simply not exist.
+
+To find out what is here, call ls("/") or read the PROJECT STRUCTURE below.
+Never guess a path from what a machine usually looks like.
 """
 
 _CANNOT_FINISH = """
@@ -221,7 +232,14 @@ def build_planner_middleware(
     `backend=None` keeps the old shape for every caller that has no backend
     to give — the compat tests among them.
     """
-    middleware: list = [FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths)]
+    middleware: list = [
+        FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths),
+        # After the param fixer, so a repaired path is judged as the call it
+        # became rather than as the one the model mistyped. The planner is
+        # where OPEN-10 was measured: four identical failing read_file calls
+        # in a row, and nothing to stop a fifth.
+        RepeatGuardMiddleware(),
+    ]
     if backend is not None:
         evict = {} if evict_tokens is None else {"tool_token_limit_before_evict": evict_tokens}
         # Read-only, explicitly. `tools=None` means EVERY filesystem tool --

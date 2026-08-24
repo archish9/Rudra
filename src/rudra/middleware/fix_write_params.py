@@ -2,9 +2,10 @@
 
 Fixes applied (in order):
 1. Parameter rename: `filename` or `path` → `file_path` for write/edit tools
-2. Sandbox prefix stripping: removes known LLM-hallucinated path prefixes
+2. Markdown fence stripping: removes ```lang ... ``` wrappers from file content
+3. Split dot-segment repair: `/. rudra/x` → `/.rudra/x` on every path arg
+4. Sandbox prefix stripping: removes known LLM-hallucinated path prefixes
    (/testbed/, /workspace/, /home/user/, etc.) from all file tool paths
-3. Markdown fence stripping: removes ```lang ... ``` wrappers from file content
 """
 
 from __future__ import annotations
@@ -56,6 +57,25 @@ def _strip_fences(content: str) -> str:
     return inner
 
 
+# A path segment that is exactly `.` followed by whitespace and then a
+# name: `/. rudra/AGENTS.md` for `/.rudra/AGENTS.md` (OPEN-8). Anchored to
+# `^` or `/` so a dot INSIDE a segment is never touched, and requiring a
+# non-space, non-slash after the whitespace so there is actually a segment
+# to rejoin.
+#
+# Narrow on purpose. Stripping whitespace from paths generally would break
+# `My Documents`, which is a real directory on every desktop OS; what makes
+# THIS safe is that `. rudra` -- a directory whose name is dot, space, name
+# -- is not a thing anyone creates, while a model splitting `.rudra` into
+# two tokens is measured behaviour.
+_SPLIT_DOT_RE = re.compile(r"(^|/)\.[ \t]+(?=[^/\s])")
+
+
+def _repair_split_dot_segment(path: str) -> str:
+    """Rejoin a dotfile segment the model split with whitespace."""
+    return _SPLIT_DOT_RE.sub(r"\1.", path)
+
+
 def _strip_sandbox_prefix(path: str) -> str:
     """Strip known sandbox/training-env prefixes from an absolute POSIX path."""
     if not path.startswith("/"):
@@ -71,10 +91,15 @@ class FixWriteParamsMiddleware(AgentMiddleware):
 
     D4 splits this middleware in two:
 
-    * **Always on** — markdown-fence stripping and `filename`/`path` ->
-      `file_path` aliasing. Fence stripping is *required*, not a small-model
-      workaround: 0.7.4's `FilesystemBackend.write()` no longer strips, so
-      nothing else in the stack does (TODO.md U.3, U.15).
+    * **Always on** — markdown-fence stripping, `filename`/`path` ->
+      `file_path` aliasing, and split dot-segment repair. Fence stripping is
+      *required*, not a small-model workaround: 0.7.4's
+      `FilesystemBackend.write()` no longer strips, so nothing else in the
+      stack does (TODO.md U.3, U.15). The dot-segment repair is always on
+      because it cannot fire on a path anyone would write by hand, and
+      because the write path fails SILENTLY without it -- a mangled read
+      errors, a mangled write creates a junk directory and reports success
+      (TODO.md OPEN-8).
     * **Opt-in** — sandbox-prefix stripping, behind `[compat] sandbox_paths`.
       It was built for a training-sandbox path shape that a 32B model on a
       normal machine does not emit, and it rewrites legitimate absolute
@@ -106,6 +131,14 @@ class FixWriteParamsMiddleware(AgentMiddleware):
                 # correct. The sandbox branch below already guards this way
                 # (CR-E11).
                 args["content"] = _strip_fences(args["content"])
+
+        # Always on, and after the alias above so it cleans the key the
+        # model's path actually ended up under. `content` is deliberately
+        # not in _PATH_ARG_KEYS: file content is data, and a line reading
+        # `. rudra` inside a document is not a path.
+        for key in _PATH_ARG_KEYS:
+            if key in args and isinstance(args[key], str):
+                args[key] = _repair_split_dot_segment(args[key])
 
         # Strip sandbox prefixes from all path-bearing args (second defense
         # layer). Opt-in per D4 — see the class docstring.

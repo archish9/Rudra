@@ -25,7 +25,7 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from rudra.context.budget import evict_kwargs, execute_kwargs
 from rudra.facts import facts_block
 from rudra.llm import build_model
-from rudra.middleware import FixWriteParamsMiddleware
+from rudra.middleware import FixWriteParamsMiddleware, RepeatGuardMiddleware
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
 from rudra.tools.git_tools import create_git_tools
 from rudra.tools.memory_tools import create_memory_tools
@@ -183,6 +183,10 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
 
     middleware: list[Any] = [
         FixWriteParamsMiddleware(strip_sandbox_prefixes=context.cfg.compat.sandbox_paths),
+        # After the param fixer, so a repaired path is judged as the call it
+        # became rather than as the one the model mistyped -- otherwise two
+        # spellings of one path count as two different calls (OPEN-10).
+        RepeatGuardMiddleware(),
         FilesystemMiddleware(
             backend=context.backend,
             tools=list(spec.fs_tools),

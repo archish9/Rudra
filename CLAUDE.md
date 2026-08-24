@@ -158,7 +158,13 @@ src/rudra/
 │   └── planner_agent.py    THREE staged agents (Step 10b): clarify · architect ·
 │                           breakdown, one tool set each via _tools_for_stage.
 │                           consult_planner + the lifted _stream_planner_turn
-├── middleware/             2 survivors of D4, both opt-in behind [compat]
+├── middleware/             2 survivors of D4, both opt-in behind [compat],
+│                           plus repeat_guard.py (OPEN-10, always on): an
+│                           agent may not re-run a READ that already failed
+│                           twice with identical args and nothing in between.
+│                           execute is excluded — a command can legitimately
+│                           succeed on retry, and guarding it would turn a
+│                           token cost into a correctness bug
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           interaction (record_fact · ask_user) · git_tools ·
 │                           testing_tools · memory_tools (remember ·

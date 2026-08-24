@@ -172,6 +172,25 @@ def test_no_stage_prompt_names_a_rudra_path(tmp_path: Path, stage: str):
     assert ".rudra" not in _prompt(tmp_path, stage)
 
 
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_every_stage_prompt_says_where_the_project_root_is(tmp_path: Path, stage: str):
+    """OPEN-9: every subagent gets a `## FILE PATH RULES` block
+    (subagents/registry.py:34-36) and the planner got nothing, while
+    holding ls, read_file, glob and grep. It guessed `/home/user`."""
+    prompt = _prompt(tmp_path, stage)
+    assert "project root" in prompt.lower()
+    assert "virtual" in prompt.lower()
+
+
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_every_stage_prompt_names_the_prefixes_models_hallucinate(tmp_path: Path, stage: str):
+    """Named explicitly rather than left to inference, because these are the
+    exact strings `compat/path_constants.py` records models inventing -- and
+    `/home/user` is the one that was actually observed."""
+    prompt = _prompt(tmp_path, stage)
+    assert "/home/user" in prompt
+
+
 def test_an_unattended_clarify_prompt_says_nobody_can_answer(tmp_path: Path):
     prompt = _prompt(tmp_path, "clarify", can_ask=False)
     assert "unattended" in prompt
@@ -198,11 +217,19 @@ def test_planner_middleware_carries_a_filesystem_middleware_with_a_limit():
 
 
 def test_planner_middleware_without_a_backend_is_unchanged():
-    """Every existing caller and test passes no backend and must still work."""
+    """Every existing caller and test passes no backend and must still work.
+
+    RepeatGuardMiddleware joined the always-on pair with OPEN-10, and the
+    ORDER is the assertion that matters: it must sit after the param fixer
+    so a repaired path is judged as the call it became, not as the one the
+    model mistyped."""
     from rudra.agent.planner_agent import build_planner_middleware
 
     middleware = build_planner_middleware("a task")
-    assert [type(m).__name__ for m in middleware] == ["FixWriteParamsMiddleware"]
+    assert [type(m).__name__ for m in middleware] == [
+        "FixWriteParamsMiddleware",
+        "RepeatGuardMiddleware",
+    ]
 
 
 def test_planner_with_no_declared_window_keeps_the_upstream_default():
