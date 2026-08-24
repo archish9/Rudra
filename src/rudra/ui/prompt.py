@@ -93,4 +93,118 @@ def _resolve(state: SelectState, raw: str) -> Chosen | None:
     return outcome if isinstance(outcome, Chosen) else None
 
 
-__all__ = ["MAX_ATTEMPTS", "run_numbered"]
+def run_inline(
+    state: SelectState,
+    *,
+    console: Any,
+    input: Any = None,  # noqa: A002 - prompt_toolkit's own parameter name
+    output: Any = None,
+) -> Chosen | Cancelled:
+    """Draw the rows inline, read keys, return a result.
+
+    `full_screen=False` on purpose: a full-screen Application clears the
+    terminal, which would wipe the run trace the user is reading. The
+    widget erases itself on exit and the CALLER prints a one-line record
+    of what was chosen, so scrollback does not fill with dead menus.
+    """
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout import Layout, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+
+    held: dict[str, Any] = {"state": state, "result": None}
+
+    def _apply(key: str) -> None:
+        outcome = press(held["state"], key)
+        if isinstance(outcome, (Chosen, Cancelled)):
+            held["result"] = outcome
+            application.exit()
+        else:
+            held["state"] = outcome
+
+    bindings = KeyBindings()
+    for binding, name in (
+        ("up", "up"),
+        ("down", "down"),
+        ("enter", "enter"),
+        ("escape", "escape"),
+        ("c-c", "c-c"),
+        ("c-d", "eof"),
+        ("space", "space"),
+    ):
+        bindings.add(binding)(lambda event, name=name: _apply(name))
+
+    # Hotkeys are bound individually and case-sensitively: `a` and `A` are
+    # different actions in the file-approval prompt.
+    for choice in state.choices:
+        if choice.hotkey is not None:
+            bindings.add(choice.hotkey)(lambda event, key=choice.hotkey: _apply(key))
+
+    def _text() -> str:
+        # Rich markup is meaningless to prompt_toolkit, so the rows are
+        # rendered plainly here. The permanent record the caller prints
+        # afterwards is the styled one.
+        return "\n".join(_plain(line) for line in frame(held["state"]))
+
+    application = Application(
+        layout=Layout(Window(FormattedTextControl(_text), always_hide_cursor=True)),
+        key_bindings=bindings,
+        full_screen=False,
+        # The property spec 4.3 names: the widget erases itself on exit
+        # and the CALLER prints the permanent one-line record. Without
+        # this the menu stays on screen and scrollback fills with dead
+        # ones -- the wall-of-text complaint by another route.
+        erase_when_done=True,
+        input=input,
+        output=output,
+    )
+    application.run()
+    return held["result"] if held["result"] is not None else Cancelled()
+
+
+def _plain(line: str) -> str:
+    """Strip Rich markup for prompt_toolkit's plain-text control."""
+    from rich.text import Text
+
+    return Text.from_markup(line).plain
+
+
+def ask(
+    state: SelectState,
+    *,
+    console: Any,
+    reader: Callable[[], str] | None = None,
+    input: Any = None,  # noqa: A002 - matches run_inline
+    output: Any = None,
+) -> Chosen | Cancelled:
+    """Run the selector on whichever driver this environment supports.
+
+    Capability, never platform (CLAUDE.md 1.8): the question is whether a
+    terminal is actually there and whether an Application constructs, not
+    which OS this is. An explicit `reader` forces the numbered driver,
+    which is the seam that keeps the existing approval tests terminal-free.
+    """
+    if reader is not None:
+        return run_numbered(state, console=console, reader=reader)
+    if not _has_terminal():
+        return run_numbered(state, console=console, reader=_stdin_reader)
+    try:
+        return run_inline(state, console=console, input=input, output=output)
+    except Exception:  # noqa: BLE001 - any terminal that refuses gets the fallback
+        return run_numbered(state, console=console, reader=_stdin_reader)
+
+
+def _has_terminal() -> bool:
+    import sys
+
+    return bool(
+        getattr(sys.stdin, "isatty", lambda: False)()
+        and getattr(sys.stdout, "isatty", lambda: False)()
+    )
+
+
+def _stdin_reader() -> str:
+    return input()
+
+
+__all__ = ["MAX_ATTEMPTS", "ask", "run_inline", "run_numbered"]
