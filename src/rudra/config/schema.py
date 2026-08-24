@@ -6,7 +6,7 @@ can be read and tested without any agent machinery.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 # tester and reviewer joined in Step 9b (C6.2-C6.4). Unset roles inherit
@@ -55,8 +55,20 @@ VALID_MEMORY_BACKENDS = frozenset({"chroma", "sqlite", "milvus", "qdrant", "pgve
 class ModelConfig:
     """Everything needed to construct one role's chat model.
 
-    `api_key_env` names an environment variable. The key value itself is never
-    stored here, never logged, and never written to a config file (C1.5).
+    Two ways to supply the key, and `api_key` wins where both are set:
+
+    * `api_key` holds the key itself. This is what `~/.config/rudra/config.toml`
+      is for -- a home-directory file that is in nobody's repository, the same
+      place `~/.aws/credentials` and `~/.npmrc` keep theirs. Writing it into a
+      *project* `config.toml` also works, and warns, because `README.md` tells
+      users to commit that file (OPEN-6).
+    * `api_key_env` names an environment variable holding it. Unchanged, and
+      still the right answer for a key that must not touch any file.
+
+    C1.5 said the value is never stored here. OPEN-6 narrowed that to what it
+    was actually protecting: the value is never *displayed*. `repr=False` is
+    how -- it keeps the key out of every repr, log line and traceback frame
+    by construction rather than by a rule each call site has to remember.
 
     Field names are unchanged from Step 5 so `llm/factory.py` keeps working.
     """
@@ -69,6 +81,9 @@ class ModelConfig:
     context_tokens: int | None
     max_output_tokens: int | None
     timeout: int | None
+    # Last, and defaulted, because MODEL_KEYS is derived from these fields
+    # and every construction site passes them by name.
+    api_key: str | None = field(repr=False, default=None)
 
 
 @dataclass(frozen=True)
@@ -100,6 +115,12 @@ class AgentConfig:
     # is unchanged, because the second stream mode never leaves
     # permissions/approval.py.
     stream_tokens: bool = False
+    # Write the complete per-run record to .rudra/run/logs/debug-<id>.jsonl
+    # (OPEN-7). On by default, unlike the `--debug` flag it replaces: the
+    # run somebody needs a log of is never the run they remembered to pass
+    # a flag to. Uncapped and unfiltered, so it is bounded by retention
+    # rather than by size -- newest 20 runs, and .rudra/run/ is gitignored.
+    debug_log: bool = True
 
 
 @dataclass(frozen=True)
@@ -232,6 +253,7 @@ DEFAULTS: dict[str, Any] = {
             # max_tokens (CR-D1, CR-D2).
             "base_url": None,
             "api_key_env": None,
+            "api_key": None,
             "temperature": 0.3,
             "context_tokens": None,
             "max_output_tokens": None,
@@ -243,6 +265,7 @@ DEFAULTS: dict[str, Any] = {
         "max_fix_attempts": 3,
         "max_questions": 5,
         "stream_tokens": False,
+        "debug_log": True,
     },
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},

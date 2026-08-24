@@ -543,7 +543,10 @@ async def create_main_agent(
     console: Optional[Console] = None,
     dry_run: bool = False,
     verbose: Optional[bool] = None,
-    debug: bool = False,
+    # Three-state, like `verbose` and for the same reason (A1.15): None
+    # means "consult [agent] debug_log", which defaults to writing the log.
+    # It was a plain bool while `--debug` was the only way to get one.
+    debug: Optional[bool] = None,
     resume: bool = False,
     **kwargs,
 ) -> RudraAgent:
@@ -684,16 +687,11 @@ async def create_main_agent(
         trace = TraceSink(level=trace_level)
         trace.add(console_consumer(console, trace_level))
 
-        # --debug adds a second consumer on the SAME events (C9.7), so the
-        # file and the screen cannot disagree about what happened -- only
-        # about how much of it was drawn. A log that cannot be opened is
-        # reported as None and skipped, never raised: bookkeeping must not end
-        # a run (loop/engine.py:501-515).
-        # The run's record (C9.5). NOT behind a flag, unlike --debug: the
-        # point of a record is that it exists when somebody wants it, which is
-        # always after the fact. Safe to write by default only because A1.95's
-        # redaction happens where the event is built, so what reaches this
-        # writer is already clean.
+        # The run's record (C9.5). NOT behind a flag: the point of a record is
+        # that it exists when somebody wants it, which is always after the
+        # fact. Safe to write by default only because A1.95's redaction
+        # happens where the event is built, so what reaches this writer is
+        # already clean.
         #
         # Pruned once here rather than per event: retention is a per-run
         # decision, and doing it per event would stat the directory thousands
@@ -702,15 +700,33 @@ async def create_main_agent(
         transcript = TranscriptWriter(transcript_path(paths, session_id))
         trace.add(transcript)
 
-        if debug:
-            from rudra.trace.debug import configure_debug_logging, debug_consumer
+        # The complete record, beside the readable one (OPEN-7). Also not
+        # behind a flag since OPEN-7 -- `--debug`/`--no-debug` now only
+        # override [agent] debug_log for one run, three-state like --verbose.
+        #
+        # add_recorder, NOT add: as an ordinary consumer this sat behind the
+        # sink's level filter and could not hold more than the console
+        # printed, so `--no-verbose` quietly cut the bug-report log down to
+        # errors. A recorder takes every event, which is what makes the file
+        # complete and leaves the transcript the readable one.
+        #
+        # A log that cannot be opened is reported as None and skipped, never
+        # raised: bookkeeping must not end a run (loop/engine.py:501-515).
+        want_log = cfg.agent.debug_log if debug is None else debug
+        if want_log:
+            from rudra.trace.debug import (
+                configure_debug_logging,
+                debug_consumer,
+                debug_log_path,
+                prune_debug_logs,
+            )
 
-            if configure_debug_logging(paths.logs / "debug.jsonl", enabled=True) is not None:
-                trace.add(debug_consumer())
+            prune_debug_logs(paths.logs)
+            log_path = debug_log_path(paths, session_id)
+            if configure_debug_logging(log_path, enabled=True) is not None:
+                trace.add_recorder(debug_consumer())
             else:
-                console.print(
-                    "[yellow]--debug: could not open .rudra/run/logs/debug.jsonl[/yellow]"
-                )
+                console.print(f"[yellow]Could not open the run log at {log_path}[/yellow]")
 
         # One store, shared by reference between the subagents and the loop --
         # the rule the gate, the FactStore and the Ledger all follow. Two

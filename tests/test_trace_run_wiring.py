@@ -100,27 +100,35 @@ def test_the_shipped_default_is_normal_not_verbose():
     assert DEFAULTS["agent"]["verbose"] is False
 
 
-async def test_debug_registers_another_consumer_on_the_same_sink(tmp_path: Path) -> None:
-    """C9.7: every consumer reads the SAME events, so they cannot disagree
-    about what happened -- only about how much each keeps.
+def _debug_logs(tmp_path: Path) -> list[Path]:
+    return list((tmp_path / "demo" / ".rudra" / "run" / "logs").glob("debug-*.jsonl"))
 
-    Asserted as "one more than without the flag" rather than as a fixed
-    count: 15c added the transcript to the same sink, and a hard-coded 2
-    would have to be revised every time a consumer joins, which teaches
-    people to update the number instead of checking the property."""
-    plain = await _agent(tmp_path)
-    baseline = len(plain._loop_context.subagents.trace.consumers)
+
+async def test_the_run_log_is_a_recorder_not_an_ordinary_consumer(tmp_path: Path) -> None:
+    """OPEN-7: as an ordinary consumer it sat behind the sink's level
+    filter and could not hold more than the console printed, so
+    `--no-verbose` cut the bug-report log down to errors. Recorders are fed
+    every event, which is the whole difference.
+
+    Asserted as "one more than without it" rather than as a fixed count: a
+    hard-coded number teaches people to update the number instead of
+    checking the property."""
+    plain = await _agent(tmp_path, debug=False)
+    baseline_recorders = len(plain._loop_context.subagents.trace.recorders)
+    baseline_consumers = len(plain._loop_context.subagents.trace.consumers)
     await plain.close()
 
     agent = await _agent(tmp_path, debug=True)
     try:
-        assert len(agent._loop_context.subagents.trace.consumers) == baseline + 1
+        trace = agent._loop_context.subagents.trace
+        assert len(trace.recorders) == baseline_recorders + 1
+        assert len(trace.consumers) == baseline_consumers, "not a rendering consumer"
     finally:
         await agent.close()
         _detach_debug_handlers()
 
 
-async def test_debug_writes_into_the_volatile_subtree(tmp_path: Path) -> None:
+async def test_the_run_log_writes_into_the_volatile_subtree(tmp_path: Path) -> None:
     """D15: beside permissions.jsonl, verify.log and usage.json."""
     import json
 
@@ -132,12 +140,12 @@ async def test_debug_writes_into_the_volatile_subtree(tmp_path: Path) -> None:
             TraceEvent(kind=TraceKind.TOOL_CALL, role="coder", name="write_file", payload="{}")
         )
         _flush_debug_handlers()
-        log = tmp_path / "demo" / ".rudra" / "run" / "logs" / "debug.jsonl"
-        assert log.exists()
+        written = _debug_logs(tmp_path)
+        assert len(written) == 1
         # Not line 0: a real run logs before the first event -- memory and
         # model setup both use the `rudra` tree, which is the point of
         # attaching to it rather than to a private logger.
-        records = [json.loads(line) for line in log.read_text().splitlines() if line]
+        records = [json.loads(line) for line in written[0].read_text().splitlines() if line]
         assert any(record.get("name") == "write_file" for record in records)
         assert all("kind" in record for record in records), "one grammar per file"
     finally:
@@ -145,10 +153,68 @@ async def test_debug_writes_into_the_volatile_subtree(tmp_path: Path) -> None:
         _detach_debug_handlers()
 
 
-async def test_without_the_flag_no_log_is_written(tmp_path: Path) -> None:
+async def test_the_run_log_is_named_for_the_run(tmp_path: Path) -> None:
+    """One file per run, like the transcript -- which is what makes
+    retention possible at all, and what stopped one file appending forever
+    once this became always-on (OPEN-7)."""
+    from rudra.trace import TraceEvent, TraceKind
+
+    agent = await _agent(tmp_path, debug=True)
+    try:
+        agent._loop_context.subagents.trace.emit(
+            TraceEvent(kind=TraceKind.TOOL_CALL, role="coder", name="write_file")
+        )
+        _flush_debug_handlers()
+        assert _debug_logs(tmp_path)[0].stem == f"debug-{agent.session_id}"
+    finally:
+        await agent.close()
+        _detach_debug_handlers()
+
+
+async def test_the_run_log_is_written_with_no_flag_at_all(tmp_path: Path) -> None:
+    """The request OPEN-7 came from: the run somebody needs a log of is
+    never the run they remembered to pass a flag to."""
+    from rudra.trace import TraceEvent, TraceKind
+
     agent = await _agent(tmp_path)
     try:
-        assert not (tmp_path / "demo" / ".rudra" / "run" / "logs" / "debug.jsonl").exists()
+        agent._loop_context.subagents.trace.emit(
+            TraceEvent(kind=TraceKind.TOOL_CALL, role="coder", name="write_file")
+        )
+        _flush_debug_handlers()
+        assert len(_debug_logs(tmp_path)) == 1
+    finally:
+        await agent.close()
+        _detach_debug_handlers()
+
+
+async def test_no_debug_suppresses_the_log_for_one_run(tmp_path: Path) -> None:
+    agent = await _agent(tmp_path, debug=False)
+    try:
+        assert _debug_logs(tmp_path) == []
+    finally:
+        await agent.close()
+
+
+async def test_the_config_key_suppresses_the_log(tmp_path: Path) -> None:
+    """`[agent] debug_log = false` for a user who does not want it, with no
+    flag on every invocation."""
+    from rudra.config import get_config
+
+    project = tmp_path / "demo"
+    (project / ".rudra").mkdir(parents=True, exist_ok=True)
+    (project / ".rudra" / "config.toml").write_text("[agent]\ndebug_log = false\n")
+
+    # Seeded the way cli.py:1430 does. create_main_agent calls get_config()
+    # with no argument, so the project root has to be resolved into the
+    # process-wide Config before it -- that ordering IS the contract (A5.2),
+    # and without it this reads tmp_path rather than tmp_path/demo.
+    reset_config()
+    get_config(project)
+
+    agent = await _agent(tmp_path)
+    try:
+        assert _debug_logs(tmp_path) == []
     finally:
         await agent.close()
 

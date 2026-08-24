@@ -94,14 +94,17 @@ model    = "qwen3:32b"
 provider    = "openai_compatible"
 base_url    = "https://openrouter.ai/api/v1"
 model       = "nvidia/nemotron-3-ultra-550b-a55b:free"
-api_key_env = "OPENROUTER_API_KEY"    # the NAME of the variable, not the key
+api_key     = "your-key-here"
 ```
 
-Put the key itself in the environment or in `.env` (gitignored):
+Set the key once per machine, in `~/.config/rudra/config.toml`, and every project picks it up:
 
-```bash
-echo 'OPENROUTER_API_KEY=sk-or-v1-...' >> .env
+```toml
+[model.default]
+api_key = "your-key-here"
 ```
+
+That file is in your home directory, so it is in no repository — the same place `~/.aws/credentials` keeps its key. If you'd rather the key touched no file at all, use `api_key_env = "OPENROUTER_API_KEY"` instead and export the key into that variable.
 
 Environment variables still work and override the file, so `RUDRA_MODEL=...` is a fine way to try something without editing anything.
 
@@ -137,7 +140,7 @@ rudra verify                 # deterministic gate: syntax, lint, typecheck, test
 
 No model is involved. Details in **[Verification](Documentation/10-verification.md)**.
 
-> **Your API key never goes in a config file.** `api_key_env` holds the *name* of an environment variable; the key itself lives in your environment or in `.env`, which is gitignored. Rudra reads the value at run time and never stores, logs, or prints it.
+> **Where your API key goes.** Set `api_key = "..."` in **`~/.config/rudra/config.toml`** — your home directory, in no repository, and read by every project on the machine. Don't put it in a project's `.rudra/config.toml`: that file is meant to be committed (see below), so a key there gets committed too. Rudra warns if it finds one. Prefer no key in any file? Use `api_key_env` instead — it holds the *name* of an environment variable, and you export the key into it. Either way the value is never printed: `rudra config list` masks it and no error message contains it.
 
 ### Where settings come from
 
@@ -307,10 +310,17 @@ and summarising it mid-task, so a long fix loop doesn't run out of room.
     export/       markdown copy of long-term memory ← worth committing
     palace/       the searchable store itself         (binary, ignored)
   run/            ledger.json, checkpoints, artifacts,
+                  logs/debug-<id>.jsonl,
                   logs/permissions.jsonl,
                   logs/tests.log,
                   logs/usage.json                     (regenerated every run)
 ```
+
+**Every run leaves a complete log** at `.rudra/run/logs/debug-<id>.jsonl` —
+one JSON object per line covering every trace event, Rudra's own log records
+and any traceback, with nothing truncated and no flag required. That is the
+file to attach to a bug report. Newest 20 runs are kept; `--no-debug` skips
+one run and `[agent] debug_log = false` turns it off.
 
 Three of those are worth knowing about:
 

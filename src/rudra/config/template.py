@@ -24,8 +24,18 @@ base_url    = "http://localhost:11434"
 model       = "qwen3:32b"
 temperature = 0.3
 
-# The NAME of an environment variable holding your key — never the key
-# itself. Rudra reads the variable at run time and never stores its value.
+# Your API key, if this provider needs one. Two ways, and api_key wins
+# where both are set.
+#
+#   api_key     = "your-key-here"      the key itself
+#   api_key_env = "OPENROUTER_API_KEY" the NAME of an environment variable
+#                                      holding it
+#
+# Put api_key in ~/.config/rudra/config.toml, not here. That file is in
+# your home directory and in no repository; THIS file is meant to be
+# committed, so a key written here gets committed with it. Rudra warns at
+# run start if it finds one. Either way the value is never printed: `rudra
+# config list` masks it and no error message contains it.
 # api_key_env = "RUDRA_API_KEY"
 
 # Your model's real context window. Without it, history compaction never
@@ -58,6 +68,13 @@ max_fix_attempts = 3
 # How many clarifying questions the planner may ask across one run.
 # Set to 0 to never ask; unattended runs (--auto) never ask regardless.
 max_questions = 5
+
+# Write the complete record of every run to
+# .rudra/run/logs/debug-<id>.jsonl — every trace event whatever `verbose`
+# shows, with payloads uncapped, plus every log record and traceback. This
+# is the file to attach to a bug report. One file per run, newest 20 kept,
+# and .rudra/run/ is gitignored. `--no-debug` skips it for a single run.
+debug_log = true
 
 [permissions]
 # ask | auto | plan

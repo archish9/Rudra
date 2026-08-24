@@ -47,7 +47,9 @@ from rudra.config.schema import (
 from rudra.state.paths import rudra_paths
 
 _TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills", "mcp", "memory")
-_AGENT_KEYS = frozenset({"verbose", "max_fix_attempts", "max_questions", "stream_tokens"})
+_AGENT_KEYS = frozenset(
+    {"verbose", "max_fix_attempts", "max_questions", "stream_tokens", "debug_log"}
+)
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
 _SKILLS_KEYS = frozenset({"enabled"})
@@ -157,18 +159,29 @@ def validate(
                     raise ConfigError(
                         f"temperature in [model.{role}] must be a number, got {value!r}."
                     )
+            # The type only -- never the value, and never a repr of it.
+            # Every other branch here interpolates `value` into its message,
+            # which for this one key would print the secret (C1.5).
+            if key == "api_key" and value is not None and not isinstance(value, str):
+                raise ConfigError(
+                    f"api_key in [model.{role}] must be a string, got "
+                    f"{type(value).__name__} ({_where(provenance, sources, dotted)})."
+                )
 
     agent = merged.get("agent", {})
     for key in agent:
         if key not in _AGENT_KEYS:
             raise ConfigError(f"Unknown key '{key}' in [agent].{_suggest(key, _AGENT_KEYS)}")
 
-    # The two booleans were the only [agent] values never type-checked, and
+    # These booleans were the only [agent] values never type-checked, and
     # they are coerced with bare bool() -- so `verbose = "false"` was True,
     # because a non-empty string is truthy. The quoted spelling of "off"
     # meant "on", silently enabling untruncated-payload tracing and token
     # streaming. Every other section already rejects a wrong type (CR-D3).
-    for key in ("verbose", "stream_tokens"):
+    # `debug_log` joined the list with OPEN-7 for the same reason, and it
+    # defaults to ON -- so the truthiness bug there would be inverted and
+    # worse: `debug_log = "false"` would keep writing the log.
+    for key in ("verbose", "stream_tokens", "debug_log"):
         value = agent.get(key)
         if value is not None and not isinstance(value, bool):
             raise ConfigError(f"{key} in [agent] must be true or false, got {value!r}.")
@@ -382,6 +395,37 @@ class Config:
         return rudra_paths(project_dir).checkpoints_db
 
 
+def committed_api_key_notice(cfg: Config) -> str | None:
+    """One line naming roles whose `api_key` came from the PROJECT config.
+
+    A literal key is supported and is the point of OPEN-6, but the two
+    config files differ in exposure and only provenance can tell them
+    apart. `~/.config/rudra/config.toml` is a home-directory file in
+    nobody's repository. `<project>/.rudra/config.toml` is the file
+    `README.md` tells users to commit, so a key there is one `git add`
+    from a public repository.
+
+    A warning rather than an error: refusing would be Rudra overruling a
+    user who may have a perfectly good reason (a private repo, a throwaway
+    key), which is the paternalism OPEN-6 was filed against. Saying so once
+    per run is the honest middle -- an inline comment in the template was
+    already measured as insufficient.
+    """
+    roles = sorted(
+        role
+        for role in cfg.models
+        if cfg.models[role].api_key and cfg.provenance.get(f"model.{role}.api_key") == "project"
+    )
+    if not roles:
+        return None
+    return (
+        f"An api_key is set in this project's .rudra/config.toml "
+        f"({', '.join(roles)}). That file is documented as safe to commit, so the "
+        f"key would be committed with it. Move it to ~/.config/rudra/config.toml, "
+        f"or use api_key_env to name an environment variable instead."
+    )
+
+
 def _build_models(merged: dict[str, Any]) -> dict[str, ModelConfig]:
     """Apply role inheritance AFTER the cross-layer merge.
 
@@ -469,6 +513,7 @@ def build_config(
             max_fix_attempts=int(merged.get("agent", {}).get("max_fix_attempts", 3)),
             max_questions=int(merged.get("agent", {}).get("max_questions", 5)),
             stream_tokens=bool(merged.get("agent", {}).get("stream_tokens", False)),
+            debug_log=bool(merged.get("agent", {}).get("debug_log", True)),
         ),
         permissions=PermissionsConfig(
             mode=permissions.get("mode", "ask"),
@@ -535,6 +580,7 @@ __all__ = [
     "Config",
     "ConfigError",
     "build_config",
+    "committed_api_key_notice",
     "deep_merge",
     "get_config",
     "reset_config",

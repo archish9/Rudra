@@ -1,4 +1,21 @@
-"""`--debug`: the machine-readable half of the trace (C9.7).
+"""The complete machine-readable record of a run (C9.7, OPEN-7).
+
+**Written on every run**, not behind `--debug`, since OPEN-7. The flag
+survives to force it back on when `[agent] debug_log = false`. The
+reasoning is `transcript.py`'s, which this file did not originally
+inherit: the point of a record is that it exists when somebody wants it,
+which is always after the run that went wrong.
+
+Two records, and the split is deliberate:
+
+* the **transcript** is the readable one -- filtered to the trace level,
+  payloads capped at 2000 chars, replayed by `rudra log`.
+* this file is the **complete** one -- registered as a sink *recorder* so
+  no level filter applies, payloads uncapped, plus every `rudra.*` log
+  record and its traceback. It is what a bug report attaches.
+
+Uncapped means unbounded, so retention is the bound: one file per run and
+`prune_debug_logs` keeps the newest 20.
 
 One configuration function, in one place -- the `deep_merge` precedent
 (config/loader.py). A second place that configures logging is a second
@@ -30,6 +47,47 @@ LOGGER_NAME = "rudra"
 EVENT_LOGGER = "rudra.trace.event"
 """Where TraceEvents are logged, so they can be filtered apart from
 ordinary log records by anyone reading the file."""
+
+FILE_PREFIX = "debug-"
+"""One file per run, named for the run, like transcripts. The prefix is
+load-bearing: `prune_debug_logs` globs it specifically, and a bare
+`*.jsonl` over this directory would delete `permissions.jsonl`."""
+
+KEEP_RUNS = 20
+"""Debug logs retained per project, newest first. Matches
+`transcript.KEEP_RUNS` -- these files are uncapped, so bounding the
+directory is the only thing bounding the disk they take."""
+
+
+def debug_log_path(paths: Any, session_id: str) -> Path:
+    """Where this run's log goes. One file per run, named for the run."""
+    return Path(paths.logs) / f"{FILE_PREFIX}{session_id}.jsonl"
+
+
+def prune_debug_logs(directory: Path, keep: int = KEEP_RUNS) -> list[Path]:
+    """Keep the `keep` newest debug logs; delete the rest. Returns the kept.
+
+    Called once when a run opens its log, not per record: retention is a
+    per-run decision, and per record it would stat the directory thousands
+    of times to reach the same answer (`transcript.prune_transcripts`).
+    """
+    directory = Path(directory)
+    try:
+        found = sorted(
+            directory.glob(f"{FILE_PREFIX}*.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except OSError:
+        return []
+
+    kept, extra = found[:keep], found[keep:]
+    for path in extra:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+    return kept
 
 
 class _JsonLines(logging.Formatter):
@@ -100,10 +158,12 @@ def configure_debug_logging(path: Path, *, enabled: bool) -> logging.Handler | N
 def debug_consumer() -> Any:
     """A TraceSink consumer that logs each event as one JSON line.
 
-    The sink filters before this runs, so `--debug` on a QUIET level logs
-    errors only. That is one filter stated once rather than two that can
-    disagree -- and it is why `--debug --verbose` is the pair a bug report
-    wants.
+    Register this with `TraceSink.add_recorder`, never `add`. As an
+    ordinary consumer it sat behind the sink's level filter, so this file
+    held only what the console had already printed and `--no-verbose` cut
+    the bug-report log down to errors (OPEN-7). A recorder is fed every
+    event, which is what makes this the complete record and the transcript
+    the readable one.
     """
     logger = logging.getLogger(EVENT_LOGGER)
 
@@ -113,4 +173,13 @@ def debug_consumer() -> Any:
     return consume_event
 
 
-__all__ = ["EVENT_LOGGER", "LOGGER_NAME", "configure_debug_logging", "debug_consumer"]
+__all__ = [
+    "EVENT_LOGGER",
+    "FILE_PREFIX",
+    "KEEP_RUNS",
+    "LOGGER_NAME",
+    "configure_debug_logging",
+    "debug_consumer",
+    "debug_log_path",
+    "prune_debug_logs",
+]

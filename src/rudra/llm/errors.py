@@ -5,7 +5,9 @@ dies at startup instead of part-way through inference. That is the point of
 C1.7.
 
 No error message may contain an API key value (C1.5). Messages name the
-environment variable; the value is never read into a message.
+environment variable; the value is never read into a message. Since OPEN-6
+a key may also be given literally as `api_key`, which does not weaken this:
+that field is `repr=False` and nothing here reads it.
 
 That holds for the *value* field by construction. It did not hold for the
 *name* field until A1.81: a user who set `api_key_env` to their key rather
@@ -59,16 +61,20 @@ class MissingApiKeyError(ModelConfigError):
             message = (
                 f"Role {role!r} needs an API key, and its api_key_env appears to hold the key "
                 f"itself rather than the *name* of an environment variable. "
-                f"Set api_key_env to a variable name, for example "
-                f'api_key_env = "OPENROUTER_API_KEY", and export the key into that variable. '
+                f"Rename that setting to api_key and the value will be used as-is:\n"
+                f'    api_key = "..."\n'
+                f"Prefer ~/.config/rudra/config.toml for it — a project .rudra/config.toml is "
+                f"documented as safe to commit, and a key there would be committed with it. "
+                f"To keep the key out of files entirely, set api_key_env to a variable name "
+                f'instead (api_key_env = "OPENROUTER_API_KEY") and export the key into it.\n'
                 f"The value has been withheld from this message; treat it as exposed and rotate "
                 f"it if it reached a log or a shared terminal."
             )
         else:
             message = (
                 f"Role {role!r} needs an API key, but environment variable {env_var!r} is not "
-                f"set. Export it, or point the role's api_key_env at a different variable. "
-                f"Rudra never reads key values from configuration files."
+                f"set. Export it, point the role's api_key_env at a different variable, or set "
+                f"api_key in ~/.config/rudra/config.toml to give the key directly."
             )
         super().__init__(message)
         self.role = role

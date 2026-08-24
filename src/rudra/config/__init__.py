@@ -13,7 +13,13 @@ and `rudra config list`.
 """
 
 from rudra.config.layers import ConfigError, user_toml_path
-from rudra.config.loader import Config, build_config, get_config, reset_config
+from rudra.config.loader import (
+    Config,
+    build_config,
+    committed_api_key_notice,
+    get_config,
+    reset_config,
+)
 from rudra.config.schema import (
     AgentConfig,
     CompatConfig,
@@ -37,6 +43,7 @@ __all__ = [
     "SkillsConfig",
     "ToolsConfig",
     "build_config",
+    "committed_api_key_notice",
     "get_config",
     "reset_config",
     "user_toml_path",

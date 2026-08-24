@@ -1,8 +1,13 @@
 """One sink, many consumers (Step 15a, C9.1 / C9.7; 15c adds a third).
 
-The level filter lives here and NOT in each consumer, so the console and
-the debug log cannot disagree about what happened -- only about how much
-of it to draw.
+The level filter lives here and NOT in each consumer, so two rendering
+consumers cannot disagree about what happened -- only about how much of
+it to draw.
+
+Recorders are the deliberate exception (OPEN-7): they are fed every event
+before the filter runs. That is not the disagreement this design rules
+out, because a recorder decides nothing -- it takes all of it, so it can
+only ever be a superset of what the console drew.
 """
 
 from __future__ import annotations
@@ -33,6 +38,50 @@ def test_quiet_filters_before_the_consumers_see_it():
     sink.emit(_event(TraceKind.TOOL_CALL))
     sink.emit(_event(TraceKind.TOOL_ERROR, payload="Error: boom"))
     assert [event.kind for event in seen] == [TraceKind.TOOL_ERROR]
+
+
+def test_a_recorder_receives_what_the_level_filter_rejects():
+    """OPEN-7, the defect in one assertion: the run log is registered here,
+    and on a QUIET run it used to contain errors only -- a display setting
+    silently deciding what a bug report would contain."""
+    recorded, rendered = [], []
+    sink = TraceSink(level=TraceLevel.QUIET, consumers=[rendered.append])
+    sink.add_recorder(recorded.append)
+
+    sink.emit(_event(TraceKind.TOOL_CALL))
+    sink.emit(_event(TraceKind.TOOL_ERROR, payload="Error: boom"))
+
+    assert [event.kind for event in rendered] == [TraceKind.TOOL_ERROR]
+    assert [event.kind for event in recorded] == [TraceKind.TOOL_CALL, TraceKind.TOOL_ERROR]
+
+
+def test_a_recorder_is_always_a_superset_of_the_consumers():
+    """The property that makes the exception safe: a recorder cannot
+    disagree with the console, only hold more than it."""
+    for level in (TraceLevel.QUIET, TraceLevel.NORMAL, TraceLevel.VERBOSE):
+        recorded, rendered = [], []
+        sink = TraceSink(level=level, consumers=[rendered.append])
+        sink.add_recorder(recorded.append)
+
+        for kind in (TraceKind.TOOL_CALL, TraceKind.TOOL_RESULT, TraceKind.TOOL_ERROR):
+            sink.emit(_event(kind, payload="Error: boom" if kind is TraceKind.TOOL_ERROR else "{}"))
+
+        assert set(rendered) <= set(recorded), level
+
+
+def test_a_broken_recorder_does_not_stop_the_consumers():
+    """Same rule as a broken consumer, and it runs first, so a raising
+    recorder must not swallow the console output behind it."""
+    seen = []
+    sink = TraceSink(level=TraceLevel.NORMAL, consumers=[seen.append])
+
+    def explode(event):
+        raise RuntimeError("recorder is broken")
+
+    sink.add_recorder(explode)
+    sink.emit(_event())
+
+    assert len(seen) == 1
 
 
 def test_a_consumer_that_raises_does_not_stop_the_run():

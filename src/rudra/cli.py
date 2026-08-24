@@ -24,7 +24,7 @@ from typer.core import TyperGroup
 
 from rudra import __version__
 from rudra.cli_repl import REPL_COMMANDS, build_session, expand_mentions
-from rudra.config import get_config, reset_config
+from rudra.config import committed_api_key_notice, get_config, reset_config
 from rudra.context.usage import render_usage
 from rudra.filesystem import project_tree
 
@@ -874,7 +874,13 @@ def doctor_command(
 # server whose command is not on PATH says "fail" for the same reason: the
 # status column is what decides the exit code, so it has to mean one thing.
 def _safe_value(name: str, value: object) -> object:
-    """A config value, masked if it is a key pasted where a name belongs.
+    """A config value, masked when it is or might be a key.
+
+    Two different rules, because the two fields differ in kind:
+
+    `api_key` holds a key by definition (OPEN-6), so it is masked with no
+    inspection at all -- printing a prefix or a length would still be
+    printing part of a secret.
 
     `api_key_env` names an environment variable, but pasting the key itself
     there is a real, observed mistake -- llm/errors.py masks it in
@@ -883,7 +889,11 @@ def _safe_value(name: str, value: object) -> object:
     troubleshooting docs point at and whose output people paste into bug
     reports (CR-D9).
     """
-    if name != "api_key_env" or not isinstance(value, str):
+    if not isinstance(value, str):
+        return value
+    if name == "api_key":
+        return "<set — value hidden>"
+    if name != "api_key_env":
         return value
     from rudra.llm.errors import _looks_like_a_secret
 
@@ -1373,13 +1383,14 @@ def main(
         "--stream",
         help="Stream the model's prose token by token into the trace (implies --verbose)",
     ),
-    debug: bool = typer.Option(
-        False,
-        "--debug",
+    debug: Optional[bool] = typer.Option(
+        None,
+        "--debug/--no-debug",
         help=(
-            "Write a machine-readable run log to .rudra/run/logs/debug.jsonl. "
-            "Pair with --verbose for a bug report: the log records what the "
-            "trace shows, so a quiet run logs errors only."
+            "Write the complete run log to .rudra/run/logs/debug-<id>.jsonl. "
+            "On by default — it records every event whatever --verbose shows, "
+            "uncapped, plus every log record and traceback. --no-debug turns "
+            "it off for one run; [agent] debug_log = false turns it off for good."
         ),
     ),
     version: bool = typer.Option(
@@ -1460,6 +1471,10 @@ def main(
     floor_notice = disabled_floor_notice(cfg)
     if floor_notice:
         console.print(f"[yellow]Warning:[/yellow] {floor_notice}")
+
+    key_notice = committed_api_key_notice(cfg)
+    if key_notice:
+        console.print(f"[yellow]Warning:[/yellow] {key_notice}")
 
     # `verbose` stays THREE-STATE all the way to create_main_agent, which
     # resolves it against [agent] verbose in one place (trace.resolve_level).

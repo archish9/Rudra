@@ -25,21 +25,46 @@ Consumer = Callable[[TraceEvent], None]
 
 @dataclass
 class TraceSink:
-    """One run's event bus."""
+    """One run's event bus.
+
+    Two fan-outs, because two kinds of consumer want different things:
+
+    `consumers` render, and are filtered to `level` -- the console draws
+    what the user asked to see.
+
+    `recorders` record, and are fed **every** event whatever the level.
+    That does not reopen what this module's docstring rules out. The
+    objection there is to a consumer *deciding for itself* what to keep,
+    which lets two views of one run disagree; a recorder decides nothing
+    and keeps all of it, so it can only ever be a superset of the console.
+    Without this, the file `--debug` writes could not contain more than the
+    console printed, and `--no-verbose` silently reduced the bug-report log
+    to errors (OPEN-7).
+    """
 
     level: TraceLevel = TraceLevel.NORMAL
     consumers: list[Consumer] = field(default_factory=list)
+    recorders: list[Consumer] = field(default_factory=list)
 
     def add(self, consumer: Consumer) -> None:
         self.consumers.append(consumer)
 
+    def add_recorder(self, consumer: Consumer) -> None:
+        """Register a consumer that receives every event, unfiltered."""
+        self.recorders.append(consumer)
+
     def emit(self, event: TraceEvent) -> None:
-        """Filter once, then fan out. A broken consumer is skipped.
+        """Feed the recorders, then filter once and fan out. Broken ones skip.
 
         Swallowing follows write_usage_log (loop/engine.py:501-515): a run
         that did its work must not be reported failed because its own
         bookkeeping raised.
         """
+        for recorder in self.recorders:
+            try:
+                recorder(event)
+            except Exception:  # noqa: BLE001 -- observability never ends a run
+                continue
         if not render(event, level=self.level):
             return
         for consumer in self.consumers:

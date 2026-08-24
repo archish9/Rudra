@@ -131,11 +131,35 @@ Role names are still not a closed list — an unknown one falls back to
 `rudra models test` probes **distinct endpoints**, not roles. Five roles
 pointing at one model is one row, listing all five; the split above is two.
 
-### API keys are never in the file
+### API keys
 
-`api_key_env` names an environment variable. Rudra reads that variable at run
-time and never stores, logs, or prints its value. Put the key in your
-environment or in `.env` (which is gitignored), not in `config.toml`.
+Two settings, and `api_key` wins where both are set:
+
+```toml
+[model.default]
+api_key     = "your-key-here"        # the key itself
+api_key_env = "OPENROUTER_API_KEY"   # or: the NAME of a variable holding it
+```
+
+**Put `api_key` in `~/.config/rudra/config.toml`, not in your project's
+`.rudra/config.toml`.** The global file lives in your home directory and is
+in no repository — the same place `~/.aws/credentials` and `~/.npmrc` keep
+theirs. The project file is [documented as safe to
+commit](../README.md#what-rudra-leaves-in-your-project), so a key written
+there gets committed with it. Rudra warns at run start when it finds one,
+rather than refusing — it is your repository and it may well be private.
+
+Set it once in the global file and every project on the machine uses it.
+That is the difference between `api_key` and `.env`: `.env` is read from the
+**project root only**, so it is the right home for a secret that differs
+per project and the wrong one for an LLM key that doesn't.
+
+Use `api_key_env` instead when the key must not be in any file — it names a
+variable, and you export it from your shell or a `.env`.
+
+Either way the value is never displayed: `rudra config list` prints
+`<set — value hidden>`, no error message contains it, and `ModelConfig`
+declares the field `repr=False` so it cannot reach a log line or a traceback.
 
 ## Environment variables
 
@@ -147,6 +171,7 @@ files:
 | `RUDRA_MODEL` | `model.default.model` |
 | `RUDRA_PROVIDER` | `model.default.provider` |
 | `RUDRA_BASE_URL` | `model.default.base_url` |
+| `RUDRA_API_KEY` | `model.default.api_key` |
 | `RUDRA_API_KEY_ENV` | `model.default.api_key_env` |
 | `RUDRA_TEMPERATURE` | `model.default.temperature` |
 | `RUDRA_CONTEXT_TOKENS` | `model.default.context_tokens` |

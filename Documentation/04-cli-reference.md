@@ -259,7 +259,7 @@ per-stack install matrix.
 | `--project-dir PATH` | `-d` | Work in that directory instead of the current one |
 | `--verbose` / `--no-verbose` | `-V` | Raise or lower the run trace. See [What the trace shows](#what-the-trace-shows) |
 | `--stream` | | Stream the model's prose token by token. Implies `--verbose` |
-| `--debug` | | Also write `.rudra/run/logs/debug.jsonl` — one JSON object per line, for a bug report |
+| `--debug` / `--no-debug` | | The complete run log at `.rudra/run/logs/debug-<id>.jsonl`. **On by default** — `--no-debug` skips it for one run, `[agent] debug_log = false` for good |
 | `--version` | `-v` | Print the version and exit |
 | `--dry-run` | | **Not functional yet** — see below. Use `--plan` |
 | `--auto` / `--yolo` | | Approve every file operation without prompting |
@@ -323,14 +323,21 @@ conversation.
 
 ### Reporting a bug
 
+The log is already there — every run writes one, with no flag:
+
 ```bash
-rudra --debug --verbose "the thing that went wrong"
+ls -t .rudra/run/logs/debug-*.jsonl | head -1
 ```
 
-`--debug` writes `.rudra/run/logs/debug.jsonl`: one JSON object per line,
-covering both the trace and Rudra's internal log records. It records what
-the trace shows, so a quiet run logs a quiet file — pair it with
-`--verbose`. Nothing is written without the flag.
+One JSON object per line, covering the trace, Rudra's internal log records,
+and any traceback. It is the **complete** record: every event regardless of
+what `--verbose` was set to, payloads uncapped. That is what separates it
+from the transcript, which is filtered to the trace level and capped at
+2000 characters per payload.
+
+One file per run, newest 20 kept. `--no-debug` skips it for a single run;
+`[agent] debug_log = false` turns it off permanently. Read it before
+posting it — it contains file paths and whatever your model wrote.
 
 ```bash
 rudra "add error handling" -d ~/projects/api

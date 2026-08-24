@@ -48,11 +48,19 @@ def _apply_provider_profile():
 
 
 def _resolve_api_key(role: str, settings: ModelConfig) -> str:
-    """Read the key from the environment variable the config names.
+    """The key for this role: the literal one if set, else the named variable.
 
-    C1.5: config carries the variable name; the value lives only in the
-    environment and never enters a message, a log line, or a repr.
+    `api_key` is checked first because it is the more specific statement --
+    a user who wrote the key into config meant that key, and silently
+    preferring a stale environment variable over it would be the "which
+    source won?" defect the whole loader exists to prevent (OPEN-6).
+
+    The value still never enters a message, a log line, or a repr: the
+    errors here name variables only (C1.5), and `ModelConfig.api_key` is
+    `repr=False`.
     """
+    if settings.api_key:
+        return settings.api_key
     if not settings.api_key_env:
         raise MissingApiKeyError(role, f"RUDRA_{role.upper()}_API_KEY_ENV (or RUDRA_API_KEY_ENV)")
     value = os.getenv(settings.api_key_env)

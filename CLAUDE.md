@@ -145,7 +145,7 @@ src/rudra/
 │                           sink · debug. Imports nothing from agent/, loop/ or
 │                           subagents/ — pinned by tests/test_trace_wiring.py.
 │                           ONE event vocabulary with three consumers: the
-│                           console, the --debug JSONL log, and (15c) the
+│                           console, the always-on JSONL run log, and the
 │                           transcript. stream.py keys its position by subgraph
 │                           NAMESPACE, which is what closed A1.20 — both stream
 │                           loops kept one counter across namespaces and
@@ -241,7 +241,7 @@ only function that creates anything.
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
 | `run/repl_history` | volatile | `cli_repl.build_session` | prompt_toolkit | Per project, because a Rust project's prompts are not a Python project's. A read-only project loses history, never the REPL (Step 15b) |
 | `run/transcripts/<id>.jsonl` | volatile | `trace/transcript.py`, every run | humans, `rudra log` | One JSON object per `TraceEvent`, appended and flushed per event so a killed run still leaves a readable record. Payloads capped at 2000 chars, newest 20 runs kept. **Written by default**, which is safe only because redaction happens where the event is built (A1.95) — moving redaction into the renderer would silently refill this file with credentials (Step 15c, C9.5) |
-| `run/logs/debug.jsonl` | volatile | `trace/debug.py`, only under `--debug` | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record. Written only with the flag; an unopenable file disables the log rather than failing the run (Step 15a, C9.7) |
+| `run/logs/debug-<id>.jsonl` | volatile | `trace/debug.py`, **every run** | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record and traceback. **The complete record** — registered with `TraceSink.add_recorder`, so unlike the transcript no trace level filters it and payloads are uncapped. One file per run, newest 20 kept by `prune_debug_logs`, which globs `debug-*` so it cannot eat `permissions.jsonl`. `[agent] debug_log = false` or `--no-debug` turns it off. Corrected 2026-08-24 (OPEN-7): was one appending `debug.jsonl` written only under `--debug`, and registered as an ordinary consumer, so `--no-verbose` cut it down to errors. An unopenable file disables the log rather than failing the run (Step 15a, C9.7) |
 | `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens and compactions for the last run. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
 | `memory/export/` | durable | `rudra memory export` | `rudra memory import` | The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
@@ -384,7 +384,7 @@ TODO-old.md S6.1.
 provider  = "openai_compatible"        # ollama | openai_compatible | anthropic | google | openai
 base_url  = "http://localhost:8000/v1"
 model     = "qwen3-30b"
-api_key_env = "RUDRA_PLANNER_KEY"      # name of env var — never the key itself
+api_key_env = "RUDRA_PLANNER_KEY"      # name of an env var; or api_key = "..." for the key
 temperature = 0.3
 
 [model.coder]
@@ -443,7 +443,27 @@ floor_disable = []
 ```
 Loaded via `langchain-mcp-adapters` → tools handed to `create_deep_agent(tools=[...])`.
 
-**API keys never in TOML.** Config names the env var; the key lives in the environment or `.env`.
+**API keys may be written in TOML, and are never displayed.** Corrected
+2026-08-24 (OPEN-6): this read *"API keys never in TOML"*, which made
+`api_key_env` — a field holding a variable *name* — the only route, and
+pushed every user toward a project `.env`: a per-project file for a
+per-machine secret. `ModelConfig` now carries a literal `api_key`, checked
+by `_resolve_api_key` **before** `api_key_env` (`llm/factory.py:50`).
+
+The rule that replaced it is narrower and holds in both directions: a key
+may be **stored**, and is never **shown**. Shown-ness is structural, not a
+convention — `api_key` is declared `field(repr=False)`, so it cannot reach
+a repr, log line or traceback frame; `cli.py::_safe_value` masks it in
+`config list` with no inspection at all.
+
+**Which file matters, and it is the only thing that does.**
+`~/.config/rudra/config.toml` is a home-directory file in nobody's
+repository (the `~/.aws/credentials` shape) — a key there is fine.
+`<project>/.rudra/config.toml` is the file `README.md` tells users to
+commit, so `committed_api_key_notice` (`config/loader.py`) warns once per
+run when provenance says the key came from that layer. A warning and not a
+refusal: it may be a private repo or a throwaway key, and overruling the
+user is what OPEN-6 was filed against.
 
 ---
 
@@ -494,7 +514,7 @@ git config core.hooksPath .githooks  # once per clone: run all three gates on pu
 .venv/bin/rudra "build a flask app"  # single-shot; prompts before each write and command
 .venv/bin/rudra --auto "..."         # unattended: files yes, commands no (A1.49)
 .venv/bin/rudra --verbose "..."      # ...and the model's prose, untruncated
-.venv/bin/rudra --debug "..."        # + .rudra/run/logs/debug.jsonl for a bug report
+.venv/bin/rudra --no-debug "..."     # skip .rudra/run/logs/debug-<id>.jsonl (on by default)
 .venv/bin/rudra log --last           # replay a past run from its transcript
 .venv/bin/rudra --auto --allow-shell "..."   # ...and commands too, opted in explicitly
 .venv/bin/rudra --plan "..."         # show the plan and stop — writes nothing

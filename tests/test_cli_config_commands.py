@@ -78,11 +78,25 @@ def test_init_global_writes_to_the_user_location(tmp_path: Path) -> None:
 
 
 def test_the_template_contains_no_api_key_value(tmp_path: Path) -> None:
-    """C1.5: the scaffold names an env var, never a key."""
+    """C1.5, as narrowed by OPEN-6: the scaffold documents both `api_key`
+    and `api_key_env`, and ships a real value for neither. The `sk-` guard
+    is the tripwire against a live key being pasted in here one day."""
     runner.invoke(app, ["init", "-d", str(tmp_path)])
     body = (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8")
     assert "api_key_env" in body
     assert "sk-" not in body
+
+
+def test_the_template_says_a_key_belongs_in_the_global_config(tmp_path: Path) -> None:
+    """The project file is the one README tells users to commit. The
+    scaffold that lives *in* that file has to be the thing that says so --
+    OPEN-6 was reported by someone who read the old comment and pasted the
+    key anyway, which measured an inline comment saying only "never the key
+    itself" as insufficient."""
+    runner.invoke(app, ["init", "-d", str(tmp_path)])
+    body = (tmp_path / ".rudra" / "config.toml").read_text(encoding="utf-8")
+    assert "~/.config/rudra/config.toml" in body
+    assert "committed" in body
 
 
 def test_the_template_documents_what_each_permission_mode_does(tmp_path: Path) -> None:

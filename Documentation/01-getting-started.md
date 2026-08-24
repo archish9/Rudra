@@ -146,21 +146,24 @@ model    = "qwen3:32b"
 provider    = "openai_compatible"
 base_url    = "https://openrouter.ai/api/v1"
 model       = "nvidia/nemotron-3-ultra-550b-a55b:free"
-api_key_env = "OPENROUTER_API_KEY"
+api_key     = "your-key-here"
 ```
 
-And put the key itself in `.env`:
+**Better: set the key once for every project**, in `~/.config/rudra/config.toml`:
 
-```bash
-echo 'OPENROUTER_API_KEY=sk-or-v1-your-key-here' >> .env
+```toml
+[model.default]
+api_key = "your-key-here"
 ```
 
-Two things, easy to mix up:
+That file is in your home directory, so it is in no repository, and every project on the machine reads it. The project's own `.rudra/config.toml` is meant to be committed, so a key written there would be committed too — Rudra warns when it finds one.
 
-- `api_key_env` is the **name** of the variable holding your key — it goes in the config file
-- `OPENROUTER_API_KEY` is the **key itself** — it goes in the environment, never in the config file
+Two settings, easy to mix up:
 
-Rudra reads the value at run time and never stores, logs, or prints it. `.env` is gitignored; `config.toml` is safe to commit precisely because the key isn't in it.
+- `api_key` is the **key itself**
+- `api_key_env` is the **name** of an environment variable holding the key, for when you'd rather it were in no file at all — export it from your shell, or from a `.env`
+
+Where both are set, `api_key` wins. Either way the value is never displayed: `rudra config list` masks it, and no error message contains it.
 
 Anthropic, OpenAI, Google, vLLM, LM Studio, Groq, and Together all work too — see **[Choosing a Model](03-providers.md)**.
 

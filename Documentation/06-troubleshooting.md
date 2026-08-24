@@ -550,23 +550,27 @@ python3 --version
 env | grep RUDRA_ | sed -E 's/(KEY=).*/\1***/'      # masks any key values
 ```
 
-If the problem happened during a run, reproduce it once with the debug log
-on and attach the file:
+If the problem happened during a run, **the log already exists** — you do
+not have to reproduce it with a flag:
 
 ```bash
-rudra --debug --verbose "the thing that went wrong"
-cat .rudra/run/logs/debug.jsonl
+ls -t .rudra/run/logs/debug-*.jsonl | head -1     # the most recent run
 ```
 
 One JSON object per line, covering both the trace and Rudra's internal log
-records. **`--verbose` matters here:** the log records exactly what the
-trace shows, so a quiet run produces a quiet file.
+records and tracebacks. It is the **complete** record: every event whatever
+`--verbose` was set to, with payloads uncapped. One file per run, newest 20
+kept.
+
+Older versions wrote this only under `--debug` and filtered it to whatever
+the console had printed, so `--no-verbose` produced a nearly empty file. If
+you are on such a version, `rudra --debug --verbose` is the pair that gets
+you a full one.
 
 Three more files are usually worth attaching: `verify.log` (what the gate
 ran and what it said), `usage.json` (tokens and wall clock per role), and
-`.rudra/run/transcripts/<run-id>.jsonl` — the run's own record, written
-whether or not `--debug` was set. `rudra log --last` shows you what is in
-it before you send it.
+`.rudra/run/transcripts/<run-id>.jsonl` — the readable record, capped at
+2000 characters per payload, which `rudra log --last` replays.
 
 **Read the debug log before you post it.** It contains file paths and
 whatever your model wrote, which may include contents of your project.
