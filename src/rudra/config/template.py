@@ -29,7 +29,7 @@ temperature = 0.3
 # api_key_env = "RUDRA_API_KEY"
 
 # Your model's real context window. Without it, history compaction never
-# triggers for local models. See TODO.md A1.17 / C1.4a.
+# triggers for local models. See Documentation/02-configuration.md.
 # context_tokens = 32768
 
 # Per-role overrides. Anything omitted is inherited from [model.default].
@@ -127,7 +127,7 @@ auto_branch = false
 test_timeout = 600
 
 [compat]
-# Workarounds kept for small models. Both off by default — see TODO.md D4.
+# Workarounds kept for small models. Both off by default.
 task_anchor   = false
 sandbox_paths = false
 
