@@ -67,8 +67,14 @@ read those facts; one you keep to yourself is one they do not have.
 
 _CLARIFY_CAN_ASK = """
 Ask only what you cannot infer from the request or the codebase. Batch
-related questions into a SINGLE ask_user() call — one key per question.
-You have {max_questions} questions for this whole run.
+related questions into a SINGLE ask_user() call; the user is shown them
+one at a time. You have {max_questions} questions for this whole run.
+
+When a question has a set of likely answers, put them in that question's
+`options` — with a short `description` each — and set `multi_select` when
+more than one may apply. NEVER write the choices into your reply instead:
+the user cannot select prose, so a question you only narrate is one that
+nobody was ever asked.
 """
 
 _CLARIFY_UNATTENDED = """

@@ -103,6 +103,11 @@ what you cannot infer from the project itself. Record what you learn with
 `record_fact`, including *why* -- facts reach every later agent, questions
 do not.
 
+When a question has likely answers, put them in that question's `options`
+and set `multi_select` if more than one may apply. Never write the choices
+into your reply instead: the user cannot select prose, so a question you
+only narrate is one nobody was asked.
+
 ## Not available on Rudra
 
 - **Browser and visual companions.** No browser, and no Node runtime. The

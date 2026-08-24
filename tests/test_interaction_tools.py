@@ -61,8 +61,10 @@ def test_ask_user_records_each_answer_as_a_fact(tmp_path: Path, monkeypatch):
 
     out = tools["ask_user"].invoke(
         {
-            "questions": ["Which language?", "Which arg parser?"],
-            "keys": ["language", "cli_framework"],
+            "questions": [
+                {"key": "language", "question": "Which language?"},
+                {"key": "cli_framework", "question": "Which arg parser?"},
+            ]
         }
     )
 
@@ -73,31 +75,44 @@ def test_ask_user_records_each_answer_as_a_fact(tmp_path: Path, monkeypatch):
     assert "Rust" in out and "clap" in out
 
 
-def test_ask_user_rejects_a_key_question_length_mismatch(tmp_path: Path, monkeypatch):
-    called = []
-    monkeypatch.setattr(
-        "rudra.tools.interaction_tools.Prompt.ask",
-        lambda *a, **k: called.append(1) or "x",
-    )
+def test_the_key_travels_with_its_question(tmp_path: Path, monkeypatch):
+    """Replaces test_ask_user_rejects_a_key_question_length_mismatch, which
+    asserted a REJECTED for `questions` and `keys` of different lengths.
+
+    That check is GONE because the state it guarded is now unrepresentable:
+    there is no second list to be a different length. The old test was not
+    rewritten, it was deleted -- keeping it would mean asserting a runtime
+    guard for a shape the type system no longer permits.
+    """
+    answers = iter(["Python", "pytest"])
+    monkeypatch.setattr("rudra.tools.interaction_tools.Prompt.ask", lambda *a, **k: next(answers))
     store, tools = _tools(tmp_path)
 
-    out = tools["ask_user"].invoke({"questions": ["a?", "b?"], "keys": ["a"]})
+    tools["ask_user"].invoke(
+        {
+            "questions": [
+                {"key": "language", "question": "Which language?"},
+                {"key": "test_framework", "question": "Which test framework?"},
+            ]
+        }
+    )
 
-    assert out.startswith("REJECTED:")
-    assert called == []  # nothing prompted
-    assert store.items() == []  # nothing recorded
+    assert store.get("language").value == "Python"
+    assert store.get("test_framework").value == "pytest"
 
 
 def test_ask_user_rejects_an_empty_question_list(tmp_path: Path):
     _store, tools = _tools(tmp_path)
-    assert tools["ask_user"].invoke({"questions": [], "keys": []}).startswith("REJECTED:")
+    assert tools["ask_user"].invoke({"questions": []}).startswith("REJECTED:")
 
 
 def test_an_empty_answer_is_not_recorded(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("rudra.tools.interaction_tools.Prompt.ask", lambda *a, **k: "  ")
     store, tools = _tools(tmp_path)
 
-    out = tools["ask_user"].invoke({"questions": ["Which database?"], "keys": ["database"]})
+    out = tools["ask_user"].invoke(
+        {"questions": [{"key": "database", "question": "Which database?"}]}
+    )
 
     assert store.get("database") is None
     assert "(no answer)" in out
@@ -107,8 +122,10 @@ def test_the_budget_is_spent_across_calls_and_then_refuses(tmp_path: Path, monke
     monkeypatch.setattr("rudra.tools.interaction_tools.Prompt.ask", lambda *a, **k: "yes")
     store, tools = _tools(tmp_path, max_questions=2)
 
-    tools["ask_user"].invoke({"questions": ["a?", "b?"], "keys": ["a", "b"]})
-    out = tools["ask_user"].invoke({"questions": ["c?"], "keys": ["c"]})
+    tools["ask_user"].invoke(
+        {"questions": [{"key": "a", "question": "a?"}, {"key": "b", "question": "b?"}]}
+    )
+    out = tools["ask_user"].invoke({"questions": [{"key": "c", "question": "c?"}]})
 
     assert out.startswith("REJECTED:")
     assert "2" in out
@@ -125,7 +142,15 @@ def test_a_batch_larger_than_the_budget_asks_what_fits_and_says_so(tmp_path: Pat
     )
     store, tools = _tools(tmp_path, max_questions=2)
 
-    out = tools["ask_user"].invoke({"questions": ["a?", "b?", "c?"], "keys": ["a", "b", "c"]})
+    out = tools["ask_user"].invoke(
+        {
+            "questions": [
+                {"key": "a", "question": "a?"},
+                {"key": "b", "question": "b?"},
+                {"key": "c", "question": "c?"},
+            ]
+        }
+    )
 
     assert len(asked) == 2
     assert store.get("c") is None
@@ -133,6 +158,9 @@ def test_a_batch_larger_than_the_budget_asks_what_fits_and_says_so(tmp_path: Pat
 
 
 def test_eof_stops_the_batch_and_keeps_what_was_already_answered(tmp_path: Path, monkeypatch):
+    """EOF is not the same as `esc`. Escape skips ONE question and the rest
+    are still worth asking; a closed stdin means every remaining prompt
+    would fail identically, so the batch stops."""
     calls = {"n": 0}
 
     def _ask(*_args, **_kwargs):
@@ -145,7 +173,12 @@ def test_eof_stops_the_batch_and_keeps_what_was_already_answered(tmp_path: Path,
     store, tools = _tools(tmp_path)
 
     out = tools["ask_user"].invoke(
-        {"questions": ["Which language?", "Which parser?"], "keys": ["language", "parser"]}
+        {
+            "questions": [
+                {"key": "language", "question": "Which language?"},
+                {"key": "parser", "question": "Which parser?"},
+            ]
+        }
     )
 
     assert store.get("language").value == "Rust"
@@ -157,10 +190,131 @@ def test_an_invalid_key_rejects_only_its_own_pair(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("rudra.tools.interaction_tools.Prompt.ask", lambda *a, **k: "yes")
     store, tools = _tools(tmp_path)
 
-    out = tools["ask_user"].invoke({"questions": ["a?", "b?"], "keys": ["BAD KEY", "good_key"]})
+    out = tools["ask_user"].invoke(
+        {
+            "questions": [
+                {"key": "BAD KEY", "question": "a?"},
+                {"key": "good_key", "question": "b?"},
+            ]
+        }
+    )
 
     assert store.get("good_key").value == "yes"
     assert "NOT recorded" in out
+
+
+# --- OPEN-11: the capability that did not exist ---
+
+
+def test_a_question_with_options_selects_by_number(tmp_path: Path):
+    """The whole point. The model can offer a list, and the user picks."""
+    store, tools = _tools(tmp_path, reader=lambda: "2")
+
+    tools["ask_user"].invoke(
+        {
+            "questions": [
+                {
+                    "key": "interface",
+                    "question": "What interface?",
+                    "options": [{"label": "CLI"}, {"label": "TUI"}],
+                }
+            ]
+        }
+    )
+
+    assert store.get("interface").value == "TUI"
+    assert store.get("interface").source == "asked"
+
+
+def test_a_question_without_options_is_still_free_text(tmp_path: Path):
+    """Graceful degradation: a model that cannot manage the nested shape
+    gets exactly the old behaviour, so nothing regresses at D6's 32B floor."""
+    store, tools = _tools(tmp_path, reader=lambda: "Rust")
+
+    tools["ask_user"].invoke({"questions": [{"key": "language", "question": "Which language?"}]})
+
+    assert store.get("language").value == "Rust"
+
+
+def test_multi_select_joins_the_answers_in_row_order(tmp_path: Path):
+    store, tools = _tools(tmp_path, reader=lambda: "3,1")
+
+    tools["ask_user"].invoke(
+        {
+            "questions": [
+                {
+                    "key": "features",
+                    "question": "Which features?",
+                    "options": [{"label": "add"}, {"label": "edit"}, {"label": "search"}],
+                    "multi_select": True,
+                }
+            ]
+        }
+    )
+
+    assert store.get("features").value == "add, search"
+
+
+def test_other_is_always_offered_so_the_user_is_never_trapped(tmp_path: Path):
+    """Row 3 is the appended Other, which opens a text input."""
+    answers = iter(["3", "GUI with tkinter"])
+    store, tools = _tools(tmp_path, reader=lambda: next(answers))
+
+    tools["ask_user"].invoke(
+        {
+            "questions": [
+                {
+                    "key": "interface",
+                    "question": "What interface?",
+                    "options": [{"label": "CLI"}, {"label": "TUI"}],
+                }
+            ]
+        }
+    )
+
+    assert store.get("interface").value == "GUI with tkinter"
+
+
+def test_cancelling_one_question_skips_it_and_asks_the_next(tmp_path: Path):
+    """Escape is a skip, not an abandon -- the counterpart to the EOF test
+    above. Row 9 does not exist, so the driver gives up as Cancelled."""
+    answers = iter(["9", "9", "9", "9", "9", "Python"])
+    store, tools = _tools(tmp_path, reader=lambda: next(answers))
+
+    tools["ask_user"].invoke(
+        {
+            "questions": [
+                {
+                    "key": "interface",
+                    "question": "What interface?",
+                    "options": [{"label": "CLI"}, {"label": "TUI"}],
+                },
+                {"key": "language", "question": "Which language?"},
+            ]
+        }
+    )
+
+    assert store.get("interface") is None
+    assert store.get("language").value == "Python", "the second question was still asked"
+
+
+def test_the_docstring_forbids_narrating_the_options(tmp_path: Path):
+    """The actual fix for the reported bug. A tool that CAN carry options
+    still gets bypassed if nothing tells the model to use it."""
+    _store, tools = _tools(tmp_path)
+    # Whitespace-normalised: the docstring is hard-wrapped, and where the
+    # line happens to break is not the thing under test.
+    doc = " ".join(tools["ask_user"].description.lower().split())
+    assert "options" in doc
+    assert "never write the choices into your message text" in doc
+
+
+def test_the_docstring_no_longer_pushes_everything_into_one_call(tmp_path: Path):
+    """The old wording -- "Send related questions together in ONE call
+    rather than one per call" -- is what produced the three-at-once dump
+    the owner reported."""
+    _store, tools = _tools(tmp_path)
+    assert "one at a time" in tools["ask_user"].description.lower()
 
 
 # --- A1.72: an unattended run cannot have asked anybody ---
