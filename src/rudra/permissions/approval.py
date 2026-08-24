@@ -10,6 +10,7 @@ functions carrying A1.20's unfixed counter.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Iterable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -28,8 +29,18 @@ from rudra.permissions.rules import (
     command_segments,
     gated_arg,
 )
+from rudra.ui import Cancelled, Choice, Chosen, initial
+from rudra.ui.prompt import ask as ask_selection
 
 MAX_APPROVAL_ROUNDS = 50
+
+_APPROVAL_CHOICES = (
+    Choice(value="approve", label="Approve", description="this one call", hotkey="a"),
+    Choice(value="reject", label="Reject", description="refuse it", hotkey="r"),
+    # `description` is replaced per request with the grant it would add.
+    Choice(value="always", label="Always", description="", hotkey="A"),
+    Choice(value="diff", label="Show full diff", description="", hotkey="d"),
+)
 
 _REJECT_MESSAGE = (
     "The user rejected this call. Do not retry it. Choose a different "
@@ -111,29 +122,44 @@ def decide_action_requests(
         full = False
         while True:
             _render_request(console, tool, args, project_root, full=full)
-            console.print(
-                f"[a]pprove  [r]eject  [A]lways ({escape(str(grant))})  [d]iff (full)",
-                markup=False,
+
+            # The grant is per request, so the "Always" row is built here
+            # rather than held in the module-level tuple.
+            choices = tuple(
+                replace(choice, description=escape(str(grant)))
+                if choice.value == "always"
+                else choice
+                for choice in _APPROVAL_CHOICES
             )
-            key = (reader() or "").strip()
-            if key == "a":
-                audit.record(tool, arg, decision, mode=mode, outcome="approve")
-                decisions.append({"type": "approve"})
-                break
-            if key == "r":
+            outcome = ask_selection(initial(choices), console=console, reader=reader)
+
+            # Cancelled is REJECT here, never approve. An interrupt at a
+            # write prompt is the one moment where guessing wrong puts
+            # bytes on the user's disk, and before OPEN-11 a Ctrl-C here
+            # was not caught at all -- it propagated out of the run.
+            if isinstance(outcome, Cancelled) or not isinstance(outcome, Chosen):
                 audit.record(tool, arg, decision, mode=mode, outcome="reject")
                 decisions.append({"type": "reject", "message": _REJECT_MESSAGE})
                 break
-            if key == "A":
+
+            key = outcome.values[0] if outcome.values else "reject"
+            if key == "approve":
+                audit.record(tool, arg, decision, mode=mode, outcome="approve")
+                decisions.append({"type": "approve"})
+                break
+            if key == "reject":
+                audit.record(tool, arg, decision, mode=mode, outcome="reject")
+                decisions.append({"type": "reject", "message": _REJECT_MESSAGE})
+                break
+            if key == "always":
                 grants.add(grant)
                 granted = engine.decide(tool, args)
                 audit.record(tool, arg, granted, mode=mode, outcome="allow")
                 decisions.append({"type": "approve"})
                 break
-            if key == "d":
-                full = True
-                continue
-            console.print(f"[red]Unrecognised key {key!r}. Choose a, r, A, or d.[/red]")
+            # "diff": not terminal. Re-render with the full diff and ask
+            # again -- the loop this function has always had.
+            full = True
 
     return decisions
 

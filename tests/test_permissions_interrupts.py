@@ -261,3 +261,120 @@ def test_run_with_approvals_works_with_the_real_async_checkpointer(tmp_path):
     state = asyncio.run(go())
     tool_messages = [m for m in state.values["messages"] if type(m).__name__ == "ToolMessage"]
     assert "gated" in tool_messages[0].content
+
+
+# --- OPEN-11: the approval prompt on the shared selector ---
+
+
+def test_the_approval_prompt_offers_all_four_actions():
+    """Approve, reject, always, diff -- the four the loop has always had."""
+    from rudra.permissions.approval import _APPROVAL_CHOICES
+
+    assert [choice.value for choice in _APPROVAL_CHOICES] == [
+        "approve",
+        "reject",
+        "always",
+        "diff",
+    ]
+
+
+def test_approve_and_always_keep_distinct_hotkeys():
+    """`a` approves once, `A` grants for the rest of the run. Collapsing
+    them would silently widen a grant the user never gave."""
+    from rudra.permissions.approval import _APPROVAL_CHOICES
+
+    hotkeys = {choice.value: choice.hotkey for choice in _APPROVAL_CHOICES}
+    assert hotkeys["approve"] == "a"
+    assert hotkeys["always"] == "A"
+    assert hotkeys["reject"] == "r"
+    assert hotkeys["diff"] == "d"
+
+
+def _decide_one(tmp_path, reader):
+    """One gated write through decide_action_requests, with an injected
+    reader -- the seam approval.py:3 documents."""
+    import io
+
+    from rich.console import Console
+
+    from rudra.config.loader import build_config
+    from rudra.permissions import build_gate
+    from rudra.permissions.approval import decide_action_requests
+
+    gate = build_gate(build_config(tmp_path), tmp_path)
+    return decide_action_requests(
+        [{"name": "write_file", "args": {"file_path": "notes.txt", "content": "hi"}}],
+        engine=gate.engine,
+        grants=gate.grants,
+        audit=gate.audit,
+        console=Console(file=io.StringIO(), width=100),
+        project_root=tmp_path,
+        mode="ask",
+        reader=reader,
+    )
+
+
+def test_pressing_a_approves(tmp_path):
+    assert _decide_one(tmp_path, lambda: "a")[0]["type"] == "approve"
+
+
+def test_pressing_r_rejects(tmp_path):
+    assert _decide_one(tmp_path, lambda: "r")[0]["type"] == "reject"
+
+
+def test_cancelling_the_approval_prompt_rejects(tmp_path):
+    """Never approve. An interrupt at a write prompt is the one moment
+    where guessing wrong puts bytes on the user's disk."""
+
+    def reader():
+        raise KeyboardInterrupt
+
+    assert _decide_one(tmp_path, reader)[0]["type"] == "reject"
+
+
+def test_eof_at_the_approval_prompt_rejects(tmp_path):
+    def reader():
+        raise EOFError
+
+    assert _decide_one(tmp_path, reader)[0]["type"] == "reject"
+
+
+def test_d_shows_the_diff_then_the_next_answer_decides(tmp_path):
+    """`d` is not terminal: it re-renders with the full diff and asks
+    again, which is the loop this function has always had."""
+    answers = iter(["d", "a"])
+    assert _decide_one(tmp_path, lambda: next(answers))[0]["type"] == "approve"
+
+
+def test_pressing_capital_a_grants_for_the_rest_of_the_run(tmp_path):
+    import io
+
+    from rich.console import Console
+
+    from rudra.config.loader import build_config
+    from rudra.permissions import build_gate
+    from rudra.permissions.approval import decide_action_requests
+
+    gate = build_gate(build_config(tmp_path), tmp_path)
+    request = {"name": "write_file", "args": {"file_path": "notes.txt", "content": "hi"}}
+    console = Console(file=io.StringIO(), width=100)
+
+    def _run(reader):
+        return decide_action_requests(
+            [request],
+            engine=gate.engine,
+            grants=gate.grants,
+            audit=gate.audit,
+            console=console,
+            project_root=tmp_path,
+            mode="ask",
+            reader=reader,
+        )
+
+    assert _run(lambda: "A")[0]["type"] == "approve"
+
+    # The second call must not prompt at all -- the grant now covers it.
+    def explode():
+        raise AssertionError("the grant should have made this call silent")
+
+    assert _run(explode)[0]["type"] == "approve"
