@@ -157,7 +157,15 @@ src/rudra/
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
 │   └── planner_agent.py    THREE staged agents (Step 10b): clarify · architect ·
 │                           breakdown, one tool set each via _tools_for_stage.
-│                           consult_planner + the lifted _stream_planner_turn
+│                           consult_planner + the lifted _stream_planner_turn.
+│                           Indexes NO skills (OPEN-17): the corpus is written
+│                           for ONE agent that clarifies, designs and builds in
+│                           one conversation, so a stage that read it tried to
+│                           run all four of its steps holding the tools for
+│                           one — emitting "write a design doc" as a TASK. Its
+│                           methodology is merged into the three stage bodies
+│                           instead, so it applies to every run on every model
+│                           rather than when a model opens a file
 ├── middleware/             2 survivors of D4, both opt-in behind [compat],
 │                           plus repeat_guard.py (OPEN-10, always on): an
 │                           agent may not re-run a READ that already failed
@@ -184,11 +192,22 @@ src/rudra/
 │                           surface is not a fixed prompt cost
 ├── skills/                 The vendored superpowers corpus and its delivery
 │                           (Step 11/11a): bundle · registry · manifest ·
-│                           transform · validate · cache · sources · notice.
-│                           Rendered into a user-level cache and reached
-│                           through a CompositeBackend route, because skills
-│                           live outside the project root while the backend
-│                           is rooted at it (D13)
+│                           transform · validate · cache · sources · notice ·
+│                           rudra_tools. Rendered into a user-level cache and
+│                           reached through a CompositeBackend route, because
+│                           skills live outside the project root while the
+│                           backend is rooted at it (D13). Consumers are the
+│                           CODER and TESTER only — the planner indexes none.
+│                           transform.py rewrites the rendered copy three ways,
+│                           and NOTICE names all three: cross-refs → readable
+│                           paths, Rudra's reference file added, and two
+│                           frontmatter `description`s replaced. That third one
+│                           is not cosmetic — deepagents copies `description`
+│                           verbatim into every indexing agent's system prompt
+│                           (middleware/skills.py:870), so upstream's "You MUST
+│                           use this before any creative work" was an unasked-for
+│                           order, not documentation (OPEN-17). Bodies are never
+│                           touched, and a test holds that line
 └── compat/                 monkeypatches + version guard into deepagents
                             internals, and virtual_paths.py — the ONE
                             function that says which real file a
@@ -211,6 +230,33 @@ and never gated.
 
 ### Control flow (`loop/engine.py`)
 1. **Planning runs in three stages before any code** (Step 10b, C6.7): `clarify` settles the facts, `architect` records layout and boundaries, `breakdown` calls `add_tasks` with units of **work**, not filenames. Each stage is a separate agent with its own tool set — clarify cannot `add_tasks`, breakdown cannot `ask_user` or `record_fact` — so a stage cannot do another stage's job. The fact store is the only channel between them, and no stage has a tool that can mark anything done.
+
+   **No planner stage indexes a skill, and that is load-bearing (OPEN-17).**
+   The three stages *are* a planning methodology, implemented in Python. The
+   superpowers corpus is a planning methodology written for **one** agent
+   that clarifies, designs and implements in a single conversation. Handed
+   both, every stage ran the corpus's version: measured four times on a 550B
+   model, the planner emitted `Ask clarifying questions`, `Propose 2-3
+   architectural approaches`, `Write design doc to docs/superpowers/specs/`
+   and `Invoke writing-plans skill` **as the task list**, or declared no
+   tasks at all.
+
+   **Three fixes written as prompt text all failed**, because the
+   `using-superpowers` bootstrap was injected into the same prompt saying
+   `IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE
+   IT.` — *a prompt cannot outrank a prompt.* Do not retry that; the ledger
+   records the three attempts so a future session does not.
+
+   What worked is `_tools_for_stage`'s own argument applied to skills:
+   **absence is the enforcement.** The methodology was merged into the stage
+   bodies rather than discarded — clarify gained scope assessment and
+   purpose/constraints/success-criteria, architect gained
+   weigh-2-3-approaches-and-record-why-the-others-lost, YAGNI and the
+   isolation test, breakdown gained the spec self-review retargeted to the
+   ledger. It now applies to every planning run on every model instead of
+   when a model chooses to open a file. Attribution is in
+   `planner_agent.py`'s docstring and in `NOTICE`; the coder and tester still
+   index the full corpus, being single agents doing one job.
 2. **The plan is presented and approved** (Step 10c, C6.9): facts with their source, then the tasks. In `ask` mode the user approves, revises — which re-enters `breakdown` with their words **verbatim**, up to `MAX_REVISIONS` (3) times — or cancels. `--plan` presents and stops. `--auto` skips the gate. **EOF and Ctrl-C are cancel, never approve.** The gate lives in `RudraAgent`, between `plan()` and `work()`; the loop does not know what a terminal is.
 3. `work()` takes the next pending task and calls `run_task`.
 4. `run_task`: coder subagent writes → `verify_project` gates → on failure the blocker goes back **verbatim** and it retries, up to `[agent] max_fix_attempts`.
@@ -275,7 +321,7 @@ Table below is verified against **installed 0.7.4**. The 0.4.12 → 0.7.4 delta 
 | Param | What it gives | Rudra uses it? |
 |---|---|---|
 | `model: str \| BaseChatModel` | `provider:model` resolved via `init_chat_model` (`_models.py:11`) | ⚠️ passes a `BaseChatModel` instance from `llm/factory.py` (Step 5) |
-| `skills: list[str]` | `SkillsMiddleware` — Anthropic Agent Skills spec, `<dir>/SKILL.md` + YAML frontmatter | ✅ Step 11/11a: `subagents/build.py:282` and `agent/planner_agent.py:463`. Corrected 2026-08-21 (CR-DOC4) — this read "never used" |
+| `skills: list[str]` | `SkillsMiddleware` — Anthropic Agent Skills spec, `<dir>/SKILL.md` + YAML frontmatter | ⚠️ **coder and tester only** (`subagents/build.py::_skills_for`, `registry.py:162,177`). The planner passes `skills=None` — corrected 2026-08-25 (OPEN-17), where this cited `planner_agent.py:463` as a live call site. Corrected 2026-08-21 (CR-DOC4) — before that it read "never used" |
 | `subagents: list[SubAgent]` | `SubAgentMiddleware` + the `task` tool | ✅ Step 9b: four specs in `subagents/registry.py`. **Rudra ships its own `general-purpose` to suppress the ungated one deepagents auto-adds** (`graph.py:751`). Passed at `agent/main_agent.py:687`. Corrected 2026-08-21 (CR-DOC5) — this read "nothing passes `subagents=` yet", which stopped being true when 9c shipped |
 | `memory: list[str]` | `MemoryMiddleware`, AGENTS.md into system prompt | ⚠️ planner only |
 | `permissions: list[FilesystemPermission]` | `allow` / `deny` / `interrupt` path rules | ❌ **cannot be used** — raises on any execute-capable backend (U.7) |
@@ -337,9 +383,13 @@ two independently configured numbers would drift, and the pair only makes
 sense read together.
 
 **The standing gap, stated rather than implied: nothing measures system
-prompt growth.** Skills, facts and the bootstrap are a fixed cost paid on
-every call, and no mechanism here trims them. Summarization compacts the
-*conversation*; the prompt is rebuilt in full each time.
+prompt growth.** Skills, facts and the merged planning methodology are a
+fixed cost paid on every call, and no mechanism here trims them.
+Summarization compacts the *conversation*; the prompt is rebuilt in full
+each time. The planner's share of that got *smaller* on 2026-08-25: dropping
+the skills index also dropped `SkillsMiddleware`'s boilerplate and the
+~780-token `using-superpowers` bootstrap, which more than pays for the
+methodology now inlined in the three stage bodies (OPEN-17).
 
 **The compaction count is tool-driven only.** deepagents' automatic
 summarization fires without passing through any Rudra middleware, so
