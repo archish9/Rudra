@@ -28,7 +28,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rudra.skills.bundle import Bundle
-from rudra.skills.rudra_tools import PLATFORM_REF_LINE, REFERENCE_FILENAME, RUDRA_TOOLS_MD
+from rudra.skills.rudra_tools import (
+    DESCRIPTION_OVERRIDES,
+    REFERENCE_FILENAME,
+    RUDRA_TOOLS_MD,
+    platform_ref_line,
+)
 
 
 class DuplicateSkillError(ValueError):
@@ -50,6 +55,7 @@ class RenderReport:
     active_skills: tuple[str, ...]
     cross_refs_rewritten: int
     platform_refs_injected: tuple[str, ...]
+    descriptions_rewritten: tuple[str, ...]
 
 
 def _check_no_duplicate_active_names(bundles: Sequence[Bundle], enabled: frozenset[str]) -> None:
@@ -74,7 +80,14 @@ _REWRITABLE_SUFFIXES = frozenset({".md"})
 # transform's *inputs*, which cannot detect a change to the transform
 # itself -- without this, a Rudra upgrade that rewrote cross-references
 # differently would silently reuse the old rendering.
-TRANSFORM_VERSION = 1
+#
+# 2 (2026-08-25): the Platform Adaptation bullet became an absolute path
+# (OPEN-18), RUDRA_TOOLS_MD gained its planning section, and two skill
+# descriptions are now overridden in the rendered copy (OPEN-17). All
+# live outside the hashed inputs -- rudra_tools.py is the transform, not a
+# bundle -- so without this bump every existing cache would keep serving
+# the old rendering and neither fix would reach a model.
+TRANSFORM_VERSION = 2
 
 
 def _rewrite_cross_refs(skill_root: Path, bundle: Bundle) -> int:
@@ -166,8 +179,49 @@ def _inject_platform_reference(skill_root: Path, bundle: Bundle) -> bool:
             f"{bundle.bootstrap_skill}/SKILL.md has no '- ' entry to insert after"
         )
         raise ValueError(msg)
-    lines.insert(max(bullets) + 1, PLATFORM_REF_LINE)
+    lines.insert(
+        max(bullets) + 1,
+        platform_ref_line(bundle.name, bundle.bootstrap_skill),
+    )
     skill_md.write_text(head + bundle.platform_ref_section + "\n".join(lines), encoding="utf-8")
+    return True
+
+
+_DESCRIPTION_RE = re.compile(r'^description:[ \t]*(?:"(?:[^"\\\\]|\\\\.)*"|.*)$', re.MULTILINE)
+
+
+def _rewrite_description(skill_root: Path, name: str) -> bool:
+    """Replace one skill's index line, in the rendered copy.
+
+    Returns True when an override applied.
+
+    Only the frontmatter `description` is touched, and only for the skills
+    DESCRIPTION_OVERRIDES names -- see the reasoning there. The body is the
+    methodology and stays exactly as upstream wrote it; the description is
+    the one line deepagents puts in a system prompt unasked.
+
+    Rewritten in place with a quoted scalar, because the replacements
+    contain `:` and a bare YAML scalar would end at the colon.
+    """
+    replacement = DESCRIPTION_OVERRIDES.get(name)
+    if replacement is None:
+        return False
+
+    skill_md = skill_root / "SKILL.md"
+    body = skill_md.read_text(encoding="utf-8")
+    # Frontmatter only: a `description:` line in the prose below is an
+    # example of a skill's frontmatter, not this skill's own.
+    head, sep, tail = body.partition("\n---")
+    if not sep:
+        return False
+
+    quoted = replacement.replace("\\", "\\\\").replace('"', '\\"')
+    updated, count = _DESCRIPTION_RE.subn(f'description: "{quoted}"', head, count=1)
+    if not count:
+        msg = f"skill '{name}' has no frontmatter 'description:' line to override"
+        raise ValueError(msg)
+
+    skill_md.write_text(updated + sep + tail, encoding="utf-8")
     return True
 
 
@@ -189,11 +243,14 @@ def render(
     library_skills: list[str] = []
     cross_refs = 0
     injected: list[str] = []
+    rewritten_descriptions: list[str] = []
     for bundle in bundles:
         for name in bundle.skill_names():
             target = library / bundle.name / name
             shutil.copytree(bundle.skills_path / name, target)
             cross_refs += _rewrite_cross_refs(target, bundle)
+            if _rewrite_description(target, name):
+                rewritten_descriptions.append(name)
             if name == bundle.bootstrap_skill and _inject_platform_reference(target, bundle):
                 injected.append(f"{bundle.name}/{name}")
             library_skills.append(f"{bundle.name}/{name}")
@@ -210,4 +267,5 @@ def render(
         active_skills=tuple(sorted(active_skills)),
         cross_refs_rewritten=cross_refs,
         platform_refs_injected=tuple(sorted(injected)),
+        descriptions_rewritten=tuple(sorted(rewritten_descriptions)),
     )

@@ -794,8 +794,9 @@ async def create_main_agent(
                 facts=facts,
                 interactive=interactive,
                 stage=stage,
-                skills_sources=skills_sources,
-                skills_cache_root=skill_cache.root if skill_cache else None,
+                # No skills argument: the planner indexes none (OPEN-17).
+                # `skills_sources` still reaches the subagents above -- the
+                # coder and tester keep the full corpus.
                 usage=usage,
                 # C8.4 names "before planning" as a retrieval trigger. The same
                 # store the loop and the subagents hold -- one run, one palace.

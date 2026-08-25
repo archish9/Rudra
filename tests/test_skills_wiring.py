@@ -83,42 +83,6 @@ def test_the_normalizer_is_told_about_every_route_the_backend_mounts(
     assert mounted == set(main_agent.route_prefixes((bundled,)))
 
 
-def test_planner_is_constructed_with_skills(tmp_path: Path) -> None:
-    from rudra.agent import planner_agent
-
-    _project(tmp_path)
-    with patch.object(planner_agent, "create_deep_agent") as spy:
-        planner_agent.create_planner_agent(
-            task="x",
-            project_path=tmp_path,
-            filesystem_backend=None,
-            checkpointer=None,
-            console=_console(),
-            stage="clarify",
-            skills_sources=("/skills/active/",),
-        )
-
-    assert spy.call_args.kwargs["skills"] == ["/skills/active/"]
-
-
-def test_planner_without_sources_passes_no_skills_argument(tmp_path: Path) -> None:
-    """None means absent, not empty -- every existing test relies on it."""
-    from rudra.agent import planner_agent
-
-    _project(tmp_path)
-    with patch.object(planner_agent, "create_deep_agent") as spy:
-        planner_agent.create_planner_agent(
-            task="x",
-            project_path=tmp_path,
-            filesystem_backend=None,
-            checkpointer=None,
-            console=_console(),
-            stage="clarify",
-        )
-
-    assert spy.call_args.kwargs.get("skills") is None
-
-
 def test_only_the_writing_subagents_want_skills() -> None:
     """S11b.1. The reviewer reads a diff; it is not choosing a method."""
     from rudra.subagents.registry import REGISTRY
@@ -166,75 +130,105 @@ def test_no_subagent_gets_skills_when_the_run_has_none(tmp_path: Path) -> None:
     assert spy.call_args.kwargs.get("skills") is None
 
 
-def test_bootstrap_is_read_from_the_rendered_cache(cache_root: Path) -> None:
-    """It must be the rendered copy, not the packaged one.
-
-    The rendered copy carries both 11a adaptations: cross-references
-    rewritten to paths, and the Platform Adaptation list naming
-    rudra-tools.md. A copy imported from src/ would send the model looking
-    for a plugin namespace that does not exist.
-    """
-    from rudra.agent.planner_agent import bootstrap_text
-
-    text = bootstrap_text(cache_root)
-
-    assert text is not None
-    assert "references/rudra-tools.md" in text
-    assert "superpowers:" not in text
-
-
-def test_bootstrap_drops_its_yaml_frontmatter(cache_root: Path) -> None:
-    """Frontmatter is loader metadata, not instruction.
-
-    Injected verbatim it drops a YAML document into the middle of a system
-    prompt and tells the model its own instructions are "Use when starting
-    any conversation" -- text addressed to whoever reads the skill index,
-    not to the agent being prompted.
-    """
-    from rudra.agent.planner_agent import bootstrap_text
-
-    text = bootstrap_text(cache_root)
-
-    assert text is not None
-    assert not text.startswith("---")
-    assert "description: Use when starting any conversation" not in text
-    # The instructions themselves survive intact.
-    assert "Platform Adaptation" in text
-    assert "ABSOLUTELY MUST invoke the skill" in text
-
-
-def test_bootstrap_is_none_when_it_is_not_in_the_cache(tmp_path: Path) -> None:
-    from rudra.agent.planner_agent import bootstrap_text
-
-    assert bootstrap_text(tmp_path) is None
-
-
-def test_bootstrap_is_none_without_a_cache_at_all() -> None:
-    from rudra.agent.planner_agent import bootstrap_text
-
-    assert bootstrap_text(None) is None
-
-
-@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
-def test_every_planner_stage_carries_the_bootstrap(
-    stage: str, tmp_path: Path, cache_root: Path
-) -> None:
+def _planner_call(stage: str, tmp_path: Path):
+    """create_deep_agent's kwargs for one planner stage."""
     from rudra.agent import planner_agent
 
     _project(tmp_path)
     with patch.object(planner_agent, "create_deep_agent") as spy:
         planner_agent.create_planner_agent(
-            task="x",
+            task="write a todo application in python",
             project_path=tmp_path,
             filesystem_backend=None,
             checkpointer=None,
             console=_console(),
             stage=stage,
-            skills_sources=("/skills/active/",),
-            skills_cache_root=cache_root,
         )
+    return spy.call_args.kwargs
 
-    assert "Platform Adaptation" in spy.call_args.kwargs["system_prompt"]
+
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_no_planner_stage_indexes_any_skill(stage: str, tmp_path: Path) -> None:
+    """OPEN-17, and absence is the enforcement.
+
+    The corpus is written for one agent that clarifies, designs and
+    implements in a single conversation; Rudra plans with three agents
+    holding disjoint tools. Measured four times on
+    nvidia/nemotron-3-ultra-550b-a55b with the same prompt: indexed, the
+    planner emitted the skill's own checklist as the task list ("Write
+    design doc to docs/superpowers/specs/", "Invoke writing-plans skill")
+    or declared nothing at all; absent, seven units of real work.
+
+    Three attempts to fix it in prompt text lost to the injected bootstrap's
+    "YOU DO NOT HAVE A CHOICE. YOU MUST USE IT." A prompt cannot outrank a
+    prompt. A missing index can.
+    """
+    assert _planner_call(stage, tmp_path)["skills"] is None
+
+
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_no_planner_stage_carries_the_bootstrap(stage: str, tmp_path: Path) -> None:
+    """It instructs the model to invoke skills the planner does not index.
+
+    Injecting it now would be strictly worse than the bug it was added for
+    (C5.3): it would send a stage after a corpus that is not there.
+    """
+    prompt = _planner_call(stage, tmp_path)["system_prompt"]
+
+    assert "Platform Adaptation" not in prompt
+    assert "YOU DO NOT HAVE A CHOICE" not in prompt
+
+
+def test_clarify_carries_the_merged_methodology(tmp_path: Path) -> None:
+    """OPEN-17: the methodology is kept, the runtime skill read is not.
+
+    brainstorming's "Understanding the idea" is now stage text rather than a
+    file the model may or may not open -- so it applies to every planning
+    run, on every model, instead of when a 550B model chooses to read it.
+    """
+    prompt = _planner_call("clarify", tmp_path)["system_prompt"]
+
+    # Look before asking, and size the request before refining it.
+    assert "Look before you ask." in prompt
+    assert "several independent pieces" in prompt
+    # Purpose, constraints, success criteria -- the three that carry a run.
+    assert "purpose" in prompt
+    assert "constraints" in prompt
+    assert "how you would know this succeeded" in prompt
+
+
+def test_architect_carries_the_merged_methodology(tmp_path: Path) -> None:
+    """ "Exploring approaches" and "Design for isolation and clarity"."""
+    prompt = _planner_call("architect", tmp_path)["system_prompt"]
+
+    assert "Weigh 2-3 approaches before you record one." in prompt
+    assert "why the others lost" in prompt
+    assert "Cut ruthlessly." in prompt
+    assert "what it does, how it is used, and what it depends" in prompt
+    assert "Follow the patterns that are" in prompt
+
+
+def test_breakdown_carries_the_merged_self_review(tmp_path: Path) -> None:
+    """The spec self-review, retargeted from a document to the ledger."""
+    prompt = _planner_call("breakdown", tmp_path)["system_prompt"]
+
+    assert "Re-read your list before you send it." in prompt
+    assert "contradict" in prompt
+    assert "placeholder" in prompt
+
+
+@pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
+def test_no_stage_is_told_to_produce_a_document(stage: str, tmp_path: Path) -> None:
+    """What deliberately did NOT transfer, because it is what leaked.
+
+    The spec-document step and the writing-plans handoff are the two the
+    failing runs emitted as tasks. Rudra's plan is the ledger.
+    """
+    prompt = _planner_call(stage, tmp_path)["system_prompt"].lower()
+
+    assert "design doc" not in prompt
+    assert "spec file" not in prompt
+    assert "writing-plans" not in prompt
 
 
 @pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])

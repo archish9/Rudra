@@ -16,6 +16,21 @@ def test_key_changes_with_the_enabled_set() -> None:
     assert cache_key(BUNDLES, DEFAULT_ENABLED) != cache_key(BUNDLES, fewer)
 
 
+def test_key_changes_with_the_transform_version(monkeypatch) -> None:
+    """The only lever that can invalidate a cache after a transform edit.
+
+    cache_key hashes the transform's *inputs* -- bundle manifests and the
+    enabled set. RUDRA_TOOLS_MD and the Platform Adaptation bullet live in
+    rudra_tools.py, which is the transform, not an input, so editing either
+    moves no hashed byte. Without the bump every existing cache keeps
+    serving the old rendering and the edit reaches no model (OPEN-17/18).
+    """
+    before = cache_key(BUNDLES, DEFAULT_ENABLED)
+    monkeypatch.setattr("rudra.skills.cache.TRANSFORM_VERSION", 999)
+
+    assert cache_key(BUNDLES, DEFAULT_ENABLED) != before
+
+
 def test_key_ignores_enabled_ordering() -> None:
     """A frozenset has no order; the key must not acquire one."""
     a = frozenset({"brainstorming", "writing-plans"})

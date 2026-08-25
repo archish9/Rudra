@@ -238,7 +238,15 @@ def test_platform_adaptation_list_names_rudra(tmp_path: Path) -> None:
     )
     section = body.split("## Platform Adaptation", 1)[1].split("\n## ", 1)[0]
 
-    assert "Rudra: `references/rudra-tools.md`" in section
+    # ABSOLUTE, not relative (OPEN-18). The bullet reaches the model inside
+    # an injected system prompt, where there is no working directory for a
+    # relative path to resolve against -- and it went unread for a whole run
+    # because of it. A relative spelling here is the regression.
+    assert (
+        "Rudra: `/skills/library/superpowers/using-superpowers/references/rudra-tools.md`"
+        in section
+    )
+    assert "Rudra: `references/" not in section
     # Upstream's own entries survive -- this is an addition, not a replacement.
     assert "Codex:" in section
 
@@ -249,7 +257,9 @@ def test_the_active_bootstrap_carries_the_reference_too(tmp_path: Path) -> None:
 
     assert (dest / "active" / "using-superpowers" / "references" / "rudra-tools.md").is_file()
     body = (dest / "active" / "using-superpowers" / "SKILL.md").read_text(encoding="utf-8")
-    assert "Rudra: `references/rudra-tools.md`" in body
+    assert (
+        "Rudra: `/skills/library/superpowers/using-superpowers/references/rudra-tools.md`" in body
+    )
 
 
 def test_reference_states_that_no_tool_can_mark_work_done(tmp_path: Path) -> None:
@@ -271,6 +281,86 @@ def test_reference_states_that_no_tool_can_mark_work_done(tmp_path: Path) -> Non
     assert "cannot mark" in ref
     assert "rudra verify" in ref
     assert "read_file" in ref
+
+
+def test_the_two_imperative_descriptions_are_overridden(tmp_path: Path) -> None:
+    """OPEN-17: a description is an instruction, not documentation.
+
+    deepagents renders the index entry verbatim from frontmatter --
+    `- **{name}**: {description}` (middleware/skills.py:870) -- so an
+    upstream "You MUST use this before any creative work" lands in the
+    system prompt of every agent that indexes the corpus. Measured twice on
+    nvidia/nemotron-3-ultra-550b-a55b (runs a5aa4552c9ab, 298dd9ac5f2c):
+    all three planner stages opened by reading brainstorming, and the
+    imperative beat the stage prompt telling them not to.
+    """
+    dest = tmp_path / "out"
+    report = render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    assert report.descriptions_rewritten == ("brainstorming", "using-superpowers")
+
+    for name in ("brainstorming", "using-superpowers"):
+        body = (dest / "active" / name / "SKILL.md").read_text(encoding="utf-8")
+        front = body.split("---", 2)[1]
+        assert "You MUST use this" not in front
+        assert "before ANY response" not in front
+
+
+def test_overriding_a_description_leaves_the_skill_body_untouched(tmp_path: Path) -> None:
+    """The methodology is upstream's. Only the index line is ours.
+
+    Rewriting the body would be forking the corpus, which S11a.3 defines as
+    a hand-update of the vendored source -- a different, deliberate act.
+    """
+    dest = tmp_path / "out"
+    render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    source = (BUNDLES[0].skills_path / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
+    rendered = (dest / "active" / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
+
+    # Everything after the frontmatter survives byte for byte.
+    assert source.split("---", 2)[2] == rendered.split("---", 2)[2]
+    # And the name -- which deepagents requires to equal the directory.
+    assert "name: brainstorming" in rendered.split("---", 2)[1]
+
+
+def test_a_skill_with_no_override_keeps_its_description(tmp_path: Path) -> None:
+    """Seven of the nine enabled skills say "Use when ...", which is
+    conditional and correct. Only the two unconditional ones are touched."""
+    dest = tmp_path / "out"
+    render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    body = (dest / "active" / "test-driven-development" / "SKILL.md").read_text(encoding="utf-8")
+    assert "Use when implementing any feature or bugfix" in body
+
+
+def test_reference_reconciles_planning_against_the_three_stages(tmp_path: Path) -> None:
+    """OPEN-17: the second reconciliation the file has to carry.
+
+    brainstorming ships enabled and its frontmatter says "You MUST use this
+    before any creative work". It describes planning as one continuous
+    process ending in a written spec; Rudra runs three agents with disjoint
+    tools ending at add_tasks. Left unreconciled, run a5aa4552c9ab emitted
+    the skill's own workflow as the task list.
+    """
+    dest = tmp_path / "out"
+    render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    ref = (
+        dest / "library" / "superpowers" / "using-superpowers" / "references" / "rudra-tools.md"
+    ).read_text(encoding="utf-8")
+
+    # All three stage names, so a skill's single-process framing is placed
+    # rather than merely contradicted.
+    assert "clarify" in ref
+    assert "architect" in ref
+    assert "breakdown" in ref
+    # The terminal state, which is what the failing run got wrong.
+    assert "Planning ends at `add_tasks`, not at a document." in ref
+    # The approval gate belongs to Python, not to the planner.
+    assert "not yours to collect" in ref
+    # The failure itself, quoted so the model sees the shape it must avoid.
+    assert "Propose 2-3 architectural approaches with trade-offs" in ref
 
 
 def test_every_tool_named_in_the_reference_actually_exists() -> None:

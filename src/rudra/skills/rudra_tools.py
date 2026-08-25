@@ -17,7 +17,64 @@ from __future__ import annotations
 
 REFERENCE_FILENAME = "references/rudra-tools.md"
 
-PLATFORM_REF_LINE = "- Rudra: `references/rudra-tools.md`"
+
+def platform_ref_line(bundle_name: str, bootstrap_skill: str) -> str:
+    """The Platform Adaptation bullet that points at Rudra's mapping file.
+
+    Absolute, and that is the whole point of the function. It was the
+    literal ``- Rudra: `references/rudra-tools.md` `` until OPEN-18: the model
+    has no working directory, so a relative path in an injected prompt
+    anchors against nothing. Measured on run `a5aa4552c9ab` -- the planner
+    read `/skills/active/brainstorming/SKILL.md` six times and this file
+    zero times, which left every reconciliation in it inert, including the
+    section this module calls "the most important difference".
+
+    Spelled against `library/` rather than `active/` for the reason
+    `_rewrite_cross_refs` targets library paths (transform.py, spec S11a.4):
+    library/ holds every skill regardless of enablement, so the path stays
+    valid when the enabled set changes.
+    """
+    return f"- Rudra: `/skills/library/{bundle_name}/{bootstrap_skill}/{REFERENCE_FILENAME}`"
+
+
+# Index-line overrides, applied to the RENDERED copy only.
+#
+# deepagents renders every skill's index entry verbatim from its frontmatter
+# -- `- **{name}**: {description}` (middleware/skills.py:870) -- so a
+# `description` is not documentation here. It is an instruction sitting in
+# the system prompt of every agent that indexes the corpus, and the agent
+# never asked for it.
+#
+# Two of the nine enabled skills issue an unconditional imperative there,
+# and measurement says the imperative wins over any prompt text arguing
+# with it. Runs `a5aa4552c9ab` and `298dd9ac5f2c`, both
+# nvidia/nemotron-3-ultra-550b-a55b: ALL THREE planner stages opened by
+# reading brainstorming before doing anything their own stage asked for.
+# The first run emitted that skill's workflow as the task list (OPEN-17);
+# the second, with the reconciliation already added to the stage prompts,
+# emitted no tasks at all.
+#
+# Rewritten so the skill stays enabled, indexed and readable -- the owner's
+# requirement -- while its index line stops ordering a planner stage to
+# re-derive a workflow Rudra already implements in Python. Bodies are never
+# touched, and neither is the source bundle: this edits the rendered copy,
+# exactly as the cross-reference rewrite does.
+DESCRIPTION_OVERRIDES: dict[str, str] = {
+    "brainstorming": (
+        "Read this for HOW to explore intent and weigh approaches. Do not "
+        "re-derive its workflow on Rudra: the planner's clarify, architect "
+        "and breakdown stages already implement it, each a separate agent "
+        "with its own tools, and you are only one of them. Its steps are "
+        "not units of work -- never pass them to add_tasks."
+    ),
+    "using-superpowers": (
+        "Reference for how skills are reached on Rudra. Its content is "
+        "already in your system prompt, so do not read it again, and do "
+        "not read a skill before answering -- do your stage's job, and "
+        "consult a skill only when it bears on the work in front of you."
+    ),
+}
+
 
 RUDRA_TOOLS_MD = """# Rudra Tool Mapping
 
@@ -71,6 +128,51 @@ fails, its output comes back to you verbatim and you fix what it named.
 
 Code review is advisory here. A reviewer subagent runs once at the end and
 prints its findings; it gates nothing.
+
+## Planning happens in three stages, and you are one of them
+
+This overrides any skill that describes planning as one continuous process.
+
+Rudra plans in three separate agents, run in order, each with its own tools.
+Your system prompt names which one you are. You do not run the other two,
+and you cannot: the tools for their work were never registered for you.
+
+- Clarifying questions, settling intent -- the **clarify** stage.
+- Approaches, trade-offs, design decisions -- the **architect** stage.
+- Turning the design into work -- the **breakdown** stage.
+
+So a skill telling you to classify the request, then ask questions, then
+propose approaches, then write it up is not wrong -- it is describing all
+three stages at once. Do your stage. The facts you record are how the next
+one receives your work.
+
+**Planning ends at `add_tasks`, not at a document.** There is no design doc,
+no spec file, no path to write one to and nothing to commit. The planner
+holds `ls`, `read_file`, `glob` and `grep` and no write tool at all. A skill
+that finishes by saving a plan or a spec finishes differently here: it
+finishes at the ledger.
+
+**A task names work that changes files.** Your own planning steps are not
+tasks. This is a real failure, quoted from a run that produced nothing:
+
+    BAD:  "Understand requirements through clarifying questions"
+    BAD:  "Propose 2-3 architectural approaches with trade-offs"
+    BAD:  "Present detailed design for approval"
+    BAD:  "Write design specification document"
+
+    GOOD: "write a Todo model with add, complete and delete"
+    GOOD: "write tests for the Todo model"
+    GOOD: "add a --format flag to the CLI"
+
+Those four BAD entries are a planning workflow, not work. The coder that was
+handed the first one had no file to write and spent the run searching for
+directories that do not exist.
+
+**The user's approval is real, and it is not yours to collect.** Rudra shows
+the user the plan and takes their decision after the breakdown stage
+returns -- outside the planner, in Python, before any code is written. You
+have no tool for it. Do not ask for approval and do not wait for it: calling
+`add_tasks` is how the plan reaches the user.
 
 ## Subagents
 

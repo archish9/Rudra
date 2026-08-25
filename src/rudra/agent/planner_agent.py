@@ -4,6 +4,22 @@ Step 9c replaced PLAN.md and current_task.md with the task ledger
 (C6.10). The planner declares work through add_tasks and retracts it
 through drop_task; it cannot mark anything done, because no tool can --
 only loop/engine.py writes that, and only when the gate passes.
+
+The three stage prompts below carry methodology adapted from the
+`brainstorming` skill of superpowers (https://github.com/obra/superpowers),
+MIT, Copyright (c) 2025 Jesse Vincent -- its scope assessment and question
+discipline in _CLARIFY_BODY, its approach-weighing, YAGNI and isolation
+guidance in _ARCHITECT_BODY, and its spec self-review in _BREAKDOWN_BODY,
+retargeted from a design document to the task ledger.
+
+It is inlined here rather than read at runtime, and that is OPEN-17's fix:
+the corpus is written for one agent that clarifies, designs and implements
+in a single conversation, so a planner *stage* that reads it tries to run
+all four of its steps holding the tools for one. Inlined, the methodology
+applies to every planning run on every model instead of when a model
+chooses to open a file. The planner therefore indexes no skills at all
+(see create_planner_agent); the coder and tester still index the full
+corpus, being single agents doing one job.
 """
 
 from __future__ import annotations
@@ -63,6 +79,26 @@ depends on, before anyone decides how to build it or what to build.
 Record every fact you establish with record_fact(), and say WHY you
 believe it. The architect, the coder, the tester and the reviewer all
 read those facts; one you keep to yourself is one they do not have.
+
+**Look before you ask.** Read what is already here first. A question whose
+answer is in the codebase spends the budget and tells the user you did not
+look.
+
+**Settle the size of the request first.** Is this a change to code that
+already exists here, or something new? A change to an existing flow needs
+its own file read, not a design conversation. Something new needs purpose
+and constraints settled before anyone picks a shape.
+
+**If the request is several independent pieces at once** -- a system with
+storage AND accounts AND billing AND reporting -- say so and record it.
+Do not spend your questions refining the details of something that needs
+splitting first; record which piece comes first and why.
+
+**What is worth a fact:** the purpose (what the user is actually trying to
+do, which is rarely the literal words), the constraints (versions,
+libraries, platforms, things they cannot use), and what "working" means
+here -- how you would know this succeeded. Those three carry the run.
+Preferences nobody stated are not facts.
 """
 
 _CLARIFY_CAN_ASK = """
@@ -95,7 +131,25 @@ Decide and record, each with record_fact() and a WHY:
   - tests: what is worth testing and at which level
 
 Read the existing code first if there is any — a decision that fights the
-project it lands in is worse than no decision.
+project it lands in is worse than no decision. Follow the patterns that are
+already there. Where existing code has a problem that gets in the way of
+this work, fix that as part of it; do not propose refactoring that serves
+something else.
+
+**Weigh 2-3 approaches before you record one.** Record the one you chose
+and why the others lost -- that reasoning is what stops the coder relitigating
+it, and what stops a later run repeating a dead end. One approach considered
+is not a decision, it is the first thing you thought of.
+
+**Cut ruthlessly.** Remove anything nobody asked for. Every feature you add
+here is one the coder must write, the tester must cover and the gate must
+pass. If it is not needed for what the user asked, it is not in the design.
+
+**Split it so each piece can be understood alone.** For every unit you name,
+you should be able to say what it does, how it is used, and what it depends
+on. If you cannot describe a piece without describing its internals, the
+boundary is wrong. A file that would hold several unrelated jobs is doing
+too much -- say where it splits.
 
 Keep each one short and concrete. "src/parser.rs holds parsing, src/main.rs
 holds the CLI" is a decision; three paragraphs about separation of concerns
@@ -115,12 +169,27 @@ A task is a unit of WORK, described in plain language. Not a filename.
   GOOD: "add a --format flag to the CLI"
   BAD:  "parser.py"
   BAD:  "create the project structure"
+  BAD:  "understand the requirements through clarifying questions"
+  BAD:  "propose 2-3 architectural approaches with trade-offs"
+  BAD:  "present the detailed design for approval"
+
+The last three are a planning workflow, not work -- they are what the two
+stages before you already did, and what you are doing now. They are quoted
+from a real run that produced no code: the coder handed the first of them
+had no file to write and spent the run searching for directories that do
+not exist. If a task does not change a file, it is not a task.
 
 One task may touch several files. Work that needs tests gets its own task.
 
 Call add_tasks() ONCE with every task you can foresee, then STOP. Do not
 add a task whose description is "verify" or "check": the gate does that on
 its own.
+
+**Re-read your list before you send it.** Is any task vague enough that two
+people would build different things? Do any two contradict each other? Does
+any one of them hide three tasks inside it? Is anything on it a placeholder
+rather than work? Fix those before calling add_tasks -- the coder gets what
+you wrote, not what you meant.
 
 You will be consulted again if a task fails or if the work runs out. When
 that happens, add a task taking a DIFFERENT approach, or drop_task() one
@@ -317,49 +386,6 @@ def _tools_for_stage(
     return interaction
 
 
-BOOTSTRAP_SKILL = "using-superpowers"
-
-
-def bootstrap_text(cache_root: Path | None) -> str | None:
-    """The rendered bootstrap skill, or None when it is not there.
-
-    Read from the *cache*, never from the package: the rendered copy has
-    its cross-references rewritten to readable paths and its Platform
-    Adaptation list pointing at references/rudra-tools.md. A packaged copy
-    would send the model after a plugin namespace Rudra does not have.
-
-    Skills are inert without this (C5.3). The index gives the model nine
-    names and descriptions; this is what tells it to act on them.
-
-    Planner stages only. `using-superpowers/SKILL.md:5-7` opens with
-    <SUBAGENT-STOP> -- "if you were dispatched as a subagent to execute a
-    specific task, ignore this skill" -- so injecting it into the coder
-    would spend ~780 tokens telling it to disregard what it just read.
-    """
-    if cache_root is None:
-        return None
-    path = cache_root / "library" / "superpowers" / BOOTSTRAP_SKILL / "SKILL.md"
-    try:
-        return _strip_frontmatter(path.read_text(encoding="utf-8"))
-    except OSError:
-        return None
-
-
-def _strip_frontmatter(text: str) -> str:
-    """Drop the leading YAML block a SKILL.md carries.
-
-    Frontmatter is metadata for the skill loader -- `name` and
-    `description` are what SkillsMiddleware puts in the index. Injecting it
-    verbatim would drop a YAML document into the middle of a system prompt
-    and tell the model its own instructions are "Use when starting any
-    conversation", which is addressed to the index reader, not to it.
-    """
-    if not text.startswith("---"):
-        return text
-    parts = text.split("---", 2)
-    return parts[2].lstrip("\n") if len(parts) == 3 else text
-
-
 # What the planner may do to the filesystem: look, never touch. Named here
 # rather than inlined so a reader of the module sees the boundary without
 # reading the middleware wiring (CR-C2).
@@ -388,8 +414,6 @@ def create_planner_agent(
     facts=None,
     interactive: bool = True,
     stage: str = "breakdown",
-    skills_sources: tuple[str, ...] | None = None,
-    skills_cache_root: Path | None = None,
     usage: Any = None,
     memory: Any = None,
 ):
@@ -464,14 +488,6 @@ def create_planner_agent(
         recall_tokens=recall_limit(cfg, "planner"),
         usage=usage,
     )
-    # C5.3: the index alone is inert. This is the instruction block that
-    # makes the model reach for a skill, and it chains onward -- it tells
-    # the model to read its harness's reference file, which is Rudra's
-    # tool mapping, which explains that no tool can mark work done.
-    bootstrap = bootstrap_text(skills_cache_root)
-    if bootstrap:
-        system_prompt = f"{system_prompt}\n\n---\n\n{bootstrap}"
-
     return create_deep_agent(
         model=model,
         tools=custom_tools,
@@ -481,10 +497,29 @@ def create_planner_agent(
         memory=[".rudra/AGENTS.md"],
         middleware=middleware,
         interrupt_on=gate.interrupt_on if gate is not None else None,
-        # None, not [], when skills are off: an empty list still installs
-        # SkillsMiddleware and spends its ~464 tokens of boilerplate on an
-        # index with nothing in it.
-        skills=list(skills_sources) if skills_sources else None,
+        # OPEN-17: the planner indexes NO skills, and that is the fix.
+        #
+        # The corpus is written for one agent that clarifies, designs and
+        # implements in a single conversation. Rudra plans with three agents
+        # holding disjoint tools, so a stage that reads `brainstorming` tries
+        # to run all four of its steps and has tools for one. Measured four
+        # times on nvidia/nemotron-3-ultra-550b-a55b, same prompt each time:
+        # with the corpus indexed the planner emitted the skill's own
+        # checklist as the task list ("Write design doc to
+        # docs/superpowers/specs/", "Invoke writing-plans skill"), or no
+        # tasks at all; with it absent, seven units of real work. Three
+        # escalating attempts to fix this in prompt text all lost to the
+        # injected bootstrap's "YOU DO NOT HAVE A CHOICE. YOU MUST USE IT."
+        #
+        # Nothing is lost: the methodology those skills carry is merged into
+        # the three stage prompts above, so it applies to every planning run
+        # by default rather than when a model chooses to read a file. The
+        # coder and tester still index the full corpus (registry.py) -- they
+        # are single agents doing one job, which is what it was written for.
+        #
+        # Absence is the enforcement, as it is for tools (_tools_for_stage)
+        # and for the reviewer's write tools (subagents/build.py).
+        skills=None,
     )
 
 

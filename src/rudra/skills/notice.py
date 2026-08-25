@@ -32,14 +32,26 @@ no version check and no update fetch at runtime.
 
 Rudra renders a modified copy of these files into the user's cache directory
 when it runs. The distributed copy in this repository is unmodified. The
-rendered copy differs in exactly two ways:
+rendered copy differs in exactly three ways:
 
   1. Cross-references between documents are rewritten from the upstream
      plugin-namespace form to filesystem paths Rudra's agents can read.
   2. One reference file describing Rudra's own tools is added, and listed in
      the upstream document that indexes such files.
+  3. The frontmatter "description" field of two documents -- "brainstorming"
+     and "using-superpowers" -- is replaced. That field is not documentation
+     in this setting: the agent framework copies it verbatim into the system
+     prompt of every agent that indexes the corpus, so an unconditional
+     instruction there is issued to agents that cannot carry it out. The
+     replacements say the same thing conditionally.
 
-No other content is altered, added, or removed.
+No other content is altered, added, or removed. Document bodies -- the
+methodology itself -- are byte-identical to upstream in both the distributed
+and the rendered copy.
+
+Rudra's own planning prompts (src/rudra/agent/planner_agent.py) additionally
+contain methodology adapted from the "brainstorming" document listed below,
+used under its MIT licence.
 """
 
 _BUNDLE_TEMPLATE = """
