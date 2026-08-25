@@ -519,6 +519,14 @@ convention — `api_key` is declared `field(repr=False)`, so it cannot reach
 a repr, log line or traceback frame; `cli.py::_safe_value` masks it in
 `config list` with no inspection at all.
 
+**A user's project is configured by `.rudra/config.toml`, not by a `.env`.**
+`rudra init` writes that file and no `.env`; it carries provider, model,
+`base_url` and either `api_key` or `api_key_env`, which is everything a
+`.env` would have carried. `.env` remains a supported layer-4 input — this
+repo's own dev config is one — but nothing asks a user to create one, and
+`rudra init` never does. See §9 for why that distinction has already cost a
+session once.
+
 **Which file matters, and it is the only thing that does.**
 `~/.config/rudra/config.toml` is a home-directory file in nobody's
 repository (the `~/.aws/credentials` shape) — a key there is fine.
@@ -635,5 +643,33 @@ only control, and real containment would need OS-level isolation.
 
 - The root noise this line used to list — `q-dev-chat-2026-03-20.md`, `filesystem-context.txt`, `improvements.txt`, `llms.txt`, `road-map.md`, `context_management_implementation_plan.md` — moved to the gitignored `docs/archive/` in Step 16 (A4.3, S16.6); `execution_tools.py` was deleted with D17 in Step 2.
 - `.env` and `.rudra/` are gitignored (verified via `git check-ignore`).
+- **Two different folders, and confusing them wastes a session. Read this
+  before testing Rudra on anything.**
+
+  | | **This repo** (`~/Documents/ai-ml/Rudra`) | **A user's project** (anywhere else) |
+  |---|---|---|
+  | What it is | Rudra's own source | The folder a user builds *their* app in |
+  | Configured by | `.env` at the repo root | `rudra init` → `.rudra/config.toml` |
+  | Holds creds? | **Yes** — the dev backend's keys | No. `config.toml` does this job |
+  | Do we touch it? | **No.** Leave `.env` exactly as it is | This is what you test against |
+
+  `.env` is Rudra's **development** config: it points this repo at a real
+  provider so the maintainer can run against one. `config/loader.py:459`
+  reads it as layer 4, and that is deliberate and staying. It is **not** how
+  a user configures a project — `rudra init` writes `.rudra/config.toml`,
+  which does the same job, and creates no `.env`.
+
+  **So: never copy this repo's `.env` into a test project.** Configure the
+  test project the way a user would — model settings in its own
+  `.rudra/config.toml`, and `api_key_env` naming a variable you export into
+  the environment. A `.env` in a test project is not a realistic setup, and
+  reasoning from its presence produces false findings.
+
+  That is not hypothetical. OPEN-19 was filed on 2026-08-25 claiming the
+  planner leaks a project `.env` to the model provider — reasoned entirely
+  from a `.env` the session itself had copied in. Re-tested on the real
+  `rudra init` workflow, the planner reads `.mcp.json` and nothing else
+  (run `292884ef16eb`). The item is `WONTFIX` and the correction is recorded
+  there.
 - ~~No LICENSE file, no CI, no CONTRIBUTING, no tests.~~ Stale as written, and stale again in the other direction. `LICENSE` landed with A4.2 and the suite is large and green — the number is not restated here, because it drifted twice in one day and `Documentation/07-development.md` owns it (CR-DOC8). **There is no CI, and none is planned**: A3.3 added `.github/workflows/ci.yml`, A3.9 narrowed it to `pull_request` only, S16.5 deleted it, and the owner declined re-adding it on 2026-08-21. That is consistent rather than an oversight — `CONTRIBUTING.md` does not accept pull requests, so a PR-triggered gate would guard nothing. `.githooks/pre-push` is the only gate; `--no-verify` or a clone that never set `core.hooksPath` is checked by nothing. `CONTRIBUTING.md` and `SECURITY.md` shipped in Step 16 (C10.4, C10.6).
 - **A local `.venv` drifts from `uv.lock` and will lie to you.** Measured 2026-08-11 on unmodified `main`: `.venv/bin/pytest -q` → `14 failed, 502 passed`, against `520 passed, 2 skipped` on a clean `uv sync` clone; the venv was missing `langchain_openai`, which `pyproject.toml:47` requires. Two defects reached `main` under that noise (A3.5, A1.51). Run `uv sync` before believing a local failure, and prefer `uv run` — which reconciles first — when the answer matters.
