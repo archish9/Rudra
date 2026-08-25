@@ -7,7 +7,7 @@ from rich.console import Console
 
 from rudra.agent import planner_agent
 from rudra.agent.planner_agent import consult_planner
-from rudra.loop.ledger import Ledger
+from rudra.loop.ledger import Ledger, TaskStatus
 
 
 @pytest.fixture
@@ -75,6 +75,39 @@ async def test_a_block_re_enters_breakdown_with_the_failure(captured):
     message = captured[0]["message"]
     assert task.id in message
     assert "typecheck failed" in message, "the blocker goes back verbatim"
+
+
+async def test_a_block_never_tells_the_planner_to_drop_the_blocked_task(captured):
+    """OPEN-24. This message used to end "or drop_task it if it is not worth
+    doing", where `it` is the task run_task had already set to BLOCKED
+    (engine.py:356,370) before work() consults at engine.py:792. drop_task
+    refuses every _SETTLED status by construction (tools.py:24,92), so Rudra
+    was ordering a call that cannot succeed -- and the planner issued it
+    three times, correctly obeying its instructions.
+    """
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    task.status = TaskStatus.BLOCKED
+    task.note = "typecheck failed"
+
+    await consult_planner(
+        object(),
+        ledger,
+        "build it",
+        stage="breakdown",
+        reason="blocked",
+        task=task,
+        gate=None,
+        console=Console(quiet=True),
+        session_id="sess",
+    )
+
+    message = captured[0]["message"]
+    assert "add_tasks" in message, "the move that works has to be named"
+    assert "cannot be dropped" in message, "and the one that cannot, ruled out"
+    # The legal use of drop_task survives: a blocker can make a task that is
+    # still PENDING pointless, and retracting those is the planner's job.
+    assert "pending" in message.lower()
 
 
 async def test_an_empty_ledger_re_enters_breakdown(captured):

@@ -692,11 +692,22 @@ async def consult_planner(
             "Call add_tasks if so; otherwise reply DONE and stop."
         )
     elif reason == "blocked" and task is not None:
+        # `{task.id} cannot be dropped` is load-bearing, not politeness
+        # (OPEN-24). run_task has already set this task BLOCKED
+        # (loop/engine.py:356,370) before work() consults here, and
+        # drop_task refuses every _SETTLED status by construction
+        # (loop/tools.py:24,92). This message used to end "or drop_task it",
+        # so Rudra was ordering a call that can never succeed -- and a
+        # planner issued it three times, correctly obeying its instructions.
+        # drop_task stays named because the blocker can make a task that is
+        # still PENDING pointless, and retracting those is a real move.
         message = (
             f"Task {task.id} ({task.description}) failed and was given up on:\n\n"
             f"{task.note}\n\n"
-            "Add a task taking a DIFFERENT approach, or drop_task it if it is "
-            "not worth doing. If neither, reply DONE and stop."
+            f"{task.id} is already recorded as blocked; it cannot be dropped or "
+            "retried. Call add_tasks with a task taking a DIFFERENT approach. If "
+            "this blocker also makes other tasks pointless, drop_task those -- "
+            "they must still be pending. If neither applies, reply DONE and stop."
         )
     elif reason == "revision":
         if not feedback.strip():

@@ -98,6 +98,39 @@ def test_drop_task_refuses_a_finished_task(tmp_path):
     assert ledger.get("t1").status is TaskStatus.DONE
 
 
+def test_the_settled_refusal_names_the_move_that_works(tmp_path):
+    """OPEN-24. `REJECTED: t1 is already blocked.` was a dead end.
+
+    A settled status is terminal -- nothing in engine.py moves a task out of
+    one -- so the identical call fails identically forever. The refusal has
+    to say so and name `add_tasks`, or the model has nothing to steer toward
+    and re-issues it, which is exactly what a 550B planner did three times.
+    """
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": ["a"]})
+    ledger.get("t1").status = TaskStatus.BLOCKED
+
+    refusal = tools["drop_task"].invoke({"task_id": "t1", "reason": "x"})
+
+    assert "REJECTED" in refusal
+    assert "add_tasks" in refusal, "the refusal must name the move that works"
+    assert "identical" in refusal, "and say the same call will fail the same way"
+
+
+def test_the_settled_refusal_covers_every_settled_status(tmp_path):
+    # DONE, BLOCKED and DROPPED are one rule, and a refusal that only reads
+    # right for one of them is a refusal a model meets in the wrong wording.
+    for status in (TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.DROPPED):
+        tools, ledger, _ = tools_for(tmp_path)
+        tools["add_tasks"].invoke({"descriptions": ["a"]})
+        ledger.get("t1").status = status
+
+        refusal = tools["drop_task"].invoke({"task_id": "t1", "reason": "x"})
+
+        assert status.value in refusal, "name the status it is actually in"
+        assert "add_tasks" in refusal
+
+
 def test_drop_task_requires_a_reason(tmp_path):
     tools, ledger, _ = tools_for(tmp_path)
     tools["add_tasks"].invoke({"descriptions": ["a"]})

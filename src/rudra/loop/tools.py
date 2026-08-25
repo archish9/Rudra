@@ -74,7 +74,9 @@ def create_ledger_tools(ledger: Ledger, path: Path) -> list:
         when it is merely hard. A dropped task is reported to the user
         along with your reason.
 
-        You cannot drop a task that has already finished.
+        Only a task that is still pending can be dropped. One that is
+        already done, blocked or dropped has been settled and cannot be
+        retracted -- to change course there, call add_tasks instead.
 
         Args:
             task_id: The id, e.g. "t2".
@@ -90,7 +92,17 @@ def create_ledger_tools(ledger: Ledger, path: Path) -> list:
             known = ", ".join(item.id for item in ledger.tasks) or "none"
             return f"REJECTED: no task '{task_id}'. Known ids: {known}."
         if task.status in _SETTLED:
-            return f"REJECTED: {task_id} is already {task.status.value}."
+            # Name the move that works, or this is a dead end (OPEN-24). A
+            # settled status is terminal -- nothing in engine.py moves a
+            # task out of one -- so a model told only "no" re-issues the
+            # identical call, which is what a planner did three times.
+            return (
+                f"REJECTED: {task_id} is already {task.status.value}. A settled "
+                f"task stays settled and no more work will be spent on it, so an "
+                f"identical drop_task will be refused identically. To take a "
+                f"different approach, call add_tasks. drop_task only works on a "
+                f"task that is still pending."
+            )
         task.status = TaskStatus.DROPPED
         task.note = f"dropped: {reason.strip()}"
         ledger.save(path)
