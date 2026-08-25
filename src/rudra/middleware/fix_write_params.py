@@ -6,6 +6,11 @@ Fixes applied (in order):
 3. Split dot-segment repair: `/. rudra/x` → `/.rudra/x` on every path arg
 4. Sandbox prefix stripping: removes known LLM-hallucinated path prefixes
    (/testbed/, /workspace/, /home/user/, etc.) from all file tool paths
+
+It also REFUSES one call rather than repairing it: a write whose only
+purpose is to bring a directory into being (OPEN-22). There is nothing to
+repair there -- the model wants a directory and `write_file` makes files --
+so the only useful answer is an error it can act on.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 import re
 
 from langchain.agents.middleware.types import AgentMiddleware
+from langchain_core.messages import ToolMessage
 
 from rudra.compat.path_constants import SANDBOX_PREFIXES
 
@@ -86,6 +92,45 @@ def _strip_sandbox_prefix(path: str) -> str:
     return path
 
 
+_DIRECTORY_PLACEHOLDER = (
+    "REJECTED: `{path}` has no file extension and its content is only a "
+    "comment, which is how an agent writes a file when what it wants is a "
+    "directory. Directories here are created implicitly -- writing "
+    "`{path}/<name>.py` creates `{path}/` on the way. Write the file you "
+    "actually want; do not write a placeholder to make its directory."
+)
+
+
+def _is_directory_placeholder(path: str, content: object) -> bool:
+    """Is this a write whose only purpose is to create a directory?
+
+    Held to the same bar as `_repair_split_dot_segment`: it must not be able
+    to fire on something a person would write by hand. Three conditions, all
+    required.
+
+    * No suffix -- `tests`, not `tests.py`.
+    * Not a dotfile -- `.gitignore` and `.env` have no suffix either, and a
+      `.gitignore` of nothing but comments is useless but legal.
+    * Content is at most three lines and every one of them is blank or a
+      `#` comment.
+
+    `LICENSE`, `Makefile` and `Dockerfile` are all suffix-less and all carry
+    real content, so none of them match. What matches is the measured shape:
+    `write_file('/tests', '# This is a placeholder to create the directory')`
+    (OPEN-22), which produced a 47-byte FILE named `tests` and doomed the
+    five later tasks that needed `tests/` to be a directory.
+    """
+    if not isinstance(content, str):
+        return False
+    name = path.rstrip("/").rsplit("/", 1)[-1]
+    if not name or name.startswith(".") or "." in name:
+        return False
+    lines = [line.strip() for line in content.strip().splitlines()]
+    if len(lines) > 3:
+        return False
+    return bool(lines) and all(not line or line.startswith("#") for line in lines)
+
+
 class FixWriteParamsMiddleware(AgentMiddleware):
     """Auto-correct file tool parameters: rename args, clean paths, strip fences.
 
@@ -152,8 +197,28 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         request.tool_call["args"] = args
         return request
 
+    def _refusal(self, request):
+        """A ToolMessage refusing a directory-placeholder write, or None."""
+        call = request.tool_call
+        if call.get("name") != "write_file":
+            return None
+        args = call.get("args", {})
+        path = args.get("file_path")
+        if not isinstance(path, str) or not _is_directory_placeholder(path, args.get("content")):
+            return None
+        return ToolMessage(
+            content=_DIRECTORY_PLACEHOLDER.format(path=path.rstrip("/")),
+            tool_call_id=call.get("id", ""),
+            name="write_file",
+            status="error",
+        )
+
     def wrap_tool_call(self, request, handler):
-        return handler(self._fix_args(request))
+        request = self._fix_args(request)
+        refusal = self._refusal(request)
+        return refusal if refusal is not None else handler(request)
 
     async def awrap_tool_call(self, request, handler):
-        return await handler(self._fix_args(request))
+        request = self._fix_args(request)
+        refusal = self._refusal(request)
+        return refusal if refusal is not None else await handler(request)

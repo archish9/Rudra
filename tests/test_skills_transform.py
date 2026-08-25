@@ -363,6 +363,31 @@ def test_reference_reconciles_planning_against_the_three_stages(tmp_path: Path) 
     assert "Propose 2-3 architectural approaches with trade-offs" in ref
 
 
+def test_reference_explains_that_execute_has_a_different_root(tmp_path: Path) -> None:
+    """OPEN-21, for the readers the planner fix left behind.
+
+    The coder and tester still index the corpus, so this file is a channel
+    that reaches them. It must not repeat the half-truth that "/" is the
+    project -- that is true of the file tools and false of `execute`.
+    """
+    dest = tmp_path / "out"
+    render(BUNDLES, DEFAULT_ENABLED, dest)
+
+    ref = (
+        dest / "library" / "superpowers" / "using-superpowers" / "references" / "rudra-tools.md"
+    ).read_text(encoding="utf-8")
+
+    assert "does not share the file tools" in ref
+    # The measured divergence, spelled out rather than described.
+    assert "the MACHINE's /tests" in ref
+    # And what to do instead.
+    assert "pytest tests/" in ref
+    # Absolute system paths stay legitimate -- the rule is not "never /".
+    assert "/usr/bin/env" in ref
+    # OPEN-22's half.
+    assert "Directories need no command" in ref
+
+
 def test_every_tool_named_in_the_reference_actually_exists() -> None:
     """A1.77: the file whose job is naming tools must not invent them.
 

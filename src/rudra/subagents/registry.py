@@ -16,6 +16,32 @@ from rudra.subagents.spec import RudraSubagent
 _READ_ONLY_FS: tuple[str, ...] = ("ls", "read_file", "glob", "grep")
 _WRITER_FS: tuple[str, ...] = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
 
+# The path contract, shared by every subagent that can write.
+#
+# It lived only in _CODER_PROMPT until 2026-08-25, and the agent that walked
+# out of the project was the TESTER, which had no path rules whatsoever
+# (OPEN-21/OPEN-22). One copy, interpolated into both, so they cannot drift.
+_PATH_RULES = """## FILE PATH RULES
+- Use RELATIVE paths only: "src/main.rs", "package.json"
+- NEVER use absolute paths or paths starting with "/" or a drive letter
+- **The file tools and `execute` do NOT agree about what "/" means.** To
+  read_file, write_file, edit_file, ls, glob and grep, "/x" is this
+  project's "x". To `execute`, "/x" is the MACHINE's "/x" -- a real shell,
+  a real filesystem, nothing to do with this project. The same string is
+  two different places. This is why relative paths are the rule: they mean
+  the same thing to both.
+- So a shell command must NEVER name a path with a leading "/" that you
+  meant as project-relative. `rm /tests` does not delete this project's
+  tests; it looks for a directory at the root of the machine, and what
+  happens next is not something this project can undo for you.
+- **Directories are created implicitly.** Writing "tests/test_models.py"
+  creates "tests/" on the way. There is no mkdir tool and you do not need
+  one. NEVER write a placeholder file in order to bring a directory into
+  being -- that gives you a FILE with that name, and every later write
+  into it fails.
+"""
+
+
 _CODER_PROMPT = """You are an expert code generator for Rudra.
 
 Your job: complete the ONE TASK you are given, writing every file it needs.
@@ -31,10 +57,7 @@ calling one wastes a turn on an error. If `execute` is not in your tool list
 at all, you cannot run commands in this run -- say so and finish the writing
 work instead of looking for another way.
 
-## FILE PATH RULES
-- Use RELATIVE paths only: "src/main.rs", "package.json"
-- NEVER use absolute paths or paths starting with "/" or a drive letter
-
+{path_rules}
 ## CODE QUALITY RULES
 - write_file content MUST be RAW source code -- NEVER wrap it in ```markdown fences```
 - Write COMPLETE, working code -- no placeholders, stubs, or TODO comments
@@ -70,6 +93,7 @@ exactly what happened.
 - Those are the only two ways to run anything. There is no `bash`, `shell`,
   `sh`, or `run` tool.
 
+{path_rules}
 ## RULES
 - Test real behaviour. A test asserting True == True passes and proves nothing
 - Do NOT edit the code under test to make a test pass -- report the failure
@@ -150,7 +174,7 @@ Stop once you have answered.
 CODER = RudraSubagent(
     name="coder",
     description="Writes one complete source file from a specification. No shell access.",
-    system_prompt=_CODER_PROMPT,
+    system_prompt=_CODER_PROMPT.format(path_rules=_PATH_RULES),
     role="coder",
     fs_tools=_WRITER_FS,
     # Chooses *how* to write the code: TDD and systematic-debugging are
@@ -170,7 +194,7 @@ CODER = RudraSubagent(
 TESTER = RudraSubagent(
     name="tester",
     description="Writes tests for existing code, runs the suite, and reports what failed.",
-    system_prompt=_TESTER_PROMPT,
+    system_prompt=_TESTER_PROMPT.format(path_rules=_PATH_RULES),
     role="tester",
     fs_tools=(*_WRITER_FS, "execute"),
     rudra_tools=("run_tests", "remember", "search_memory"),

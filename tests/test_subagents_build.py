@@ -550,3 +550,50 @@ def test_no_usage_object_means_no_usage_middleware(context):
         REGISTRY["coder"], context, _model_for(REGISTRY["coder"], context.cfg)
     )
     assert not [m for m in middleware if type(m).__name__ == "UsageMiddleware"]
+
+
+# --- OPEN-21: the two path universes ------------------------------------
+
+
+def test_every_writing_subagent_is_told_execute_does_not_share_the_root():
+    """OPEN-21. The file tools are project-rooted; `execute` is a real shell
+    whose "/" is the machine. Nothing said so, and the tester found out the
+    hard way: `write_file('/tests')` landed in the project, `rm /tests`
+    looked at the host, `mkdir -p /tests` hit the host root, and
+    `mkdir -p /tmp/tests` then created a directory OUTSIDE the project.
+
+    Not a containment control -- `permissions/floor.py` explains at length
+    why a regex cannot contain a shell, and that decision stands. This is
+    the *cause*: the model was not evading anything, it was reasoning
+    correctly from a path contract Rudra had only told it half of.
+    """
+    from rudra.subagents.registry import REGISTRY
+
+    for name in ("coder", "tester"):
+        prompt = REGISTRY[name].system_prompt
+        assert "do NOT agree about what" in prompt, name
+        assert "MACHINE" in prompt, name
+        assert "rm /tests" in prompt, name
+
+
+def test_every_writing_subagent_is_told_directories_are_implicit():
+    """OPEN-22's teaching half. The guard in fix_write_params refuses the
+    placeholder write; this is what stops the model reaching for it."""
+    from rudra.subagents.registry import REGISTRY
+
+    for name in ("coder", "tester"):
+        prompt = REGISTRY[name].system_prompt
+        assert "Directories are created implicitly" in prompt, name
+        assert "no mkdir tool" in prompt, name
+
+
+def test_the_path_contract_has_exactly_one_owner():
+    """It lived only in the coder prompt, and the TESTER is the agent that
+    actually walked out of the project -- it had no path rules at all
+    (OPEN-21). Two copies would drift; one constant cannot."""
+    from rudra.subagents.registry import _PATH_RULES, REGISTRY
+
+    for name in ("coder", "tester"):
+        assert _PATH_RULES in REGISTRY[name].system_prompt, name
+    # The reviewer cannot write, so the contract would be noise for it.
+    assert _PATH_RULES not in REGISTRY["reviewer"].system_prompt

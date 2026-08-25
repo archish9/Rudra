@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 from rudra.middleware.fix_write_params import (
     FixWriteParamsMiddleware,
+    _is_directory_placeholder,
     _repair_split_dot_segment,
     _strip_fences,
 )
@@ -155,3 +156,79 @@ def test_content_is_never_path_repaired():
     not a path and must survive verbatim."""
     args = _fixed("write_file", {"file_path": "/a.md", "content": "see /. rudra/x\n"})
     assert args["content"] == "see /. rudra/x\n"
+
+
+# --- OPEN-22: a write whose only purpose is to make a directory -----------
+#
+# Measured in the first full --auto --allow-shell run: the tester wanted a
+# `tests/` directory, had no mkdir tool, and wrote
+# `write_file('/tests', '# This is a placeholder to create the directory')`.
+# That succeeded and left a 47-byte FILE named `tests`, which doomed the
+# five later tasks needing `tests/` to be a directory.
+
+
+def _handled(name: str, args: dict):
+    """Run one call through wrap_tool_call; returns the refusal or SENTINEL."""
+    sentinel = object()
+    request = SimpleNamespace(tool_call={"name": name, "args": args, "id": "c1"})
+    middleware = FixWriteParamsMiddleware()
+    return middleware.wrap_tool_call(request, lambda _req: sentinel), sentinel
+
+
+def test_the_measured_directory_placeholder_is_refused():
+    result, sentinel = _handled(
+        "write_file",
+        {"file_path": "/tests", "content": "# This is a placeholder to create the directory"},
+    )
+    assert result is not sentinel
+    assert result.status == "error"
+    assert "created implicitly" in result.content
+    # It must say what to do instead, or the model retries the same shape.
+    assert "/tests/<name>.py" in result.content
+
+
+def test_a_real_file_with_that_name_still_writes():
+    """`tests/test_models.py` is the call the model should have made."""
+    result, sentinel = _handled(
+        "write_file",
+        {"file_path": "tests/test_models.py", "content": "# a comment\nassert True\n"},
+    )
+    assert result is sentinel
+
+
+def test_suffixless_files_people_actually_write_are_untouched():
+    """The bar this guard is held to: it must not fire on a real file.
+
+    LICENSE, Makefile and Dockerfile are all suffix-less; all carry real
+    content, so none of them look like a directory placeholder.
+    """
+    for name, content in (
+        ("LICENSE", "Apache License\nVersion 2.0\n"),
+        ("Makefile", "# build\nall:\n\tpytest\n"),
+        ("Dockerfile", "# base\nFROM python:3.12\n"),
+    ):
+        assert not _is_directory_placeholder(name, content), name
+
+
+def test_dotfiles_are_never_treated_as_directory_placeholders():
+    """`.gitignore` and `.env` have no suffix either, and a comment-only
+    `.gitignore` is useless but legal. Refusing one would be a false
+    positive on a file the user may well have asked for."""
+    assert not _is_directory_placeholder(".gitignore", "# nothing yet")
+    assert not _is_directory_placeholder(".env", "# set me")
+
+
+def test_a_long_comment_only_file_is_not_a_placeholder():
+    """Three lines is the cutoff. A comment-only file of real length is
+    someone's notes, not a mkdir substitute."""
+    assert not _is_directory_placeholder("notes", "# one\n# two\n# three\n# four")
+
+
+def test_content_that_is_not_a_string_is_not_a_placeholder():
+    """A model emitting a list for `content` gets the existing correctable
+    error from the tool, not an AttributeError in here (CR-E11's lesson)."""
+    assert not _is_directory_placeholder("tests", ["# x"])
+
+
+def test_a_trailing_slash_still_reads_as_a_directory_attempt():
+    assert _is_directory_placeholder("tests/", "# placeholder")

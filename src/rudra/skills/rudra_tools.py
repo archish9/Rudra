@@ -88,7 +88,7 @@ todo"). On Rudra these resolve to the tools below.
 | Change an existing file | `edit_file` |
 | Remove a file | `delete` |
 | List or search files | `ls`, `glob`, `grep` |
-| Run a command | `execute` |
+| Run a command | `execute` -- REAL shell, real paths; see below |
 | Dispatch a subagent | `task` -- pass a subagent_type, listed below |
 | Create or track todos | `add_tasks`, `drop_task`, `read_ledger` |
 | Run the tests | `run_tests` |
@@ -185,6 +185,29 @@ have no tool for it. Do not ask for approval and do not wait for it: calling
 
 The reviewer cannot write because its tools are never registered, not
 because its prompt asks it not to. Do not ask it to apply a fix.
+
+## `execute` does not share the file tools' idea of "/"
+
+The file tools are rooted at this project: `read_file("/src/app.py")` means
+this project's `src/app.py`, and they cannot reach anything outside it.
+
+`execute` is a real shell on a real machine. Its `/` is the machine's root.
+The same string means two different places depending on which tool you hand
+it to, and only the file tools are confined.
+
+    write_file("/tests", ...)   -> creates  <project>/tests
+    execute("rm /tests")        -> looks at the MACHINE's /tests
+
+Use **relative** paths in shell commands -- they mean the same thing to
+both, because `execute` already runs in the project directory.
+`pytest tests/` is right; `pytest /tests` is a different filesystem.
+
+Absolute paths for real system things are fine and normal: `/usr/bin/env`,
+`/bin/sh`. What is never right is an absolute path you meant as
+project-relative.
+
+Directories need no command: writing `tests/test_x.py` creates `tests/`.
+Do not `mkdir` one, and do not write a placeholder file to make one.
 
 ## Commands may be denied
 

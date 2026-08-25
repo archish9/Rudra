@@ -87,7 +87,10 @@ _REWRITABLE_SUFFIXES = frozenset({".md"})
 # live outside the hashed inputs -- rudra_tools.py is the transform, not a
 # bundle -- so without this bump every existing cache would keep serving
 # the old rendering and neither fix would reach a model.
-TRANSFORM_VERSION = 2
+# 3 (2026-08-25): RUDRA_TOOLS_MD gained the section explaining that
+# `execute`'s "/" is the machine's root while the file tools' "/" is the
+# project (OPEN-21), and that directories are implicit (OPEN-22).
+TRANSFORM_VERSION = 3
 
 
 def _rewrite_cross_refs(skill_root: Path, bundle: Bundle) -> int:
