@@ -55,6 +55,71 @@ def _matches(project_path: Path, profile: StackProfile, package_json: dict) -> b
     return True
 
 
+# How far down to look for source files when no marker matched. Deep enough
+# for `pkg/sub/mod.py` and a `tests/` beside it, shallow enough that this
+# cannot walk a monorepo -- it runs on every gate call.
+_INFERENCE_DEPTH = 4
+
+
+def _has_source_file(project_path: Path, suffix: str, skip: frozenset[str]) -> bool:
+    """Is there a `suffix` file here that belongs to THIS project?
+
+    Bounded and short-circuiting. `skip` keeps `.venv` out, which matters
+    more than it looks: a virtualenv holds thousands of .py files belonging
+    to somebody else, and counting them would call every directory holding
+    one a Python project -- including a Rust project that built a venv for
+    its tooling.
+    """
+
+    def walk(directory: Path, depth: int) -> bool:
+        try:
+            entries = sorted(directory.iterdir())
+        except OSError:
+            return False
+        for entry in entries:
+            if entry.is_file() and entry.suffix == suffix:
+                return True
+        if depth <= 0:
+            return False
+        for entry in entries:
+            if entry.is_dir() and entry.name not in skip and not entry.name.startswith("."):
+                if walk(entry, depth - 1):
+                    return True
+        return False
+
+    return walk(project_path, _INFERENCE_DEPTH)
+
+
+def _inferred(project_path: Path) -> list[StackProfile]:
+    """The stack a project's SOURCE FILES imply, when no marker named one.
+
+    Only Python, and only as a last resort (OPEN-28).
+
+    **Python is the one marker-optional stack**, which is what makes this a
+    correction rather than a guess. A Rust project cannot exist without
+    `Cargo.toml`, nor a Node one without `package.json`; those markers are
+    structural, so their absence really does mean "not that stack". Python's
+    markers are conventional -- `pyproject.toml`, `setup.py`,
+    `requirements.txt` are all optional -- so their absence means nothing,
+    and a directory of `.py` files with a `tests/` beside it is a Python
+    project whatever its packaging says.
+
+    Measured 2026-08-26 (run4): without this, a finished 13-task run had
+    lint, typecheck and test ALL report `not_applicable`. Since
+    `not_applicable` is deliberately non-halting (A1.57) the gate passed, so
+    nine tasks were marked DONE on a syntax parse, the fix loop never had
+    input, and the three test files the run wrote were never executed.
+
+    This fires only where `detect` would otherwise return [], so no project
+    that already resolves a stack can be changed by it.
+    """
+    from rudra.stacks.registry import PYTHON
+
+    if _has_source_file(project_path, ".py", PYTHON.skip_dirs):
+        return [PYTHON]
+    return []
+
+
 def detect(project_path: Path) -> list[StackProfile]:
     """Target stacks present in `project_path`, most specific first.
 
@@ -62,7 +127,9 @@ def detect(project_path: Path) -> list[StackProfile]:
     Node, and monorepos are ordinary. Returning a single "the" stack would
     force a wrong answer, and D18 forbids Rudra forcing the user's hand.
 
-    An empty list means greenfield -- no marker files yet.
+    An empty list means greenfield -- nothing here to verify yet. A project
+    with source files but no marker is NOT that case, and reporting it as one
+    is OPEN-28: see `_inferred`.
     """
     project_path = Path(project_path)
     if not project_path.is_dir():
@@ -70,6 +137,10 @@ def detect(project_path: Path) -> list[StackProfile]:
 
     package_json = _load_package_json(project_path)
     matched = [p for p in PROFILES if _matches(project_path, p, package_json)]
+    if not matched:
+        # Last resort only. A real marker always decides, so a Rust project
+        # with one helper script stays Rust (OPEN-28).
+        return _inferred(project_path)
     return sorted(matched, key=lambda p: (-p.specificity, p.name))
 
 
@@ -128,6 +199,38 @@ def _system_interpreter() -> str:
     return "python3"
 
 
+_TEST_DIRS = ("tests", "test")
+
+
+def _has_undiscoverable_tests(project_path: Path) -> bool:
+    """Are there test files `unittest discover` structurally cannot reach?
+
+    Measured 2026-08-26 against run4's finished project, whose `tests/` holds
+    three test modules and no `__init__.py`:
+
+        python3 -m unittest discover           Ran 0 tests.  NO TESTS RAN
+        python3 -m unittest discover -s tests  ImportError: not importable
+        python3 -m pytest tests -q             7 failed, 22 passed
+
+    Shape, not execution: this module observes and does not run anything
+    (see the module docstring), so the question asked is "can unittest even
+    enter this directory", which `__init__.py` answers on disk.
+    """
+    for name in _TEST_DIRS:
+        directory = project_path / name
+        if not directory.is_dir() or (directory / "__init__.py").is_file():
+            continue
+        try:
+            if any(
+                child.name.startswith("test") and child.suffix == ".py"
+                for child in directory.iterdir()
+            ):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _python_test_command(project_path: Path) -> list[str]:
     """The launchable argv for a Python project's tests.
 
@@ -163,6 +266,14 @@ def _python_test_command(project_path: Path) -> list[str]:
     # still the likelier intent for a project that built a venv at all, and
     # `unittest discover` on a pytest layout finds nothing.
     if python_bin is not None:
+        return [interpreter, "-m", "pytest"]
+    # The same reasoning one step further, on layout evidence rather than on
+    # a venv (OPEN-28). `unittest discover` cannot enter a directory that is
+    # not an importable package, so a `tests/` folder without `__init__.py`
+    # is a pytest layout by construction -- emitting unittest for it produces
+    # "Ran 0 tests" forever, which the gate reports as `not_applicable` and
+    # therefore PASSES.
+    if _has_undiscoverable_tests(project_path):
         return [interpreter, "-m", "pytest"]
     return [interpreter, "-m", "unittest", "discover"]
 
@@ -282,8 +393,26 @@ def resolve_typecheck_command(project_path: Path, profile: StackProfile) -> Comm
         # --ignore-missing-imports because Rudra's mypy cannot see the
         # project's dependencies. It still catches type errors in the
         # project's own code, which is where generated code goes wrong.
+        #
+        # --explicit-package-bases because without it mypy REFUSES TO RUN --
+        # not a type error, a flat refusal -- on a project whose directory
+        # name is not a valid Python identifier and which has a root
+        # __init__.py (OPEN-29). Both conditions are ordinary: `my-app` and
+        # `todo-cli` are normal names, and run5's coder wrote a root
+        # __init__.py unprompted, which blocked that run's first task and
+        # cost three more to a cascade of drops.
+        #
+        # Measured 2026-08-26: with the flag the same project checks clean
+        # AND a real `Incompatible return value type` still surfaces, and an
+        # ordinary src/ or flat layout is byte-identical with and without.
+        # So the gate keeps BLOCKING -- this is a fix to how mypy is invoked,
+        # not a retreat from type-checking generated code.
+        #
+        # Only on Rudra's own invocation. The venv branch above is the
+        # project's mypy: it has adopted the tool, and its own config -- which
+        # may set this very option -- must outrank Rudra's opinion.
         return CommandResolution(
-            _bundled("mypy", "--ignore-missing-imports", "."),
+            _bundled("mypy", "--ignore-missing-imports", "--explicit-package-bases", "."),
             OK,
             detail="Rudra's bundled mypy; project dependencies are not resolved",
             tool="mypy",
