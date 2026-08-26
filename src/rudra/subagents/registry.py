@@ -75,6 +75,13 @@ calling one wastes a turn on an error. If `execute` is not in your tool list
 at all, you cannot run commands in this run -- say so and finish the writing
 work instead of looking for another way.
 
+**Do NOT try to run the tests, and do not hand that job to anyone else.** A
+verification gate runs them for you the moment you stop, and reports the
+failures back to you if there are any. There is no `task` tool here and no
+other agent to ask -- writing the files IS the whole job. An answer that
+explains you could not run something, with no file written, is a failed
+attempt.
+
 {path_rules}
 ## CODE QUALITY RULES
 - write_file content MUST be RAW source code -- NEVER wrap it in ```markdown fences```

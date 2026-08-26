@@ -59,6 +59,15 @@ class RudraSubagent:
             applied to a second payload. The two memory *tools* are gated
             separately, by `rudra_tools`, because that is how every other
             Rudra tool reaches a spec.
+        can_delegate: May this subagent call `task` to dispatch another
+            agent? Default False, and no shipped spec sets it True (OPEN-26).
+            deepagents registers `task` for every agent Rudra builds, because
+            Rudra always passes the gated `general-purpose` spec that
+            suppresses the ungated auto-added one -- so the tool is present
+            whether or not the spec wants it, and the coder found it. It
+            writes one file for one task; there is no sub-work to hand off.
+            Enforced by withholding the tool, never by asking the prompt
+            nicely (middleware/delegation_guard.py).
         wants_compaction: Does this subagent get `compact_conversation`?
             The coder and tester retry and read pytest transcripts; the
             planner stages are short and the reviewer runs once, so they
@@ -72,6 +81,7 @@ class RudraSubagent:
     fs_tools: tuple[str, ...] = ()
     rudra_tools: tuple[str, ...] = ()
     wants_skills: bool = False
+    can_delegate: bool = False
     wants_compaction: bool = False
     wants_memory: bool = False
     wants_mcp: bool = False

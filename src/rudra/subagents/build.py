@@ -26,6 +26,7 @@ from rudra.context.budget import evict_kwargs, execute_kwargs
 from rudra.facts import facts_block
 from rudra.llm import build_model
 from rudra.middleware import (
+    DelegationGuardMiddleware,
     ExecuteGuardMiddleware,
     FixWriteParamsMiddleware,
     RepeatGuardMiddleware,
@@ -198,6 +199,12 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
         # following the stack top to bottom meets the three argument-and-
         # prompt repairs together (OPEN-25).
         ExecuteGuardMiddleware(),
+        # The gated general-purpose spec below stays passed to
+        # create_deep_agent -- it is what suppresses deepagents' ungated one
+        # (OPEN-14) -- so `task` is registered for every agent whether the
+        # spec wants it or not. This withholds it from the model's view
+        # (OPEN-26).
+        DelegationGuardMiddleware(can_delegate=spec.can_delegate),
         FilesystemMiddleware(
             backend=context.backend,
             tools=list(spec.fs_tools),

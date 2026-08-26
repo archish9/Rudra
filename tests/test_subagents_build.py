@@ -152,6 +152,34 @@ def test_every_subagent_carries_the_execute_guard(name, context):
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_carries_the_delegation_guard(name, context):
+    # OPEN-26. `task` is registered for every agent Rudra builds, because
+    # _nested_subagents always supplies the gated general-purpose spec.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    assert any(type(m).__name__ == "DelegationGuardMiddleware" for m in middleware)
+
+
+def test_no_shipped_subagent_may_delegate(context):
+    """The coder writes one file for one task; the tester writes and runs
+    tests; the reviewer reads a diff; and general-purpose IS the delegate --
+    granting it `task` would permit recursion. Nothing needs to hand work off,
+    and `to_subagent_spec`'s delegating parent has never been built
+    (build.py:353-355)."""
+    for name, spec in REGISTRY.items():
+        assert spec.can_delegate is False, name
+
+
+def test_the_gated_general_purpose_spec_is_still_passed(context):
+    """OPEN-14 regression guard, and the reason OPEN-26 is solved with a
+    middleware rather than `subagents=None`. Dropping the spec would remove
+    `task` AND restore deepagents' ungated general-purpose, whose auto-add
+    skips only on a spec literally named this (graph.py:750-751)."""
+    from rudra.subagents.build import _nested_subagents
+
+    assert [spec["name"] for spec in _nested_subagents(context)] == ["general-purpose"]
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
 def test_the_filesystem_middleware_is_scoped_to_the_spec(name, context):
     middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
     filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"]
@@ -627,6 +655,15 @@ def test_the_tester_is_told_not_to_test_what_does_not_exist_yet():
     assert "does not exist yet" in prompt
     assert "another task" in prompt
     assert "absent" in prompt or "empty" in prompt
+
+
+def test_the_coder_is_told_the_gate_runs_the_tests(context):
+    """OPEN-26's complement. The coder has no `execute` (registry.py:179) and
+    went looking for a way to run tests anyway; what it found was `task`.
+    delegation_guard.py removes that route -- this removes the motive."""
+    prompt = REGISTRY["coder"].system_prompt
+    assert "Do NOT try to run the tests" in prompt
+    assert "task" in prompt, "the tool it reached for is named, so it is not a mystery"
 
 
 def test_the_path_contract_has_exactly_one_owner():
