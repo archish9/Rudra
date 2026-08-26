@@ -39,7 +39,19 @@ _APPROVAL_CHOICES = (
     Choice(value="reject", label="Reject", description="refuse it", hotkey="r"),
     # `description` is replaced per request with the grant it would add.
     Choice(value="always", label="Always", description="", hotkey="A"),
+    Choice(
+        value="auto",
+        label="Auto-accept",
+        description="stop asking for the rest of this session",
+        hotkey="!",
+    ),
     Choice(value="diff", label="Show full diff", description="", hotkey="d"),
+)
+
+_AUTO_ACCEPT_NOTICE = (
+    "[yellow]Auto-accept on for the rest of this session — no further "
+    "approval prompts.[/yellow] Deny rules and Rudra's built-in floor still "
+    "apply, and every call is still written to the audit log."
 )
 
 _REJECT_MESSAGE = (
@@ -155,6 +167,20 @@ def decide_action_requests(
                 grants.add(grant)
                 granted = engine.decide(tool, args)
                 audit.record(tool, arg, granted, mode=mode, outcome="allow")
+                decisions.append({"type": "approve"})
+                break
+            if key == "auto":
+                # No rule is added. The engine reads `approve_all` directly,
+                # so the rest of THIS batch stops prompting for free -- each
+                # request is re-checked against the engine at the top of this
+                # loop -- and so does every later call, because
+                # interrupts._predicate asks the same engine per call.
+                grants.grant_all()
+                granted = engine.decide(tool, args)
+                audit.record(tool, arg, granted, mode=mode, outcome="allow")
+                # Said out loud, once. Escalating what the agent may do
+                # without a line saying so is the failure mode this guards.
+                console.print(_AUTO_ACCEPT_NOTICE)
                 decisions.append({"type": "approve"})
                 break
             # "diff": not terminal. Re-render with the full diff and ask

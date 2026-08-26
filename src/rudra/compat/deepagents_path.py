@@ -47,6 +47,29 @@ NORMALIZATION LAYERS
       silence (OPEN-12).
 
    (a) precedes (b) deliberately — see the ordering note in ``_normalize``.
+
+SANDBOX PREFIXES ARE OPT-IN
+---------------------------
+Layer (b) runs only under ``[compat] sandbox_paths``, off by default, which
+is the same flag gating the identical stripping in
+``middleware/fix_write_params.py`` and for the same reason: the list holds
+``/src/``, ``/app/``, ``/code/``, ``/tmp/`` and ``/root/``, every one of
+which is an ordinary directory a project really has.
+
+It was unconditional until 2026-08-26, and TODO.md OPEN-31 is what that
+cost. Because ``virtual_mode=True`` makes a leading ``/`` mean the project
+root, ``/src/models.py`` is the *correct* spelling of ``<project>/src/models.py``
+-- and it was being rewritten to ``/models.py``. Worse, the prefixes carry a
+trailing slash, so ``ls("/src")`` never matched while
+``read_file("/src/models.py")`` always did: the listing tool kept returning
+paths the reading tool then denied, by a different name, and every agent in
+run ``d104fd13d9cc`` looped until its failure guard fired.
+
+Under virtual-root semantics the layer rescues nothing by default.
+``/testbed/app/main.py`` simply means ``<project>/testbed/app/main.py``,
+which does not exist -- so the model gets an error naming the path it asked
+for and can correct itself, instead of a silent rewrite naming one it did
+not.
 """
 
 from __future__ import annotations
@@ -79,19 +102,23 @@ def install_path_normalizer(
     project_root: Path,
     plan_path: Optional[Path] = None,
     route_prefixes: Sequence[str] = (),
+    strip_sandbox_prefixes: bool = False,
 ) -> None:
     """Patch deepagents to accept absolute paths from LLMs on any OS.
 
     Handles:
     - Windows absolute paths  e.g. ``C:\\project\\src\\models.py``
     - POSIX absolute paths     e.g. ``/home/user/project/src/models.py``
-    - Sandbox prefixes         e.g. ``/testbed/app/main.py``
+    - Sandbox prefixes         e.g. ``/testbed/app/main.py`` (opt-in)
     - Unknown absolute paths   e.g. ``/some/random/prefix/requirements.txt``
 
     Args:
         project_root: Absolute path to the project root directory.
         plan_path: Optional path to .rudra/run/PLAN.md for plan-aware suffix matching.
                    When provided, planned filenames are used to resolve unknown paths.
+        strip_sandbox_prefixes: ``[compat] sandbox_paths``. Off by default, and
+                   the default is the correct setting -- see the SANDBOX
+                   PREFIXES ARE OPT-IN section of the module docstring.
 
     Safe to call multiple times (always wraps the original, never re-wraps).
     """
@@ -215,11 +242,16 @@ def install_path_normalizer(
         # the stripped path may still have a project-name component (e.g.
         # "/home/user/repos/myproject/requirements.txt" strips to
         # "myproject/requirements.txt", which still needs suffix resolution).
+        # Gated on `[compat] sandbox_paths` since OPEN-31: `/src/`, `/app/`,
+        # `/code/`, `/tmp/` and `/root/` are ordinary project directories,
+        # and a VIRTUAL absolute path naming one is the common case rather
+        # than the hallucination this list was built for.
         sandbox_stripped: str | None = None
-        for prefix in SANDBOX_PREFIXES:
-            if path.startswith(prefix):
-                sandbox_stripped = path[len(prefix) :]
-                break
+        if strip_sandbox_prefixes:
+            for prefix in SANDBOX_PREFIXES:
+                if path.startswith(prefix):
+                    sandbox_stripped = path[len(prefix) :]
+                    break
 
         if sandbox_stripped is not None:
             planned = _load_planned_files(plan_path)

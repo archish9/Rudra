@@ -703,3 +703,66 @@ def test_a_path_alias_cannot_dodge_the_floor_or_a_deny_rule(tmp_path: Path) -> N
 
     # `path` is `ls`'s own argument, not an alias, and is unaffected.
     assert engine.decide("ls", {"path": "src"}).effect == "allow"
+
+
+# -- auto-accept (OPEN-30) -------------------------------------------------
+
+
+def test_auto_accept_is_off_on_a_fresh_grants_object():
+    from rudra.permissions.grants import SessionGrants
+
+    assert SessionGrants().approve_all is False
+
+
+def test_auto_accept_allows_a_call_that_would_otherwise_ask(tmp_path):
+    from rudra.permissions.grants import SessionGrants
+
+    grants = SessionGrants()
+    subject = engine(tmp_path, grants=grants)
+    assert subject.decide("write_file", {"file_path": "app.py"}).effect == "ask"
+    grants.grant_all()
+    decision = subject.decide("write_file", {"file_path": "app.py"})
+    assert decision.effect == "allow"
+    assert decision.source == "session-grant-all"
+
+
+def test_auto_accept_does_not_beat_the_deny_floor(tmp_path):
+    """`!` silences the ask default. It is not a way past git-dir."""
+    from rudra.permissions.grants import SessionGrants
+
+    grants = SessionGrants()
+    grants.grant_all()
+    subject = engine(tmp_path, grants=grants)
+    decision = subject.decide("write_file", {"file_path": str(tmp_path / ".git" / "config")})
+    assert decision.effect == "deny"
+    assert decision.source == "floor"
+
+
+def test_auto_accept_does_not_beat_a_catastrophic_command(tmp_path):
+    from rudra.permissions.grants import SessionGrants
+
+    grants = SessionGrants()
+    grants.grant_all()
+    subject = engine(tmp_path, grants=grants)
+    assert subject.decide("execute", {"command": "rm -rf /"}).effect == "deny"
+
+
+def test_auto_accept_does_not_beat_a_user_deny_rule(tmp_path):
+    from rudra.permissions.grants import SessionGrants
+
+    grants = SessionGrants()
+    grants.grant_all()
+    subject = engine(tmp_path, deny=("execute:curl*",), grants=grants)
+    decision = subject.decide("execute", {"command": "curl http://x"})
+    assert decision.effect == "deny"
+    assert decision.source == "deny"
+
+
+def test_auto_accept_still_fails_closed_on_an_unresolvable_path(tmp_path):
+    """CR-B2's rule outranks consent: a call nobody can match is denied."""
+    from rudra.permissions.grants import SessionGrants
+
+    grants = SessionGrants()
+    grants.grant_all()
+    subject = engine(tmp_path, grants=grants)
+    assert subject.decide("write_file", {}).effect == "deny"

@@ -266,16 +266,32 @@ def test_run_with_approvals_works_with_the_real_async_checkpointer(tmp_path):
 # --- OPEN-11: the approval prompt on the shared selector ---
 
 
-def test_the_approval_prompt_offers_all_four_actions():
-    """Approve, reject, always, diff -- the four the loop has always had."""
+def test_the_approval_prompt_offers_all_five_actions():
+    """Approve, reject, always, auto-accept, diff.
+
+    Four until 2026-08-26, when OPEN-30 added `auto`. Order is asserted, not
+    just membership: `diff` stays last because it is the only non-terminal
+    row, and `auto` sits after `always` because it is the wider of the two.
+    """
     from rudra.permissions.approval import _APPROVAL_CHOICES
 
     assert [choice.value for choice in _APPROVAL_CHOICES] == [
         "approve",
         "reject",
         "always",
+        "auto",
         "diff",
     ]
+
+
+def test_every_approval_hotkey_is_distinct():
+    """`run_inline` binds each hotkey individually, so a duplicate would
+    silently give one row's key to another row's action."""
+    from rudra.permissions.approval import _APPROVAL_CHOICES
+
+    hotkeys = [choice.hotkey for choice in _APPROVAL_CHOICES]
+    assert len(hotkeys) == len(set(hotkeys))
+    assert None not in hotkeys
 
 
 def test_approve_and_always_keep_distinct_hotkeys():
@@ -287,6 +303,9 @@ def test_approve_and_always_keep_distinct_hotkeys():
     assert hotkeys["approve"] == "a"
     assert hotkeys["always"] == "A"
     assert hotkeys["reject"] == "r"
+    # Not a letter, and not next to any of them: `!` is the widest answer
+    # in the menu and the one a mistyped key must never reach (OPEN-30).
+    assert hotkeys["auto"] == "!"
     assert hotkeys["diff"] == "d"
 
 

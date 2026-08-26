@@ -129,3 +129,24 @@ def test_the_floor_notice_names_every_disabled_rule(tmp_path):
 def test_stdin_is_interactive_is_false_under_pytest_capture():
     """Not a strong assertion — it exists so the helper is exercised."""
     assert isinstance(stdin_is_interactive(), bool)
+
+
+# -- session-scoped grants (OPEN-30) ---------------------------------------
+
+
+def test_build_gate_makes_its_own_grants_when_none_is_passed(tmp_path):
+    gate = build_gate(build_config(tmp_path), tmp_path)
+    assert len(gate.grants) == 0
+    assert gate.grants.approve_all is False
+
+
+def test_build_gate_reuses_a_grants_object_it_is_given(tmp_path):
+    """What makes `always` and `!` outlive one REPL turn (OPEN-30)."""
+    from rudra.permissions.grants import SessionGrants
+
+    grants = SessionGrants()
+    grants.grant_all()
+    gate = build_gate(build_config(tmp_path), tmp_path, grants=grants)
+    assert gate.grants is grants
+    assert gate.engine.grants is grants
+    assert gate.engine.decide("write_file", {"file_path": "a.py"}).effect == "allow"

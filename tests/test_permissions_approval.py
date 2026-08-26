@@ -204,3 +204,94 @@ def test_a_grant_taken_mid_batch_applies_to_the_rest_of_the_batch(tmp_path):
 
 def test_max_approval_rounds_is_a_backstop_not_a_working_limit():
     assert MAX_APPROVAL_ROUNDS >= 50
+
+
+# -- auto-accept (OPEN-30) -------------------------------------------------
+
+
+def test_the_menu_offers_auto_accept(tmp_path):
+    _, output, _ = run(tmp_path, [request()], ["a"])
+    assert "Auto-accept" in output
+
+
+def test_auto_accept_approves_this_call(tmp_path):
+    decisions, _, _ = run(tmp_path, [request()], ["!"])
+    assert decisions == [{"type": "approve"}]
+
+
+def test_auto_accept_sets_the_flag_on_the_grants(tmp_path):
+    grants = SessionGrants()
+    run(tmp_path, [request()], ["!"], grants=grants)
+    assert grants.approve_all is True
+
+
+def test_auto_accept_adds_no_rule(tmp_path):
+    """It is the absence of a question, not a very wide grant."""
+    grants = SessionGrants()
+    run(tmp_path, [request()], ["!"], grants=grants)
+    assert len(grants) == 0
+
+
+def test_after_auto_accept_the_rest_of_the_batch_does_not_prompt(tmp_path):
+    grants = SessionGrants()
+    engine = PermissionEngine(
+        mode="ask", allow=(), deny=(), floor_disable=(), project_root=tmp_path, grants=grants
+    )
+    decisions, _, _ = run(
+        tmp_path,
+        [request(command="pytest -q"), request("write_file", file_path="a.py", content="x")],
+        ["!"],
+        grants=grants,
+        engine=engine,
+    )
+    assert [d["type"] for d in decisions] == ["approve", "approve"]
+
+
+def test_after_auto_accept_a_later_call_does_not_prompt(tmp_path):
+    grants = SessionGrants()
+    engine = PermissionEngine(
+        mode="ask", allow=(), deny=(), floor_disable=(), project_root=tmp_path, grants=grants
+    )
+    run(tmp_path, [request()], ["!"], grants=grants, engine=engine)
+    # No key is scripted; a second prompt would raise from `scripted`.
+    decisions, _, _ = run(
+        tmp_path, [request("delete", file_path="a.py")], [], grants=grants, engine=engine
+    )
+    assert decisions == [{"type": "approve"}]
+
+
+def test_auto_accept_is_audited(tmp_path):
+    grants = SessionGrants()
+    engine = PermissionEngine(
+        mode="ask", allow=(), deny=(), floor_disable=(), project_root=tmp_path, grants=grants
+    )
+    _, _, entries = run(tmp_path, [request()], ["!"], grants=grants, engine=engine)
+    # "allow", like `always` -- the engine now allows it, so the record is
+    # what the engine decided, not which key was pressed.
+    assert entries[0]["decision"] == "allow"
+    assert entries[0]["source"] == "session-grant-all"
+
+
+def test_auto_accept_says_what_still_applies(tmp_path):
+    """Escalating privilege silently is the thing to avoid."""
+    _, output, _ = run(tmp_path, [request()], ["!"])
+    lowered = output.lower()
+    assert "auto-accept" in lowered
+    assert "deny" in lowered and "floor" in lowered
+
+
+def test_a_denied_call_is_still_refused_after_auto_accept(tmp_path):
+    grants = SessionGrants()
+    engine = PermissionEngine(
+        mode="ask",
+        allow=(),
+        deny=("execute:curl*",),
+        floor_disable=(),
+        project_root=tmp_path,
+        grants=grants,
+    )
+    run(tmp_path, [request()], ["!"], grants=grants, engine=engine)
+    decisions, _, _ = run(
+        tmp_path, [request(command="curl http://x")], [], grants=grants, engine=engine
+    )
+    assert decisions[0]["type"] == "reject"

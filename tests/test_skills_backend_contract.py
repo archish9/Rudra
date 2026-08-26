@@ -129,13 +129,22 @@ def test_route_paths_survive_the_path_normalizer(tmp_path: Path, rendered: Path)
 
 
 def test_the_normalizer_still_rescues_hallucinated_paths(tmp_path: Path) -> None:
-    """The route exemption must not switch off what the normalizer is for."""
+    """The route exemption must not switch off what the normalizer is for.
+
+    Sandbox stripping is opt-in since OPEN-31, so the flag is passed here --
+    the point of this test is that `/skills/` and `/artifacts/` being exempt
+    did not exempt everything else, and that is unchanged.
+    """
     from deepagents.backends import utils
 
     from rudra.compat.deepagents_path import install_path_normalizer
 
     project = tmp_path / "proj"
     project.mkdir(parents=True)
-    install_path_normalizer(project, route_prefixes=("/skills/", "/artifacts/"))
+    install_path_normalizer(
+        project,
+        route_prefixes=("/skills/", "/artifacts/"),
+        strip_sandbox_prefixes=True,
+    )
 
     assert utils.validate_path("/testbed/app/main.py") != "/testbed/app/main.py"

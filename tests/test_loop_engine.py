@@ -165,14 +165,69 @@ async def test_a_stopped_run_leaves_its_task_resumable(monkeypatch, context):
     assert [t.id for t in ledger.resumable()] == [task.id]
 
 
-async def test_a_subagent_error_stops_the_whole_run(monkeypatch, context):
+async def test_a_subagent_that_keeps_erroring_stops_the_whole_run(monkeypatch, context):
     async def broken(name, prompt, *, context, thread_id=None):
         return SubagentResult(name=name, text="", ok=False, error="no provider package")
 
     monkeypatch.setattr(engine, "run_subagent", broken)
     monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
-    outcome, _, _ = await run_one(context)
+    outcome, task, _ = await run_one(context)
     assert outcome is Outcome.STOP_RUN
+    # The note must survive to the summary: it is the only place the user
+    # learns WHY the run ended, and "3 attempts exhausted" is not a reason.
+    assert "could not run" in task.note
+    assert "no provider package" in task.note
+
+
+async def test_one_transient_error_costs_an_attempt_and_not_the_run(monkeypatch, context):
+    """OPEN-33: run `eb2e1e2e2b2c` ended `0 done · 11 never attempted` on one
+    HTTP 500 from the provider, 693 seconds into task 1.
+
+    `subagents/runner.py` catches every exception and reports it as
+    `SubagentResult.error`, so a provider 500 and a broken config are the
+    same value; the loop treated that value as fatal on the stated grounds
+    that it "would recur on every remaining task". A 500 is the
+    counterexample.
+    """
+    results = [
+        SubagentResult(name="coder", text="", ok=False, error="Error code: 500 - internal"),
+        SubagentResult(name="coder", text="wrote it", ok=True),
+    ]
+
+    async def flaky(name, prompt, *, context, thread_id=None):
+        return results.pop(0) if results else SubagentResult(name=name, text="", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", flaky)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.attempts == 2, "the errored attempt is spent, not fatal"
+
+
+async def test_errors_separated_by_a_success_do_not_accumulate(monkeypatch, context):
+    """The budget counts CONSECUTIVE errors, so it measures "the provider is
+    down" rather than "this run has been unlucky twice in an hour"."""
+    from rudra.loop.engine import MAX_CONSECUTIVE_RUN_ERRORS
+
+    script = []
+    for _ in range(MAX_CONSECUTIVE_RUN_ERRORS + 2):
+        script.append(SubagentResult(name="coder", text="", ok=False, error="Error code: 500"))
+        script.append(SubagentResult(name="coder", text="wrote it", ok=True))
+
+    async def alternating(name, prompt, *, context, thread_id=None):
+        return script.pop(0) if script else SubagentResult(name=name, text="", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", alternating)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+
+    ledger = Ledger()
+    outcomes = []
+    for index in range(MAX_CONSECUTIVE_RUN_ERRORS + 1):
+        task = ledger.add(f"task {index}")
+        outcomes.append(await run_task(task, ledger, context=context))
+
+    assert all(outcome is Outcome.DONE for outcome in outcomes), outcomes
 
 
 async def test_a_halted_subagent_is_only_a_failed_attempt(monkeypatch, context):

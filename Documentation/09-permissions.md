@@ -69,14 +69,15 @@ leaves nothing behind.
   +     args = parse(argv)
   … 8 more changed lines
 
-[a]pprove  [r]eject  [A]lways (write_file:src/app.py)  [d]iff (full)
+[a]pprove  [r]eject  [A]lways (write_file:src/app.py)  [!]auto-accept  [d]iff (full)
 ```
 
 | Key | Effect |
 |---|---|
 | `a` | Approve this one call |
 | `r` | Reject it. Rudra is told not to retry and picks another approach |
-| `A` | Approve, and stop asking about this tool and pattern for the rest of the run |
+| `A` | Approve, and stop asking about this tool and pattern for the rest of the session |
+| `!` | Approve, and stop asking about **anything** for the rest of the session |
 | `d` | Show the whole diff, then ask again |
 
 What you see depends on the operation:
@@ -92,11 +93,39 @@ What you see depends on the operation:
 Binary content, or anything over about 1 MB, reports its size rather than
 rendering.
 
-### `A` only lasts for the run
+### `!` — auto-accept
 
-An `A` grant lives in memory until the process exits. It is never written to
-your config. A run can widen what it may do for its own lifetime and can
-never quietly widen what you have saved.
+`!` is the answer for "I have seen enough, stop asking". From that point on
+Rudra runs without prompting you, and prints one line saying so.
+
+**It is not `--auto`, and the difference is deliberate.** `!` silences the
+question; it does not lift a refusal. Every deny rule you wrote still
+refuses, and so does Rudra's built-in floor — `git-dir` and
+`catastrophic-command` — exactly as before you pressed it. Nothing you have
+forbidden becomes permitted. What changes is that everything Rudra would
+have *asked* about now proceeds.
+
+Unlike `--auto`, `!` leaves `execute` and MCP calls working: `--auto` blocks
+them unless you opt in with `--allow-shell` / `--allow-mcp`, because nobody
+is reading commands in an unattended run. At an approval prompt somebody
+plainly is, and that person just said yes.
+
+Every call is still written to the audit log, with `source:
+"session-grant-all"`.
+
+There is no key that turns it back off. Restart Rudra. A run that has
+already written files cannot un-write them, and a switch that implies
+otherwise is worse than no switch.
+
+### `A` and `!` last for the session, not the run
+
+Both live in memory until the process exits — across every task you type at
+the REPL prompt, not just the one you were running when you answered.
+Neither is ever written to your config. A session can widen what it may do
+for its own lifetime and can never quietly widen what you have saved.
+
+A single-shot `rudra "…"` run is one run and one session, so there the two
+are the same thing.
 
 For a command, the grant covers the first word — approving `pytest -q` once
 also covers `pytest -q tests/unit`. For a file, it covers that exact path.
@@ -301,7 +330,8 @@ allowed by default, which would otherwise bury the signal under hundreds of
 `read_file` lines.
 
 The `source` field says *why*: `prompt`, `floor`, `deny`, `allow`,
-`session-grant`, `auto-shell`, `mode-default`, or `floor-disabled`.
+`session-grant`, `session-grant-all` (you pressed `!`), `auto-shell`,
+`mode-default`, or `floor-disabled`.
 
 It lives under `run/`, which Rudra's own `.gitignore` excludes.
 

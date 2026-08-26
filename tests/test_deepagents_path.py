@@ -35,13 +35,21 @@ def normalizer(tmp_path: Path):
     saved_utils = utils.validate_path
     saved_fs_mw = fs_mw.validate_path
 
-    def _install(plan_lines: str | None = None, root: Path | None = None):
+    def _install(
+        plan_lines: str | None = None,
+        root: Path | None = None,
+        strip_sandbox: bool = False,
+    ):
         plan_path = None
         if plan_lines is not None:
             plan_path = tmp_path / ".rudra" / "run" / "PLAN.md"
             plan_path.parent.mkdir(parents=True, exist_ok=True)
             plan_path.write_text(plan_lines, encoding="utf-8")
-        install_path_normalizer((root or tmp_path).resolve(), plan_path=plan_path)
+        install_path_normalizer(
+            (root or tmp_path).resolve(),
+            plan_path=plan_path,
+            strip_sandbox_prefixes=strip_sandbox,
+        )
         return utils.validate_path
 
     yield _install
@@ -98,10 +106,59 @@ def test_windows_absolute_path_is_stripped(normalizer):
         ("/workspace/src/main.rs", "/src/main.rs"),
     ],
 )
-def test_sandbox_prefixes_are_stripped(normalizer, hallucinated, expected):
-    """LLMs trained on SWE-bench and Codespaces emit these constantly."""
-    validate = normalizer()
+def test_sandbox_prefixes_are_stripped_when_opted_in(normalizer, hallucinated, expected):
+    """LLMs trained on SWE-bench and Codespaces emit these constantly.
+
+    Opt-in since OPEN-31: `[compat] sandbox_paths` gates this the same way
+    it gates the identical stripping in `middleware/fix_write_params.py`.
+    """
+    validate = normalizer(strip_sandbox=True)
     assert validate(hallucinated) == expected
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/src/models.py",
+        "/src/storage.py",
+        "/app/main.py",
+        "/code/lib.py",
+        "/tmp/scratch.py",
+        "/testbed/app/main.py",
+        "/workspace/src/main.rs",
+    ],
+)
+def test_sandbox_prefixes_are_left_alone_by_default(normalizer, path: str):
+    """OPEN-31: with `[compat] sandbox_paths` off, nothing is stripped.
+
+    `SANDBOX_PREFIXES` lists `/src/`, `/app/`, `/code/`, `/tmp/` and
+    `/root/`, which are ordinary project directories -- `/src/` most of all.
+    Stripping them unconditionally rewrote `/src/models.py` to `/models.py`,
+    and `read_file` then reported `File '/models.py' not found` for a file
+    `ls` had just listed as `/src/models.py`. Every agent in run
+    `d104fd13d9cc` looped on that contradiction.
+
+    Under `virtual_mode=True` there is nothing to rescue by default: a real
+    hallucination like `/testbed/app/main.py` simply means
+    `<project>/testbed/app/main.py`, which does not exist, so the model gets
+    an error naming the path it actually asked for.
+    """
+    validate = normalizer()
+    assert validate(path) == path
+
+
+def test_ls_and_read_file_agree_on_a_src_path(normalizer):
+    """OPEN-31's unrecoverable pair, stated as the invariant it broke.
+
+    The prefixes carry a trailing slash, so `/src` (what `ls` is called
+    with) never matched and `/src/models.py` (what `ls` returns, and what
+    `read_file` is then called with) always did. The listing tool was the
+    one tool the truncation could not reach, which is precisely what made
+    the loop unbreakable.
+    """
+    validate = normalizer()
+    assert validate("/src") == "/src"
+    assert validate("/src/models.py") == "/src/models.py"
 
 
 def test_plan_aware_suffix_match_resolves_an_unknown_prefix(normalizer):
@@ -189,3 +246,26 @@ def test_a_symlinked_root_matches_the_path_the_user_typed(normalizer, tmp_path: 
     assert validate(f"{link}/src/deep/models.py") == "/src/deep/models.py"
     # And the resolved spelling keeps working.
     assert validate(f"{real}/src/deep/models.py") == "/src/deep/models.py"
+
+
+def test_the_normalizer_is_wired_to_the_same_flag_as_the_middleware():
+    """OPEN-31: the flag existed, the normalizer was never given it.
+
+    `middleware/fix_write_params.py` gates the identical stripping behind
+    `[compat] sandbox_paths` and `subagents/build.py` passes it; the
+    normalizer's copy ran unconditionally, so `sandbox_paths = false` in a
+    user's config stripped `/src/` anyway. Both call sites must read the
+    same field, and this fails if either stops.
+
+    Asserted against the source rather than a run because
+    `create_main_agent` builds a graph, a backend and a checkpointer before
+    it gets here -- the same reason `tests/test_agent_wiring.py` reads
+    source.
+    """
+    from pathlib import Path as _Path
+
+    main_agent = _Path("src/rudra/agent/main_agent.py").read_text(encoding="utf-8")
+    build = _Path("src/rudra/subagents/build.py").read_text(encoding="utf-8")
+
+    assert "strip_sandbox_prefixes=cfg.compat.sandbox_paths" in main_agent
+    assert "strip_sandbox_prefixes=context.cfg.compat.sandbox_paths" in build

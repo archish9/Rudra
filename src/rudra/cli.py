@@ -357,15 +357,23 @@ _MODE_DESCRIPTIONS = {
 }
 
 
-def _permission_notice(cfg) -> str:
+def _permission_notice(cfg, grants=None) -> str:
     """One line, shown on every run — not only when a flag is passed.
 
     Step 6 shipped this saying NOT ENFORCED, deliberately: an inert default
     of `ask` claims more safety than you get. Step 7 enforces it, so the
     line now describes what the mode actually does.
+
+    `grants` is read for the same reason (OPEN-30): the REPL prints this in
+    its task panel on every turn, and once the user has answered `!` at a
+    prompt the words "prompting before each write" are false. The mode is
+    still `ask` — auto-accept is a session grant, not a mode — so the line
+    reports both rather than replacing one with the other.
     """
     described = _MODE_DESCRIPTIONS.get(cfg.permissions.mode, cfg.permissions.mode)
     line = f"permissions: {cfg.permissions.mode} — {described}"
+    if grants is not None and getattr(grants, "approve_all", False):
+        line += " · auto-accept on for this session — no further prompts"
     if cfg.permissions.floor_disable:
         line += f" · floor disabled: {', '.join(cfg.permissions.floor_disable)}"
     return line
@@ -1595,6 +1603,15 @@ def main(
 
         pt_session = build_session(project_path)
 
+        # ONE object for the whole session, built before the loop (OPEN-30).
+        # `build_gate` makes its own when handed None, and it runs inside
+        # create_main_agent -- which is called once per input below -- so a
+        # session-scoped grant has to be threaded from out here or it lasts
+        # exactly one turn.
+        from rudra.permissions.grants import SessionGrants
+
+        session_grants = SessionGrants()
+
         async def _repl_session():
             while True:
                 try:
@@ -1649,7 +1666,7 @@ def main(
                             f"[dim]Path:[/dim] {project_path}\n"
                             f"[dim]Planner:[/dim] {cfg.model_for('planner').model}  "
                             f"[dim]│  Coder:[/dim] {cfg.model_for('coder').model}\n"
-                            f"[yellow]{_permission_notice(cfg)}[/yellow]",
+                            f"[yellow]{_permission_notice(cfg, session_grants)}[/yellow]",
                             title="⚡ Task",
                             border_style="bright_cyan",
                         )
@@ -1663,6 +1680,7 @@ def main(
                         dry_run=dry_run,
                         verbose=verbose,
                         debug=debug,
+                        grants=session_grants,
                     )
                     turn = asyncio.create_task(agent.run())
                     try:

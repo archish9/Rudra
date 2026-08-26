@@ -241,6 +241,31 @@ that interprets policy. Precedence, top down: **deny floor** (every mode,
 Rudra's own `add_tasks`/`drop_task`/`ask_user` are control plane
 and never gated.
 
+**The approval prompt has five answers, and the fifth is a grant, not a
+mode (OPEN-30).** `a` approves one call, `r` rejects, `A` grants one rule
+(`suggest_grant` — one path, or one command's first word), `!` **auto-accept**
+stops asking for the rest of the session, `d` shows the full diff and asks
+again. `!` sets `SessionGrants.approve_all`, which `decide` reads at the
+*session grants* step — so it is third in the precedence list above, and the
+deny floor and `permissions.deny` have already returned by the time it is
+consulted. `git-dir`, `catastrophic-command` and every user deny rule still
+refuse after `!`; every call is still audited, with `source:
+"session-grant-all"`.
+
+Setting `engine.mode = "auto"` would have been the obvious implementation
+and is wrong: the auto branch denies `execute` unless `shell_in_auto` and
+`call_mcp_tool` unless `mcp_in_auto` (`rules.py`), so the prompt the user
+just answered would become a *denial* on the next command.
+
+**Session grants outlive the run.** `build_gate` and `create_main_agent`
+both take an optional `grants=`, and `_repl_session` builds ONE
+`SessionGrants` before its loop — the REPL builds a fresh agent per input
+(S15.4), so without this `always` meant "always, until you press enter".
+Single-shot passes nothing and gets its own. The REPL's task panel reads it
+too: `_permission_notice(cfg, grants)` appends `auto-accept on for this
+session`, because a panel still promising "prompting before each write"
+after `!` is a lie printed once per turn.
+
 ### Control flow (`loop/engine.py`)
 1. **Planning runs in three stages before any code** (Step 10b, C6.7): `clarify` settles the facts, `architect` records layout and boundaries, `breakdown` calls `add_tasks` with units of **work**, not filenames. Each stage is a separate agent with its own tool set — clarify cannot `add_tasks`, breakdown cannot `ask_user` or `record_fact` — so a stage cannot do another stage's job. The fact store is the only channel between them, and no stage has a tool that can mark anything done.
 

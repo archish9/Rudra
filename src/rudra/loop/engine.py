@@ -73,6 +73,11 @@ class LoopContext:
     # then reads as new, and the loop behaves exactly as it did before this
     # field existed. The degraded mode is the old blocking one.
     failure_baseline: frozenset[str] = frozenset()
+    # How many subagent runs in a row never produced a turn (OPEN-33).
+    # Mutated by run_task, reset by any run that does produce one. Not
+    # persisted, for the reason `failure_baseline` is not: a fresh process
+    # starts at zero and gets its full budget, which is the safe direction.
+    run_errors: int = 0
 
 
 def _is_build_output(path: str) -> bool:
@@ -333,6 +338,20 @@ async def _verify(task: Task, context: LoopContext) -> Any:
     )
 
 
+# Consecutive subagent runs that never happened before the run gives up
+# (OPEN-33). A budget rather than a classifier: `subagents/runner.py`
+# catches every exception and hands the loop a string, so "is this
+# transient?" can only be answered by string-matching a provider's prose --
+# which is a guess that breaks on the next provider. Whether the failure
+# recurs is not a guess, and it is the thing the old code was asserting
+# when it said an error "would recur on every remaining task".
+#
+# Three, because it must be small enough that a genuinely broken
+# environment still stops in seconds. A build failure raises before any
+# network call (llm/factory.py), so three of those cost nothing.
+MAX_CONSECUTIVE_RUN_ERRORS = 3
+
+
 async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outcome:
     """Write, verify, fix, reverify -- until the gate passes or we stop.
 
@@ -384,10 +403,29 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         )
 
         if result.error:
-            # Never ran: a build failure or a mid-stream exception. Both are
-            # environment-class and would recur on every remaining task.
+            # The coder never produced a turn: a build failure, or an
+            # exception mid-stream. `runner.py` cannot tell those apart --
+            # it catches every Exception and reports `str(exc)` -- so a
+            # provider's HTTP 500 arrives here indistinguishable from a
+            # missing package.
+            #
+            # This used to end the run outright, on the reasoning that both
+            # are "environment-class and would recur on every remaining
+            # task". A 500 is the counterexample, and it cost run
+            # `eb2e1e2e2b2c` all eleven of its tasks 693 seconds in
+            # (OPEN-33). So: spend the attempt, and stop only once the
+            # errors have actually shown they recur.
+            context.run_errors += 1
             task.note = f"the coder could not run: {result.error}"
-            return _stop(Outcome.STOP_RUN)
+            if context.run_errors >= MAX_CONSECUTIVE_RUN_ERRORS:
+                return _stop(Outcome.STOP_RUN)
+            ledger.save(context.paths.ledger_json)
+            continue
+
+        # A run that happened. Whatever else went wrong with it, the
+        # provider is answering -- which is the only thing the counter above
+        # is measuring.
+        context.run_errors = 0
 
         if result.halted_reason:
             # A guard fired. Recorded for the summary; the gate below is what
@@ -480,8 +518,11 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         task.last_signature = signature
 
     task.status = TaskStatus.BLOCKED
-    if "wrote nothing" not in task.note:
-        # Same reason as above (CR-C4): the count is not a blocker.
+    if "wrote nothing" not in task.note and "could not run" not in task.note:
+        # Same reason as above (CR-C4): the count is not a blocker. "could
+        # not run" is excluded for the same reason "wrote nothing" is -- it
+        # names what actually happened, and "3 attempts exhausted" with an
+        # empty blocker names nothing (OPEN-33).
         task.note = f"{task.attempts} attempts exhausted\n\n{blocker_text}".rstrip()
     outcome = _stop(Outcome.BLOCKED)
     record_block_memory(context, task)

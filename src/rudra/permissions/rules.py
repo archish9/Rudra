@@ -636,6 +636,15 @@ class PermissionEngine:
 
         # 3. session grants
         if self.grants is not None:
+            # `auto-accept` (OPEN-30): the user answered "stop asking" at a
+            # prompt, so the ask default no longer applies. It sits HERE and
+            # not lower down because that placement is the safety property:
+            # the floor (1) and the user's own deny rules (2) have already
+            # returned, so `!` can silence a question and can never unblock
+            # something the user or the floor refused. Deny still beats
+            # allow.
+            if self.grants.approve_all:
+                return _final("allow", "<session:auto-accept>", "session-grant-all")
             granted = self.grants.matches(tool, absolute, relative)
             if granted is not None:
                 return _final("allow", str(granted), "session-grant")

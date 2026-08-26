@@ -176,3 +176,36 @@ def test_auto_without_the_flag_leaves_shell_opted_out(tmp_path, monkeypatch):
     from rudra.config.loader import get_config
 
     assert get_config().tools.shell_in_auto is False
+
+
+# -- auto-accept in the REPL panel (OPEN-30) -------------------------------
+
+
+def test_the_notice_says_nothing_about_auto_accept_by_default(tmp_path):
+    from rudra.cli import _permission_notice
+    from rudra.config.loader import build_config
+    from rudra.permissions.grants import SessionGrants
+
+    reset_config()
+    assert "auto-accept" not in _permission_notice(build_config(tmp_path), SessionGrants())
+
+
+def test_the_notice_stops_promising_prompts_once_auto_accept_is_on(tmp_path):
+    """The REPL panel prints this every turn; after `!` it would be a lie."""
+    from rudra.cli import _permission_notice
+    from rudra.config.loader import build_config
+    from rudra.permissions.grants import SessionGrants
+
+    grants = SessionGrants()
+    grants.grant_all()
+    reset_config()
+    assert "auto-accept" in _permission_notice(build_config(tmp_path), grants)
+
+
+def test_the_notice_still_works_with_no_grants_at_all(tmp_path):
+    """Single-shot has no session object to pass."""
+    from rudra.cli import _permission_notice
+    from rudra.config.loader import build_config
+
+    reset_config()
+    assert "permissions:" in _permission_notice(build_config(tmp_path))

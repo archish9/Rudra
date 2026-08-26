@@ -6,7 +6,7 @@ import asyncio
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from rich.console import Console
 
@@ -23,6 +23,9 @@ from rudra.loop.plan_view import (
     render_plan,
 )
 from rudra.state import ensure_layout
+
+if TYPE_CHECKING:  # pragma: no cover - the import is lazy at runtime
+    from rudra.permissions.grants import SessionGrants
 
 # How many times a user may send the plan back before Rudra stops
 # offering. Someone revising a fourth time wants to change the request,
@@ -146,12 +149,12 @@ class RudraAgent:
     def __init__(
         self,
         context: AgentContext,
-        planner_agent,
         session_id: str,
         db_conn,
         loop_context,
         planner_callback,
         ledger,
+        planner_agent=None,
         gate=None,
         facts=None,
         approve=None,
@@ -160,6 +163,11 @@ class RudraAgent:
         transcript=None,
     ):
         self.context = context
+        # Kept for callers that pass one; a real run does not. Since
+        # OPEN-32 every planning stage is built inside `planner_callback`
+        # at the moment it is consulted, so there is no single planner
+        # agent to hold -- holding one is what let a stage answer with a
+        # prompt rendered before the facts existed.
         self.planner_agent = planner_agent
         self.session_id = session_id
         self.console = context.console
@@ -555,6 +563,12 @@ async def create_main_agent(
     # It was a plain bool while `--debug` was the only way to get one.
     debug: Optional[bool] = None,
     resume: bool = False,
+    # An explicit parameter, never through **kwargs: those are forwarded
+    # into AgentContext below, which would raise on this name. The REPL owns
+    # one SessionGrants for its whole lifetime and passes it to every turn,
+    # which is what makes `always` and `auto-accept` outlive one run
+    # (OPEN-30). Single-shot passes nothing and build_gate makes its own.
+    grants: Optional["SessionGrants"] = None,
     **kwargs,
 ) -> RudraAgent:
     """Factory function — creates the planner + stores coder config for orchestration."""
@@ -622,7 +636,15 @@ async def create_main_agent(
     # (A1.65). Route prefixes are real mount points, not hallucinated
     # absolute paths (A1.79).
     routes = route_prefixes(sources)
-    install_path_normalizer(project_path, route_prefixes=routes)
+    # Sandbox-prefix stripping is opt-in, the same flag and the same reason
+    # as FixWriteParamsMiddleware (OPEN-31): `/src/`, `/app/`, `/code/` and
+    # `/tmp/` are real project directories, and under `virtual_mode=True` a
+    # leading `/` already means this project's root.
+    install_path_normalizer(
+        project_path,
+        route_prefixes=routes,
+        strip_sandbox_prefixes=cfg.compat.sandbox_paths,
+    )
     filesystem_backend = build_backend(cfg, project_path, sources)
 
     # Shell and the permission layer are constructed together, and neither
@@ -630,7 +652,7 @@ async def create_main_agent(
     # without the gate in the same step.
     # Same `routes` the backend mounts and the normalizer is told to leave
     # alone, so all three resolve a path identically (CR-B4).
-    gate = build_gate(cfg, project_path, routes)
+    gate = build_gate(cfg, project_path, routes, grants=grants)
 
     # MCP is opt-in and no server ships enabled (S13.4). A malformed
     # .mcp.json warns and disables MCP rather than failing the run: D19
@@ -773,16 +795,29 @@ async def create_main_agent(
         # loading again here rather than passing the object in keeps
         # create_main_agent constructible without one.
         ledger = Ledger.load(paths.ledger_json) if resume else Ledger()
-        # One agent per stage (S10b.1). Construction is cheap -- build_model
-        # makes no network call (llm/factory.py:64-68) and create_deep_agent
-        # only compiles a graph -- and building all three up front keeps the
-        # callback a lookup rather than a factory.
+
+        # One agent per stage (S10b.1), built WHEN THE STAGE IS CONSULTED
+        # and not before (OPEN-32).
         #
         # Every stage shares the SAME ledger and fact store: those are the
         # only channel between stages, and a copy would leave the coder with
-        # an architecture nobody recorded.
-        planners = {
-            stage: create_planner_agent(
+        # an architecture nobody recorded. Sharing the object is necessary
+        # and was not sufficient: `create_planner_agent` renders the store
+        # through `facts_block` into a system prompt STRING that is frozen
+        # into the compiled graph (planner_agent.py). Built up front, all
+        # three stages carried the store as it stood before the run began --
+        # so `architect` never saw what `clarify` had just been told by the
+        # user, and `breakdown` saw neither. Run `eb2e1e2e2b2c` planned
+        # three different applications in one pass because of it.
+        #
+        # This is what the subagents have always done (subagents/runner.py
+        # builds per dispatch), and it is affordable for the same reason the
+        # eager version was: build_model makes no network call
+        # (llm/factory.py:64-68) and create_deep_agent only compiles a graph.
+        # The one real cost is `memory=`, which embeds a recall query per
+        # build -- and that was already paid per stage, just earlier (CR-C8).
+        def build_planner(stage: str):
+            return create_planner_agent(
                 task=task,
                 project_path=project_path,
                 filesystem_backend=filesystem_backend,
@@ -802,16 +837,18 @@ async def create_main_agent(
                 # store the loop and the subagents hold -- one run, one palace.
                 memory=memory_store,
             )
-            for stage in STAGES
-        }
 
         async def planner_callback(
             run_ledger, request, *, stage, reason="initial", task=None, feedback=""
         ):
             # `feedback` carries a plan revision's wording (C6.9). Without it
             # a revision reaches consult_planner empty and raises.
+            if stage not in STAGES:
+                known = ", ".join(STAGES)
+                msg = f"unknown planner stage {stage!r}; valid stages: {known}"
+                raise ValueError(msg)
             await consult_planner(
-                planners[stage],
+                build_planner(stage),
                 run_ledger,
                 request,
                 stage=stage,
@@ -826,9 +863,6 @@ async def create_main_agent(
 
         return RudraAgent(
             context=context,
-            # The breakdown stage: the one that outlives planning, since it is
-            # the only stage re-entered on a block (S10b.3).
-            planner_agent=planners["breakdown"],
             session_id=session_id,
             db_conn=db_conn,
             loop_context=loop_context,

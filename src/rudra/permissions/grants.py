@@ -1,8 +1,15 @@
-"""Session grants: `always` at an approval prompt, in memory only.
+"""Session grants: `always` and `auto-accept` at an approval prompt.
 
-Never written to config. A run can widen what it is allowed to do for its
-own lifetime, and can never widen what the user has persisted -- which is
-also why Step 6 declined to build a TOML writer (S6.1).
+In memory only, never written to config. A session can widen what it is
+allowed to do for its own lifetime, and can never widen what the user has
+persisted -- which is also why Step 6 declined to build a TOML writer
+(S6.1).
+
+That lifetime is the SESSION, not the run (OPEN-30). `build_gate` accepts
+an existing instance, and `_repl_session` builds one before its loop, so a
+grant taken in the first turn is still granted in the fourth. Before that
+the object was rebuilt inside every `create_main_agent` call and `always`
+meant "always, until you press enter again".
 """
 
 from __future__ import annotations
@@ -15,6 +22,25 @@ class SessionGrants:
 
     def __init__(self) -> None:
         self._rules: list[Rule] = []
+        self.approve_all = False
+        """`auto-accept`: every gated call is consented to for this session.
+
+        Deliberately NOT a rule in `_rules`. A rule has to match a path or a
+        command, and this is the absence of a question rather than a very
+        wide answer -- `Rule(tool, "*")` per tool would have to enumerate
+        the tools and would be matched by `rule_matches`, which is where
+        `permissive=` and command splitting live (CR-B1). The engine reads
+        this flag directly instead.
+        """
+
+    def grant_all(self) -> None:
+        """Stop asking for the rest of this session.
+
+        One way only. Nothing in the prompt turns it back off, because a
+        run that has already written files cannot un-write them and a
+        false sense of "I turned it off" is worse than restarting Rudra.
+        """
+        self.approve_all = True
 
     def add(self, rule: Rule) -> None:
         if rule not in self._rules:

@@ -77,14 +77,25 @@ class Gate:
         )
 
 
-def build_gate(cfg: Config, project_path: Path, routes: tuple[str, ...] = ()) -> Gate:
+def build_gate(
+    cfg: Config,
+    project_path: Path,
+    routes: tuple[str, ...] = (),
+    grants: SessionGrants | None = None,
+) -> Gate:
     """Construct the permission layer for one project run.
 
     Malformed rules raise here, at construction, rather than at the first
     tool call -- a run that is going to fail on its rules should fail before
     it spends a planner pass.
+
+    `grants` is how a session outlives a run (OPEN-30). This function is
+    called from `create_main_agent`, which the REPL calls once per input, so
+    a fresh object here means `always` and `auto-accept` are forgotten the
+    moment the user presses enter. The REPL passes one object for its whole
+    lifetime; single-shot passes nothing and gets exactly the old behaviour.
     """
-    grants = SessionGrants()
+    grants = grants if grants is not None else SessionGrants()
     engine = PermissionEngine(
         # The backend's mount points, so the gate resolves a path the same
         # way the backend will. Supplied by route_prefixes(), which the
