@@ -21,6 +21,12 @@ _WRITER_FS: tuple[str, ...] = ("ls", "read_file", "write_file", "edit_file", "gl
 # It lived only in _CODER_PROMPT until 2026-08-25, and the agent that walked
 # out of the project was the TESTER, which had no path rules whatsoever
 # (OPEN-21/OPEN-22). One copy, interpolated into both, so they cannot drift.
+#
+# WHERE COMMANDS RUN is the positive half of OPEN-25: no prompt in Rudra
+# said where `execute` runs, only what "/" meant to it, so a model with a
+# container-shaped prior had nothing to correct it. This states the fact;
+# middleware/execute_guard.py removes the upstream tool description that
+# was asserting the opposite.
 _PATH_RULES = """## FILE PATH RULES
 - Use RELATIVE paths only: "src/main.rs", "package.json"
 - NEVER use absolute paths or paths starting with "/" or a drive letter
@@ -39,6 +45,18 @@ _PATH_RULES = """## FILE PATH RULES
   one. NEVER write a placeholder file in order to bring a directory into
   being -- that gives you a FILE with that name, and every later write
   into it fails.
+
+## WHERE COMMANDS RUN
+- `execute` ALREADY runs in this project's root directory. You are there
+  before the command starts.
+- So NEVER `cd` before a command. Not once, not "to be safe". There is
+  nowhere else to go.
+- You are NOT in a container, a sandbox, or a checkout of someone else's
+  repository. /app, /workspace, /testbed, /root and /mnt/<id> do not exist
+  here and never will. A `cd` into one fails, `&&` short-circuits, and the
+  command you actually wanted never runs.
+- Right:  python -m pytest tests/test_models.py -v
+- Wrong:  cd /app && python -m pytest tests/test_models.py -v
 """
 
 
@@ -96,6 +114,14 @@ exactly what happened.
 {path_rules}
 ## RULES
 - Test real behaviour. A test asserting True == True passes and proves nothing
+- **Test ONLY the code your task points at.** Do NOT write tests for a module
+  that does not exist yet, or for one another task is going to build. A test
+  for unwritten code fails for the whole rest of the run, and it belongs to
+  no task, so nobody is ever asked to fix it.
+- **Never assert that something is absent or empty** -- that a package
+  exports nothing, that a directory holds no files, that a list is bare.
+  Those are facts about work not done yet, and the next task falsifies them.
+  Assert what the code you were pointed at DOES.
 - Do NOT edit the code under test to make a test pass -- report the failure
 - If run_tests() says it was not permitted, do NOT retry it. Say so and stop:
   the user must opt in with --allow-shell

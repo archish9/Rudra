@@ -143,6 +143,15 @@ def test_the_gate_precedes_the_argument_rewriter(name, context):
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_carries_the_execute_guard(name, context):
+    # OPEN-25. Unconditional rather than restricted to specs granting
+    # `execute`: the middleware is a no-op without one, and a spec that gains
+    # shell later must not have to remember this.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    assert any(type(m).__name__ == "ExecuteGuardMiddleware" for m in middleware)
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
 def test_the_filesystem_middleware_is_scoped_to_the_spec(name, context):
     middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
     filesystem = [m for m in middleware if type(m).__name__ == "FilesystemMiddleware"]
@@ -585,6 +594,39 @@ def test_every_writing_subagent_is_told_directories_are_implicit():
         prompt = REGISTRY[name].system_prompt
         assert "Directories are created implicitly" in prompt, name
         assert "no mkdir tool" in prompt, name
+
+
+def test_every_writing_subagent_is_told_where_commands_run():
+    """OPEN-25's positive half. Nothing in Rudra said where `execute` runs --
+    only what "/" meant to it -- so a model carrying a container-shaped prior
+    from training had nothing to correct it, and emitted `cd /app && ...`.
+    The upstream tool description asserting the opposite is removed by
+    middleware/execute_guard.py; this is the fact that replaces it."""
+    from rudra.subagents.registry import REGISTRY
+
+    for name in ("coder", "tester"):
+        prompt = REGISTRY[name].system_prompt
+        assert "WHERE COMMANDS RUN" in prompt, name
+        assert "ALREADY runs in this project's root directory" in prompt, name
+        assert "NEVER `cd` before a command" in prompt, name
+        assert "not in a container" in prompt.lower(), name
+        assert "cd /app &&" in prompt, name
+
+
+def test_the_tester_is_told_not_to_test_what_does_not_exist_yet():
+    """OPEN-23's complement. Measured 2026-08-26 (run `ee29dd3ebf51`): the
+    tester for `t1` ("Define the Todo class") wrote `tests/test_cli.py`
+    against a CLI that task `t8` had not built. Those tests failed for the
+    rest of the run and belonged to no task, blocking six in a row.
+
+    Prompt text alone would be a weak fix -- OPEN-17 is the standing evidence
+    -- which is why loop/regressions.py carries the structural half. This
+    reduces how often the situation arises; it is not what stops it hurting.
+    """
+    prompt = REGISTRY["tester"].system_prompt
+    assert "does not exist yet" in prompt
+    assert "another task" in prompt
+    assert "absent" in prompt or "empty" in prompt
 
 
 def test_the_path_contract_has_exactly_one_owner():

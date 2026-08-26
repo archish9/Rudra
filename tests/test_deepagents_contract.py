@@ -516,3 +516,24 @@ def test_eviction_threshold_has_no_create_deep_agent_parameter():
 
     names = list(inspect.signature(create_deep_agent).parameters)
     assert not [n for n in names if "token" in n or "evict" in n]
+
+
+def test_upstream_execute_description_still_says_isolated_sandbox():
+    """The trigger that retires `middleware/execute_guard.py` (OPEN-25).
+
+    Every `execute` tool deepagents builds carries this text as its schema
+    description, and three things in it push a model toward `cd /app && ...`:
+    it calls the shell an "isolated sandbox", its only worked example is a
+    `cd`, and "use absolute paths" contradicts `_PATH_RULES`. Rudra replaces
+    the description rather than arguing with it -- a prompt cannot outrank a
+    prompt (OPEN-17).
+
+    If this fails, upstream has reworded it: re-read the new text and, if it
+    no longer asserts a container, delete the description half of
+    ExecuteGuardMiddleware. The `cd` warning is independent of this.
+    """
+    from deepagents.middleware.filesystem import EXECUTE_TOOL_DESCRIPTION
+
+    assert "isolated sandbox" in EXECUTE_TOOL_DESCRIPTION
+    assert 'cd "/path/with spaces"' in EXECUTE_TOOL_DESCRIPTION
+    assert "Use absolute paths" in EXECUTE_TOOL_DESCRIPTION

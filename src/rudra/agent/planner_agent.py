@@ -671,7 +671,9 @@ async def consult_planner(
 
     A revision carries the user's words **verbatim**, for the reason the
     gate's blocker goes back unparaphrased: a summary of an instruction is
-    a worse instruction.
+    a worse instruction. `feedback` carries whatever words the consult needs
+    -- the user's for a revision, the gate's unowned failure list for
+    `stale_failures` (OPEN-23) -- and both are interpolated unchanged.
 
     Each stage has its own thread, so the only thing that carries between
     them is what was recorded -- which is the point (S10b.1).
@@ -708,6 +710,25 @@ async def consult_planner(
             "retried. Call add_tasks with a task taking a DIFFERENT approach. If "
             "this blocker also makes other tasks pointless, drop_task those -- "
             "they must still be pending. If neither applies, reply DONE and stop."
+        )
+    elif reason == "stale_failures":
+        # OPEN-23's second half. Every task is finished and the gate is still
+        # red, so these failures were never any task's -- no coder was ever
+        # handed them, and none ever will be. Deliberately NOT worded like
+        # `blocked`: nothing here failed to be done, so asking for "a
+        # DIFFERENT approach" would name a first approach that never existed.
+        if not feedback.strip():
+            msg = "a stale-failure consult needs the failure list; got an empty string"
+            raise ValueError(msg)
+        message = (
+            "Every task is finished, but the test suite is still failing, and "
+            "these failures were failing before any remaining task ran -- so no "
+            "task owns them:\n\n"
+            f"{feedback.strip()}\n\n"
+            "Call add_tasks with a task that fixes them, naming the files above. "
+            "If they are tests asserting behaviour nothing was ever asked to "
+            "build, the task is to build it. If nothing should be done, reply "
+            "DONE and stop."
         )
     elif reason == "revision":
         if not feedback.strip():

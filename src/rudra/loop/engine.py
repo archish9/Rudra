@@ -26,6 +26,7 @@ from rudra.context.usage import render_usage
 from rudra.git.core import is_repo, status
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
 from rudra.loop.ledger import Ledger, Task, TaskStatus
+from rudra.loop.regressions import INHERITED, PASSED, failure_keys, verdict_for
 from rudra.memory.degrade import last_failure
 from rudra.memory.entry import MemoryEntry
 from rudra.subagents import SubagentContext, run_subagent
@@ -66,6 +67,12 @@ class LoopContext:
     # reference with SubagentContext -- one run, one palace handle. Optional
     # for the reason `usage` is.
     memory: Any = None
+    # What the gate was failing on when it last ran, as loop/regressions.py
+    # keys (OPEN-23). Mutated by run_task, read by the next task, and
+    # deliberately NOT persisted: a fresh process starts empty, every failure
+    # then reads as new, and the loop behaves exactly as it did before this
+    # field existed. The degraded mode is the old blocking one.
+    failure_baseline: frozenset[str] = frozenset()
 
 
 def _is_build_output(path: str) -> bool:
@@ -233,6 +240,41 @@ def _blocker_text(report: Any) -> str:
     return "\n".join(lines)
 
 
+def _wrote_nothing_note(blocker_text: str) -> str:
+    """Why an attempt changed no file (OPEN-23).
+
+    "the coder wrote nothing" is true and causally misleading on a retry: the
+    coder writes nothing when it has nothing it is allowed to fix, which is
+    what happens when the blocker names a file its task does not own.
+    Measured 2026-08-26 (run `ee29dd3ebf51`), four consecutive tasks carried
+    that note while behaving exactly as instructed.
+
+    The substring "wrote nothing" is load-bearing -- the BLOCKED path below
+    greps for it to avoid overwriting this note with an attempt count.
+    """
+    if not blocker_text:
+        return "the coder wrote nothing"
+    return f"the coder wrote nothing on a retry. It had been asked to fix:\n\n{blocker_text}"
+
+
+def _inherited_note(report: Any, inherited: frozenset[str]) -> str:
+    """Why a task passed while the suite is red (OPEN-23).
+
+    Names the failures rather than counting them, for the reason
+    `_blocker_text` quotes the gate verbatim: the next reader of this ledger
+    wants to know WHICH file is red and whether anything owns it, and a
+    number answers neither.
+    """
+    still = sorted(failure_keys(report) & inherited)
+    listed = "\n".join(f"  {key}" for key in still)
+    return (
+        "passed: this task introduced no failure.\n\n"
+        f"{len(still)} failure(s) were already failing before it ran and still are:\n"
+        f"{listed}\n\n"
+        "They belong to whatever task owns those files, not to this one."
+    )
+
+
 async def _verify(task: Task, context: LoopContext) -> Any:
     """Run the gate over what this task touched.
 
@@ -263,6 +305,11 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     """
     tested = False
     blocker_text = ""
+    # What was already failing before this task ran (OPEN-23). Captured ONCE,
+    # here, and deliberately not refreshed per attempt: a regression attempt 1
+    # introduced must still be this task's own on attempt 2, and re-reading
+    # the baseline inside the loop would launder it into an inheritance.
+    inherited = context.failure_baseline
     # Across every attempt, not per attempt: "how long did this task take"
     # is the question, and a task that failed twice before passing cost
     # the user all three tries (C9.6).
@@ -317,7 +364,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         # always has one, and the qualifier was what disabled this guard
         # outside a git repository (OPEN-13).
         if not task.files_touched:
-            task.note = "the coder wrote nothing"
+            task.note = _wrote_nothing_note(blocker_text)
             ledger.save(context.paths.ledger_json)
             continue
 
@@ -342,9 +389,19 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             task.note = _blocker_text(report)
             return _stop(Outcome.STOP_RUN)
 
-        if report.passed:
+        # Every gate run updates what the NEXT task inherits, including a
+        # failing one -- that is the whole point. Set before the branches
+        # below so no early return can skip it.
+        verdict = verdict_for(report, inherited=inherited)
+        context.failure_baseline = failure_keys(report)
+
+        if verdict is PASSED or verdict is INHERITED:
             task.status = TaskStatus.DONE
-            task.note = ""
+            # An inherited failure is not this task's blocker, but it is not
+            # nothing either: the note is the only place a reader learns the
+            # suite was already red when this task started, and why it passed
+            # anyway (OPEN-23).
+            task.note = "" if verdict is PASSED else _inherited_note(report, inherited)
             outcome = _stop(Outcome.DONE)
             record_task_in_memory(context.paths, task)
             record_task_memory(context, task)
@@ -726,6 +783,16 @@ async def plan(
 MAX_BLOCKED_CONSULTS = 5
 
 
+def _stale_failure_list(keys: frozenset[str]) -> str:
+    """The unowned failures, one per line, sorted (OPEN-23).
+
+    Sorted rather than in whatever order a set iterates: this text reaches a
+    model AND a ledger a human reads, and two runs of the same red suite
+    should produce the same lines in the same order.
+    """
+    return "\n".join(f"  {key}" for key in sorted(keys))
+
+
 async def work(
     request: str,
     *,
@@ -740,12 +807,32 @@ async def work(
     have approved them.
     """
     consulted_on_empty = False
+    consulted_on_stale = False
     blocked_consults = 0
     cancelled = False
 
     while True:
         task = ledger.next_pending()
         if task is None:
+            # Asked BEFORE "is anything missing?", and that order is the
+            # point (OPEN-23). A red suite with an empty ledger is not a
+            # question about the plan -- the plan may be complete and the
+            # suite still failing on tests no task ever owned. A planner
+            # reading a finished plan answers "nothing missing" and the run
+            # ends, which is how a red suite used to leave no trace.
+            #
+            # Here rather than after the loop so a task it adds is actually
+            # worked: `continue` re-enters with the new task pending.
+            if context.failure_baseline and not consulted_on_stale:
+                consulted_on_stale = True
+                await planner(
+                    ledger,
+                    request,
+                    stage="breakdown",
+                    reason="stale_failures",
+                    feedback=_stale_failure_list(context.failure_baseline),
+                )
+                continue
             if consulted_on_empty:
                 break
             consulted_on_empty = True

@@ -122,10 +122,14 @@ src/rudra/
 │                           trigger cannot drift apart (A1.47). evict_kwargs
 │                           exists because omitting that argument and passing
 │                           None are different: None disables eviction outright
-├── loop/                   The agentic loop (Step 9c). ledger · bounds · tools ·
-│                           engine. ledger.py and bounds.py import nothing from
-│                           Rudra. No agent-facing tool can write DONE — only
-│                           engine.py, and only on VerifyReport.passed
+├── loop/                   The agentic loop (Step 9c). ledger · bounds ·
+│                           regressions · tools · engine. ledger.py,
+│                           bounds.py and regressions.py import nothing from
+│                           Rudra. regressions.py answers the loop's hardest
+│                           question — which failures a task answers for
+│                           (OPEN-23) — and is worth reading without a graph. No agent-facing tool can write DONE — only
+│                           engine.py, and only on VerifyReport.passed or a
+│                           failure that predates the task (regressions.py)
 ├── memory/                 Long-term memory (Steps 14a/14b). store.py is the
 │                           ONLY module that imports mempalace, and imports it
 │                           lazily -- chromadb pulls onnxruntime, grpcio and
@@ -269,7 +273,30 @@ and never gated.
 2. **The plan is presented and approved** (Step 10c, C6.9): facts with their source, then the tasks. In `ask` mode the user approves, revises — which re-enters `breakdown` with their words **verbatim**, up to `MAX_REVISIONS` (3) times — or cancels. `--plan` presents and stops. `--auto` skips the gate. **EOF and Ctrl-C are cancel, never approve.** The gate lives in `RudraAgent`, between `plan()` and `work()`; the loop does not know what a terminal is.
 3. `work()` takes the next pending task and calls `run_task`.
 4. `run_task`: coder subagent writes → `verify_project` gates → on failure the blocker goes back **verbatim** and it retries, up to `[agent] max_fix_attempts`.
-5. Success = **`VerifyReport.passed`**. Only `engine.py` writes `DONE`, and only there.
+5. Success = **`VerifyReport.passed`, or a failing gate whose every located
+   failure was already failing before this task ran** (OPEN-23,
+   `loop/regressions.py`). Only `engine.py` writes `DONE`, and only there —
+   D9 is untouched, because Python still decides, not a model.
+
+   The second clause exists because the gate is project-wide and the coder is
+   task-scoped, and before 2026-08-26 the composition of the two deadlocked:
+   a test written by an earlier task's tester against code a *later* task
+   would build failed the whole suite, came back verbatim to a coder not
+   allowed to touch it, and blocked six consecutive tasks until
+   `MAX_BLOCKED_CONSULTS` ended the run — with the task that would have
+   fixed it among the never-attempted (run `ee29dd3ebf51`).
+
+   **It is a time comparison, never a file comparison.** "Is this finding in
+   a file my task touched" is the obvious rule and it is wrong: in that same
+   run `tests/test_cli.py` failed *through* a change to `todo/storage.py`, so
+   ownership-by-filename would have passed a real regression. A **new**
+   failure blocks the task whether or not it touched the file, which keeps
+   "a task that breaks a sibling's tests must not pass" strictly.
+
+   The baseline is per-run and in memory (`LoopContext.failure_baseline`),
+   never persisted: a fresh process — the first task, or `--continue` — has
+   none, every failure reads as new, and the loop behaves exactly as it did
+   before. The degraded mode is the old blocking one, never the passing one.
 6. Two identical failure signatures in a row → `BLOCKED` (C6.5a). A gate `escalate` → the whole run stops.
 7. The planner is consulted again **only** on a block or an empty ledger — never after an ordinary success, and only the `breakdown` stage is re-entered (S10b.3). Clarify and architect run once: re-opening the questions after code exists churns decisions the coder already built on.
 8. Reviewer runs once at the end, advisory, printed, gating nothing.

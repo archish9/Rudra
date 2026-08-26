@@ -446,3 +446,122 @@ async def test_seconds_survive_the_save_run_task_makes(monkeypatch, context):
     monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
     _outcome, task, _ledger = await run_one(context)
     assert Ledger.load(context.paths.ledger_json).get(task.id).seconds == task.seconds
+
+
+async def test_a_no_op_retry_note_says_what_the_coder_was_asked_to_fix(monkeypatch, context):
+    """OPEN-23's third part. "the coder wrote nothing" is true and causally
+    misleading -- it sends the next reader hunting a lazy coder. Measured
+    2026-08-26: four consecutive tasks carried it while behaving correctly,
+    having been handed a blocker in a file they did not own. The blocker is
+    what makes the note diagnosable."""
+    from rudra.loop.engine import _wrote_nothing_note
+
+    assert _wrote_nothing_note("") == "the coder wrote nothing"
+    note = _wrote_nothing_note("test failed: 27 run, 3 failed\n  tests/test_cli.py:119: boom")
+    assert "wrote nothing" in note, "the BLOCKED path greps for this substring (engine.py:411)"
+    assert "tests/test_cli.py:119" in note
+
+
+# --------------------------------------------------------------------------
+# OPEN-23: a task answers for what it broke, not for what it inherited
+# --------------------------------------------------------------------------
+
+CLI_FINDINGS = (Finding("tests/test_cli.py", 119, "AssertionError"),)
+STORAGE_FINDINGS = (Finding("todo/storage.py", 96, "FileNotFoundError"),)
+
+
+async def test_a_task_that_inherits_every_failure_passes(monkeypatch, context):
+    """`t3` of run `ee29dd3ebf51`: it implemented load-from-file correctly and
+    was blocked three times by `tests/test_cli.py`, a file written by an
+    earlier task's tester against a CLI that task `t8` had not built yet."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(CLI_FINDINGS))
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.status is TaskStatus.DONE
+    assert task.attempts == 1, "no attempt is spent on someone else's failure"
+
+
+async def test_the_pass_says_why_and_names_the_failures(monkeypatch, context):
+    """A silent pass on a red suite is worse than a block: the next reader has
+    no way to learn the gate was failing."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(CLI_FINDINGS))
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+
+    _, task, _ = await run_one(context)
+
+    assert "introduced no failure" in task.note
+    assert "tests/test_cli.py:119" in task.note
+
+
+async def test_a_new_failure_still_blocks_even_with_a_baseline(monkeypatch, context):
+    """The invariant OPEN-23 says must survive. `t2` of the same run: its
+    findings mixed the pre-existing CLI failures with a real storage bug."""
+    report = failing_report((*CLI_FINDINGS, *STORAGE_FINDINGS))
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: report)
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    # Two, not max_fix_attempts: the failure signature repeats identically,
+    # so the no-progress rule stops it first (C6.5a). What matters here is
+    # that a retry was spent at all -- the inherited case never spends one.
+    assert task.attempts > 1
+
+
+async def test_a_regression_in_an_untouched_file_still_blocks(monkeypatch, context):
+    """Nothing consults files_touched, deliberately: in the measured run
+    `tests/test_cli.py` failed THROUGH a change to `todo/storage.py`, so a
+    rule keyed on which file a finding names would have passed it."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(CLI_FINDINGS))
+    context.failure_baseline = frozenset({"todo/storage.py:96"})
+
+    outcome, _, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+
+
+async def test_a_failing_gate_updates_what_the_next_task_inherits(monkeypatch, context):
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(CLI_FINDINGS))
+
+    await run_one(context)
+
+    assert context.failure_baseline == frozenset({"tests/test_cli.py:119"})
+
+
+async def test_a_passing_gate_clears_the_baseline(monkeypatch, context):
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+
+    await run_one(context)
+
+    assert context.failure_baseline == frozenset()
+
+
+async def test_a_regression_introduced_on_attempt_one_is_not_inherited_by_attempt_two(
+    monkeypatch, context
+):
+    """The reason the baseline is captured once per TASK and not per attempt.
+    Refreshing it inside the fix loop would launder a regression the task
+    itself introduced into an inheritance on the very next attempt, and the
+    task would pass on exactly the failure it caused."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(STORAGE_FINDINGS))
+    context.failure_baseline = frozenset()
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.attempts > 1, "the task was retried on its own regression"
+
+
+async def test_with_no_baseline_a_failure_blocks_exactly_as_before(monkeypatch, context):
+    """A fresh process -- the first task, or `--continue` -- has no baseline.
+    The degraded mode must be the old blocking one, never the passing one."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(CLI_FINDINGS))
+
+    outcome, _, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED

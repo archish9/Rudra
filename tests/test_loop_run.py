@@ -62,13 +62,17 @@ class FakePlanner:
     def __init__(self, script=None):
         self.reasons: list[str] = []
         self.stages: list[str] = []
+        self.feedback: list[str] = []
         self.script = list(script or [])
 
-    async def __call__(self, ledger, request, *, stage="breakdown", reason="initial", task=None):
+    async def __call__(
+        self, ledger, request, *, stage="breakdown", reason="initial", task=None, feedback=""
+    ):
         self.stages.append(stage)
         if stage != "breakdown":
             return
         self.reasons.append(reason)
+        self.feedback.append(feedback)
         if self.script:
             for description in self.script.pop(0):
                 ledger.add(description)
@@ -255,3 +259,85 @@ async def test_planning_runs_even_when_the_breakdown_declares_nothing(monkeypatc
     assert ("clarify", "initial") in seen
     assert result.success is False
     assert "0 requested" in result.message or "Tasks: 0" in result.message
+
+
+# --------------------------------------------------------------------------
+# OPEN-23: failures nothing owns
+# --------------------------------------------------------------------------
+
+
+async def test_an_empty_ledger_with_a_red_gate_asks_for_an_owner(monkeypatch, context):
+    """Every task finished and the suite is still failing. Before OPEN-23 the
+    loop asked "is anything missing?", which is a question about the PLAN --
+    a planner reading a complete plan answers no, and the run ends green-ish
+    with a red suite nobody was ever told about."""
+    planner = FakePlanner([["a"], [], []])
+    monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.DONE))
+    monkeypatch.setattr(engine, "review_once", _noop)
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+
+    await run_loop("build it", context=context, planner=planner)
+
+    assert "stale_failures" in planner.reasons
+
+
+async def test_the_unowned_failures_reach_the_planner_by_name(monkeypatch, context):
+    planner = FakePlanner([["a"], [], []])
+    monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.DONE))
+    monkeypatch.setattr(engine, "review_once", _noop)
+    context.failure_baseline = frozenset({"tests/test_cli.py:138", "tests/test_cli.py:119"})
+
+    await run_loop("build it", context=context, planner=planner)
+
+    sent = planner.feedback[planner.reasons.index("stale_failures")]
+    assert "tests/test_cli.py:119" in sent
+    assert "tests/test_cli.py:138" in sent
+    assert sent.index("119") < sent.index("138"), "sorted, so a diff of two runs is readable"
+
+
+async def test_the_stale_failure_consult_happens_once(monkeypatch, context):
+    """Bounded for the reason every other consult is (CR-C7). A planner that
+    answers it with nothing must not be asked again forever."""
+    planner = FakePlanner([["a"], [], [], []])
+    monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.DONE))
+    monkeypatch.setattr(engine, "review_once", _noop)
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+
+    await run_loop("build it", context=context, planner=planner)
+
+    assert planner.reasons.count("stale_failures") == 1
+
+
+async def test_a_green_gate_asks_the_ordinary_empty_ledger_question(monkeypatch, context):
+    """The new consult is for a red suite only. With nothing failing, the
+    question that has always been asked is still the right one."""
+    planner = FakePlanner([["a"], []])
+    monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.DONE))
+    monkeypatch.setattr(engine, "review_once", _noop)
+
+    await run_loop("build it", context=context, planner=planner)
+
+    assert "stale_failures" not in planner.reasons
+    assert "ledger_empty" in planner.reasons
+
+
+async def test_work_added_by_the_stale_consult_is_actually_run(monkeypatch, context):
+    """The consult sits at the empty-ledger branch rather than after the loop
+    precisely so that a task it adds gets worked. Asking for an owner and
+    then exiting would be theatre."""
+    planner = FakePlanner([["a"], ["fix the CLI tests"], []])
+    ran: list[str] = []
+
+    async def fake_run_task(task, ledger, *, context):
+        ran.append(task.description)
+        task.status = TaskStatus.DONE
+        task.attempts = 1
+        return Outcome.DONE
+
+    monkeypatch.setattr(engine, "run_task", fake_run_task)
+    monkeypatch.setattr(engine, "review_once", _noop)
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+
+    await run_loop("build it", context=context, planner=planner)
+
+    assert "fix the CLI tests" in ran

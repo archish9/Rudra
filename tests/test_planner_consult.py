@@ -154,3 +154,37 @@ async def test_clarify_cannot_be_revised(captured):
 async def test_a_revision_without_feedback_is_a_programming_error(captured):
     with pytest.raises(ValueError, match="feedback"):
         await _consult("breakdown", reason="revision")
+
+
+async def test_stale_failures_asks_for_an_owner_not_a_different_approach(captured):
+    """OPEN-23's second half. When every task is finished and the suite is
+    still red, the failures belong to nobody -- no task owns them, so no
+    coder will ever be handed them. This is the one consult that exists to
+    give them an owner."""
+    await _consult(
+        "breakdown",
+        reason="stale_failures",
+        feedback="  tests/test_cli.py:119\n  tests/test_cli.py:138",
+    )
+
+    message = captured[0]["message"]
+    assert "tests/test_cli.py:119" in message
+    assert "tests/test_cli.py:138" in message
+    assert "add_tasks" in message
+    # It must not read like the `blocked` consult: nothing failed to be
+    # done here, so "take a DIFFERENT approach" would be a wrong instruction.
+    assert "DIFFERENT approach" not in message
+
+
+async def test_stale_failures_needs_the_failure_list(captured):
+    """An empty list means the caller had nothing to report and should not
+    have spent a model call. Same guard `revision` carries, same reason."""
+    with pytest.raises(ValueError, match="failure"):
+        await _consult("breakdown", reason="stale_failures", feedback="   ")
+
+
+async def test_stale_failures_cannot_re_enter_clarify_or_architect(captured):
+    """The rule every non-initial reason obeys (S10b.3)."""
+    for stage in ("clarify", "architect"):
+        with pytest.raises(ValueError, match="runs once"):
+            await _consult(stage, reason="stale_failures", feedback="  x.py:1")

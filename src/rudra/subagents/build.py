@@ -25,7 +25,11 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 from rudra.context.budget import evict_kwargs, execute_kwargs
 from rudra.facts import facts_block
 from rudra.llm import build_model
-from rudra.middleware import FixWriteParamsMiddleware, RepeatGuardMiddleware
+from rudra.middleware import (
+    ExecuteGuardMiddleware,
+    FixWriteParamsMiddleware,
+    RepeatGuardMiddleware,
+)
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
 from rudra.tools.git_tools import create_git_tools
 from rudra.tools.memory_tools import create_memory_tools
@@ -187,6 +191,13 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
         # became rather than as the one the model mistyped -- otherwise two
         # spellings of one path count as two different calls (OPEN-10).
         RepeatGuardMiddleware(),
+        # Before the FilesystemMiddleware that BUILDS the execute tool, which
+        # is only where it has to sit in the list -- the description swap
+        # happens per model call, on whatever tools the request carries, so
+        # construction order does not reach it. Placed here because a reader
+        # following the stack top to bottom meets the three argument-and-
+        # prompt repairs together (OPEN-25).
+        ExecuteGuardMiddleware(),
         FilesystemMiddleware(
             backend=context.backend,
             tools=list(spec.fs_tools),
