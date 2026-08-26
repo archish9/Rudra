@@ -210,11 +210,22 @@ async def test_a_changing_failure_uses_the_whole_budget(monkeypatch, context):
 
 
 async def test_a_coder_that_writes_nothing_is_a_failed_attempt(monkeypatch, context):
-    # With no changed files the gate's syntax stage reports "0 files
-    # parsed" and stubs "0 changed file(s) scanned", so a green report
-    # would mark an untouched task DONE. Spec §5.
+    """Spec §5, narrowed by OPEN-27 to what it always actually meant.
+
+    The original comment stated the mechanism exactly: "with no changed files
+    the gate's syntax stage reports '0 files parsed' and stubs '0 changed
+    file(s) scanned', so a green report would mark an untouched task DONE".
+    That is a report which is green because it JUDGED NOTHING -- and the stub
+    was `passing_report()`, whose test stage passed, which is not that report.
+
+    Since OPEN-27 the two are distinguished, so the stub has to be the one
+    the description names. A vacuous gate still blocks, which is this test.
+    A gate that genuinely ran the tests and passed does not, which is
+    `test_an_empty_diff_passes_when_the_gate_is_green_and_tests_judged` --
+    the case where an earlier task had already done this one's work.
+    """
     monkeypatch.setattr(engine, "changed_since", lambda ctx, before: ())
-    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: vacuous_report())
     outcome, task, _ = await run_one(context)
     assert outcome is Outcome.BLOCKED
     assert task.status is not TaskStatus.DONE
@@ -234,10 +245,27 @@ async def test_a_coder_that_writes_nothing_outside_a_repo_is_a_failed_attempt(mo
 
     `context.project_path` is a bare tmp_path with no `.git`, and the real
     snapshot functions are restored over the autouse fakes.
+
+    The gate is stubbed `vacuous_report()` rather than `passing_report()`,
+    and that is a correction rather than a concession (OPEN-27). This
+    scenario is a project with no files, and the REAL gate cannot return a
+    passing test stage for one -- measured 2026-08-26 against
+    `verify_project` on an empty directory:
+
+        syntax     not_applicable  'no JavaScript files changed'
+        lint       not_applicable  'no stack detected'
+        typecheck  not_applicable  'no stack detected'
+        test       not_applicable  'this project declares no test command'
+        stubs      passed          '0 changed file(s) scanned'
+
+    `passing_report()` described a world this test cannot be in. Since
+    OPEN-27 an empty diff asks the gate instead of assuming, so the stub has
+    to be one the gate could actually produce -- and with the faithful one
+    the task still blocks, which is what this test is for.
     """
     monkeypatch.setattr(engine, "git_snapshot", real_git_snapshot)
     monkeypatch.setattr(engine, "changed_since", real_changed_since)
-    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: vacuous_report())
 
     outcome, task, _ = await run_one(context)
 
@@ -565,3 +593,130 @@ async def test_with_no_baseline_a_failure_blocks_exactly_as_before(monkeypatch, 
     outcome, _, _ = await run_one(context)
 
     assert outcome is Outcome.BLOCKED
+
+
+# --------------------------------------------------------------------------
+# OPEN-27: an empty diff is a failure only if nothing can confirm otherwise
+# --------------------------------------------------------------------------
+
+
+def vacuous_report():
+    """Green, and green because it judged nothing.
+
+    The OPEN-12/13 shape: a project with no files parses no syntax, collects
+    no tests, and scans no stubs. Passing a task on this is how two tasks
+    were once marked DONE having created no file.
+    """
+    return VerifyReport.from_stages(
+        [
+            StageResult(name="syntax", outcome=NOT_APPLICABLE, blocking=True),
+            StageResult(
+                name="test",
+                outcome=NOT_APPLICABLE,
+                blocking=True,
+                detail="no tests were collected",
+            ),
+            StageResult(name="stubs", outcome=PASSED, blocking=True),
+        ]
+    )
+
+
+@pytest.fixture
+def wrote_nothing(monkeypatch):
+    """A coder that changes no file, which is what `t2`-`t5` of run3 did."""
+    monkeypatch.setattr(engine, "changed_since", lambda ctx, before: ())
+
+
+async def test_an_empty_diff_passes_when_the_gate_is_green_and_tests_judged(
+    monkeypatch, context, wrote_nothing
+):
+    """Run `6ec092f525e7`: `t1` built add/list/complete/remove for real, so
+    `t2` found its work done and wrote nothing -- correctly -- and was
+    blocked for it. The project was complete and its tests passed."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.status is TaskStatus.DONE
+    assert task.attempts == 1, "no attempt is spent re-asking for work that exists"
+
+
+async def test_that_pass_says_it_wrote_nothing_and_why_that_was_fine(
+    monkeypatch, context, wrote_nothing
+):
+    """This item's own lesson: three defects have now worn the same note.
+    A reader must be able to tell which one they are looking at."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+
+    _, task, _ = await run_one(context)
+
+    assert "wrote nothing" in task.note
+    assert "already" in task.note.lower()
+
+
+async def test_a_green_but_vacuous_gate_still_blocks(monkeypatch, context, wrote_nothing):
+    """OPEN-12/13, kept closed. A project with no files collects no tests, so
+    "green" means the gate judged nothing -- which is not evidence of
+    anything. Passing here is exactly the defect that guard was built for."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: vacuous_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert "wrote nothing" in task.note
+
+
+async def test_the_vacuous_block_says_the_project_could_not_confirm_it(
+    monkeypatch, context, wrote_nothing
+):
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: vacuous_report())
+
+    _, task, _ = await run_one(context)
+
+    assert "no tests" in task.note.lower()
+
+
+async def test_an_empty_diff_with_a_failing_gate_still_blocks(monkeypatch, context, wrote_nothing):
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+
+
+async def test_an_empty_diff_riding_someone_elses_red_suite_still_passes(
+    monkeypatch, context, wrote_nothing
+):
+    """OPEN-23's baseline composes with this one: a failure that predates the
+    task is not evidence against it, here either."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(CLI_FINDINGS))
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+
+    outcome, _, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+
+
+async def test_an_empty_diff_that_broke_something_new_still_blocks(
+    monkeypatch, context, wrote_nothing
+):
+    """Belt and braces. A coder cannot break a suite without writing a file,
+    so this should be unreachable -- but the rule must not depend on that."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(CLI_FINDINGS))
+
+    outcome, _, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+
+
+async def test_a_task_that_wrote_something_is_unaffected(monkeypatch, context):
+    """The ordinary path keeps its own behaviour: files written, gate green,
+    DONE with an empty note."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.files_touched == ("a.py",)
+    assert task.note == ""

@@ -240,21 +240,56 @@ def _blocker_text(report: Any) -> str:
     return "\n".join(lines)
 
 
-def _wrote_nothing_note(blocker_text: str) -> str:
-    """Why an attempt changed no file (OPEN-23).
+def _confirms_nothing_to_do(report: Any, verdict: str) -> bool:
+    """Does this gate run prove the task did not need doing?
 
-    "the coder wrote nothing" is true and causally misleading on a retry: the
-    coder writes nothing when it has nothing it is allowed to fix, which is
-    what happens when the blocker names a file its task does not own.
-    Measured 2026-08-26 (run `ee29dd3ebf51`), four consecutive tasks carried
-    that note while behaving exactly as instructed.
+    Both halves are load-bearing.
+
+    Green -- or green but for failures that predate the task (OPEN-23) --
+    says the project is in the state the task wanted.
+    `tests_produced_no_judgement` says whether "green" means anything at all:
+    a project with no files parses no syntax and collects no tests, and that
+    is exactly the shape OPEN-12/13 wrongly passed, marking two tasks DONE
+    having created no file. A vacuous pass is not evidence, so it blocks.
+    """
+    return (verdict is PASSED or verdict is INHERITED) and not tests_produced_no_judgement(report)
+
+
+def _already_satisfied_note(report: Any) -> str:
+    """Why a task that wrote nothing is DONE (OPEN-27)."""
+    tested = next((stage for stage in report.stages if stage.name == "test"), None)
+    detail = f" ({tested.detail})" if tested is not None and tested.detail else ""
+    return (
+        "the coder wrote nothing, and nothing needed writing: this task's "
+        "work was already in place, and the gate passes over the whole "
+        f"project with its tests run{detail}."
+    )
+
+
+def _wrote_nothing_note(blocker_text: str, report: Any = None) -> str:
+    """Why an attempt changed no file, and WHICH of the cases it is.
+
+    **This exact string has been the visible symptom of three unrelated
+    defects in three consecutive runs**: a stale test the coder was not
+    allowed to fix (OPEN-23), a delegation to an agent that could not do the
+    work (OPEN-26), and work an earlier task had already completed
+    (OPEN-27). Every time it sent the reader after a lazy coder, and every
+    time the coder was behaving correctly. So it now says which.
 
     The substring "wrote nothing" is load-bearing -- the BLOCKED path below
     greps for it to avoid overwriting this note with an attempt count.
     """
-    if not blocker_text:
-        return "the coder wrote nothing"
-    return f"the coder wrote nothing on a retry. It had been asked to fix:\n\n{blocker_text}"
+    if report is not None and tests_produced_no_judgement(report):
+        return (
+            "the coder wrote nothing, and the project cannot confirm whether "
+            "it needed to: no tests were collected, so a green gate proves "
+            "nothing here. Write the work, or add a test that covers it."
+        )
+    if blocker_text:
+        return f"the coder wrote nothing on a retry. It had been asked to fix:\n\n{blocker_text}"
+    if report is not None and report.blocker is not None:
+        return f"the coder wrote nothing, and the gate is failing:\n\n{_blocker_text(report)}"
+    return "the coder wrote nothing"
 
 
 def _inherited_note(report: Any, inherited: frozenset[str]) -> str:
@@ -364,7 +399,27 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         # always has one, and the qualifier was what disabled this guard
         # outside a git repository (OPEN-13).
         if not task.files_touched:
-            task.note = _wrote_nothing_note(blocker_text)
+            # An empty diff is not proof of failure -- it is an absence of
+            # evidence. OPEN-27 measured five tasks where the honest reading
+            # was "there was nothing to write": an earlier task had already
+            # built this one's work, and the coder read the file, said so,
+            # and stopped. Ask the gate rather than assuming.
+            #
+            # `changed_files` scopes the STUB SCAN only
+            # (verify/__init__.py:68-70), so this is already a whole-project
+            # verdict; the stub scan finds nothing, which is correct, because
+            # nothing was written.
+            report = await _verify(task, context)
+            verdict = verdict_for(report, inherited=inherited)
+            context.failure_baseline = failure_keys(report)
+            if _confirms_nothing_to_do(report, verdict):
+                task.status = TaskStatus.DONE
+                task.note = _already_satisfied_note(report)
+                outcome = _stop(Outcome.DONE)
+                record_task_in_memory(context.paths, task)
+                record_task_memory(context, task)
+                return outcome
+            task.note = _wrote_nothing_note(blocker_text, report)
             ledger.save(context.paths.ledger_json)
             continue
 
