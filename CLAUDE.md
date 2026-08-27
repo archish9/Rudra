@@ -96,7 +96,14 @@ src/rudra/
 │                           Step 9c's fix loop consumes this directly
 ├── verify/                 The deterministic gate (Step 9a, C6.6):
 │                           syntax · lint · typecheck · test · stubs.
-│                           Blocking except lint. Six outcomes, not two.
+│                           Blocking except lint — and except typecheck when
+│                           it ran RUDRA's bundled mypy, whose verdict is a
+│                           function of Rudra's own site-packages and so
+│                           differs machine to machine (OPEN-38). A project
+│                           that installs mypy into its own .venv gets the
+│                           blocking verdict back. The resolution declares
+│                           this, not the stage: only resolve_typecheck_command
+│                           knows which mypy it picked. Six outcomes, not two.
 │                           VerifyReport.escalate splits fix-loop input
 │                           (iterate) from user action (stop). Calls
 │                           run_gated and run_tests; starts no subprocess

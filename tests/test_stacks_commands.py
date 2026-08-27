@@ -153,3 +153,48 @@ def test_every_other_resolution_is_authoritative(tmp_path):
     a project's own tsc both keep blocking."""
     assert resolve_typecheck_command(tmp_path, RUST).advisory is False
     assert resolve_lint_command(tmp_path, PYTHON).advisory is False
+
+
+def test_bundled_mypy_ignores_the_ambient_site_packages(tmp_path):
+    """OPEN-38 commit 2. `--ignore-missing-imports` resolves what it CAN, and
+    what Rudra's mypy can resolve is whatever sits in Rudra's own venv. This
+    machine has flask 3.1.3 and flask_sqlalchemy 3.1.1 installed, so run6's
+    `Model = SQLAlchemy.Model` was checked against the real Flask:
+
+        as Rudra invoked it                      3 errors
+        + --no-site-packages, MYPYPATH=""        2 errors
+
+    The flag does not make the file pass -- `Model = <variable>` used as a
+    base class is a `valid-type` error either way. It makes the answer the
+    SAME everywhere, which is what a printed finding has to be to be worth
+    reading. Measured 2026-08-27 with mypy 2.3.0.
+    """
+    resolution = resolve_typecheck_command(tmp_path, PYTHON)
+    assert "--no-site-packages" in resolution.argv
+
+
+def test_bundled_mypy_empties_mypypath(tmp_path):
+    """The other ambient input. MYPYPATH adds stub search roots from whatever
+    shell the user happened to launch Rudra from.
+
+    `""` rather than a deletion: measured 2026-08-27, `MYPYPATH=""` and an
+    unset MYPYPATH give byte-identical mypy output, so a plain string
+    override is enough and the resolution needs no delete semantics.
+    """
+    resolution = resolve_typecheck_command(tmp_path, PYTHON)
+    assert dict(resolution.env)["MYPYPATH"] == ""
+
+
+def test_a_project_venv_mypy_keeps_its_own_environment(tmp_path):
+    """Same rule as `--explicit-package-bases`: a project that installed mypy
+    has adopted it, and its dependencies are the ones it means to check
+    against. Scrubbing them would be Rudra overruling the project."""
+    make_venv_binary(tmp_path, "mypy")
+    resolution = resolve_typecheck_command(tmp_path, PYTHON)
+    assert "--no-site-packages" not in resolution.argv
+    assert resolution.env == ()
+
+
+def test_no_other_resolution_overrides_the_environment(tmp_path):
+    assert resolve_lint_command(tmp_path, PYTHON).env == ()
+    assert resolve_typecheck_command(tmp_path, RUST).env == ()

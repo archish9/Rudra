@@ -351,13 +351,19 @@ def _run_command_stage(
     else:
         argv = list(override)
 
+    # scrubbed_env inherits os.environ, so a resolution that must not read an
+    # ambient variable has to say so here -- overriding on top, never
+    # replacing, or the toolchain A1.44 is about disappears again.
+    env = scrubbed_env(cfg)
+    env.update(resolution.env)
+
     result = run_gated(
         argv,
         cwd=project_path,
         gate=gate,
         console=console,
         timeout=cfg.tools.test_timeout,
-        env=scrubbed_env(cfg),
+        env=env,
     )
     combined = f"{result.stdout}\n{result.stderr}".strip()
 

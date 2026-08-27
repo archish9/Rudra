@@ -516,12 +516,31 @@ def resolve_typecheck_command(project_path: Path, profile: StackProfile) -> Comm
         # The detail string below already said the dependencies are not
         # resolved; the stage simply treated that verdict as authoritative
         # anyway. It is reported in full, exactly as lint is (S9a.2).
+        # --no-site-packages and MYPYPATH="" for the other half of OPEN-38.
+        # Advisory says the verdict must not fail a task; these two say it
+        # must at least be the SAME verdict on every machine, because it is
+        # still printed and a finding nobody else can reproduce is not worth
+        # reading. They do not make the failing file pass -- measured
+        # 2026-08-27, run6's `Model = SQLAlchemy.Model` goes from 3 errors to
+        # 2, because `Model = <variable>` used as a base class is a
+        # valid-type error however the import resolved.
+        #
+        # MYPYPATH="" rather than a deletion: an empty value and an unset one
+        # produce byte-identical output, so the record needs no way to say
+        # "remove this variable".
         return CommandResolution(
-            _bundled("mypy", "--ignore-missing-imports", "--explicit-package-bases", "."),
+            _bundled(
+                "mypy",
+                "--ignore-missing-imports",
+                "--explicit-package-bases",
+                "--no-site-packages",
+                ".",
+            ),
             OK,
             detail="Rudra's bundled mypy; project dependencies are not resolved",
             tool="mypy",
             advisory=True,
+            env=(("MYPYPATH", ""),),
         )
 
     if profile.name not in _NODE_FAMILY:

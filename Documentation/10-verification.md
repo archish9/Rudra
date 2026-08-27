@@ -80,18 +80,20 @@ the version your project pins.
 ### Python {#python}
 
 Nothing to install. If your project has no `mypy` of its own, Rudra runs its
-bundled copy with `--ignore-missing-imports` — it cannot resolve your
-dependencies, so it checks your code rather than your imports, and the report
-says so.
+bundled copy with `--ignore-missing-imports --no-site-packages` and an empty
+`MYPYPATH` — it cannot resolve your dependencies, so it checks your code rather
+than your imports, and the report says so.
+
+The last two flags are why the answer is the same on your machine and on
+someone else's: without them mypy resolves whatever happens to be installed
+*beside Rudra*, so a Rudra installed next to Flask checks your Flask app
+against the real Flask and a clean one checks it against `Any`.
 
 **That bundled verdict is advisory: it is reported in full and never fails a
-task.** The reason is that `--ignore-missing-imports` does not mean "resolve
-nothing" — it means "resolve what you can, ignore the rest", and what Rudra's
-mypy can resolve is whatever happens to sit in *Rudra's* environment. A machine
-where Rudra was installed beside Flask type-checks your Flask app against the
-real Flask; a clean install checks the identical file against `Any` and reaches
-a different verdict. Blocking on an answer that changes with someone else's
-install is not a gate.
+task.** Reproducible is not the same as informed. The flags above fix *which*
+answer you get; they cannot give mypy your dependencies, so it is still
+checking your code against `Any` wherever a third-party type would have said
+something. That is a useful report and a bad gate.
 
 **Install `mypy` into your project's `.venv` and it blocks again.** That copy
 sees your real dependencies and reads your own `mypy.ini` or `[tool.mypy]`, so

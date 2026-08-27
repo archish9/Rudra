@@ -178,3 +178,44 @@ def test_bundled_mypy_denial_still_escalates(tmp_path, monkeypatch):
     assert result.blocking is True
     assert result.halts is True
     assert result.escalate is True
+
+
+def capturing_run(result, sink):
+    def runner(argv, **kwargs):
+        sink.update(kwargs)
+        sink["argv"] = argv
+        return result
+
+    return runner
+
+
+def test_a_resolutions_environment_reaches_the_command(tmp_path, monkeypatch):
+    """OPEN-38 commit 2. The override is useless if it stops at the
+    resolution, and `scrubbed_env` inherits os.environ wholesale
+    (permissions/env.py:34) -- so an ambient MYPYPATH would otherwise pass
+    straight through."""
+    monkeypatch.setenv("MYPYPATH", "/somewhere/the/user/happened/to/have")
+    sink: dict = {}
+    monkeypatch.setattr(pipeline, "run_gated", capturing_run(command_result(exit_code=0), sink))
+    pipeline.typecheck_stage(tmp_path, PYTHON, gate=object(), console=None, cfg=FakeCfg())
+    assert sink["env"]["MYPYPATH"] == ""
+
+
+def test_the_rest_of_the_environment_survives_the_override(tmp_path, monkeypatch):
+    """It is an override, not a replacement. LocalShellBackend's empty-env
+    default already cost a session once (A1.44) -- a stage that dropped PATH
+    would find no toolchain at all."""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    sink: dict = {}
+    monkeypatch.setattr(pipeline, "run_gated", capturing_run(command_result(exit_code=0), sink))
+    pipeline.typecheck_stage(tmp_path, PYTHON, gate=object(), console=None, cfg=FakeCfg())
+    assert sink["env"]["PATH"] == "/usr/bin:/bin"
+
+
+def test_a_project_venv_mypy_gets_the_plain_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYPYPATH", "/the/projects/own/stubs")
+    make_venv_mypy(tmp_path)
+    sink: dict = {}
+    monkeypatch.setattr(pipeline, "run_gated", capturing_run(command_result(exit_code=0), sink))
+    pipeline.typecheck_stage(tmp_path, PYTHON, gate=object(), console=None, cfg=FakeCfg())
+    assert sink["env"]["MYPYPATH"] == "/the/projects/own/stubs"

@@ -66,6 +66,13 @@ class CommandResolution:
     answer does not. It governs the exit-code verdict only: a denied or
     unstartable command still blocks and escalates, because "no model can
     fix this" is a different claim from "this verdict is unreliable".
+
+    `env` is the environment this command needs OVERRIDDEN, as pairs rather
+    than a mapping so the record stays hashable and frozen like `argv`. It
+    is applied on top of `scrubbed_env`, never in place of it -- that
+    function exists because LocalShellBackend's empty-environment default
+    made every venv, nvm and rustup toolchain invisible (A1.44), and a
+    stage that replaced it would reintroduce exactly that.
     """
 
     argv: tuple[str, ...] | None
@@ -73,3 +80,4 @@ class CommandResolution:
     detail: str = ""
     tool: str = ""
     advisory: bool = False
+    env: tuple[tuple[str, str], ...] = ()
