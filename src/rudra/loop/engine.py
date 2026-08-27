@@ -587,6 +587,17 @@ async def review_once(context: LoopContext, ledger: Ledger) -> None:
         context.console.print("\n[bold]Review[/bold] [dim](advisory)[/dim]")
         context.console.print(result.text)
 
+    # A guard fired, or the reviewer never produced a turn. Say so (OPEN-35).
+    # `run_subagent` returns text="" when a guard fires before any prose, and
+    # printing only `.text` meant run 36023bb8bdd1 said NOTHING about a
+    # reviewer killed mid-read -- which read as a crash. The coder path has
+    # recorded this since 9c (`result.halted_reason` -> task.note); this is
+    # the same report, on the one path that had none. Still advisory: it
+    # gates nothing and changes no exit code.
+    reason = result.halted_reason or result.error
+    if reason:
+        context.console.print(f"\n[dim]Review incomplete: {escape(reason)}[/dim]")
+
 
 _ARCHITECTURE_PROMPT = """You are updating a project's engineering memory.
 

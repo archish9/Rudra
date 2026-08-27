@@ -166,6 +166,75 @@ async def test_the_same_tool_on_different_files_does_not_halt(monkeypatch, patch
     assert result.ok is True
 
 
+# --- OPEN-35: paging a long file is not repeating -------------------------
+
+
+def test_the_call_key_separates_read_windows():
+    """`read_file` pages, so the window is part of what makes a call
+    distinct. Without it the key for page 1 and page 3 of one file are the
+    same string and the guard counts them as one call made three times."""
+    whole = {"name": "read_file", "args": {"file_path": "/a.py"}}
+    page_two = {"name": "read_file", "args": {"file_path": "/a.py", "offset": 100}}
+    page_two_short = {
+        "name": "read_file",
+        "args": {"file_path": "/a.py", "offset": 100, "limit": 50},
+    }
+
+    assert runner._call_key(whole) != runner._call_key(page_two)
+    assert runner._call_key(page_two) != runner._call_key(page_two_short)
+    # The identical call is still identical -- that is what the guard is for.
+    assert runner._call_key(page_two) == runner._call_key(dict(page_two))
+    # A tool with no window is unaffected: same name, same target, same key.
+    write = {"name": "write_file", "args": {"file_path": "/a.py", "content": "x"}}
+    assert runner._call_key(write) == runner._call_key(
+        {"name": "write_file", "args": {"file_path": "/a.py", "content": "y"}}
+    )
+
+
+async def test_paging_through_one_long_file_does_not_halt(monkeypatch, patched):
+    """OPEN-35: `read_file` pages at 100 lines, so the third page of any
+    file was the third "repeat" and tripped MAX_REPEATED_CALLS -- meaning no
+    subagent could read a file past ~200 lines.
+
+    Run 36023bb8bdd1 ended on exactly this: the reviewer, four events from
+    the end of the debug log, asked for `offset: 200` of a 400-line
+    test_api.py and was killed for it.
+    """
+    pages = [
+        ai("", [call("read_file", file_path="/tests/integration/test_api.py", offset=offset)])
+        for offset in (0, 100, 200, 300)
+    ]
+    monkeypatch.setattr(
+        runner, "run_with_approvals", stream_of({"messages": [*pages, ai("Findings: none.")]})
+    )
+    result = await run_subagent("reviewer", "review it", context=patched)
+    assert result.ok is True
+    assert result.halted_reason is None
+    assert result.text == "Findings: none."
+
+
+async def test_the_same_page_read_three_times_still_halts(monkeypatch, patched):
+    """The guard's real target is the identical call made again (OPEN-10's
+    four identical read_files, A1.92's globs). Widening the key must not
+    retire it."""
+    repeated = [ai("", [call("read_file", file_path="/a.py", offset=100)]) for _ in range(3)]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": repeated}))
+    result = await run_subagent("reviewer", "review it", context=patched)
+    assert result.ok is False
+    assert "repeated" in (result.halted_reason or "")
+    assert "/a.py" in (result.halted_reason or ""), "the halt must still name the file"
+
+
+async def test_the_whole_file_read_three_times_still_halts(monkeypatch, patched):
+    """`offset` and `limit` carry defaults, so an unpaged read arrives with
+    neither in `args`. Three of those are still one call made three times."""
+    repeated = [ai("", [call("read_file", file_path="/a.py")]) for _ in range(3)]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": repeated}))
+    result = await run_subagent("reviewer", "review it", context=patched)
+    assert result.ok is False
+    assert "repeated" in (result.halted_reason or "")
+
+
 async def test_each_invocation_gets_a_distinct_thread(monkeypatch, patched):
     seen: list[str] = []
 

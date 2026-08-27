@@ -500,6 +500,99 @@ async def test_the_reviewer_still_runs_when_nothing_was_recorded(monkeypatch, co
     assert prompts, "an empty file list must not skip the review"
 
 
+# --- OPEN-35: a reviewer that was cut short must say so -------------------
+
+
+def recording_console(context):
+    """A console the test can read back. The fixture's is quiet=True."""
+    context.console = Console(record=True, width=200)
+    return context.console
+
+
+async def test_a_halted_reviewer_reports_why_instead_of_printing_nothing(monkeypatch, context):
+    """OPEN-35's second half. `run_subagent` returns ok=False with a
+    halted_reason and text="" when a guard fires before the reviewer has
+    emitted prose. review_once read only `.text`, so run 36023bb8bdd1
+    printed NOTHING about a reviewer that had been killed mid-read -- the
+    "agent crashed without completing its task" the user saw was a guard
+    firing into a console.print that never happened.
+
+    The coder path already records this (engine.py, `result.halted_reason`
+    -> task.note); the reviewer had no equivalent.
+    """
+
+    async def halting(name, prompt, *, context, thread_id=None):
+        return SubagentResult(
+            name=name,
+            text="",
+            ok=False,
+            halted_reason="'read_file' on '/tests/integration/test_api.py' repeated 3x -- stopping",
+        )
+
+    monkeypatch.setattr(engine, "run_subagent", halting)
+    console = recording_console(context)
+
+    await engine.review_once(context, Ledger())
+
+    printed = console.export_text()
+    assert "Review incomplete" in printed
+    assert "repeated 3x" in printed
+
+
+async def test_a_reviewer_that_errored_reports_the_error(monkeypatch, context):
+    """ok=False arrives two ways -- halted_reason for a guard, error for a
+    build failure or a provider 500. Both used to print nothing."""
+
+    async def failing(name, prompt, *, context, thread_id=None):
+        return SubagentResult(name=name, text="", ok=False, error="Error code: 500")
+
+    monkeypatch.setattr(engine, "run_subagent", failing)
+    console = recording_console(context)
+
+    await engine.review_once(context, Ledger())
+
+    assert "Error code: 500" in console.export_text()
+
+
+async def test_partial_review_prose_is_printed_alongside_the_reason(monkeypatch, context):
+    """A guard can fire after the reviewer has said something useful. Print
+    both: the findings it managed, and why there are no more."""
+
+    async def halting(name, prompt, *, context, thread_id=None):
+        return SubagentResult(
+            name=name,
+            text="src/models.py mixes the model and the schema.",
+            ok=False,
+            halted_reason="80 tool calls in one invocation -- stopping.",
+        )
+
+    monkeypatch.setattr(engine, "run_subagent", halting)
+    console = recording_console(context)
+
+    await engine.review_once(context, Ledger())
+
+    printed = console.export_text()
+    assert "src/models.py mixes" in printed
+    assert "Review incomplete" in printed
+
+
+async def test_a_clean_review_prints_no_reason_line(monkeypatch, context):
+    """The advisory pass is the common case and must stay quiet about
+    machinery that did not fire."""
+
+    async def clean(name, prompt, *, context, thread_id=None):
+        return SubagentResult(name=name, text="Findings: none.", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", clean)
+    console = recording_console(context)
+
+    await engine.review_once(context, Ledger())
+
+    printed = console.export_text()
+    assert "Findings: none." in printed
+    assert "incomplete" not in printed
+
+
 async def test_a_finished_task_records_how_long_it_took(monkeypatch, context):
     """The per-task half of C9.6: a user asking "what was slow" is asking
     about a task, not about a role."""

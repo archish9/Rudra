@@ -143,10 +143,24 @@ def _wants_token_stream(context: Any) -> bool:
     return bool(getattr(agent_cfg, "stream_tokens", False))
 
 
-def _call_key(tool_call: dict) -> tuple[str, str]:
+def _call_key(tool_call: dict) -> tuple[str, ...]:
+    """What makes two tool calls "the same call" for the repeat guard.
+
+    The read window is part of it (OPEN-35). `read_file` pages -- 100 lines
+    at a time, `offset`/`limit` on deepagents' ReadFileSchema -- so keying
+    on the path alone made page 3 of a file the third repeat of page 1, and
+    `MAX_REPEATED_CALLS` killed the subagent. No agent could read a file
+    past ~200 lines; run 36023bb8bdd1 ended with the reviewer asking for
+    `offset: 200` of a 400-line test file.
+
+    The guard's target is unchanged: the identical call made again. Tools
+    with no window -- write_file, edit_file, task -- carry an empty one and
+    key exactly as before.
+    """
     args = tool_call.get("args") or {}
     identifier = args.get("file_path") or args.get("path") or args.get("subagent_type") or ""
-    return tool_call.get("name", ""), str(identifier)
+    window = (str(args.get("offset", "")), str(args.get("limit", "")))
+    return (tool_call.get("name", ""), str(identifier), *window)
 
 
 async def run_subagent(
@@ -197,7 +211,7 @@ async def run_subagent(
     state = StreamState(role=name)
     consecutive_failures = 0
     total_calls = 0
-    repeated: dict[tuple[str, str], int] = {}
+    repeated: dict[tuple[str, ...], int] = {}
     halted: str | None = None
     last_text = ""
 
