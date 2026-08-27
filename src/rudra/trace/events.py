@@ -17,13 +17,23 @@ from typing import Any
 
 
 class TraceKind(StrEnum):
-    """What happened. The whole vocabulary -- add here or nowhere."""
+    """What happened. The whole vocabulary -- add here or nowhere.
+
+    Five of these describe something the MODEL did. `NOTICE` is the one
+    that describes something RUDRA did on its own account -- a guard that
+    halted a subagent (OPEN-44), and whatever follows it. It exists as a
+    kind rather than as `OTHER` with a telling `name` so an investigation
+    can filter the debug log by kind instead of grepping a string, which
+    is the "diagnose a note by its text" mistake three items have now been
+    filed against.
+    """
 
     AI_TEXT = "ai_text"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     TOOL_ERROR = "tool_error"
     USER = "user"
+    NOTICE = "notice"
     OTHER = "other"
 
 

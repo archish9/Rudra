@@ -352,6 +352,34 @@ async def _verify(task: Task, context: LoopContext) -> Any:
 MAX_CONSECUTIVE_RUN_ERRORS = 3
 
 
+def _record_halt(task: Task, result: Any, context: LoopContext) -> None:
+    """Keep a subagent guard halt, and say it happened (OPEN-44).
+
+    `task.note` used to be the only place this landed, and every branch
+    that finishes a task rewrites that field -- the PASSING one clears it
+    outright. So a halt survived exactly when the task ALSO failed, and
+    vanished in the case a reader most needs it: run bf6be7525991 ended 6
+    of 6 coder invocations on MAX_REPEATED_CALLS and its ledger, its
+    terminal and its debug log all said nothing about any of them.
+
+    `halts` is a separate field rather than a wider `note` for a reason
+    the fix must not undo: `note` is interpolated verbatim into
+    consult_planner's prompt and filed in the palace by
+    record_block_memory (CR-C4), so it is read by a MODEL later. A halt is
+    a fact about Rudra's machinery, not about the work.
+
+    The console line is the same report review_once has made for the
+    reviewer since OPEN-35 -- printed where it happens, because the run
+    trace carries it at VERBOSE only (trace/render.py).
+    """
+    if not result.halted_reason:
+        return
+    task.halts = (*task.halts, result.halted_reason)
+    context.console.print(
+        f"[dim]{escape(result.name)} stopped early: {escape(result.halted_reason)}[/dim]"
+    )
+
+
 async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outcome:
     """Write, verify, fix, reverify -- until the gate passes or we stop.
 
@@ -431,6 +459,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # A guard fired. Recorded for the summary; the gate below is what
             # says how badly the attempt actually went.
             task.note = result.halted_reason
+            _record_halt(task, result, context)
 
         task.files_touched = changed_since(context, before)
         # No `before is not None` qualifier any more: `attempt_snapshot`
@@ -469,12 +498,13 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         # already passed.
         if report.passed and not tested and tests_produced_no_judgement(report):
             tested = True
-            await run_subagent(
+            tester_result = await run_subagent(
                 "tester",
                 _tester_prompt(task),
                 context=context.subagents,
                 thread_id=f"{context.subagents.session_id}-{task.id}-tester",
             )
+            _record_halt(task, tester_result, context)
             task.files_touched = changed_since(context, before)
             report = await _verify(task, context)
 

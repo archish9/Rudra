@@ -35,8 +35,18 @@ _MIN_LEVEL = {
     TraceKind.TOOL_RESULT: TraceLevel.NORMAL,
     TraceKind.AI_TEXT: TraceLevel.VERBOSE,
     TraceKind.USER: TraceLevel.VERBOSE,
+    TraceKind.NOTICE: TraceLevel.VERBOSE,
     TraceKind.OTHER: TraceLevel.VERBOSE,
 }
+"""VERBOSE for NOTICE, deliberately, and OPEN-45 inherits the choice.
+
+A notice annotates a run rather than reporting on it: one line per
+retried model call would bury the trace it is annotating. What must be
+seen is printed by the code that decided to act -- loop/engine.py prints
+a subagent halt where it happens, the way review_once already prints the
+reviewer's (OPEN-35) -- and the debug log holds every notice at every
+level, because recorders bypass this filter entirely (trace/sink.py,
+OPEN-7)."""
 
 
 def _clip(text: str, limit: int, level: TraceLevel) -> str:
@@ -92,6 +102,10 @@ def render(event: TraceEvent, *, level: TraceLevel) -> list[str]:
     if event.kind is TraceKind.AI_TEXT:
         body = _clip(event.payload, AI_TEXT_CHARS, level)
         return [f"[bold cyan]{tag} ← \\[{index}] AI[/bold cyan]  {body}"]
+
+    if event.kind is TraceKind.NOTICE:
+        body = _clip(event.payload, OTHER_CHARS, level)
+        return [f"[yellow]{tag} ! \\[{index}] {name}:[/yellow] {body}"]
 
     if event.kind is TraceKind.USER:
         body = _clip(event.payload, OTHER_CHARS, level)

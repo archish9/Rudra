@@ -171,7 +171,15 @@ src/rudra/
 │                           loops kept one counter across namespaces and
 │                           silently dropped messages. render.py escapes every
 │                           payload (A1.67, A1.48, A1.91): model and config text
-│                           printed raw through Rich loses anything in brackets
+│                           printed raw through Rich loses anything in brackets.
+│                           Every kind but NOTICE describes something the MODEL
+│                           did; NOTICE is what Rudra says about ITSELF — the
+│                           first is a subagent guard halt (OPEN-44). Emit one
+│                           through TraceSink.notice, never by hand: it is the
+│                           only path that redacts. It renders at VERBOSE and
+│                           reaches the debug log at every level, so anything
+│                           the user must ACT on is printed by the code that
+│                           decided to act, the way loop/engine.py prints a halt
 ├── agent/
 │   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -362,7 +370,7 @@ only function that creates anything.
 | `AGENTS.md` | durable | `_ensure_agents_md` creates it; `record_task_in_memory` and `summarise_architecture` update it | planner via `memory=` | **A living document since C7.3** (closes A1.9): one Session Log entry per completed task, with `files_touched` from git, and one model call per run folding them into Architecture Notes. **The log is capped at 20 entries** — this file is paid for on every planner call, so an uncapped one is a tax that grows without bound (S12.4) |
 | `facts.json` | durable | `record_fact` / `ask_user` (agent) | every agent's prompt | Open key/value: `{key: {value, why, source}}`. Keys are enumerated nowhere in code. Replaced `project.json`, which is **ignored, not migrated** (S10a.8) — the old file is left on disk, unreferenced |
 | `.gitignore` | durable | `ensure_layout` | git | Written by Rudra, scopes **only** `.rudra/` |
-| `run/ledger.json` | volatile | `add_tasks`/`drop_task` (agent) + `engine.py` (status) | `run_loop`, `summarise` | Tasks are **work**, not filenames. Written atomically after every status change; never resumed |
+| `run/ledger.json` | volatile | `add_tasks`/`drop_task` (agent) + `engine.py` (status) | `run_loop`, `summarise` | Tasks are **work**, not filenames. Written atomically after every status change; never resumed. A task's `halts` records every subagent guard that fired on it, and is separate from `note` because `note` is read by a MODEL later — `consult_planner` interpolates it and `record_block_memory` files it in the palace (CR-C4) — and because every branch that finishes a task rewrites `note`, which is how six guard halts vanished from run7 (OPEN-44) |
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |

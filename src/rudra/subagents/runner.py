@@ -12,6 +12,7 @@ killing a run and discarding completed work.
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -279,6 +280,23 @@ async def run_subagent(
                         consecutive_failures = 0
 
                 if halted is not None:
+                    if context.trace is not None:
+                        # A guard firing is a thing RUDRA did, so no chunk
+                        # carries it and `trace.feed` above cannot see it
+                        # (OPEN-44). Emitted from the one place all three
+                        # guards funnel through, with the namespace and
+                        # position they fired at -- a delegate's events read
+                        # `role: coder` with a namespace and are not the
+                        # coder's own, which is the distinction OPEN-37
+                        # turned on.
+                        context.trace.notice(
+                            halted,
+                            role=state.role,
+                            name="guard",
+                            namespace=where,
+                            index=processed,
+                            at=time.monotonic() - state.started,
+                        )
                     break
                 processed += 1
             seen[where] = processed

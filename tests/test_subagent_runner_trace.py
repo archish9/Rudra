@@ -154,3 +154,74 @@ async def test_tool_calls_do_not_corrupt_the_namespace_bookkeeping(monkeypatch):
     await run_subagent("coder", "write a.py", context=context)
 
     assert [event.payload for event in seen] == ["{'file_path': 'a.py'}", "c1", "p2"]
+
+
+async def test_a_guard_halt_is_emitted_as_a_notice(monkeypatch):
+    """OPEN-44. `trace.feed` forwards graph CHUNKS, and a halt is Rudra's
+    own decision rather than a chunk -- so the debug log, which is meant to
+    be the complete record (CLAUDE.md §3), held nothing about six killed
+    coder invocations in run bf6be7525991. Grepping it for `stopping`,
+    `halted` and `repeated` returned nothing at all.
+    """
+    seen = []
+    sink = TraceSink(level=TraceLevel.QUIET)
+    sink.add_recorder(seen.append)
+    call = {"name": "write_file", "args": {"file_path": "/DONE"}, "id": "1"}
+    messages = [AIMessage(content="", tool_calls=[call]) for _ in range(6)]
+    chunks = [((), {"messages": messages[: n + 1]}) for n in range(6)]
+    context = _context(sink, monkeypatch, chunks)
+
+    result = await run_subagent("coder", "write a.py", context=context)
+
+    assert not result.ok
+    notices = [event for event in seen if event.kind is TraceKind.NOTICE]
+    assert len(notices) == 1, "one notice per halt, and a halt ends the invocation"
+    assert notices[0].role == "coder"
+    assert "/DONE" in notices[0].payload
+    assert notices[0].payload == result.halted_reason, "the trace and the caller agree"
+
+
+async def test_the_notice_carries_the_namespace_it_fired_in(monkeypatch):
+    """A delegate's events read `role: coder, namespace: [...]` and are not
+    the coder's own -- the distinction OPEN-37 turned on."""
+    seen = []
+    sink = TraceSink(level=TraceLevel.QUIET)
+    sink.add_recorder(seen.append)
+    call = {"name": "write_file", "args": {"file_path": "a.py"}, "id": "1"}
+    messages = [AIMessage(content="", tool_calls=[call]) for _ in range(6)]
+    chunks = [(("task:1",), {"messages": messages[: n + 1]}) for n in range(6)]
+    context = _context(sink, monkeypatch, chunks)
+
+    await run_subagent("coder", "write a.py", context=context)
+
+    notices = [event for event in seen if event.kind is TraceKind.NOTICE]
+    assert notices[0].namespace == ("task:1",)
+
+
+async def test_a_total_call_halt_is_emitted_too(monkeypatch):
+    """Three guards can halt an invocation; the notice is not keyed to one."""
+    seen = []
+    sink = TraceSink(level=TraceLevel.QUIET)
+    sink.add_recorder(seen.append)
+    calls = [{"name": "glob", "args": {"pattern": f"**/{n}"}, "id": str(n)} for n in range(90)]
+    messages = [AIMessage(content="", tool_calls=[call]) for call in calls]
+    chunks = [((), {"messages": messages[: n + 1]}) for n in range(90)]
+    context = _context(sink, monkeypatch, chunks)
+
+    result = await run_subagent("coder", "look around", context=context)
+
+    assert "tool calls" in (result.halted_reason or "")
+    notices = [event for event in seen if event.kind is TraceKind.NOTICE]
+    assert [event.payload for event in notices] == [result.halted_reason]
+
+
+async def test_a_clean_run_emits_no_notice(monkeypatch):
+    seen = []
+    sink = TraceSink(level=TraceLevel.QUIET)
+    sink.add_recorder(seen.append)
+    chunks = [((), {"messages": [AIMessage(content="done")]})]
+    context = _context(sink, monkeypatch, chunks)
+
+    await run_subagent("coder", "write a.py", context=context)
+
+    assert [event for event in seen if event.kind is TraceKind.NOTICE] == []

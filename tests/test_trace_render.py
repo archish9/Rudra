@@ -63,3 +63,21 @@ def test_a_tool_name_containing_markup_is_escaped_too():
     data on exactly the same footing as the payload."""
     event = _event(TraceKind.TOOL_CALL, name="[bold]write", payload="{}")
     assert r"\[bold]write" in "\n".join(render(event, level=TraceLevel.NORMAL))
+
+
+def test_a_notice_is_hidden_at_normal_and_shown_at_verbose():
+    """OPEN-44's kind decision, and OPEN-45 inherits the level. A notice is
+    something RUDRA did, not something the model did; on screen it belongs
+    where OTHER already sat. The halt gets its own console line from
+    loop/engine.py, and both reach the debug log whatever the level --
+    recorders bypass this filter (trace/sink.py, OPEN-7).
+    """
+    event = _event(TraceKind.NOTICE, name="guard", payload="'write_file' on '/DONE' repeated 3x")
+    assert render(event, level=TraceLevel.NORMAL) == []
+    assert "repeated 3x" in "\n".join(render(event, level=TraceLevel.VERBOSE))
+
+
+def test_a_notice_escapes_its_payload():
+    event = _event(TraceKind.NOTICE, name="guard", payload="'read_file' on '[pending]' repeated")
+    line = "\n".join(render(event, level=TraceLevel.VERBOSE))
+    assert r"\[pending]" in line

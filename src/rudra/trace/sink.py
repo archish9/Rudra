@@ -16,7 +16,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from rudra.trace.events import TraceEvent, TraceLevel
+from rudra.trace.events import TraceEvent, TraceKind, TraceLevel
+from rudra.trace.redact import redact
 from rudra.trace.render import render
 from rudra.trace.stream import StreamState, consume
 
@@ -72,6 +73,41 @@ class TraceSink:
                 consumer(event)
             except Exception:  # noqa: BLE001 -- observability never ends a run
                 continue
+
+    def notice(
+        self,
+        payload: str,
+        *,
+        role: str,
+        name: str = "",
+        namespace: tuple[str, ...] = (),
+        index: int = 0,
+        at: float = 0.0,
+    ) -> TraceEvent:
+        """Emit one thing RUDRA did, and return it (OPEN-44).
+
+        `feed` is for langgraph chunks; a guard halt or a retry has no
+        chunk to parse, and before this there was no way to say one at
+        all -- so the debug log, which is meant to be the COMPLETE record
+        (CLAUDE.md §3), held nothing about six killed coder invocations in
+        run bf6be7525991.
+
+        Redacted here for the reason stream.py redacts where it builds
+        (A1.95): one rule covering the console, the debug log and the
+        transcript, rather than a clean screen over a debug file holding
+        a credential.
+        """
+        event = TraceEvent(
+            kind=TraceKind.NOTICE,
+            role=role,
+            namespace=namespace,
+            index=index,
+            name=name,
+            payload=redact(payload),
+            at=at,
+        )
+        self.emit(event)
+        return event
 
     def feed(self, chunk: Any, state: StreamState) -> list[TraceEvent]:
         """Consume one stream chunk and emit everything new in it.

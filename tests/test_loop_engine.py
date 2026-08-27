@@ -868,3 +868,117 @@ async def test_a_task_that_wrote_something_is_unaffected(monkeypatch, context):
     assert outcome is Outcome.DONE
     assert task.files_touched == ("a.py",)
     assert task.note == ""
+
+
+async def test_a_guard_halt_survives_a_task_that_then_passes(monkeypatch, context):
+    """OPEN-44. `run_subagent` reported the halt correctly; `task.note` was
+    the only place it landed, and the passing branch clears that field
+    unconditionally (`task.note = "" if verdict is PASSED`). So a halt
+    survived exactly when the task ALSO failed, and vanished in the case a
+    reader most needs it -- run bf6be7525991 halted 6 of 6 coder
+    invocations and its ledger records none of it.
+    """
+
+    async def halting(name, prompt, *, context, thread_id=None):
+        return SubagentResult(
+            name=name,
+            text="",
+            ok=False,
+            halted_reason="'write_file' on '/DONE' repeated 3x -- stopping",
+        )
+
+    monkeypatch.setattr(engine, "run_subagent", halting)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.note == "", "the passing note is unchanged -- a model reads that field"
+    assert task.halts == ("'write_file' on '/DONE' repeated 3x -- stopping",)
+
+
+async def test_a_guard_halt_survives_a_task_that_wrote_nothing(monkeypatch, context):
+    """The other branch that overwrites the note: `_already_satisfied_note`
+    on an empty diff the gate confirms needed no work (OPEN-27)."""
+
+    async def halting(name, prompt, *, context, thread_id=None):
+        return SubagentResult(
+            name=name, text="", ok=False, halted_reason="80 tool calls in one invocation"
+        )
+
+    monkeypatch.setattr(engine, "run_subagent", halting)
+    monkeypatch.setattr(engine, "changed_since", lambda ctx, before: ())
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.halts == ("80 tool calls in one invocation",)
+
+
+async def test_every_halted_attempt_is_recorded_not_just_the_last(monkeypatch, context):
+    """A task gets `max_fix_attempts` coder invocations and each can halt."""
+    reports = [failing_report(), passing_report()]
+    reasons = iter(["first halt", "second halt"])
+
+    async def halting(name, prompt, *, context, thread_id=None):
+        return SubagentResult(name=name, text="", ok=False, halted_reason=next(reasons))
+
+    monkeypatch.setattr(engine, "run_subagent", halting)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+    _, task, _ = await run_one(context)
+
+    assert task.halts == ("first halt", "second halt")
+
+
+async def test_a_guard_halt_is_printed_when_it_fires(monkeypatch, context):
+    """The terminal said nothing at all about six killed coders. One line,
+    at the moment it happens -- the same report review_once already makes
+    for the reviewer (OPEN-35)."""
+
+    async def halting(name, prompt, *, context, thread_id=None):
+        return SubagentResult(
+            name=name, text="", ok=False, halted_reason="'write_file' on '/DONE' repeated 3x"
+        )
+
+    monkeypatch.setattr(engine, "run_subagent", halting)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    console = recording_console(context)
+
+    await run_one(context)
+
+    printed = console.export_text()
+    assert "coder" in printed
+    assert "repeated 3x" in printed
+
+
+async def test_a_halted_tester_is_recorded_too(monkeypatch, context):
+    """The tester's result was discarded outright: `await run_subagent(...)`
+    with nothing bound. A guard that kills the tester mid-run left no trace
+    anywhere."""
+    results = {
+        "coder": SubagentResult(name="coder", text="wrote it", ok=True),
+        "tester": SubagentResult(
+            name="tester", text="", ok=False, halted_reason="3 consecutive tool failures"
+        ),
+    }
+    reports = [no_test_judgement_report(), passing_report()]
+
+    async def by_name(name, prompt, *, context, thread_id=None):
+        return results[name]
+
+    monkeypatch.setattr(engine, "run_subagent", by_name)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.halts == ("3 consecutive tool failures",)
+
+
+async def test_a_clean_task_records_no_halt(monkeypatch, context):
+    """The common case stays quiet: an empty tuple, and nothing printed."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    console = recording_console(context)
+
+    _, task, _ = await run_one(context)
+
+    assert task.halts == ()
+    assert "stopped early" not in console.export_text()

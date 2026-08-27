@@ -179,3 +179,30 @@ def test_a_ledger_written_before_seconds_existed_still_loads(tmp_path):
         encoding="utf-8",
     )
     assert Ledger.load(path).tasks[0].seconds == 0.0
+
+
+def test_a_tasks_halts_survive_a_save_and_load(tmp_path):
+    """OPEN-44: a guard halt is the one record that used to be erased.
+
+    It lives beside `note` rather than in it because `note` is read by a
+    MODEL -- consult_planner interpolates it verbatim and
+    record_block_memory files it in the palace (CR-C4) -- while this is a
+    record of what Rudra did.
+    """
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    task.halts = ("'write_file' on '/DONE' repeated 3x -- stopping",)
+    path = tmp_path / "ledger.json"
+    ledger.save(path)
+
+    assert Ledger.load(path).tasks[0].halts == ("'write_file' on '/DONE' repeated 3x -- stopping",)
+
+
+def test_a_ledger_written_before_halts_existed_still_loads(tmp_path):
+    """Volatile file, but a run in flight during an upgrade must not crash."""
+    path = tmp_path / "ledger.json"
+    path.write_text(
+        json.dumps({"tasks": [{"id": "t1", "description": "x", "status": "pending"}]}),
+        encoding="utf-8",
+    )
+    assert Ledger.load(path).tasks[0].halts == ()

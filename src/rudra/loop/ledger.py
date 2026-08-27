@@ -53,6 +53,15 @@ class Task:
     files_touched: tuple[str, ...] = ()
     last_signature: str | None = None
     note: str = ""
+    # Every guard halt this task's subagents hit, in the order they
+    # happened (OPEN-44). Beside `note` rather than in it, because the two
+    # have different readers: `note` is interpolated verbatim into
+    # consult_planner's prompt and filed in the palace by
+    # record_block_memory (CR-C4), so a model reads it, while this is a
+    # record of what RUDRA did -- and, critically, every branch that
+    # rewrites `note` used to erase the halt with it, including the
+    # passing one, which is the case a reader most needs it in.
+    halts: tuple[str, ...] = ()
     # Wall clock this task consumed, in seconds (C9.6, Step 15a). Recorded
     # by loop/engine.py at every exit from run_task, including the failing
     # ones: a task that burned three attempts is the one a user most wants
@@ -168,6 +177,7 @@ class Ledger:
                 files_touched=tuple(entry.get("files_touched", ())),
                 last_signature=entry.get("last_signature"),
                 note=entry.get("note", ""),
+                halts=tuple(entry.get("halts", ())),
                 # .get, not [...]: a ledger written by an older Rudra is a
                 # volatile file, but a run in flight during an upgrade
                 # must not crash on it.
