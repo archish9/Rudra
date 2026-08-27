@@ -198,7 +198,16 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
         # nobody. Inside the accounting, a twice-retried call would read as
         # one 40-second call that was mostly asyncio.sleep -- precisely the
         # number OPEN-40 exists to make trustworthy.
-        ModelRetryMiddleware(spec.role),
+        # `trace` and `usage` are what make it audible (OPEN-45): it was
+        # registered on every spec and reported nothing, so a coder
+        # absorbing a third of its requests read as a slow model. getattr
+        # for the reason `facts` is read that way (line 90) -- the context
+        # is duck-typed and callers outside a full run build stand-ins.
+        ModelRetryMiddleware(
+            spec.role,
+            trace=getattr(context, "trace", None),
+            usage=getattr(context, "usage", None),
+        ),
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped -- otherwise two
         # spellings of one path count as two different calls (OPEN-10).

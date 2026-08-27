@@ -878,6 +878,12 @@ async def create_main_agent(
                 # C8.4 names "before planning" as a retrieval trigger. The same
                 # store the loop and the subagents hold -- one run, one palace.
                 memory=memory_store,
+                # The same sink planner_callback streams the turn through
+                # below, and the same one the subagents get at :820 -- one
+                # run, one record. It reaches the middleware stack rather
+                # than the stream: ModelRetryMiddleware fires between
+                # chunks, so `trace.feed` cannot see it (OPEN-45).
+                trace=trace,
             )
 
         async def planner_callback(

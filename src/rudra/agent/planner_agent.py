@@ -278,6 +278,7 @@ def build_planner_middleware(
     backend: Any = None,
     evict_tokens: int | None = None,
     usage: Any = None,
+    trace: Any = None,
 ) -> list:
     """The planner's middleware stack, with both D4 workarounds gated.
 
@@ -308,6 +309,12 @@ def build_planner_middleware(
 
     `backend=None` keeps the old shape for every caller that has no backend
     to give — the compat tests among them.
+
+    `trace=None` has the same default and the same reason as `usage=None`
+    (OPEN-45): compat tests construct this with neither, and a run that
+    built no sink must still get its retries. Both go to
+    ModelRetryMiddleware, which before OPEN-45 was registered here holding
+    nothing to report to.
     """
     middleware: list = [
         FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths),
@@ -324,7 +331,11 @@ def build_planner_middleware(
         # and the backoff sleep is charged to nobody. Inside the
         # accounting, a twice-retried call would read as one 40-second call
         # that was mostly `asyncio.sleep` -- the number OPEN-40 is about.
-        ModelRetryMiddleware("planner"),
+        # `trace` and `usage` are what make it audible (OPEN-45). It was
+        # registered correctly and reported nothing, so a planner absorbing
+        # a third of its requests looked exactly like a slow model -- and
+        # those have opposite fixes.
+        ModelRetryMiddleware("planner", trace=trace, usage=usage),
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped. The planner is
         # where OPEN-10 was measured: four identical failing read_file calls
@@ -454,6 +465,7 @@ def create_planner_agent(
     stage: str = "breakdown",
     usage: Any = None,
     memory: Any = None,
+    trace: Any = None,
 ):
     """Create one stage of the planner (S10b.1).
 
@@ -469,6 +481,14 @@ def create_planner_agent(
 
     `stage` defaults to "breakdown" because that is what every pre-10b
     caller expected: declare the work.
+
+    `trace` is the run's TraceSink, and it reaches the middleware stack
+    only -- `consult_planner` takes its own, for streaming the turn. Two
+    parameters for one object because the two are used at different times:
+    this one is frozen into the compiled graph at construction, and that
+    one is passed per turn. Both are the SAME sink in a real run
+    (agent/main_agent.py), which is what keeps one run to one record.
+    Added by OPEN-45, so ModelRetryMiddleware has somewhere to report.
     """
     from rudra.facts import FactStore
     from rudra.loop.ledger import Ledger
@@ -502,6 +522,7 @@ def create_planner_agent(
         backend=filesystem_backend,
         evict_tokens=evict_limit(cfg, "planner"),
         usage=usage,
+        trace=trace,
     )
     if gate is not None:
         # First in the list: a denied call must be stopped before any other

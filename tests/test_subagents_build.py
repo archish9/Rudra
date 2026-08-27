@@ -72,6 +72,7 @@ class FakeContext:
     # dataclass is how tests stay green against code that would break.
     skills_sources: tuple[str, ...] | None = None
     usage: Any = None
+    trace: Any = None
 
 
 class FakeModel(BaseChatModel):
@@ -179,6 +180,34 @@ def test_the_model_retry_sits_outside_the_usage_accounting(name, context):
     middleware = _middleware_for(REGISTRY[name], counted, _model_for(REGISTRY[name], counted.cfg))
     names = [type(m).__name__ for m in middleware]
     assert names.index("ModelRetryMiddleware") < names.index("UsageMiddleware")
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_retry_can_report_what_it_did(name, context):
+    # OPEN-45. Registered is not the same as wired: this middleware shipped
+    # on every spec holding neither a sink nor an accumulator, so a run
+    # absorbing a third of its requests was indistinguishable from a slow
+    # model -- and those have opposite fixes.
+    import dataclasses
+
+    sink = object()
+    usage = object()
+    wired = dataclasses.replace(context, trace=sink, usage=usage)
+    middleware = _middleware_for(REGISTRY[name], wired, _model_for(REGISTRY[name], wired.cfg))
+    retry = next(m for m in middleware if type(m).__name__ == "ModelRetryMiddleware")
+
+    assert retry.trace is sink
+    assert retry.usage is usage
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_a_subagent_retry_still_builds_with_no_run_around_it(name, context):
+    # The context fixture carries neither, as every 9b-era stand-in does.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    retry = next(m for m in middleware if type(m).__name__ == "ModelRetryMiddleware")
+
+    assert retry.trace is None
+    assert retry.usage is None
 
 
 def test_no_shipped_subagent_may_delegate(context):

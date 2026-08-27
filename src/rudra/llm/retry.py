@@ -37,8 +37,17 @@ _TRANSIENT_NAME_HINTS = (
 )
 
 
-def _status_of(error: BaseException) -> int | None:
-    """The HTTP status an exception carries, however it carries it."""
+def status_of(error: BaseException) -> int | None:
+    """The HTTP status an exception carries, however it carries it.
+
+    Public since OPEN-45, which needs it to name a failure in a trace
+    notice WITHOUT using `str(error)` -- a provider error body can echo
+    the request back, and trace/render.py escapes but does not redact.
+    Public rather than imported under its old underscore, because this
+    module is the one place that knows how a provider spells a status
+    and a second copy of that knowledge is what `is_transient` exists to
+    prevent.
+    """
     for attribute in ("status_code", "status", "code", "http_status"):
         value = getattr(error, attribute, None)
         if isinstance(value, int):
@@ -65,7 +74,7 @@ def is_transient(error: BaseException) -> bool:
     A bad key, a missing model or a malformed request will fail identically
     on every attempt, so retrying them only delays the real message.
     """
-    status = _status_of(error)
+    status = status_of(error)
     if status is not None:
         return status in _TRANSIENT_STATUS
 
@@ -114,7 +123,7 @@ class ProviderUnavailable(RuntimeError):
         *,
         progress: str | None = None,
     ) -> None:
-        status = _status_of(error)
+        status = status_of(error)
         detail = f"{type(error).__name__}"
         if status is not None:
             detail += f" ({status})"
@@ -129,4 +138,4 @@ class ProviderUnavailable(RuntimeError):
         self.progress = progress
 
 
-__all__ = ["ProviderUnavailable", "is_transient", "retry_delays"]
+__all__ = ["ProviderUnavailable", "is_transient", "retry_delays", "status_of"]

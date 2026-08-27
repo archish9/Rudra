@@ -30,6 +30,18 @@ class RoleUsage:
     input_tokens: int | None = None
     output_tokens: int | None = None
     compactions: int = 0
+    # How many of this role's `calls` were re-issues of a call that failed
+    # transiently (OPEN-45). It has to be counted separately rather than
+    # derived, because ModelRetryMiddleware sits OUTSIDE UsageMiddleware by
+    # design (each attempt is one recorded call with its own duration, and
+    # the backoff sleep is charged to nobody) -- so `calls` already absorbs
+    # every retry and nothing distinguishes the absorbed ones. Measured: a
+    # call retried twice records calls=4 against three model turns, which a
+    # reader cannot tell from a miscount.
+    #
+    # It is also what makes OPEN-40's `seconds / calls` readable: a retried
+    # call inflates the denominator with an attempt that produced no tokens.
+    retries: int = 0
     # What the injected recall block cost this role, in characters, summed
     # over every agent build (Step 14b, spec 4.6). Characters rather than
     # tokens because that is what render.py actually budgets in, and a
@@ -105,6 +117,17 @@ class RunUsage:
         """
         self._slot(role).compactions += 1
 
+    def record_retry(self, role: str) -> None:
+        """One model call by `role` re-issued after a transient failure.
+
+        Mirrors record_compaction, and the mirror is the point: both count
+        something Rudra did on the run's behalf that `calls` alone cannot
+        show. Called by ModelRetryMiddleware once per retry ACTUALLY MADE
+        -- never on the give-up, which raises ProviderUnavailable and is
+        already reported as a sentence.
+        """
+        self._slot(role).retries += 1
+
     def roles(self) -> tuple[str, ...]:
         """Roles in the order they first appeared -- the run's own order."""
         return tuple(self.per_role)
@@ -117,6 +140,7 @@ class RunUsage:
                 "input_tokens": tally.input_tokens,
                 "output_tokens": tally.output_tokens,
                 "compactions": tally.compactions,
+                "retries": tally.retries,
                 "recall_chars": tally.recall_chars,
                 "recall_injections": tally.recall_injections,
                 "seconds": round(tally.seconds, 3),
@@ -159,6 +183,11 @@ def render_usage(usage: Any) -> str:
         if tally["compactions"]:
             plural = "s" if tally["compactions"] != 1 else ""
             line += f", {tally['compactions']} compaction{plural}"
+        # Guarded exactly as compactions is, so a clean run's panel is
+        # byte-identical to the one before OPEN-45 (§5.2). "retries" rather
+        # than "retry"+plural: the two words differ by more than an "s".
+        if tally["retries"]:
+            line += f", {tally['retries']} {'retry' if tally['retries'] == 1 else 'retries'}"
         lines.append(line + ")[/dim]")
 
     return "Tokens:\n" + "\n".join(lines)

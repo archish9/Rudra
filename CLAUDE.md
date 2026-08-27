@@ -173,10 +173,11 @@ src/rudra/
 │                           payload (A1.67, A1.48, A1.91): model and config text
 │                           printed raw through Rich loses anything in brackets.
 │                           Every kind but NOTICE describes something the MODEL
-│                           did; NOTICE is what Rudra says about ITSELF — the
-│                           first is a subagent guard halt (OPEN-44). Emit one
-│                           through TraceSink.notice, never by hand: it is the
-│                           only path that redacts. It renders at VERBOSE and
+│                           did; NOTICE is what Rudra says about ITSELF — a
+│                           subagent guard halt (OPEN-44, name="guard") and a
+│                           retried model call (OPEN-45, name="retry"). Emit
+│                           one through TraceSink.notice, never by hand: it is
+│                           the only path that redacts. It renders at VERBOSE and
 │                           reaches the debug log at every level, so anything
 │                           the user must ACT on is printed by the code that
 │                           decided to act, the way loop/engine.py prints a halt
@@ -377,7 +378,7 @@ only function that creates anything.
 | `run/repl_history` | volatile | `cli_repl.build_session` | prompt_toolkit | Per project, because a Rust project's prompts are not a Python project's. A read-only project loses history, never the REPL (Step 15b) |
 | `run/transcripts/<id>.jsonl` | volatile | `trace/transcript.py`, every run | humans, `rudra log` | One JSON object per `TraceEvent`, appended and flushed per event so a killed run still leaves a readable record. Payloads capped at 2000 chars, newest 20 runs kept. **Written by default**, which is safe only because redaction happens where the event is built (A1.95) — moving redaction into the renderer would silently refill this file with credentials (Step 15c, C9.5) |
 | `run/logs/debug-<id>.jsonl` | volatile | `trace/debug.py`, **every run** | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record and traceback. **The complete record** — registered with `TraceSink.add_recorder`, so unlike the transcript no trace level filters it and payloads are uncapped. One file per run, newest 20 kept by `prune_debug_logs`, which globs `debug-*` so it cannot eat `permissions.jsonl`. `[agent] debug_log = false` or `--no-debug` turns it off. Corrected 2026-08-24 (OPEN-7): was one appending `debug.jsonl` written only under `--debug`, and registered as an ordinary consumer, so `--no-verbose` cut it down to errors. An unopenable file disables the log rather than failing the run (Step 15a, C9.7) |
-| `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens and compactions for the last run. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
+| `run/logs/usage.json` | volatile | `write_usage_log` | humans | Per-role tokens, compactions and **retries** for the last run — `retries` since OPEN-45, because `ModelRetryMiddleware` sits outside `UsageMiddleware` so `calls` silently absorbs every re-issue. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
 | `memory/export/` | durable | `rudra memory export` | `rudra memory import` | The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
 | `memory/palace/` | volatile | `rudra.memory.store` | `rudra.memory.store` | ChromaDB, project-scoped per D14/S14.5. Opened only through `MemoryStore`; a failure degrades loudly and never fails a task (C8.6) |

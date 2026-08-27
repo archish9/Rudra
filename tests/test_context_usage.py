@@ -26,6 +26,12 @@ def test_recording_accumulates_per_role():
         "input_tokens": 350,
         "output_tokens": 40,
         "compactions": 0,
+        # Added by OPEN-45: how often the model call this row counts had to
+        # be re-issued. It rides invisibly inside `calls` otherwise --
+        # ModelRetryMiddleware sits OUTSIDE UsageMiddleware by design, so
+        # each attempt is one recorded call and a reader finding calls=4
+        # against three model turns cannot tell a retry from a miscount.
+        "retries": 0,
         # Added in Step 15a: wall clock, the one number a local backend
         # always has -- token counts are frequently absent (C9.6).
         "seconds": 0.0,
@@ -79,6 +85,55 @@ def test_a_compaction_alone_still_registers_the_role():
     usage = RunUsage()
     usage.record_compaction("tester")
     assert usage.roles() == ("tester",)
+
+
+def test_retries_are_counted_per_role():
+    """OPEN-45. Mirrors compactions, for the reason it mirrors it: the
+    retry is outside the usage middleware, so `calls` already absorbs it
+    and nothing labels which of those calls were re-issued."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+    usage.record_retry("coder")
+    usage.record_retry("coder")
+    assert usage.as_dict()["coder"]["retries"] == 2
+
+
+def test_retries_are_not_shared_between_roles():
+    """A failing coder endpoint and a healthy planner are a different
+    problem from a provider that is down -- which is the whole reason
+    ModelRetryMiddleware carries a role at all."""
+    usage = RunUsage()
+    usage.record_retry("coder")
+    assert usage.as_dict()["coder"]["retries"] == 1
+    assert usage.as_dict().get("planner") is None
+
+
+def test_a_retry_alone_still_registers_the_role():
+    """A role whose FIRST model call failed has retried before it has
+    recorded, so arrival order must not decide whether it is reportable."""
+    usage = RunUsage()
+    usage.record_retry("tester")
+    assert usage.roles() == ("tester",)
+
+
+def test_render_is_silent_about_retries_when_there_were_none():
+    """The regression that matters most: a clean run's panel must be
+    byte-identical to the one before OPEN-45, or every existing assertion
+    about it becomes noise."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1)
+
+    assert "retr" not in render_usage(usage)
+
+
+def test_render_names_retries_when_they_happened():
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1)
+    usage.record_retry("coder")
+    assert "1 retry" in render_usage(usage)
+
+    usage.record_retry("coder")
+    assert "2 retries" in render_usage(usage)
 
 
 def test_render_is_empty_when_nothing_was_recorded():

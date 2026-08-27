@@ -42,6 +42,10 @@ def test_sync_hook_records_the_reported_counts():
         "input_tokens": 100,
         "output_tokens": 10,
         "compactions": 0,
+        # Added by OPEN-45, and zero here for the reason it must be: this
+        # middleware never sees a retry. ModelRetryMiddleware sits OUTSIDE
+        # it by design, so each attempt arrives here as its own call.
+        "retries": 0,
         # Added in Step 14b: the recall block's cost, isolated because it
         # otherwise rides invisibly inside input_tokens (spec 4.6).
         "recall_chars": 0,

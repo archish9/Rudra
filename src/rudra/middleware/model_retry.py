@@ -38,7 +38,7 @@ from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
 
-from rudra.llm.retry import ProviderUnavailable, is_transient, retry_delays
+from rudra.llm.retry import ProviderUnavailable, is_transient, retry_delays, status_of
 
 
 class ModelRetryMiddleware(AgentMiddleware):
@@ -48,14 +48,63 @@ class ModelRetryMiddleware(AgentMiddleware):
     answering -- a run whose coder is failing and whose planner is fine is
     a different problem from one whose provider is down, and the message
     is the only place a user learns which they have.
+
+    `trace` and `usage` are what stop this from being a silent guard
+    (OPEN-45). It shipped with neither, so a run absorbing a third of its
+    requests was indistinguishable from a slow model, and RUN #2 could not
+    confirm the very item it was being run to confirm. Both are optional
+    for the reason SubagentContext.trace is: the machinery must stay
+    constructible without a run, and every OPEN-41 test builds it that way.
     """
 
-    def __init__(self, role: str = "agent") -> None:
+    def __init__(self, role: str = "agent", *, trace: Any = None, usage: Any = None) -> None:
         super().__init__()
         self.role = role
+        self.trace = trace
+        self.usage = usage
 
     def _provider(self) -> str:
         return f"the {self.role} model"
+
+    def _report(self, error: BaseException, attempt: int, budget: int) -> None:
+        """Say that a retry is about to happen, to whoever is listening.
+
+        Called once per retry ACTUALLY MADE -- never on the give-up, which
+        already raises ProviderUnavailable and reaches the user as a
+        sentence. A second channel for one fact is how two descriptions of
+        one event drift.
+
+        The payload carries the exception CLASS and its status, never
+        `str(error)`: a provider error body can echo the request back, and
+        trace/render.py escapes but does not redact.
+
+        Swallowing follows TraceSink.emit and write_usage_log
+        (loop/engine.py): a run that is already surviving a provider
+        failure must not then die of its own bookkeeping.
+        """
+        if self.usage is not None:
+            try:
+                self.usage.record_retry(self.role)
+            except Exception:  # noqa: BLE001 -- observability never ends a run
+                pass
+        if self.trace is None:
+            return
+        status = status_of(error)
+        detail = type(error).__name__
+        if status is not None:
+            detail += f" ({status})"
+        try:
+            self.trace.notice(
+                f"{self._provider()} failed with {detail}; retrying, attempt {attempt} of {budget}",
+                role=self.role,
+                # VERBOSE on screen, and in the debug log at every level --
+                # a retry annotates a run rather than reporting on it, so
+                # one console line per flaky call would bury the trace it
+                # is annotating (OPEN-44's choice, inherited).
+                name="retry",
+            )
+        except Exception:  # noqa: BLE001 -- observability never ends a run
+            pass
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         delays = retry_delays()
@@ -67,6 +116,7 @@ class ModelRetryMiddleware(AgentMiddleware):
                     if is_transient(error):
                         raise ProviderUnavailable(self._provider(), attempt + 1, error) from error
                     raise
+                self._report(error, attempt + 1, len(delays))
                 time.sleep(delays[attempt])
         raise AssertionError("unreachable")  # pragma: no cover
 
@@ -80,6 +130,7 @@ class ModelRetryMiddleware(AgentMiddleware):
                     if is_transient(error):
                         raise ProviderUnavailable(self._provider(), attempt + 1, error) from error
                     raise
+                self._report(error, attempt + 1, len(delays))
                 await asyncio.sleep(delays[attempt])
         raise AssertionError("unreachable")  # pragma: no cover
 
