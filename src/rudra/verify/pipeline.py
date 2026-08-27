@@ -25,6 +25,7 @@ from rudra.permissions.env import scrubbed_env
 from rudra.shell.runner import run_gated
 from rudra.stacks.detect import (
     _load_package_json,
+    find_test_files,
     resolve_lint_command,
     resolve_typecheck_command,
 )
@@ -638,6 +639,31 @@ def test_stage(
     if result.no_tests_collected:
         # Neither a pass nor a failure: the code was never exercised. Calling
         # it a failure sends the fix loop to repair working code (A1.57).
+        #
+        # Unless the tests are RIGHT THERE (OPEN-34). "No tests exist" and
+        # "the runner cannot find the tests that exist" are different claims,
+        # and only the first is a pass. The second passed the gate on every
+        # task of run6 -- `unittest discover` against a `tests/unit/` layout,
+        # `Ran 0 tests`, `not_applicable`, which is not halting -- so the
+        # loop wrote "the gate passes over the whole project with its tests
+        # run" onto three tasks whose suite executed nothing.
+        visible = find_test_files(Path(project_path))
+        if visible:
+            listed = ", ".join(visible)
+            return StageResult(
+                name="test",
+                outcome=FAILED,
+                blocking=True,
+                command=result.command,
+                stack=result.stack,
+                detail=(
+                    f"the test command collected nothing, but {len(visible)} test "
+                    f"file(s) are present: {listed}. The runner cannot reach them -- "
+                    "check for a missing `__init__.py`, a layout the runner does not "
+                    "search, or a collection error above."
+                ),
+                output_tail=result.output_tail,
+            )
         return StageResult(
             name="test",
             outcome=NOT_APPLICABLE,

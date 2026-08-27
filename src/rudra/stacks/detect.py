@@ -19,7 +19,7 @@ from rudra.stacks.profile import (
     CommandResolution,
     StackProfile,
 )
-from rudra.stacks.registry import PROFILES
+from rudra.stacks.registry import ALL_SKIP_DIRS, PROFILES
 
 
 def _load_package_json(project_path: Path) -> dict:
@@ -202,6 +202,23 @@ def _system_interpreter() -> str:
 _TEST_DIRS = ("tests", "test")
 
 
+def _is_discoverable(root: Path, module: Path) -> bool:
+    """Can `unittest discover` walk from `root` down to `module`?
+
+    Discovery recurses only into importable directories, so EVERY directory
+    on the path -- `root` itself included -- needs an `__init__.py`. One gap
+    anywhere in the chain and the module below it is unreachable.
+    """
+    current = root
+    if not (current / "__init__.py").is_file():
+        return False
+    for part in module.relative_to(root).parts[:-1]:
+        current = current / part
+        if not (current / "__init__.py").is_file():
+            return False
+    return True
+
+
 def _has_undiscoverable_tests(project_path: Path) -> bool:
     """Are there test files `unittest discover` structurally cannot reach?
 
@@ -215,20 +232,99 @@ def _has_undiscoverable_tests(project_path: Path) -> bool:
     Shape, not execution: this module observes and does not run anything
     (see the module docstring), so the question asked is "can unittest even
     enter this directory", which `__init__.py` answers on disk.
+
+    **The walk is recursive and the check is per-file (OPEN-34).** OPEN-28
+    asked this of `tests/`'s DIRECT children and skipped the directory
+    outright when `tests/__init__.py` existed, and both halves were wrong one
+    level down. run6's project keeps its modules in `tests/unit/` and
+    `tests/integration/`, so `tests/` itself held only directories, the
+    `any()` was False, and the gate ran `unittest discover` against a pytest
+    layout for a whole run -- collecting nothing, reporting `not_applicable`,
+    and therefore passing every task. A package `tests/` whose SUBdirectories
+    are not packages is undiscoverable for the same reason, which is why
+    `tests/__init__.py` no longer ends the question.
     """
     for name in _TEST_DIRS:
         directory = project_path / name
-        if not directory.is_dir() or (directory / "__init__.py").is_file():
+        if not directory.is_dir():
             continue
         try:
-            if any(
-                child.name.startswith("test") and child.suffix == ".py"
-                for child in directory.iterdir()
-            ):
-                return True
+            modules = [path for path in directory.rglob("test*.py") if path.is_file()]
         except OSError:
             continue
+        if any(not _is_discoverable(directory, module) for module in modules):
+            return True
     return False
+
+
+# Suffixes a test file can carry, across every stack the gate knows. Rust is
+# absent on purpose: `#[test]` lives inline in the module it tests, so a Rust
+# project with a full suite has no test-named file and would be reported as
+# having none. Claiming less than we can see is the safe direction here --
+# see `find_test_files`.
+_TEST_FILE_SUFFIXES = frozenset({".py", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go"})
+
+# Enough names to make the gate's message concrete without pasting a suite
+# into it.
+_MAX_REPORTED_TEST_FILES = 5
+
+
+def _is_test_filename(name: str) -> bool:
+    """Does this filename claim to be a test, in any stack's spelling?
+
+    `test_models.py`, `models_test.py`, `models_test.go`, `api.test.ts` and
+    `api.spec.tsx` all do.
+    """
+    path = Path(name)
+    if path.suffix not in _TEST_FILE_SUFFIXES:
+        return False
+    stem = path.stem
+    return (
+        name.startswith("test_")
+        or stem.endswith("_test")
+        or stem.endswith(".test")
+        or stem.endswith(".spec")
+    )
+
+
+def find_test_files(project_path: Path) -> list[str]:
+    """Test files visible on disk, project-relative, capped and sorted.
+
+    The question the gate needs answered before it reads "no tests were
+    collected" as a pass (OPEN-34): are there tests here that the runner
+    failed to find? An empty list is the greenfield case A1.57 protects --
+    tests not written yet -- and a non-empty one is a broken gate.
+
+    Bounded and skip-aware for the same reason `_has_source_file` is: a
+    `.venv` or `node_modules` holds thousands of somebody else's test files,
+    and counting them would fail the gate of every project that has one.
+    """
+    found: list[str] = []
+
+    def walk(directory: Path, depth: int) -> None:
+        if len(found) >= _MAX_REPORTED_TEST_FILES:
+            return
+        try:
+            entries = sorted(directory.iterdir())
+        except OSError:
+            return
+        for entry in entries:
+            if len(found) >= _MAX_REPORTED_TEST_FILES:
+                return
+            if entry.is_file() and _is_test_filename(entry.name):
+                found.append(entry.relative_to(project_path).as_posix())
+        if depth <= 0:
+            return
+        for entry in entries:
+            if (
+                entry.is_dir()
+                and entry.name not in ALL_SKIP_DIRS
+                and not entry.name.startswith(".")
+            ):
+                walk(entry, depth - 1)
+
+    walk(project_path, _INFERENCE_DEPTH)
+    return sorted(found)
 
 
 def _python_test_command(project_path: Path) -> list[str]:

@@ -81,3 +81,85 @@ def test_a_timed_out_suite_fails_without_escalating(monkeypatch, tmp_path):
     )
     assert result.outcome == FAILED
     assert result.escalate is False
+
+
+def _write(root, relative: str, body: str = "def test_x():\n    assert True\n"):
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_collecting_nothing_with_test_files_on_disk_is_a_failure(monkeypatch, tmp_path):
+    """OPEN-34's second half. `not_applicable` is deliberately non-halting
+    (A1.57), so a runner that finds none of the tests sitting on disk passed
+    the gate on every task of run6 while executing nothing.
+
+    "No tests exist" and "the runner cannot find the tests that exist" are
+    different claims and only the first one is a pass. This one is a broken
+    gate, and the fix loop can act on it -- add the missing `__init__.py`,
+    move the file, fix the config -- so it blocks without escalating.
+    """
+    _write(tmp_path, "tests/unit/test_models.py")
+
+    result = stage_for(
+        monkeypatch,
+        TestResult(
+            available=True,
+            command=["python3", "-m", "unittest", "discover"],
+            exit_code=5,
+            passed=False,
+            no_tests_collected=True,
+        ),
+        tmp_path,
+    )
+
+    assert result.outcome == FAILED
+    assert result.escalate is False
+    assert "tests/unit/test_models.py" in result.detail
+
+
+def test_collecting_nothing_in_a_project_with_no_test_files_stays_not_applicable(
+    monkeypatch, tmp_path
+):
+    """The greenfield case, and the reason A1.57 exists: a project whose
+    tests have not been written yet must not send the fix loop to repair
+    working code."""
+    _write(tmp_path, "app.py", "x = 1\n")
+
+    result = stage_for(
+        monkeypatch,
+        TestResult(available=True, exit_code=5, passed=False, no_tests_collected=True),
+        tmp_path,
+    )
+
+    assert result.outcome == NOT_APPLICABLE
+
+
+def test_the_trailing_underscore_test_spelling_counts_as_a_test_file(monkeypatch, tmp_path):
+    """`models_test.py` and `api.test.ts` are the same claim as `test_x.py`."""
+    _write(tmp_path, "tests/models_test.py")
+
+    result = stage_for(
+        monkeypatch,
+        TestResult(available=True, exit_code=5, passed=False, no_tests_collected=True),
+        tmp_path,
+    )
+
+    assert result.outcome == FAILED
+
+
+def test_test_files_inside_a_skipped_directory_do_not_count(monkeypatch, tmp_path):
+    """`.venv` and `node_modules` are full of somebody else's test files.
+    Counting them would fail the gate of every project holding a
+    virtualenv -- the same trap `stacks` skip_dirs exists for."""
+    _write(tmp_path, ".venv/lib/site-packages/pytest/test_thing.py")
+    _write(tmp_path, "node_modules/lib/index.test.js", "it('x', () => {});\n")
+
+    result = stage_for(
+        monkeypatch,
+        TestResult(available=True, exit_code=5, passed=False, no_tests_collected=True),
+        tmp_path,
+    )
+
+    assert result.outcome == NOT_APPLICABLE

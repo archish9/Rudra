@@ -150,3 +150,56 @@ def test_inference_does_not_recurse_forever_on_a_deep_tree(tmp_path):
 
     # Whatever the answer, it must return rather than walk the world.
     assert detect(tmp_path) in ([], [p for p in detect(tmp_path)])
+
+
+def test_a_nested_pytest_layout_is_undiscoverable_too(tmp_path):
+    """OPEN-34. run6's project exactly: the test modules are one level below
+    `tests/`, which itself holds only directories.
+
+        tests/unit/test_models.py
+        tests/unit/test_database.py
+        tests/integration/test_api.py
+
+    OPEN-28's predicate looked at `tests/`'s DIRECT children for `test*.py`,
+    found two directories and no module, and fell through to
+    `unittest discover` -- which collected nothing, reported
+    `not_applicable`, and therefore PASSED on every task in the run
+    (`.rudra/run/logs/verify.log`: `## test: not_applicable`,
+    `tests.log`: `Ran 0 tests in 0.000s`).
+    """
+    _write(tmp_path, "src/models.py")
+    _write(tmp_path, "tests/unit/test_models.py")
+    _write(tmp_path, "tests/integration/test_api.py")
+
+    command = resolve_test_command(tmp_path, detect(tmp_path)[0])
+
+    assert command is not None
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_a_package_tests_dir_with_non_package_subdirs_is_undiscoverable(tmp_path):
+    """The second half of OPEN-34's fix, and why the `__init__.py`
+    early-`continue` had to go: `tests/` being a package says nothing about
+    `tests/unit/`, and `unittest discover` cannot enter the subdirectory
+    that actually holds the modules."""
+    _write(tmp_path, "app.py")
+    _write(tmp_path, "tests/__init__.py", "")
+    _write(tmp_path, "tests/unit/test_app.py")
+
+    command = resolve_test_command(tmp_path, detect(tmp_path)[0])
+
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_a_fully_packaged_nested_layout_still_uses_unittest(tmp_path):
+    """Every directory on the path is importable, so discovery reaches the
+    module and needs no third-party install. The predicate must answer the
+    structural question, not "is there a subdirectory"."""
+    _write(tmp_path, "app.py")
+    _write(tmp_path, "tests/__init__.py", "")
+    _write(tmp_path, "tests/unit/__init__.py", "")
+    _write(tmp_path, "tests/unit/test_app.py")
+
+    command = resolve_test_command(tmp_path, detect(tmp_path)[0])
+
+    assert command[1:] == ["-m", "unittest", "discover"]

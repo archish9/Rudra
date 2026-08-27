@@ -7,7 +7,7 @@ Context loaded into every fresh Claude Code session. Read `TODO.md` next — it 
 | File | Owns |
 |---|---|
 | `TODO.md` | **What is open now, and nothing else.** Read it first. It opens with the order to fix the open items in, and carries everything a fresh session needs to reproduce them — baseline, how to configure a throwaway test project, model availability, where the logs are |
-| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — OPEN-1…OPEN-22 and the 75 `CR-*` code-review findings of 2026-08-21, with their reproductions. Split out 2026-08-25 |
+| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — OPEN-1…OPEN-33 and the 75 `CR-*` code-review findings of 2026-08-21, with their reproductions. Split out 2026-08-25; OPEN-23…OPEN-33 moved here 2026-08-26 |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
