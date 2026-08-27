@@ -135,3 +135,118 @@ async def test_the_filter_also_runs_on_the_async_path():
     )
 
     assert DELEGATION_TOOL not in _names(handler.seen)
+
+
+# ---------------------------------------------------------------------------
+# OPEN-37: the same item one agent up.
+#
+# `planner_agent.py` passes no `subagents=`, so deepagents auto-adds its own
+# general-purpose spec (graph.py:750-751, which skips the auto-add only when a
+# supplied spec is literally NAMED `general-purpose`). That spec is a subagent
+# like any other, so `task` is registered for the planner too -- and the
+# auto-added child inherits the PARENT's tools and NOT the parent's middleware
+# (CLAUDE.md, "Permission flow"), which for the planner means `add_tasks`,
+# `drop_task` and `read_ledger` in an ungated agent.
+#
+# Measured in run6 (2026-08-26), debug log lines 528-564. The breakdown stage
+# delegated:
+#
+#     tool_call planner task {'description': "Run the test suite to see
+#                             what's actually failing",
+#                             'subagent_type': 'general-purpose'}
+#
+# and the child answered with its tool list, which was the planner's:
+#
+#     Error: bash is not a valid tool, try one of
+#     [ls, read_file, glob, grep, add_tasks, drop_task, read_ledger].
+#
+# It had no shell, so it ran `ls /home/user` (path_not_found), `ls /`, ~30
+# read_file calls over the four files the planner had just read, and three
+# failing `bash` calls. It contributed nothing and the run ended after it.
+#
+# The fix is OPEN-26's: withhold the tool. Suppressing the auto-add instead --
+# by passing Rudra's own GENERAL_PURPOSE spec -- would leave `task` reachable,
+# so the planner would still spend turns delegating.
+# ---------------------------------------------------------------------------
+
+
+def _planner_stack(**kwargs):
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    return build_planner_middleware("a task", **kwargs)
+
+
+def _planner_guards(**kwargs):
+    return [m for m in _planner_stack(**kwargs) if isinstance(m, DelegationGuardMiddleware)]
+
+
+def test_the_planner_carries_the_guard():
+    guards = _planner_guards()
+
+    assert len(guards) == 1
+    assert guards[0].can_delegate is False
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"compat_task_anchor": True}, id="task-anchor"),
+        pytest.param({"compat_sandbox_paths": True}, id="sandbox-paths"),
+        pytest.param({"usage": object()}, id="usage"),
+    ],
+)
+def test_the_planner_carries_the_guard_under_every_option(kwargs):
+    """Unconditional, never a knob: no planner stage may delegate, so there is
+    no configuration in which the guard is absent."""
+    guards = _planner_guards(**kwargs)
+
+    assert len(guards) == 1
+    assert guards[0].can_delegate is False
+
+
+def test_the_planner_carries_the_guard_with_a_backend():
+    from deepagents.backends.filesystem import FilesystemBackend
+
+    backend = FilesystemBackend(root_dir="/tmp", virtual_mode=True)
+
+    guards = _planner_guards(backend=backend, evict_tokens=13107)
+
+    assert len(guards) == 1
+    assert guards[0].can_delegate is False
+
+
+def test_the_guard_sits_after_the_param_fixer_in_the_planner_stack():
+    """Same order as subagents/build.py:195-207. It must not displace
+    FixWriteParamsMiddleware from the front (U.14, test_agent_wiring.py)."""
+    names = [type(m).__name__ for m in _planner_stack()]
+
+    assert names[0] == "FixWriteParamsMiddleware"
+    assert names.index("DelegationGuardMiddleware") > names.index("RepeatGuardMiddleware")
+
+
+def test_no_planner_stage_request_carries_the_delegation_tool():
+    """The property, tested through the assembled stack rather than by name.
+
+    Run6's planner tools, verbatim from the child's error message, plus the
+    tool this item is about.
+    """
+    handler = _Handler()
+    request = _request(
+        "ls", "read_file", "glob", "grep", "add_tasks", "drop_task", "read_ledger", DELEGATION_TOOL
+    )
+
+    for middleware in _planner_stack():
+        if isinstance(middleware, DelegationGuardMiddleware):
+            middleware.wrap_model_call(request, handler)
+            request = handler.seen
+
+    assert DELEGATION_TOOL not in _names(request)
+    assert _names(request) == [
+        "ls",
+        "read_file",
+        "glob",
+        "grep",
+        "add_tasks",
+        "drop_task",
+        "read_ledger",
+    ]

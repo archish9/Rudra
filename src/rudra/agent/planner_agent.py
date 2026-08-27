@@ -39,6 +39,7 @@ from rudra.filesystem import project_tree
 from rudra.llm import build_model
 from rudra.loop.tools import create_ledger_tools
 from rudra.middleware import (
+    DelegationGuardMiddleware,
     FixWriteParamsMiddleware,
     RepeatGuardMiddleware,
     TaskAnchorMiddleware,
@@ -314,6 +315,28 @@ def build_planner_middleware(
         # where OPEN-10 was measured: four identical failing read_file calls
         # in a row, and nothing to stop a fifth.
         RepeatGuardMiddleware(),
+        # OPEN-37, and it is OPEN-26 one agent up. `create_deep_agent` below
+        # passes no `subagents=`, so deepagents auto-adds its own
+        # general-purpose spec (graph.py:750-751 -- the auto-add is skipped
+        # only when a supplied spec is literally NAMED `general-purpose`),
+        # and any spec at all registers `task` (graph.py:827-828). The
+        # auto-added child inherits the PARENT's tools and NOT the parent's
+        # middleware, so for the planner that is an ungated agent holding
+        # `add_tasks`, `drop_task` and `read_ledger`.
+        #
+        # Run6 measured what it does with them: the breakdown stage
+        # delegated "Run the test suite to see what's actually failing" to a
+        # child with no shell, which spent ~30 read_file calls re-reading the
+        # four files the planner had just read, failed three `bash` calls,
+        # and contributed nothing.
+        #
+        # Unconditional, and not a `can_delegate` argument: no planner stage
+        # may delegate, so there is no configuration where this is True. The
+        # alternative -- passing Rudra's own GENERAL_PURPOSE spec to suppress
+        # the auto-add -- leaves `task` reachable and only changes who
+        # answers, so the turns are still spent. Absence is the enforcement
+        # (U.17), as it is for _tools_for_stage and for `skills=None` below.
+        DelegationGuardMiddleware(can_delegate=False),
     ]
     if backend is not None:
         evict = {} if evict_tokens is None else {"tool_token_limit_before_evict": evict_tokens}

@@ -219,16 +219,18 @@ def test_planner_middleware_carries_a_filesystem_middleware_with_a_limit():
 def test_planner_middleware_without_a_backend_is_unchanged():
     """Every existing caller and test passes no backend and must still work.
 
-    RepeatGuardMiddleware joined the always-on pair with OPEN-10, and the
-    ORDER is the assertion that matters: it must sit after the param fixer
-    so a repaired path is judged as the call it became, not as the one the
-    model mistyped."""
+    RepeatGuardMiddleware joined the always-on trio with OPEN-10 and
+    DelegationGuardMiddleware with OPEN-37, and the ORDER is the assertion
+    that matters: the repeat guard must sit after the param fixer so a
+    repaired path is judged as the call it became, not as the one the model
+    mistyped."""
     from rudra.agent.planner_agent import build_planner_middleware
 
     middleware = build_planner_middleware("a task")
     assert [type(m).__name__ for m in middleware] == [
         "FixWriteParamsMiddleware",
         "RepeatGuardMiddleware",
+        "DelegationGuardMiddleware",
     ]
 
 
