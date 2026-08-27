@@ -149,3 +149,52 @@ async def test_a_failure_after_streaming_began_is_not_retried(monkeypatch) -> No
         await _drain(agent)
 
     assert agent.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_streaming_began_is_still_a_readable_error(monkeypatch) -> None:
+    """OPEN-41. Not retried is not the same as not reported.
+
+    `ProviderUnavailable` used to be reachable only on the not-yielded
+    path, so the case that costs the user MORE work -- the run is further
+    along -- was the one case that got no message. Run `82fa4385bb22` was
+    the measurement: 850 terminal lines, 557 of them Rich traceback frames
+    through site-packages/openai, and zero mentions of the provider being
+    at fault.
+    """
+    monkeypatch.setattr("rudra.llm.retry.retry_delays", lambda **_: [0.0, 0.0, 0.0])
+    agent = _FlakyAgent(failures=99, error=_Status(500), after_chunks=1)
+
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        await _drain(agent)
+
+    assert agent.calls == 1
+    assert "500" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_a_mid_stream_failure_does_not_claim_nothing_was_written(monkeypatch) -> None:
+    """The default clause is a lie once the run has started.
+
+    A coder that wrote four files before the provider failed leaves four
+    files on disk, and telling the user otherwise sends them looking for
+    work that is already there.
+    """
+    monkeypatch.setattr("rudra.llm.retry.retry_delays", lambda **_: [0.0, 0.0, 0.0])
+    agent = _FlakyAgent(failures=99, error=_Status(500), after_chunks=1)
+
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        await _drain(agent)
+
+    assert "Nothing was written" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_a_mid_stream_NON_transient_failure_still_raises_itself(monkeypatch) -> None:
+    """A 401 is not a provider outage and must not be dressed as one."""
+    agent = _FlakyAgent(failures=99, error=_Status(401), after_chunks=1)
+
+    with pytest.raises(_Status):
+        await _drain(agent)
+
+    assert agent.calls == 1

@@ -41,6 +41,7 @@ from rudra.loop.tools import create_ledger_tools
 from rudra.middleware import (
     DelegationGuardMiddleware,
     FixWriteParamsMiddleware,
+    ModelRetryMiddleware,
     RepeatGuardMiddleware,
     TaskAnchorMiddleware,
 )
@@ -310,6 +311,20 @@ def build_planner_middleware(
     """
     middleware: list = [
         FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths),
+        # OPEN-41, and the planner is where it was measured: all three of
+        # 2026-08-27's dead runs died in a planner stage, on a provider 500
+        # that `_stream_with_retry` had already stopped guarding because the
+        # stage had emitted a chunk.
+        #
+        # Not at the front: U.14 keeps FixWriteParamsMiddleware there, and
+        # this one has no claim on the seat -- it implements the model-call
+        # hooks only and never sees a tool argument. What its position DOES
+        # decide is that it sits ahead of the UsageMiddleware appended
+        # below, so each attempt is one recorded call with its own duration
+        # and the backoff sleep is charged to nobody. Inside the
+        # accounting, a twice-retried call would read as one 40-second call
+        # that was mostly `asyncio.sleep` -- the number OPEN-40 is about.
+        ModelRetryMiddleware("planner"),
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped. The planner is
         # where OPEN-10 was measured: four identical failing read_file calls

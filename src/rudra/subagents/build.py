@@ -29,6 +29,7 @@ from rudra.middleware import (
     DelegationGuardMiddleware,
     ExecuteGuardMiddleware,
     FixWriteParamsMiddleware,
+    ModelRetryMiddleware,
     RepeatGuardMiddleware,
 )
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
@@ -188,6 +189,16 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
 
     middleware: list[Any] = [
         FixWriteParamsMiddleware(strip_sandbox_prefixes=context.cfg.compat.sandbox_paths),
+        # OPEN-41. Outermost of the MODEL-call wrappers, which is the only
+        # thing its position decides -- it implements the model-call hooks
+        # only and never sees a tool argument, so it has no claim on the
+        # front seat U.14 keeps for the param fixer. Ahead of the
+        # UsageMiddleware appended below: each ATTEMPT is then one recorded
+        # call with its own duration, and the backoff sleep is charged to
+        # nobody. Inside the accounting, a twice-retried call would read as
+        # one 40-second call that was mostly asyncio.sleep -- precisely the
+        # number OPEN-40 exists to make trustworthy.
+        ModelRetryMiddleware(spec.role),
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped -- otherwise two
         # spellings of one path count as two different calls (OPEN-10).

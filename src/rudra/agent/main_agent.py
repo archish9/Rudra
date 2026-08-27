@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from rich.console import Console
+from rich.markup import escape
 
 from rudra.config import get_config
 from rudra.facts import FactStore, facts_block
@@ -287,10 +288,16 @@ class RudraAgent:
             # the vendor's client internals tells the user nothing they can
             # act on, and this is the *expected* failure for anyone on a
             # free tier -- Documentation/08-project-status.md says so.
-            self._log_always(f"[bold red]\n{error}[/bold red]")
+            #
+            # Since OPEN-41 this also catches a failure that struck AFTER
+            # the stream began, which is where all three of 2026-08-27's
+            # dead runs died. `_provider_failure_message` adds the resume
+            # line, and only when the ledger says it would do something.
+            message = _provider_failure_message(error, self._ledger)
+            self._log_always(f"[bold red]\n{escape(message)}[/bold red]")
             return AgentResult(
                 success=False,
-                message=str(error),
+                message=message,
                 files_created=[],
                 files_modified=[],
             )
@@ -408,6 +415,41 @@ class RudraAgent:
             files_created=[],
             files_modified=[],
         )
+
+
+def _provider_failure_message(error: Any, ledger: Any) -> str:
+    """The provider's sentence, plus a resume line only when one is true.
+
+    OPEN-41. `ProviderUnavailable` already says what failed and whether the
+    run had started; what it cannot know is whether anything is left to
+    pick up, because that is the ledger's question and this funnel serves
+    the planner and every subagent alike.
+
+    Gated on `Ledger.resumable()` rather than on "did the run get far", and
+    the distinction is the whole point: `resumable()` is PENDING-only
+    (loop/ledger.py:91-100), so a ledger of DONE and BLOCKED tasks resumes
+    to nothing and a `--continue` suggestion would spend a run reaching the
+    same place. All three of 2026-08-27's dead runs died in a planner stage
+    before `breakdown` added a task -- `plan()` had already saved an empty
+    ledger (loop/engine.py:873), so the file existed and held nothing.
+
+    Promising `--continue` is safe here for a checked reason, not an
+    assumed one. A task is only IN_PROGRESS inside `run_task`, and
+    `run_subagent` catches every exception and reports it as a string
+    rather than raising (subagents/runner.py:200,285) -- the loop turns
+    that into `run_errors` and the OPEN-33 budget. So nothing that leaves a
+    task IN_PROGRESS can reach this handler, and `resumable()`'s deliberate
+    exclusion of that status (A1.93) cannot swallow the task the user lost.
+    """
+    text = str(error)
+    pending = len(ledger.resumable()) if ledger is not None else 0
+    if not pending:
+        return text
+    plural = "" if pending == 1 else "s"
+    return (
+        f"{text} {pending} task{plural} still pending and the ledger is saved. "
+        f"Resume with: rudra --continue"
+    )
 
 
 def _maybe_auto_branch(project_path: Path, task: str, *, cfg, gate, console: Console) -> None:

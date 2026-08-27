@@ -190,6 +190,17 @@ def decide_action_requests(
     return decisions
 
 
+# Replaces `ProviderUnavailable`'s "Nothing was written." clause when the
+# failure struck after the stream had begun (OPEN-41). Deliberately says
+# "may": this funnel carries the planner AND every subagent, and cannot see
+# whether the agent it was streaming had written anything yet. Claiming
+# either way would be a guess; the ledger is the thing that actually knows,
+# and `RudraAgent` adds the resume line from it.
+_MID_RUN_PROGRESS = (
+    "The run had already started, so any files written before this point are on disk."
+)
+
+
 async def _stream_with_retry(
     agent: Any,
     payload: Any,
@@ -251,8 +262,22 @@ async def _stream_with_retry(
             return
         except Exception as error:  # noqa: BLE001 -- re-raised below
             if yielded or not is_transient(error) or attempt == len(delays):
-                if is_transient(error) and not yielded:
-                    raise ProviderUnavailable("the model provider", attempt + 1, error) from error
+                if is_transient(error):
+                    # OPEN-41: reachable on BOTH paths now. It used to be
+                    # the not-yielded one only, so the case that costs the
+                    # user more -- the run is further along -- was the one
+                    # case with no message, and run `82fa4385bb22` reached
+                    # the terminal as 850 lines of openai/langgraph frames.
+                    # Still not RETRIED when yielded: the caller's parse
+                    # loop has consumed chunks and replaying them needs
+                    # resume (C7.2). Reporting it is a separate question
+                    # from rescuing it, and only the reporting is fixed.
+                    raise ProviderUnavailable(
+                        "the model provider",
+                        attempt + 1,
+                        error,
+                        progress=_MID_RUN_PROGRESS if yielded else None,
+                    ) from error
                 raise
             last = error
             await asyncio.sleep(delays[attempt])

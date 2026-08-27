@@ -159,6 +159,28 @@ def test_every_subagent_carries_the_delegation_guard(name, context):
     assert any(type(m).__name__ == "DelegationGuardMiddleware" for m in middleware)
 
 
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_carries_the_model_retry(name, context):
+    # OPEN-41. `_stream_with_retry` protects one model call per invocation
+    # -- the first -- and a subagent makes dozens. Every spec, because a
+    # provider degrades for all of them at once.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    assert any(type(m).__name__ == "ModelRetryMiddleware" for m in middleware)
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_the_model_retry_sits_outside_the_usage_accounting(name, context):
+    # Each ATTEMPT is one recorded call and the backoff sleep is nobody's.
+    # Inside the accounting, a twice-retried call reads as one 40-second
+    # call that was mostly asyncio.sleep -- the number OPEN-40 is about.
+    import dataclasses
+
+    counted = dataclasses.replace(context, usage=object())
+    middleware = _middleware_for(REGISTRY[name], counted, _model_for(REGISTRY[name], counted.cfg))
+    names = [type(m).__name__ for m in middleware]
+    assert names.index("ModelRetryMiddleware") < names.index("UsageMiddleware")
+
+
 def test_no_shipped_subagent_may_delegate(context):
     """The coder writes one file for one task; the tester writes and runs
     tests; the reviewer reads a diff; and general-purpose IS the delegate --

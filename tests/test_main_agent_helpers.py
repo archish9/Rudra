@@ -140,3 +140,58 @@ def test_maybe_auto_branch_never_raises_when_git_explodes(tmp_path: Path, monkey
         gate=None,
         console=Console(),
     )
+
+
+# --- OPEN-41: what a provider failure tells the user about resuming ---------
+
+
+def _ledger_with(*statuses):
+    from rudra.loop.ledger import Ledger, TaskStatus
+
+    ledger = Ledger()
+    for index, status in enumerate(statuses):
+        task = ledger.add(f"task {index}")
+        task.status = TaskStatus(status) if isinstance(status, str) else status
+    return ledger
+
+
+def _error():
+    from rudra.llm.retry import ProviderUnavailable
+
+    class _Status(Exception):
+        status_code = 500
+
+    return ProviderUnavailable("the model provider", 3, _Status())
+
+
+def test_a_provider_failure_offers_continue_when_tasks_remain():
+    """Only when it is TRUE. `Ledger.resumable()` is PENDING-only
+    (ledger.py:91-100), so a ledger of DONE and BLOCKED tasks resumes to
+    nothing and pointing the user at `--continue` would waste a run."""
+    from rudra.agent.main_agent import _provider_failure_message
+
+    text = _provider_failure_message(_error(), _ledger_with("pending", "done"))
+
+    assert "rudra --continue" in text
+    assert "1 task" in text
+
+
+def test_a_provider_failure_offers_nothing_when_the_ledger_is_empty():
+    """The measured case: all three of 2026-08-27's dead runs died in a
+    planner stage, before `breakdown` had added a single task. `plan()`
+    saves an empty ledger at engine.py:873, so the file exists and resumes
+    to nothing."""
+    from rudra.agent.main_agent import _provider_failure_message
+
+    text = _provider_failure_message(_error(), _ledger_with())
+
+    assert "--continue" not in text
+    assert "Provider error" in text
+
+
+def test_a_provider_failure_offers_nothing_when_every_task_is_finished():
+    from rudra.agent.main_agent import _provider_failure_message
+
+    text = _provider_failure_message(_error(), _ledger_with("done", "blocked"))
+
+    assert "--continue" not in text

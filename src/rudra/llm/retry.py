@@ -83,6 +83,13 @@ def retry_delays(attempts: int = 3, *, base: float = 1.0) -> list[float]:
     return [base * (2**index) * random.uniform(0.5, 1.0) for index in range(attempts)]
 
 
+# What the default message says about the run's output. True of the case
+# this class was built for -- a failure at or before the first chunk, which
+# is where every 2026-08-17 failure struck -- and false of the mid-stream
+# case OPEN-41 added, where the run is further along and files may exist.
+_WROTE_NOTHING = "Nothing was written."
+
+
 class ProviderUnavailable(RuntimeError):
     """A transient provider failure that outlived its retries.
 
@@ -90,21 +97,36 @@ class ProviderUnavailable(RuntimeError):
     how many attempts, and what the far end actually said. The original
     exception stays available as `__cause__` for anyone debugging Rudra
     itself, but it does not reach the terminal.
+
+    `progress` replaces the "Nothing was written." clause. It exists
+    because OPEN-41 made this class reachable from a SECOND place -- a
+    failure after the stream has already yielded -- where that sentence is
+    simply false: the run had begun, and on a later task there are files on
+    disk. A parameter rather than a sibling class, so the two paths cannot
+    drift apart in wording, in status formatting, or in what they attach.
     """
 
-    def __init__(self, provider: str, attempts: int, error: BaseException) -> None:
+    def __init__(
+        self,
+        provider: str,
+        attempts: int,
+        error: BaseException,
+        *,
+        progress: str | None = None,
+    ) -> None:
         status = _status_of(error)
         detail = f"{type(error).__name__}"
         if status is not None:
             detail += f" ({status})"
         super().__init__(
             f"Provider error from {provider} after {attempts} attempt(s): {detail}. "
-            f"The model endpoint could not serve the request. Nothing was written. "
+            f"The model endpoint could not serve the request. {progress or _WROTE_NOTHING} "
             f"If this persists, check your quota and the endpoint's status."
         )
         self.provider = provider
         self.attempts = attempts
         self.error = error
+        self.progress = progress
 
 
 __all__ = ["ProviderUnavailable", "is_transient", "retry_delays"]
