@@ -309,3 +309,56 @@ async def test_an_ordinary_run_is_nowhere_near_the_ceiling(monkeypatch, patched)
     result = await run_subagent("coder", "write it", context=patched)
 
     assert result.ok is True
+
+
+# --- OPEN-42: how a turn actually ends, and what a repeat looks like ------
+
+
+async def test_a_text_only_reply_ends_the_turn_and_is_what_the_caller_gets(monkeypatch, patched):
+    """The finding `_FINISH_RULES` is built on, pinned so an upgrade cannot
+    quietly take it away.
+
+    Run7's coder invented `task_complete` because nothing told it a
+    text-only reply is the stop verb. It already is: langgraph's ReAct loop
+    ends on an AIMessage with no tool calls, and `run_subagent` reports that
+    message as `text` with `ok=True`. deepagents ships no completion tool --
+    `grep -rl task_complete` over the installed package returns nothing.
+    """
+    messages = [
+        ai("", [call("write_file", file_path="src/app.py")]),
+        ToolMessage(content="Updated file src/app.py", tool_call_id="1"),
+        ai("Wrote src/app.py with the CRUD endpoints."),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert result.ok is True
+    assert result.halted_reason is None
+    assert result.text == "Wrote src/app.py with the CRUD endpoints."
+
+
+async def test_repeats_separated_by_other_calls_still_halt(monkeypatch, patched):
+    """Run7's actual shape, which the existing back-to-back test does not
+    cover: `/task_complete.txt`, `/DONE`, `/DONE`, `/task_complete.txt`,
+    `/DONE`.
+
+    `repeated` is keyed per (tool, target) and never reset, so the third
+    `/DONE` halts even with two unrelated writes in between. This is why
+    OPEN-42 §6's premise is wrong -- the guard DID fire in run7, on the
+    third marker write, which is why that write has no `tool_result` in the
+    debug log. It was invisible for a different reason (see OPEN-44).
+    """
+    writes = [
+        ai("", [call("write_file", file_path="/task_complete.txt")]),
+        ai("", [call("write_file", file_path="/DONE")]),
+        ai("", [call("write_file", file_path="/DONE")]),
+        ai("", [call("write_file", file_path="/task_complete.txt")]),
+        ai("", [call("write_file", file_path="/DONE")]),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": writes}))
+
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert result.ok is False
+    assert "/DONE" in (result.halted_reason or "")

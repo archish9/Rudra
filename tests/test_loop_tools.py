@@ -150,3 +150,152 @@ def test_read_ledger_shows_every_task_and_its_status(tmp_path):
 def test_read_ledger_says_so_when_empty(tmp_path):
     tools, _, _ = tools_for(tmp_path)
     assert "no tasks" in tools["read_ledger"].invoke({}).lower()
+
+
+# --- OPEN-43: add_tasks refuses a description the ledger already holds ------
+#
+# Run7 emitted t3, t4 and t5 with byte-identical descriptions. t3 did the
+# work in 51.0s; t4 (72.7s) and t5 (147.7s) each came back "the coder wrote
+# nothing, and nothing needed writing" -- 220s of the run's 1300s spent
+# re-doing a finished task twice. Everything downstream behaved correctly
+# (OPEN-13's empty-diff guard, OPEN-27's benign spelling, OPEN-23's
+# regression check, D9). The defect is a task that should never have been
+# created, so the refusal belongs at the point of creation.
+#
+# D9 is untouched: refusing to CREATE work is not deciding work is
+# FINISHED. add_tasks already refuses an empty description today.
+
+DUPLICATE = "Fix JSON validation so invalid bodies return 400, not 500"
+
+
+def test_an_identical_description_is_rejected(tmp_path):
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+    ledger.get("t1").status = TaskStatus.DONE
+
+    result = tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    assert "REJECTED" in result
+    assert len(ledger.tasks) == 1, "the duplicate must not reach the ledger"
+
+
+def test_the_rejection_names_the_task_and_a_move_that_works(tmp_path):
+    """OPEN-24's rule, applied to a second refusal.
+
+    A model told only "no" re-issues the identical call -- a planner did
+    exactly that three times. The refusal has to name the task it collides
+    with, the status that task is in, and an action that will succeed.
+    """
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+    ledger.get("t1").status = TaskStatus.DONE
+
+    refusal = tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    assert "REJECTED" in refusal
+    assert "t1" in refusal, "name the task it duplicates"
+    assert "done" in refusal, "name the status that task is in"
+    assert "identical" in refusal, "say the same call will fail the same way"
+    assert "different" in refusal, "name the move that works"
+
+
+def test_whitespace_and_case_do_not_defeat_the_check(tmp_path):
+    # Normalisation is whitespace-collapse plus casefold and nothing more.
+    # Deliberately NOT fuzzy: a false positive here silently deletes real
+    # work, which is strictly worse than the 220s this item is about.
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": ["Fix   JSON validation"]})
+
+    result = tools["add_tasks"].invoke({"descriptions": ["  fix json    VALIDATION "]})
+
+    assert "REJECTED" in result
+    assert len(ledger.tasks) == 1
+
+
+def test_a_duplicate_of_a_pending_task_is_rejected(tmp_path):
+    # Not just `done`: a duplicate of pending work gets worked twice.
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    result = tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    assert "REJECTED" in result
+    assert len(ledger.tasks) == 1
+
+
+def test_a_duplicate_of_a_blocked_task_is_rejected(tmp_path):
+    # The worst case. MAX_BLOCKED_CONSULTS is the only thing that ends a run
+    # where the planner keeps re-emitting work that cannot succeed, and run1
+    # and run2 both died there.
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+    ledger.get("t1").status = TaskStatus.BLOCKED
+
+    result = tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    assert "REJECTED" in result
+    assert "blocked" in result
+    assert len(ledger.tasks) == 1
+
+
+def test_a_duplicate_of_a_dropped_task_is_rejected(tmp_path):
+    # The one arguable exception -- the planner retracted it deliberately.
+    # Treated the same for now; narrowing it needs evidence from a real run.
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+    tools["drop_task"].invoke({"task_id": "t1", "reason": "not needed"})
+
+    result = tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    assert "REJECTED" in result
+    assert len(ledger.tasks) == 1
+
+
+def test_new_tasks_in_a_mixed_batch_are_still_added(tmp_path):
+    # Rejecting the whole batch would lose real work over one bad entry,
+    # and the planner has no way to retry only the good part.
+    tools, ledger, path = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    result = tools["add_tasks"].invoke(
+        {"descriptions": ["write the parser", DUPLICATE, "write its tests"]}
+    )
+
+    assert [task.description for task in ledger.tasks] == [
+        DUPLICATE,
+        "write the parser",
+        "write its tests",
+    ]
+    assert "REJECTED" in result
+    assert "t2" in result and "t3" in result, "report what was added"
+    assert Ledger.load(path).tasks == ledger.tasks
+
+
+def test_duplicates_within_one_call_are_collapsed(tmp_path):
+    tools, ledger, _ = tools_for(tmp_path)
+
+    result = tools["add_tasks"].invoke({"descriptions": ["x", "x"]})
+
+    assert len(ledger.tasks) == 1
+    assert "REJECTED" in result
+
+
+def test_a_genuinely_different_task_is_accepted(tmp_path):
+    # Guards against over-matching. Same subject, different work.
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": ["Fix JSON validation in create_todo"]})
+
+    result = tools["add_tasks"].invoke({"descriptions": ["Fix JSON validation in update_todo"]})
+
+    assert "REJECTED" not in result
+    assert len(ledger.tasks) == 2
+
+
+def test_the_success_message_is_unchanged_when_nothing_is_rejected(tmp_path):
+    # No churn for the common path: a fully-successful call must read
+    # exactly as it did before this check existed.
+    tools, _, _ = tools_for(tmp_path)
+
+    result = tools["add_tasks"].invoke({"descriptions": ["a", "b"]})
+
+    assert result == "Added 2 task(s): t1 (a), t2 (b)"

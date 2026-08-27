@@ -150,3 +150,61 @@ def test_the_coder_is_told_it_cannot_run_commands():
 
     assert "YOU CANNOT RUN COMMANDS" in prompt
     assert "no shell tool" in prompt
+
+
+# --- OPEN-42: the writers are told how to end a turn ----------------------
+
+
+def test_only_a_writer_gets_the_completion_contract():
+    """Parity in both directions, the shape OPEN-36's test established.
+
+    A writer is the only agent that can turn "I am finished" into a file in
+    the user's project, which is what run7 measured: eleven marker writes
+    across three coder invocations (OPEN-42). The reviewer and
+    general-purpose cannot write at all, so they pay nothing for a contract
+    that could only rule out a move they cannot make.
+    """
+    from rudra.subagents.registry import _FINISH_RULES, REGISTRY
+
+    for name, spec in REGISTRY.items():
+        assert (_FINISH_RULES in spec.system_prompt) == spec.can_write, name
+
+
+def test_the_completion_contract_states_the_signal():
+    """The positive half, and it is the point of the item.
+
+    Run7's coder had no stop verb at all -- nothing in its prompt said how a
+    turn ends -- so it reached for `task_complete` from its training prior,
+    and when that errored it used the one tool it had. Telling it the signal
+    fills a gap; it does not argue with a competing instruction, which is
+    why this is not the OPEN-17 shape.
+    """
+    from rudra.subagents.registry import _FINISH_RULES
+
+    assert "call no tool" in _FINISH_RULES.lower()
+
+
+def test_the_completion_contract_names_no_marker_filename():
+    """The negative half is a CATEGORY, never a list of filenames.
+
+    A rule about `DONE` would not have covered `task_complete.txt`, and
+    neither would cover `COMPLETE.md` next run -- the model invents the name.
+    Rejected explicitly in OPEN-42 §10.
+    """
+    from rudra.subagents.registry import _FINISH_RULES
+
+    assert "never write a file" in _FINISH_RULES.lower()
+    for enumerated in ("DONE", ".txt", ".md"):
+        assert enumerated not in _FINISH_RULES, enumerated
+
+
+@pytest.mark.parametrize("name", ["coder", "tester"])
+def test_a_writer_has_exactly_one_section_about_stopping(name):
+    """A second stop section is the OPEN-17 shape: a prompt outranking a
+    prompt. The vague `## STOP CONDITION` that said "Stop when the task is
+    complete" without saying HOW is what `_FINISH_RULES` replaces, not
+    something it sits beside."""
+    prompt = REGISTRY[name].system_prompt
+
+    assert "## STOP CONDITION" not in prompt
+    assert prompt.count("## HOW TO FINISH") == 1

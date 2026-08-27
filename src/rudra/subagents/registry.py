@@ -76,6 +76,45 @@ _COMMAND_RULES = """
 """
 
 
+# What ends a turn, for every subagent that can write a file.
+#
+# Run7 (`bf6be7525991`) measured the gap: the coder's prompt said "STOP" and
+# never said HOW, and no prompt in Rudra mentioned completion at all. Given
+# no stop verb the model produced one from its training prior -- it called
+# `task_complete`, which deepagents does not ship -- and when that errored it
+# reached for the only tool it had, writing `/DONE` and `/task_complete.txt`
+# **eleven times across three invocations**. Both files ship to the user as
+# though they were source (OPEN-42).
+#
+# It already had a stop verb: langgraph's ReAct loop ends on an AIMessage
+# with no tool calls, and `run_subagent` returns that message as the result
+# (runner.py:290). Nothing told it so. This is a GAP being filled, not an
+# instruction being argued with -- which is what makes it unlike OPEN-17 and
+# OPEN-36, where prompt text lost to prompt text.
+#
+# The prohibition is a category and never a filename. A rule about the two
+# names run7 happened to invent would not cover the third.
+#
+# Writers only. The reviewer and general-purpose have no write tool, so the
+# failure this rules out is one they cannot make (U.17).
+_FINISH_RULES = """
+## HOW TO FINISH
+**Reply with text and call no tool.** That is what ends your turn -- it is
+the only completion signal there is, it always works, and that reply is the
+only thing the caller ever sees. Make it one or two lines saying what you
+did.
+
+There is no `task_complete` tool, and no tool of that kind. A name that is
+not in your tool list comes back as an error every time, however sensible
+the name looks.
+
+**Never write a file to announce that you have finished.** A file ends
+nothing. It stays in the user's project as though they had asked for it,
+and you are still not finished. The only files you write are the ones the
+task asked for.
+"""
+
+
 def _rules_for(fs_tools: tuple[str, ...]) -> str:
     """The rules block for a writer, assembled from the tools it is granted.
 
@@ -123,8 +162,8 @@ wrote, type checks it, runs the tests, and scans for placeholders. If it
 fails you will be asked again with the exact errors, so a stub only costs
 a round trip.
 
-## STOP CONDITION
-Stop when the task is complete. Do not start work the task did not ask for.
+{finish_rules}
+Do not start work the task did not ask for.
 """
 
 _TESTER_PROMPT = """You are a test engineer for Rudra.
@@ -169,9 +208,8 @@ exactly what happened.
 Only your final message reaches the caller. It must contain the verdict and
 the failure output, not a summary of your intentions.
 
-## STOP CONDITION
-Stop once you have reported the result. Do not iterate on a fix -- that is
-someone else's job.
+{finish_rules}
+Do not iterate on a fix -- that is someone else's job.
 """
 
 _REVIEWER_PROMPT = """You are a code reviewer for Rudra.
@@ -236,7 +274,9 @@ Stop once you have answered.
 CODER = RudraSubagent(
     name="coder",
     description="Writes one complete source file from a specification. No shell access.",
-    system_prompt=_CODER_PROMPT.format(path_rules=_rules_for(_WRITER_FS)),
+    system_prompt=_CODER_PROMPT.format(
+        path_rules=_rules_for(_WRITER_FS), finish_rules=_FINISH_RULES
+    ),
     role="coder",
     fs_tools=_WRITER_FS,
     # Chooses *how* to write the code: TDD and systematic-debugging are
@@ -256,7 +296,9 @@ CODER = RudraSubagent(
 TESTER = RudraSubagent(
     name="tester",
     description="Writes tests for existing code, runs the suite, and reports what failed.",
-    system_prompt=_TESTER_PROMPT.format(path_rules=_rules_for(_TESTER_FS)),
+    system_prompt=_TESTER_PROMPT.format(
+        path_rules=_rules_for(_TESTER_FS), finish_rules=_FINISH_RULES
+    ),
     role="tester",
     fs_tools=_TESTER_FS,
     rudra_tools=("run_tests", "remember", "search_memory"),

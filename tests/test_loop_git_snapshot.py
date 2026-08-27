@@ -214,3 +214,37 @@ def test_a_committed_change_is_no_longer_pending(context: FakeContext):
     git(context.project_path, "commit", "-q", "-m", "add new")
 
     assert "new.py" not in (git_snapshot(context) or frozenset())
+
+
+# --- OPEN-42: a marker file is work in a repo and invisible outside one ---
+
+
+def test_a_marker_file_registers_as_work_in_a_git_project(context: FakeContext):
+    """The hazard OPEN-42 is filed against, which run7 could not show.
+
+    `git_snapshot` passes `all_untracked=True` and fingerprints contents, so
+    it sees a suffixless `DONE` like any other file. A task whose coder wrote
+    nothing but its own completion announcement therefore reports
+    `files_touched`, and the empty-diff guard (OPEN-13) never runs.
+    """
+    before = git_snapshot(context)
+    (context.project_path / "DONE").write_text("The task is complete.\n", encoding="utf-8")
+    (context.project_path / "task_complete.txt").write_text("Task t5 done.\n", encoding="utf-8")
+
+    assert changed_since(context, before) == ("DONE", "task_complete.txt")
+
+
+def test_a_marker_file_is_invisible_without_git(no_repo: FakeContext):
+    """Run7's own case, recorded so the asymmetry is documented rather than
+    surprising.
+
+    `tree_snapshot` walks `source_files`, which filters on `_SCANNED_SUFFIXES`
+    (verify/stubs.py:30-33). `DONE` has no suffix and `.txt` is not in the
+    set, so both markers are invisible -- which is why run7's t4 and t5
+    correctly show `files_touched: []` despite three marker writes each.
+    """
+    before = attempt_snapshot(no_repo)
+    (no_repo.project_path / "DONE").write_text("The task is complete.\n", encoding="utf-8")
+    (no_repo.project_path / "task_complete.txt").write_text("Task t5 done.\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ()

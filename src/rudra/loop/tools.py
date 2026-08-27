@@ -17,7 +17,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from rudra.loop.ledger import Ledger, TaskStatus
+from rudra.loop.ledger import Ledger, Task, TaskStatus
 
 # Statuses a task can no longer be dropped out of: the gate has already
 # ruled, and letting the model retract that would rewrite history.
@@ -29,6 +29,35 @@ def _render(ledger: Ledger) -> str:
         return "The ledger has no tasks yet."
     return "\n".join(
         f"{task.id}  [{task.status.value}]  {task.description}" for task in ledger.tasks
+    )
+
+
+def _normalised(text: str) -> str:
+    """The whole of the duplicate check: collapse whitespace, casefold.
+
+    Deliberately NOT fuzzy, and deliberately not stemmed. A near-duplicate
+    that is genuinely different work would be silently dropped, and the
+    failure mode of a false positive here is *work that never happens* --
+    strictly worse than the wasted turn a false negative costs. Run7's case
+    was byte-identical three times over, so exact-after-normalisation
+    catches it (OPEN-43).
+    """
+    return " ".join(text.split()).casefold()
+
+
+def _duplicate_refusal(text: str, clash: Task) -> str:
+    """Name the collision and a move that works, or this is OPEN-24 again.
+
+    A model told only "no" re-issues the identical call. The refusal names
+    the task, the status it is in, and the one action that will succeed.
+    """
+    quoted = text if len(text) <= 60 else f"{text[:57]}..."
+    return (
+        f'REJECTED: "{quoted}" duplicates {clash.id}, which is already '
+        f"{clash.status.value}. That task exists and will not be worked "
+        f"twice, so an identical add_tasks will be refused identically. If "
+        f"work is genuinely still outstanding, add a task with a different "
+        f"description saying what is still wrong."
     )
 
 
@@ -61,10 +90,35 @@ def create_ledger_tools(ledger: Ledger, path: Path) -> list:
         wanted = [text.strip() for text in descriptions if text and text.strip()]
         if not wanted:
             return "REJECTED: give at least one non-empty task description."
-        added = [ledger.add(text) for text in wanted]
+
+        # Every status, not only DONE. A duplicate of a PENDING task is
+        # worked twice; a duplicate of a BLOCKED one is the case that ends
+        # a run at MAX_BLOCKED_CONSULTS. DROPPED is the arguable exception
+        # -- treated the same until a real run shows it blocking (OPEN-43).
+        seen = {_normalised(task.description): task for task in ledger.tasks}
+        added: list[Task] = []
+        refused: list[str] = []
+        for text in wanted:
+            key = _normalised(text)
+            clash = seen.get(key)
+            if clash is not None:
+                refused.append(_duplicate_refusal(text, clash))
+                continue
+            task = ledger.add(text)
+            # Recorded before the next iteration, so two copies in ONE call
+            # collide with each other and not only with the ledger.
+            seen[key] = task
+            added.append(task)
+
+        if not added:
+            return "\n".join(refused)
+        # A batch carrying real work and one duplicate adds the work and
+        # reports the duplicate: rejecting the whole call would lose the
+        # rest, and the model has no way to retry only the good part.
         ledger.save(path)
         listed = ", ".join(f"{task.id} ({task.description})" for task in added)
-        return f"Added {len(added)} task(s): {listed}"
+        message = f"Added {len(added)} task(s): {listed}"
+        return "\n".join([message, *refused]) if refused else message
 
     @tool
     def drop_task(task_id: str, reason: str) -> str:
