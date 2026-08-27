@@ -592,7 +592,22 @@ def test_no_usage_object_means_no_usage_middleware(context):
 # --- OPEN-21: the two path universes ------------------------------------
 
 
-def test_every_writing_subagent_is_told_execute_does_not_share_the_root():
+def _specs_that_can_run_commands() -> list[str]:
+    """The specs whose prompts must carry the command contract.
+
+    Derived, never listed. The hand-written pair these tests used to loop
+    over named the coder, which has never held `execute` -- OPEN-36, where
+    twenty lines of shell instructions produced 15 dead `execute` calls in
+    one run.
+    """
+    from rudra.subagents.registry import REGISTRY
+
+    names = [name for name, spec in REGISTRY.items() if "execute" in spec.fs_tools]
+    assert names, "vacuous if no shipped spec can run anything"
+    return names
+
+
+def test_every_subagent_that_can_run_commands_is_told_execute_does_not_share_the_root():
     """OPEN-21. The file tools are project-rooted; `execute` is a real shell
     whose "/" is the machine. Nothing said so, and the tester found out the
     hard way: `write_file('/tests')` landed in the project, `rm /tests`
@@ -606,7 +621,7 @@ def test_every_writing_subagent_is_told_execute_does_not_share_the_root():
     """
     from rudra.subagents.registry import REGISTRY
 
-    for name in ("coder", "tester"):
+    for name in _specs_that_can_run_commands():
         prompt = REGISTRY[name].system_prompt
         assert "do NOT agree about what" in prompt, name
         assert "MACHINE" in prompt, name
@@ -624,7 +639,7 @@ def test_every_writing_subagent_is_told_directories_are_implicit():
         assert "no mkdir tool" in prompt, name
 
 
-def test_every_writing_subagent_is_told_where_commands_run():
+def test_every_subagent_that_can_run_commands_is_told_where_they_run():
     """OPEN-25's positive half. Nothing in Rudra said where `execute` runs --
     only what "/" meant to it -- so a model carrying a container-shaped prior
     from training had nothing to correct it, and emitted `cd /app && ...`.
@@ -632,7 +647,7 @@ def test_every_writing_subagent_is_told_where_commands_run():
     middleware/execute_guard.py; this is the fact that replaces it."""
     from rudra.subagents.registry import REGISTRY
 
-    for name in ("coder", "tester"):
+    for name in _specs_that_can_run_commands():
         prompt = REGISTRY[name].system_prompt
         assert "WHERE COMMANDS RUN" in prompt, name
         assert "ALREADY runs in this project's root directory" in prompt, name

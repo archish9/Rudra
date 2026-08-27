@@ -30,9 +30,9 @@ two model calls each.
 
 **Replaced, not argued with.** OPEN-17 measured three separate attempts to
 overrule an injected prompt with prompt text, all of which lost: *a prompt
-cannot outrank a prompt*. `_PATH_RULES` still states the fact -- the shell
-is already in the project root -- but the contradicting text is removed from
-the schema rather than contested in the system prompt.
+cannot outrank a prompt*. `_COMMAND_RULES` still states the fact -- the
+shell is already in the project root -- but the contradicting text is removed
+from the schema rather than contested in the system prompt.
 
 **And the warning is keyed on the `cd`, never on the path.** D4 gated
 sandbox-prefix stripping because `/src/` and `/tmp/` are hallucinated

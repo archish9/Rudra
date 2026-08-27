@@ -15,6 +15,7 @@ from rudra.subagents.spec import RudraSubagent
 
 _READ_ONLY_FS: tuple[str, ...] = ("ls", "read_file", "glob", "grep")
 _WRITER_FS: tuple[str, ...] = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
+_TESTER_FS: tuple[str, ...] = (*_WRITER_FS, "execute")
 
 # The path contract, shared by every subagent that can write.
 #
@@ -22,14 +23,36 @@ _WRITER_FS: tuple[str, ...] = ("ls", "read_file", "write_file", "edit_file", "gl
 # out of the project was the TESTER, which had no path rules whatsoever
 # (OPEN-21/OPEN-22). One copy, interpolated into both, so they cannot drift.
 #
+# The shell half moved to _COMMAND_RULES on 2026-08-27 (OPEN-36). What is
+# left here is true for a writer whether or not it can run anything.
+_PATH_RULES = """## FILE PATH RULES
+- Use RELATIVE paths only: "src/main.rs", "package.json"
+- NEVER use absolute paths or paths starting with "/" or a drive letter
+- **Directories are created implicitly.** Writing "tests/test_models.py"
+  creates "tests/" on the way. There is no mkdir tool and you do not need
+  one. NEVER write a placeholder file in order to bring a directory into
+  being -- that gives you a FILE with that name, and every later write
+  into it fails.
+"""
+
+# The command contract: the half of the old _PATH_RULES that means anything
+# only to an agent holding a shell.
+#
+# It was interpolated into every writer until 2026-08-27, and the CODER does
+# not have `execute` (OPEN-36) -- twenty lines of operating instructions for
+# a tool it cannot call, against one sentence saying it might not have it.
+# Run6 measured the result: 15 `execute` calls from the coder, every one an
+# `is not a valid tool` error, and three consecutive ones would have tripped
+# MAX_CONSECUTIVE_FAILURES (runner.py:32). `_rules_for` assembles this from
+# the spec's own fs_tools, so the prompt and the tool list cannot disagree.
+#
 # WHERE COMMANDS RUN is the positive half of OPEN-25: no prompt in Rudra
 # said where `execute` runs, only what "/" meant to it, so a model with a
 # container-shaped prior had nothing to correct it. This states the fact;
 # middleware/execute_guard.py removes the upstream tool description that
 # was asserting the opposite.
-_PATH_RULES = """## FILE PATH RULES
-- Use RELATIVE paths only: "src/main.rs", "package.json"
-- NEVER use absolute paths or paths starting with "/" or a drive letter
+_COMMAND_RULES = """
+## WHERE COMMANDS RUN
 - **The file tools and `execute` do NOT agree about what "/" means.** To
   read_file, write_file, edit_file, ls, glob and grep, "/x" is this
   project's "x". To `execute`, "/x" is the MACHINE's "/x" -- a real shell,
@@ -40,13 +63,6 @@ _PATH_RULES = """## FILE PATH RULES
   meant as project-relative. `rm /tests` does not delete this project's
   tests; it looks for a directory at the root of the machine, and what
   happens next is not something this project can undo for you.
-- **Directories are created implicitly.** Writing "tests/test_models.py"
-  creates "tests/" on the way. There is no mkdir tool and you do not need
-  one. NEVER write a placeholder file in order to bring a directory into
-  being -- that gives you a FILE with that name, and every later write
-  into it fails.
-
-## WHERE COMMANDS RUN
 - `execute` ALREADY runs in this project's root directory. You are there
   before the command starts.
 - So NEVER `cd` before a command. Not once, not "to be safe". There is
@@ -60,6 +76,19 @@ _PATH_RULES = """## FILE PATH RULES
 """
 
 
+def _rules_for(fs_tools: tuple[str, ...]) -> str:
+    """The rules block for a writer, assembled from the tools it is granted.
+
+    Every writer gets the path contract. Only a spec whose `fs_tools`
+    carries `execute` gets the command contract. Passing one named tuple
+    both here and to `fs_tools=` is what keeps the two in step; the parity
+    test in tests/test_subagents_registry.py is what keeps it closed.
+    """
+    if "execute" in fs_tools:
+        return _PATH_RULES + _COMMAND_RULES
+    return _PATH_RULES
+
+
 _CODER_PROMPT = """You are an expert code generator for Rudra.
 
 Your job: complete the ONE TASK you are given, writing every file it needs.
@@ -69,11 +98,11 @@ Your job: complete the ONE TASK you are given, writing every file it needs.
 2. Write every file the task requires: write_file(file_path=..., content=...)
 3. STOP
 
-## RUNNING COMMANDS
-The tool is `execute`. There is no `bash`, `shell`, `sh`, or `run` tool, and
-calling one wastes a turn on an error. If `execute` is not in your tool list
-at all, you cannot run commands in this run -- say so and finish the writing
-work instead of looking for another way.
+## YOU CANNOT RUN COMMANDS
+You have no shell tool. You read files and you write files; that is the
+whole toolset. Do not go looking for another way to run something -- there
+is not one, and searching the filesystem for an interpreter is a slow way
+of finding that out.
 
 **Do NOT try to run the tests, and do not hand that job to anyone else.** A
 verification gate runs them for you the moment you stop, and reports the
@@ -207,7 +236,7 @@ Stop once you have answered.
 CODER = RudraSubagent(
     name="coder",
     description="Writes one complete source file from a specification. No shell access.",
-    system_prompt=_CODER_PROMPT.format(path_rules=_PATH_RULES),
+    system_prompt=_CODER_PROMPT.format(path_rules=_rules_for(_WRITER_FS)),
     role="coder",
     fs_tools=_WRITER_FS,
     # Chooses *how* to write the code: TDD and systematic-debugging are
@@ -227,9 +256,9 @@ CODER = RudraSubagent(
 TESTER = RudraSubagent(
     name="tester",
     description="Writes tests for existing code, runs the suite, and reports what failed.",
-    system_prompt=_TESTER_PROMPT.format(path_rules=_PATH_RULES),
+    system_prompt=_TESTER_PROMPT.format(path_rules=_rules_for(_TESTER_FS)),
     role="tester",
-    fs_tools=(*_WRITER_FS, "execute"),
+    fs_tools=_TESTER_FS,
     rudra_tools=("run_tests", "remember", "search_memory"),
     wants_skills=True,
     wants_compaction=True,

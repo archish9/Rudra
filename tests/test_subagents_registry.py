@@ -82,10 +82,17 @@ def test_no_spec_can_carry_middleware(name):
 def test_the_agents_that_can_run_commands_name_the_real_tool():
     """A1.92: three separate runs saw a subagent call a `bash` tool that
     does not exist, once escalating to 204 filesystem globs hunting for an
-    interpreter. The tool is `execute`, and nothing said so."""
+    interpreter. The tool is `execute`, and nothing said so.
+
+    Derived from the specs rather than listed by hand, because the hand-written
+    list drifted once already: it named the coder, which has never had
+    `execute` at all (OPEN-36).
+    """
     from rudra.subagents.registry import REGISTRY
 
-    for name in ("coder", "tester"):
+    with_shell = [name for name, spec in REGISTRY.items() if "execute" in spec.fs_tools]
+    assert with_shell, "vacuous if no shipped spec can run anything"
+    for name in with_shell:
         prompt = REGISTRY[name].system_prompt
         assert "execute" in prompt
         assert "bash" in prompt, "the wrong name has to be named to be ruled out"
@@ -98,3 +105,48 @@ def test_the_read_only_agent_is_told_what_to_do_when_asked_to_run_something():
 
     assert "cannot" in prompt.lower()
     assert "glob" in prompt, "the specific wrong move is worth naming"
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_a_prompt_names_execute_only_if_its_spec_grants_it(name):
+    """OPEN-36. The coder's prompt opened with `## RUNNING COMMANDS` and
+    carried `## WHERE COMMANDS RUN`, twenty lines of operating instructions
+    for a tool `fs_tools` does not grant -- and run6 measured 15 `execute`
+    calls from the coder, every one of them `execute is not a valid tool`.
+    Three in a row trips MAX_CONSECUTIVE_FAILURES (runner.py:32).
+
+    One sentence saying "you may not have it" lost to twenty explaining how
+    to use it, which is OPEN-17's lesson again: a prompt cannot outrank a
+    prompt. So the parity is exact in BOTH directions -- an agent that has
+    the tool must be told the tool's name (A1.92), and one that does not
+    must never see the word.
+    """
+    spec = REGISTRY[name]
+    mentions = "execute" in spec.system_prompt
+    grants = "execute" in spec.fs_tools
+    assert mentions == grants, (
+        f"{name}: prompt mentions execute={mentions}, spec grants it={grants}"
+    )
+
+
+def test_only_a_spec_with_execute_gets_the_command_contract():
+    """The other half of the same split. `_PATH_RULES` is the contract for
+    every writer; `_COMMAND_RULES` is the half that only means anything to
+    an agent holding a shell, so it is assembled from the spec rather than
+    interpolated unconditionally."""
+    from rudra.subagents.registry import _COMMAND_RULES, REGISTRY
+
+    assert _COMMAND_RULES in REGISTRY["tester"].system_prompt
+    for name in ("coder", "reviewer", "general-purpose"):
+        assert _COMMAND_RULES not in REGISTRY[name].system_prompt, name
+
+
+def test_the_coder_is_told_it_cannot_run_commands():
+    """Removing the instructions is not enough on its own -- A1.92 watched
+    agents with no shell hunt the filesystem for an interpreter. The
+    reviewer and general-purpose prompts already answer this by stating the
+    absence and naming no tool; the coder now does too."""
+    prompt = REGISTRY["coder"].system_prompt
+
+    assert "YOU CANNOT RUN COMMANDS" in prompt
+    assert "no shell tool" in prompt
