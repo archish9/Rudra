@@ -397,10 +397,15 @@ def _run_command_stage(
         return StageResult(
             name=name, outcome=PASSED, blocking=blocking, command=result.argv, stack=stack
         )
+    # The one branch `advisory` governs: the tool ran, and this is its
+    # verdict on the code. Every branch above it -- denied, timed out,
+    # would not start -- keeps `blocking`, because those say the stage did
+    # not happen, which is a different claim from an unreliable answer
+    # (OPEN-38).
     return StageResult(
         name=name,
         outcome=FAILED,
-        blocking=blocking,
+        blocking=blocking and not resolution.advisory,
         command=result.argv,
         stack=stack,
         findings=_parse_findings(combined),
@@ -558,7 +563,13 @@ def typecheck_stage(
     cfg: Any,
     _override: list[str] | None = None,
 ) -> StageResult:
-    """Blocking. A type error is a genuine defect (spec S9a.2)."""
+    """Blocking. A type error is a genuine defect (spec S9a.2).
+
+    With one exception, and it is the resolution's to declare: Rudra's
+    bundled mypy answers from Rudra's own site-packages, so its verdict is
+    not reproducible and is advisory (OPEN-38). A project that installed
+    mypy itself keeps the blocking verdict.
+    """
     if profile is None:
         return StageResult(
             name="typecheck", outcome=NOT_APPLICABLE, blocking=True, detail="no stack detected"

@@ -57,9 +57,19 @@ class CommandResolution:
     will (`not_applicable`), while a TypeScript project without tsc
     installed has one that is absent (`missing_tool`, which blocks and
     escalates). One status cannot carry both.
+
+    `advisory` says the verdict this command returns is not reproducible on
+    another machine, so a failure must be reported and must not fail a task
+    (OPEN-38). It rides here rather than on the stage because only the
+    resolver knows WHICH tool it picked -- Rudra's bundled mypy, whose
+    answer depends on Rudra's own site-packages, or the project's own, whose
+    answer does not. It governs the exit-code verdict only: a denied or
+    unstartable command still blocks and escalates, because "no model can
+    fix this" is a different claim from "this verdict is unreliable".
     """
 
     argv: tuple[str, ...] | None
     status: str
     detail: str = ""
     tool: str = ""
+    advisory: bool = False

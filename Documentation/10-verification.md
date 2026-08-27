@@ -20,7 +20,7 @@ Exit codes: `0` passed · `1` a blocking stage failed · `2` something needs you
 |---|---|---|
 | syntax | yes | Does every changed file parse? |
 | lint | **no — advisory** | What does the linter say? Reported in full, never fails the task |
-| typecheck | yes | Do the types hold? |
+| typecheck | yes, *except* Rudra's bundled mypy — advisory | Do the types hold? |
 | test | yes | Does the project's own suite pass? |
 | stubs | yes | Are there placeholders in the files this run touched? |
 
@@ -83,6 +83,26 @@ Nothing to install. If your project has no `mypy` of its own, Rudra runs its
 bundled copy with `--ignore-missing-imports` — it cannot resolve your
 dependencies, so it checks your code rather than your imports, and the report
 says so.
+
+**That bundled verdict is advisory: it is reported in full and never fails a
+task.** The reason is that `--ignore-missing-imports` does not mean "resolve
+nothing" — it means "resolve what you can, ignore the rest", and what Rudra's
+mypy can resolve is whatever happens to sit in *Rudra's* environment. A machine
+where Rudra was installed beside Flask type-checks your Flask app against the
+real Flask; a clean install checks the identical file against `Any` and reaches
+a different verdict. Blocking on an answer that changes with someone else's
+install is not a gate.
+
+**Install `mypy` into your project's `.venv` and it blocks again.** That copy
+sees your real dependencies and reads your own `mypy.ini` or `[tool.mypy]`, so
+its answer is yours and it is reproducible:
+
+```bash
+python -m pip install mypy      # inside your project's .venv
+```
+
+Either way the findings are printed, and `rudra verify` still shows them under
+`typecheck`, tagged `(advisory)` when they came from the bundled copy.
 
 ### Rust {#rust}
 

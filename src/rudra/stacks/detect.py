@@ -507,11 +507,21 @@ def resolve_typecheck_command(project_path: Path, profile: StackProfile) -> Comm
         # Only on Rudra's own invocation. The venv branch above is the
         # project's mypy: it has adopted the tool, and its own config -- which
         # may set this very option -- must outrank Rudra's opinion.
+        # advisory because `--ignore-missing-imports` makes the verdict a
+        # function of RUDRA's site-packages, not the project's (OPEN-38).
+        # Measured 2026-08-27 on run6's `src/models.py`: with flask_sqlalchemy
+        # installed here mypy resolved it for real and reported 3 errors; on a
+        # clean Rudra install the same file reports 2. Same code, same mypy,
+        # two answers -- and this stage used to BLOCK on whichever one it got.
+        # The detail string below already said the dependencies are not
+        # resolved; the stage simply treated that verdict as authoritative
+        # anyway. It is reported in full, exactly as lint is (S9a.2).
         return CommandResolution(
             _bundled("mypy", "--ignore-missing-imports", "--explicit-package-bases", "."),
             OK,
             detail="Rudra's bundled mypy; project dependencies are not resolved",
             tool="mypy",
+            advisory=True,
         )
 
     if profile.name not in _NODE_FAMILY:

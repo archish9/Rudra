@@ -133,3 +133,23 @@ def test_node_declaring_eslint_without_installing_it_is_a_missing_tool(tmp_path)
     resolution = resolve_lint_command(tmp_path, NODE)
     assert resolution.status == "missing_tool"
     assert resolution.tool == "eslint"
+
+
+def test_bundled_mypy_resolution_is_marked_advisory(tmp_path):
+    """OPEN-38. The flag rides on the resolution rather than on the stage,
+    because only `resolve_typecheck_command` knows which mypy it picked."""
+    resolution = resolve_typecheck_command(tmp_path, PYTHON)
+    assert resolution.advisory is True
+
+
+def test_a_project_venv_mypy_resolution_is_authoritative(tmp_path):
+    make_venv_binary(tmp_path, "mypy")
+    resolution = resolve_typecheck_command(tmp_path, PYTHON)
+    assert resolution.advisory is False
+
+
+def test_every_other_resolution_is_authoritative(tmp_path):
+    """Nothing else acquires the flag by accident -- rust's cargo check and
+    a project's own tsc both keep blocking."""
+    assert resolve_typecheck_command(tmp_path, RUST).advisory is False
+    assert resolve_lint_command(tmp_path, PYTHON).advisory is False

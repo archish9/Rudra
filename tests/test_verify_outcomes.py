@@ -118,3 +118,63 @@ def test_lint_is_advisory_even_when_it_fails(tmp_path, monkeypatch):
     assert result.blocking is False
     assert result.halts is False
     assert result.findings, "advisory governs the verdict, not the visibility"
+
+
+def make_venv_mypy(tmp_path):
+    binaries = tmp_path / ".venv" / "bin"
+    binaries.mkdir(parents=True, exist_ok=True)
+    executable = binaries / "mypy"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    return executable
+
+
+def test_bundled_mypy_type_errors_are_advisory(tmp_path, monkeypatch):
+    """OPEN-38. `--ignore-missing-imports` makes the bundled verdict a
+    function of Rudra's OWN site-packages, so the same file gets opposite
+    answers on two machines. Measured 2026-08-27 on run6's `src/models.py`
+    at its second attempt (`Model = SQLAlchemy.Model`):
+
+        Rudra's venv has flask_sqlalchemy   3 errors
+        a clean Rudra install               2 errors
+
+    A verdict that cannot be reproduced must not fail a task. It is still
+    reported in full -- this is lint's disposition (S9a.2), not silence.
+    """
+    output = "src/models.py:6: error: Cannot access instance-only attribute\n"
+    monkeypatch.setattr(pipeline, "run_gated", fake_run(command_result(exit_code=1, stdout=output)))
+    result = pipeline.typecheck_stage(tmp_path, PYTHON, gate=object(), console=None, cfg=FakeCfg())
+    assert result.outcome == FAILED
+    assert result.blocking is False
+    assert result.halts is False
+    assert result.findings, "advisory governs the verdict, not the visibility"
+
+
+def test_a_project_venv_mypy_still_blocks(tmp_path, monkeypatch):
+    """The other half of OPEN-38. A project that installed mypy has adopted
+    it: the tool sees the project's real dependencies and reads the project's
+    own config, so its verdict is reproducible and keeps blocking."""
+    make_venv_mypy(tmp_path)
+    output = "src/models.py:6: error: Incompatible return value type\n"
+    monkeypatch.setattr(pipeline, "run_gated", fake_run(command_result(exit_code=1, stdout=output)))
+    result = pipeline.typecheck_stage(tmp_path, PYTHON, gate=object(), console=None, cfg=FakeCfg())
+    assert result.outcome == FAILED
+    assert result.blocking is True
+    assert result.halts is True
+
+
+def test_bundled_mypy_denial_still_escalates(tmp_path, monkeypatch):
+    """Advisory is about the VERDICT, not about the stage being unrunnable.
+    Under `--auto` without `--allow-shell` the command is denied, which no
+    model can fix, so it must still stop the run (CLAUDE.md §8)."""
+    monkeypatch.setattr(
+        pipeline,
+        "run_gated",
+        fake_run(
+            command_result(exit_code=None, denied=True, denial_reason="<auto:shell-not-opted-in>")
+        ),
+    )
+    result = pipeline.typecheck_stage(tmp_path, PYTHON, gate=object(), console=None, cfg=FakeCfg())
+    assert result.outcome == DENIED
+    assert result.blocking is True
+    assert result.halts is True
+    assert result.escalate is True
