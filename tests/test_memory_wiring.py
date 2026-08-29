@@ -153,6 +153,9 @@ def test_the_recall_query_is_the_task_not_the_subagent_name(monkeypatch, tmp_pat
         usage=None,
         mcp=None,
         skills_sources=None,
+        # Required on SubagentContext (runner.py:73), and read by the
+        # coder's PROJECT FILES block (OPEN-39).
+        project_path=tmp_path,
     )
 
     _prompt_for(REGISTRY["coder"], context, "add retry logic to the HTTP client")

@@ -39,6 +39,11 @@ def test_recording_accumulates_per_role():
         # otherwise rides invisibly inside input_tokens (spec 4.6).
         "recall_chars": 0,
         "recall_injections": 0,
+        # Added by OPEN-39: the project listing's cost, isolated for the
+        # reason the recall block's is -- it is a FIXED per-call prompt
+        # cost, and the trade it makes is model calls bought with tokens.
+        "tree_chars": 0,
+        "tree_injections": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -264,3 +269,36 @@ def test_the_usage_block_carries_no_currency():
     rendered = render_usage(usage)
     assert "$" not in rendered
     assert "cost" not in rendered.lower()
+
+
+def test_tree_cost_is_tracked_separately_from_the_calls_it_rides_in() -> None:
+    """OPEN-39. The project listing is a FIXED per-call cost -- it is
+    re-sent on every coder call whether or not the coder reads it -- and it
+    rides inside input_tokens like the recall block does. The trade it
+    makes is calls bought with tokens, and this is the number that says
+    which side won."""
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    usage.record_tree("coder", 1820)
+    assert usage.as_dict()["coder"]["tree_chars"] == 1820
+
+
+def test_tree_cost_accumulates_across_builds() -> None:
+    """The listing is rebuilt on every agent construction, never cached:
+    the coder writes the files it is shown."""
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    usage.record_tree("coder", 100)
+    usage.record_tree("coder", 200)
+    assert usage.as_dict()["coder"]["tree_chars"] == 300
+    assert usage.as_dict()["coder"]["tree_injections"] == 2
+
+
+def test_a_role_that_never_got_a_listing_reports_zero_not_none() -> None:
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    usage.record("reviewer", input_tokens=5, output_tokens=5)
+    assert usage.as_dict()["reviewer"]["tree_chars"] == 0

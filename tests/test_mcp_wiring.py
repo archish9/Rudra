@@ -100,6 +100,10 @@ def test_only_mcp_subagents_are_told_servers_exist(tmp_path):
     from rudra.subagents.registry import CODER, TESTER
 
     entry = ServerEntry(name="kalatest", transport="stdio", command=sys.executable, args=(FIXTURE,))
-    ctx = SimpleNamespace(cfg=build_config(tmp_path), facts=None, mcp=McpClient([entry]))
+    # project_path is a required SubagentContext field (runner.py:73); the
+    # coder's PROJECT FILES block reads it (OPEN-39).
+    ctx = SimpleNamespace(
+        cfg=build_config(tmp_path), facts=None, mcp=McpClient([entry]), project_path=tmp_path
+    )
     assert "kalatest" in _prompt_for(CODER, ctx)
     assert "kalatest" not in _prompt_for(TESTER, ctx)

@@ -1,5 +1,5 @@
 """Filesystem helpers for Rudra."""
 
-from rudra.filesystem.tree import project_tree
+from rudra.filesystem.tree import EMPTY_PROJECT, project_tree
 
-__all__ = ["project_tree"]
+__all__ = ["EMPTY_PROJECT", "project_tree"]

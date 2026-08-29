@@ -42,6 +42,14 @@ from rudra.tools.testing_tools import create_testing_tools
 # the factories need per-run arguments a frozen spec cannot hold.
 _TOOL_FACTORIES = (create_git_tools, create_testing_tools, create_memory_tools)
 
+# How many paths the PROJECT FILES block may list. Below project_tree's own
+# 300 default on purpose: 300 paths is roughly 1,800 tokens paid on every
+# call the coder makes -- 133 of them in run8 -- and the cap is the only
+# thing that keeps this block off a large repository's every call. It is a
+# constant rather than a config key because an inert key is worse than no
+# key (CLAUDE.md 6); `tree_chars` in usage.json is what revises it.
+TREE_MAX_ENTRIES = 150
+
 
 def _model_for(spec: RudraSubagent, cfg: Any = None) -> Any:
     """The chat model for this subagent's role.
@@ -124,6 +132,31 @@ def _prompt_for(spec: RudraSubagent, context: Any, task: str = "") -> str:
     block = facts_block(getattr(context, "facts", None))
     if block:
         parts.append(block)
+
+    # What is on disk, after what was decided and before what was
+    # remembered. Rendered here rather than baked into the spec for the
+    # reason the facts block is -- build_agent runs once per invocation --
+    # and deliberately NOT cached across invocations: these agents write
+    # the files they are being shown, so a stale listing is a correctness
+    # bug rather than a performance trade (OPEN-39).
+    if spec.wants_tree:
+        from rudra.filesystem import project_tree
+
+        listing = project_tree(context.project_path, max_entries=TREE_MAX_ENTRIES)
+        parts.append(
+            "## PROJECT FILES\n\n"
+            "Every file in this project, current as of this call. You do not "
+            "need to `ls` or `glob` to find out what exists.\n\n"
+            f"```\n{listing}\n```"
+        )
+        # What it cost, for the reason the recall block's cost is recorded:
+        # this block is re-sent on every call whether or not it is read, so
+        # it buys model calls with prompt tokens and only a number says
+        # which side won.
+        usage = getattr(context, "usage", None)
+        if usage is not None:
+            usage.record_tree(spec.role, len(parts[-1]))
+
     # A model never told a server exists will never call list_mcp_tools, so
     # this block is what makes the meta-tool design reachable. Fixed size,
     # and only for the specs that actually hold the tools.

@@ -51,6 +51,16 @@ class RoleUsage:
     # evidence rather than argument.
     recall_chars: int = 0
     recall_injections: int = 0
+    # What the injected project listing cost this role, in characters,
+    # summed over every agent build (OPEN-39). Counted for the reason
+    # recall_chars is, and the reason is sharper here: the listing is a
+    # FIXED per-call cost that buys model calls with prompt tokens, so if
+    # input per call rises by more than the call count falls the change is
+    # a loss. Nothing else can isolate it -- it rides inside input_tokens
+    # like every other part of the prompt, and CLAUDE.md 5a records that
+    # system prompt growth is otherwise unmeasured.
+    tree_chars: int = 0
+    tree_injections: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -108,6 +118,17 @@ class RunUsage:
         slot.recall_chars += int(chars)
         slot.recall_injections += 1
 
+    def record_tree(self, role: str, chars: int) -> None:
+        """One project listing injected into `role`'s prompt.
+
+        Mirrors record_recall, injections included: the average size of one
+        listing is what says whether TREE_MAX_ENTRIES is set right, and a
+        total alone cannot give it.
+        """
+        slot = self._slot(role)
+        slot.tree_chars += int(chars)
+        slot.tree_injections += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -143,6 +164,8 @@ class RunUsage:
                 "retries": tally.retries,
                 "recall_chars": tally.recall_chars,
                 "recall_injections": tally.recall_injections,
+                "tree_chars": tally.tree_chars,
+                "tree_injections": tally.tree_injections,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

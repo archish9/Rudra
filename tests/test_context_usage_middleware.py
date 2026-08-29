@@ -50,6 +50,10 @@ def test_sync_hook_records_the_reported_counts():
         # otherwise rides invisibly inside input_tokens (spec 4.6).
         "recall_chars": 0,
         "recall_injections": 0,
+        # Added by OPEN-39, and zero here for the same reason: the project
+        # listing is injected at prompt assembly, never at call time.
+        "tree_chars": 0,
+        "tree_injections": 0,
     }
     assert result.result[0].content == "hi"
 

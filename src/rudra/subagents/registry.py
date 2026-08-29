@@ -337,6 +337,11 @@ CODER = RudraSubagent(
     # benefits most from what earlier runs settled (Step 14b, S14.3/S14.4).
     rudra_tools=("remember", "search_memory"),
     wants_skills=True,
+    # It writes into a project it cannot otherwise see: build_agent runs
+    # once per invocation with an empty conversation, so without the
+    # listing every invocation re-derives the layout with `ls` and `glob`
+    # (OPEN-39).
+    wants_tree=True,
     wants_compaction=True,
     wants_memory=True,
     # The one agent that both writes code and might need an outside service
@@ -354,6 +359,9 @@ TESTER = RudraSubagent(
     fs_tools=_TESTER_FS,
     rudra_tools=("run_tests", "remember", "search_memory"),
     wants_skills=True,
+    # It must test code another agent wrote, so "what exists" is the first
+    # thing it needs and the last thing it is told (OPEN-39).
+    wants_tree=True,
     wants_compaction=True,
     wants_memory=True,
 )

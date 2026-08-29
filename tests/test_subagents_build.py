@@ -534,18 +534,27 @@ def test_the_facts_block_is_appended_to_every_subagent_prompt(name, context):
 
 
 def test_a_prompt_is_unchanged_when_there_are_no_facts(context):
+    # Asserted as "no facts block", not as equality with the spec prompt:
+    # OPEN-39 gives the coder a PROJECT FILES block unconditionally, so
+    # equality would now be a claim about the listing rather than about
+    # the facts. The reviewer holds the equality case below.
     from rudra.facts import FactStore
     from rudra.subagents.build import _prompt_for
 
     context.facts = FactStore()
-    assert _prompt_for(REGISTRY["coder"], context) == REGISTRY["coder"].system_prompt
+    prompt = _prompt_for(REGISTRY["coder"], context)
+    assert "## PROJECT FACTS" not in prompt
+    assert REGISTRY["coder"].system_prompt in prompt
+    # A spec that gets no other block still comes back untouched.
+    assert _prompt_for(REGISTRY["reviewer"], context) == REGISTRY["reviewer"].system_prompt
 
 
 def test_a_context_without_facts_still_builds(context):
     """SubagentContext.facts defaults to None; nothing may require it."""
     from rudra.subagents.build import _prompt_for
 
-    assert _prompt_for(REGISTRY["coder"], context) == REGISTRY["coder"].system_prompt
+    assert "## PROJECT FACTS" not in _prompt_for(REGISTRY["coder"], context)
+    assert _prompt_for(REGISTRY["reviewer"], context) == REGISTRY["reviewer"].system_prompt
 
 
 def test_a_fact_recorded_after_construction_reaches_the_next_build(context):
@@ -742,3 +751,124 @@ def test_the_path_contract_has_exactly_one_owner():
         assert _PATH_RULES in REGISTRY[name].system_prompt, name
     # The reviewer cannot write, so the contract would be noise for it.
     assert _PATH_RULES not in REGISTRY["reviewer"].system_prompt
+
+
+# --- OPEN-39: the project listing ------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["coder", "tester"])
+def test_the_writing_subagents_are_told_what_files_exist(name, context):
+    """OPEN-39. 158 of run6's 243 tool calls were orientation -- 13 of 20
+    invocations opened with `ls`, listing a directory an earlier invocation
+    in the same run had already listed. The coder had no other route: the
+    system prompt carried the spec, the facts and the memories, and no file
+    listing, so `ls` -> `glob` -> `read_file` from scratch was the only way
+    to learn what existed."""
+    from rudra.subagents.build import _prompt_for
+
+    (context.project_path / "app.py").write_text("x = 1\n")
+    prompt = _prompt_for(REGISTRY[name], context)
+
+    assert "## PROJECT FILES" in prompt
+    assert "app.py" in prompt
+
+
+@pytest.mark.parametrize("name", ["reviewer", "general-purpose"])
+def test_the_reading_subagents_are_not(name, context):
+    """S11b.1 again: the reviewer is handed the changed-file list in its own
+    prompt (loop/engine.py), so a whole-project listing is a payload it
+    cannot act on -- paid for on every review."""
+    from rudra.subagents.build import _prompt_for
+
+    (context.project_path / "app.py").write_text("x = 1\n")
+    assert "## PROJECT FILES" not in _prompt_for(REGISTRY[name], context)
+
+
+def test_the_project_listing_is_capped_below_project_trees_own_default(context):
+    """300 paths is ~1,800 tokens on all 133 of run8's coder calls. The cap
+    is the only thing keeping this off a large repository's every call."""
+    from rudra.subagents.build import TREE_MAX_ENTRIES, _prompt_for
+
+    assert TREE_MAX_ENTRIES < 300
+    for i in range(TREE_MAX_ENTRIES + 50):
+        (context.project_path / f"mod_{i:04d}.py").write_text("x = 1\n")
+
+    prompt = _prompt_for(REGISTRY["coder"], context)
+    listing = prompt.split("## PROJECT FILES", 1)[1]
+    assert listing.count("mod_") == TREE_MAX_ENTRIES
+    assert f"(cap: {TREE_MAX_ENTRIES})" in listing
+
+
+def test_an_empty_project_still_builds_a_prompt(context):
+    """`project_tree` answers "(empty project)"; nothing may crash on it."""
+    from rudra.filesystem import EMPTY_PROJECT
+    from rudra.subagents.build import _prompt_for
+
+    prompt = _prompt_for(REGISTRY["coder"], context)
+    assert "## PROJECT FILES" in prompt
+    assert EMPTY_PROJECT in prompt
+
+
+def test_the_listing_lands_between_the_facts_and_the_recall(context):
+    """What was decided, then what is on disk, then what was remembered."""
+    from rudra.subagents.build import _prompt_for
+
+    (context.project_path / "app.py").write_text("x = 1\n")
+    context.facts = _stocked_store()
+    prompt = _prompt_for(REGISTRY["coder"], context, task="add a route")
+
+    assert prompt.index("## PROJECT FACTS") < prompt.index("## PROJECT FILES")
+
+
+def test_the_listing_is_rebuilt_per_invocation_never_cached(context):
+    """The coder writes the files it is being shown, so a stale listing is a
+    correctness bug rather than a performance trade. build_agent runs once
+    per invocation for exactly this reason (build.py:109-113)."""
+    from rudra.subagents.build import _prompt_for
+
+    (context.project_path / "app.py").write_text("x = 1\n")
+    assert "widget.py" not in _prompt_for(REGISTRY["coder"], context)
+
+    (context.project_path / "widget.py").write_text("y = 2\n")
+    assert "widget.py" in _prompt_for(REGISTRY["coder"], context)
+
+
+def test_the_listings_cost_is_recorded(context):
+    """This change ADDS to the fixed per-call prompt, which CLAUDE.md 5a
+    says nothing currently measures. Without the number the trade -- calls
+    bought with tokens -- cannot be settled, and the next session repeats
+    the investigation."""
+    import dataclasses
+
+    from rudra.context.usage import RunUsage
+    from rudra.subagents.build import _prompt_for
+
+    (context.project_path / "app.py").write_text("x = 1\n")
+    usage = RunUsage()
+    measured = dataclasses.replace(context, usage=usage)
+    _prompt_for(REGISTRY["coder"], measured)
+
+    assert usage.as_dict()["coder"]["tree_chars"] > 0
+    assert usage.as_dict()["coder"]["tree_injections"] == 1
+
+
+def test_a_context_without_usage_still_builds_the_listing(context):
+    """SubagentContext.usage defaults to None; nothing may require it."""
+    from rudra.subagents.build import _prompt_for
+
+    (context.project_path / "app.py").write_text("x = 1\n")
+    context.usage = None
+    assert "app.py" in _prompt_for(REGISTRY["coder"], context)
+
+
+def test_build_agent_passes_the_listing_to_create_deep_agent(context, monkeypatch):
+    """A1.8's shape: a fix that exists and is not wired."""
+    import rudra.subagents.build as build
+
+    captured = {}
+    monkeypatch.setattr(build, "create_deep_agent", lambda **kw: captured.update(kw) or object())
+    (context.project_path / "app.py").write_text("x = 1\n")
+    build.build_agent(REGISTRY["coder"], context)
+
+    assert "## PROJECT FILES" in captured["system_prompt"]
+    assert "app.py" in captured["system_prompt"]

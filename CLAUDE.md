@@ -113,7 +113,15 @@ src/rudra/
 │                           every subagent carries the gate — deepagents
 │                           inherits interrupt_on but NOT middleware.
 │                           The reviewer cannot write because the tools are
-│                           never registered, not because a prompt says so
+│                           never registered, not because a prompt says so.
+│                           `_prompt_for` is where a spec meets the project:
+│                           facts, then the `## PROJECT FILES` listing
+│                           (`wants_tree`, coder and tester only), then
+│                           recalled memories, then the MCP catalog. The
+│                           listing is rebuilt on EVERY invocation and never
+│                           cached — these agents write the files they are
+│                           being shown, so a carried-over listing is a
+│                           correctness bug, not a saved call (OPEN-39)
 ├── facts/                  The open fact store (Step 10a, C6.8a). store.py
 │                           imports nothing from Rudra. A fact is
 │                           {value, why, source}; keys are enumerated
@@ -450,6 +458,7 @@ inert before Step 12.
 | Artifacts kept out of the user's repo | **designed** | `artifacts_root="/artifacts"`, or deepagents writes `large_tool_results/` and `conversation_history/` into the project (A1.45) |
 | Per-run token accounting | **designed** | `src/rudra/context/usage.py`. Nothing upstream reports what a run cost |
 | Recalled memories in every prompt | **designed** | `memory/render.py` + `recall_limit`. **One number now feeds three consumers** — summarization, eviction, and recall. `usage.json` carries `recall_chars` per role so the fraction can be revised with evidence (Step 14b) |
+| The project file listing in the coder's and tester's prompts | **designed** | `filesystem/tree.py` + `wants_tree`, capped at `TREE_MAX_ENTRIES = 150` in `subagents/build.py`. It BUYS model calls WITH prompt tokens — 65% of run6's tool calls were agents re-deriving a layout nobody had told them — so `usage.json` carries `tree_chars` per role and the trade is settled by that number, not by argument (OPEN-39) |
 | Per-task memory in `AGENTS.md` | **designed** | `src/rudra/context/agents_md.py` + the two writers in `loop/engine.py`. Session Log capped at 20 entries (C7.3) |
 | Per-role and per-task wall clock | **designed** | `UsageMiddleware` times every model call; `run_task` times every task (Step 15a, C9.6). **No cost figure, ever — S15.2.** Latency is the one number a local backend always has: token counts are frequently `not reported`, and a failed call still costs the wait |
 | The run trace | **designed** | `src/rudra/trace/`. Before Step 15a the subagents printed nothing at all — `runner.py` consumed every chunk to drive its guards and rendered none — so a run went quiet exactly while the coder worked. `--verbose` reached nothing (A1.90) |
@@ -460,8 +469,12 @@ two independently configured numbers would drift, and the pair only makes
 sense read together.
 
 **The standing gap, stated rather than implied: nothing measures system
-prompt growth.** Skills, facts and the merged planning methodology are a
-fixed cost paid on every call, and no mechanism here trims them.
+prompt growth *as a whole*.** Skills, facts and the merged planning
+methodology are a fixed cost paid on every call, and no mechanism here trims
+them. Two of its parts are now priced individually — `recall_chars` since
+Step 14b and `tree_chars` since OPEN-39 — and both exist for the same
+reason: a block added to the fixed prompt must arrive with the number that
+says whether it paid for itself. The gap is the *total*, not the parts.
 Summarization compacts the *conversation*; the prompt is rebuilt in full
 each time. The planner's share of that got *smaller* on 2026-08-25: dropping
 the skills index also dropped `SkillsMiddleware`'s boilerplate and the
