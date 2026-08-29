@@ -269,7 +269,7 @@ Rudra also refuses, before making any network call, to run a model whose provide
 | [LangChain](https://python.langchain.com) / LangGraph | Model interfaces and checkpointing |
 | [Typer](https://typer.tiangolo.com) + [Rich](https://rich.readthedocs.io) | Command line and terminal output |
 
-The file tools the agents use — `read_file`, `write_file`, `edit_file`, `ls`, `glob`, `grep` — come from deepagents, rooted at your project directory so nothing outside it can be touched. `execute` runs commands there too.
+The file tools the agents use — `read_file`, `write_file`, `edit_file`, `delete`, `ls`, `glob`, `grep` — come from deepagents, rooted at your project directory so nothing outside it can be touched. `execute` runs commands there too.
 
 Rudra adds a few of its own:
 

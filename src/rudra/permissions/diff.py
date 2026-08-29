@@ -20,6 +20,8 @@ from rudra.compat.virtual_paths import virtual_to_host
 
 MAX_RENDER_BYTES = 1_000_000
 NEW_FILE_PREVIEW_LINES = 10
+# How far a delete preview walks a directory before reporting "N+ files".
+MAX_DELETE_WALK = 500
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,39 @@ def _read(path: Path) -> str | None:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def _delete_detail(project_root: Path, raw: str) -> str:
+    """What the user is about to lose, beyond the path they can already see.
+
+    `delete` reached a writing agent in OPEN-49, and it is not `write_file`
+    with a smaller blast radius: upstream removes a directory recursively
+    (filesystem.py:1258-1265). Until then this branch read the target as
+    text and appended a line count, so a missing path, a binary file and a
+    forty-file directory all rendered as a bare `delete  <path>` -- the one
+    prompt standing between a recursive delete and the user's project said
+    nothing about which of the three they were approving.
+
+    The directory walk is capped: the number is a courtesy in a header, and
+    a `node_modules`-shaped target must not make the user wait on it.
+    """
+    target = _resolve(project_root, raw)
+    if target.is_dir():
+        seen = 0
+        for entry in target.rglob("*"):
+            if entry.is_file():
+                seen += 1
+                if seen > MAX_DELETE_WALK:
+                    return f" (directory, {MAX_DELETE_WALK}+ files)"
+        return f" (directory, {seen} files)"
+    existing = _read(target)
+    if existing is not None:
+        return f", {len(existing.splitlines())} lines"
+    if not target.exists():
+        return " (not found)"
+    # Real, and readable as neither text nor a directory. The path is the
+    # whole of what we can honestly say about it.
+    return ""
 
 
 def _counts(diff_lines: list[str]) -> tuple[int, int]:
@@ -138,9 +173,7 @@ def render(
         return _edit_preview(args, full, max_lines)
     if tool == "delete":
         raw_path = str(args.get("file_path", ""))
-        existing = _read(_resolve(project_root, raw_path))
-        size = f", {len(existing.splitlines())} lines" if existing is not None else ""
-        return DiffPreview(f"delete  {raw_path}{size}", "", False)
+        return DiffPreview(f"delete  {raw_path}{_delete_detail(project_root, raw_path)}", "", False)
     if tool == "execute":
         command = str(args.get("command", ""))
         return DiffPreview("execute", f"  {command}\n  cwd: {project_root}", False)

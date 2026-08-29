@@ -209,7 +209,11 @@ def test_coder_puts_the_permission_gate_first(monkeypatch, tmp_path):
         # (OPEN-15). It used to be `is gate.interrupt_on` -- the whole map,
         # `execute` included, on an agent with no shell, so an `execute`
         # call raised an approval panel and then failed as an unknown tool.
-        assert set(captured["interrupt_on"]) == {"write_file", "edit_file"}
+        # `delete` joined them in OPEN-49, and this assertion is where that
+        # grant becomes visible as a GATED one: the narrowing is computed
+        # from the spec's own fs_tools, so a tool the coder now holds gets
+        # an approval entry without anything here being told about it.
+        assert set(captured["interrupt_on"]) == {"write_file", "edit_file", "delete"}
         assert all(
             captured["interrupt_on"][name] is gate.interrupt_on[name]
             for name in captured["interrupt_on"]

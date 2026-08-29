@@ -14,7 +14,23 @@ from __future__ import annotations
 from rudra.subagents.spec import RudraSubagent
 
 _READ_ONLY_FS: tuple[str, ...] = ("ls", "read_file", "glob", "grep")
-_WRITER_FS: tuple[str, ...] = ("ls", "read_file", "write_file", "edit_file", "glob", "grep")
+# `delete` since OPEN-49. Run8's t4 was "remove the conflicting test file";
+# the coder had no way to remove anything -- no `delete`, and no `execute` to
+# `rm` with -- so it said so in its own prose, t4 went `dropped`, t5 `blocked`
+# behind it at 790.9s, and the file shipped to the user. The tool was already
+# gated end to end (rules.py:78, floor.py:34, interrupts.py:43, diff.py:139);
+# it was simply never granted to the one agent whose job is changing files.
+_WRITER_FS: tuple[str, ...] = (
+    "ls",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "delete",
+    "glob",
+    "grep",
+)
+# The tester inherits `delete` from the line above, and gains nothing by it:
+# it holds `execute` and could always `rm`.
 _TESTER_FS: tuple[str, ...] = (*_WRITER_FS, "execute")
 
 # The path contract, shared by every subagent that can write.
@@ -33,6 +49,37 @@ _PATH_RULES = """## FILE PATH RULES
   one. NEVER write a placeholder file in order to bring a directory into
   being -- that gives you a FILE with that name, and every later write
   into it fails.
+"""
+
+# The delete contract, granted with the tool in OPEN-49.
+#
+# Two corrections, and both are about upstream's own tool description
+# (deepagents filesystem.py:1258-1265), which is the text the model reads
+# beside this one.
+#
+# It opens with "the file or directory at the given absolute path". Every
+# other granted tool's description is silent on the question; this one
+# asserts the opposite of _PATH_RULES, so leaving "RELATIVE paths only" to
+# cover it by implication is the OPEN-17 shape -- prompt against prompt,
+# with the tool's own description holding the closer seat.
+#
+# It then says "Prefer deleting a directory in one call over deleting each
+# file individually". Sound advice for a general agent and wrong for this
+# one: a directory delete is recursive, the coder is scoped to ONE task,
+# and the tree it removes holds work that other tasks did. That asymmetry
+# is also the answer to the argument OPEN-49 was filed with -- `write_file`
+# already overwrites a sibling's work (0.7.4, backends/filesystem.py:489),
+# but it overwrites ONE file, and this removes a subtree.
+_DELETE_RULES = """
+## DELETING FILES
+- `delete` takes a RELATIVE path, exactly like every other file tool here.
+  Its own description says "absolute path"; that is wrong for this project
+  and the FILE PATH RULES above are what hold.
+- Deleting a directory is RECURSIVE -- it takes everything inside with it.
+  Its description suggests preferring that to deleting files one by one.
+  Do NOT. Delete the individual files your task names.
+- Delete ONLY what YOUR task asks you to remove. Other files in this
+  project are other tasks' work, and nothing restores them.
 """
 
 # The command contract: the half of the old _PATH_RULES that means anything
@@ -118,14 +165,18 @@ task asked for.
 def _rules_for(fs_tools: tuple[str, ...]) -> str:
     """The rules block for a writer, assembled from the tools it is granted.
 
-    Every writer gets the path contract. Only a spec whose `fs_tools`
-    carries `execute` gets the command contract. Passing one named tuple
-    both here and to `fs_tools=` is what keeps the two in step; the parity
-    test in tests/test_subagents_registry.py is what keeps it closed.
+    Every writer gets the path contract. A spec whose `fs_tools` carries
+    `delete` gets the delete contract, and one carrying `execute` gets the
+    command contract. Passing one named tuple both here and to `fs_tools=`
+    is what keeps them in step; the parity tests in
+    tests/test_subagents_registry.py are what keep it closed.
     """
+    rules = _PATH_RULES
+    if "delete" in fs_tools:
+        rules += _DELETE_RULES
     if "execute" in fs_tools:
-        return _PATH_RULES + _COMMAND_RULES
-    return _PATH_RULES
+        rules += _COMMAND_RULES
+    return rules
 
 
 _CODER_PROMPT = """You are an expert code generator for Rudra.

@@ -111,3 +111,69 @@ def test_an_unreadable_existing_file_degrades_to_a_size_header(tmp_path):
     preview = render("write_file", {"file_path": "sub", "content": "x"}, tmp_path)
     assert preview.body == ""
     assert preview.header
+
+
+# --- OPEN-49: a delete preview that distinguishes what it is deleting ------
+#
+# `delete` reached the coder in OPEN-49, and it is not `write_file` with a
+# smaller blast radius: upstream deletes a directory recursively and its own
+# description RECOMMENDS doing so in one call (filesystem.py:1258-1265).
+# Before this, every target that was not a readable text file rendered as a
+# bare `delete  <path>` -- missing, binary and forty-file directory alike --
+# so the one prompt that stands between a recursive delete and the user's
+# project told them nothing about which of the three they were approving.
+
+
+def test_a_directory_delete_says_it_is_a_directory(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("a\n", encoding="utf-8")
+    preview = render("delete", {"file_path": "src"}, tmp_path)
+    assert "directory" in preview.header.lower()
+
+
+def test_a_directory_delete_counts_what_goes_with_it(tmp_path):
+    (tmp_path / "src" / "deep").mkdir(parents=True)
+    for name in ("a.py", "b.py"):
+        (tmp_path / "src" / name).write_text("x\n", encoding="utf-8")
+    (tmp_path / "src" / "deep" / "c.py").write_text("x\n", encoding="utf-8")
+    preview = render("delete", {"file_path": "src"}, tmp_path)
+    assert "3 files" in preview.header
+
+
+def test_an_empty_directory_delete_still_reports_a_count(tmp_path):
+    (tmp_path / "empty").mkdir()
+    preview = render("delete", {"file_path": "empty"}, tmp_path)
+    assert "0 files" in preview.header
+
+
+def test_a_directory_count_is_capped_so_the_prompt_cannot_stall(tmp_path):
+    """A `node_modules`-shaped target must not make the user wait on a walk
+    whose only purpose is one number in a header."""
+    from rudra.permissions.diff import MAX_DELETE_WALK
+
+    target = tmp_path / "big"
+    target.mkdir()
+    for n in range(MAX_DELETE_WALK + 5):
+        (target / f"f{n}.txt").write_text("x", encoding="utf-8")
+    preview = render("delete", {"file_path": "big"}, tmp_path)
+    assert f"{MAX_DELETE_WALK}+ files" in preview.header
+
+
+def test_deleting_a_path_that_is_not_there_says_so(tmp_path):
+    """A no-op the user should not be asked to approve blind. It rendered
+    identically to a binary file before."""
+    preview = render("delete", {"file_path": "gone.py"}, tmp_path)
+    assert "not found" in preview.header.lower()
+
+
+def test_an_undecodable_file_delete_still_names_the_path(tmp_path):
+    """The third case the old bare header collapsed together: readable
+    neither as text nor as a directory, and still a real file the user is
+    about to lose. The bytes are deliberately invalid UTF-8 -- `\\x00\\x01`
+    decodes fine and would exercise the line-count branch instead.
+    """
+    (tmp_path / "blob.bin").write_bytes(b"\xff\xfe\x00")
+    preview = render("delete", {"file_path": "blob.bin"}, tmp_path)
+    assert "blob.bin" in preview.header
+    assert "not found" not in preview.header.lower()
+    assert "directory" not in preview.header.lower()

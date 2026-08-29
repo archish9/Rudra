@@ -208,3 +208,73 @@ def test_a_writer_has_exactly_one_section_about_stopping(name):
 
     assert "## STOP CONDITION" not in prompt
     assert prompt.count("## HOW TO FINISH") == 1
+
+
+# --- OPEN-49: the writers have a verb for "delete" -------------------------
+
+
+def test_the_coder_can_delete():
+    """Run8's t4 was "remove the conflicting test file"; the coder had no
+    `delete` and no `execute` to `rm` with, said so in its own prose, and
+    the task was `dropped` while t5 `blocked` at 790.9s behind it.
+
+    Absence is the enforcement in this registry (spec.py:41-43), so the
+    absence has to be deliberate -- and for the one agent whose job is
+    changing files on disk it was not. `delete` is a fully gated tool
+    already (rules.py:78, floor.py:34, interrupts.py:43): granting it adds
+    a verb, not a mechanism.
+    """
+    assert "delete" in REGISTRY["coder"].fs_tools
+
+
+def test_the_tester_inherits_delete_from_the_writer_set():
+    """`_TESTER_FS` is `_WRITER_FS` plus a shell, so this follows from the
+    line above rather than being decided separately -- and it grants the
+    tester nothing new: it holds `execute` and could always `rm`.
+    """
+    assert "delete" in REGISTRY["tester"].fs_tools
+
+
+def test_only_a_spec_with_delete_gets_the_delete_contract():
+    """The parity shape OPEN-36 established, applied to a third block.
+
+    `_PATH_RULES` is every writer's contract, `_COMMAND_RULES` belongs to
+    an agent holding a shell, and `_DELETE_RULES` belongs to one holding
+    `delete`. Assembled from the spec's own `fs_tools` so a prompt cannot
+    describe a tool the spec withholds.
+    """
+    from rudra.subagents.registry import _DELETE_RULES, REGISTRY
+
+    for name, spec in REGISTRY.items():
+        assert (_DELETE_RULES in spec.system_prompt) == ("delete" in spec.fs_tools), name
+
+
+def test_the_delete_contract_overrides_upstreams_absolute_path_claim():
+    """deepagents' DELETE_TOOL_DESCRIPTION (filesystem.py:1258-1265) opens
+    with "the given absolute path", which is the exact opposite of
+    `_PATH_RULES`. Every other granted tool's description is silent on the
+    question; this one asserts the wrong answer, so the contract has to
+    name it rather than assume "RELATIVE paths only" is read as covering a
+    tool that says otherwise.
+    """
+    from rudra.subagents.registry import _DELETE_RULES
+
+    lowered = _DELETE_RULES.lower()
+    assert "relative" in lowered
+    assert "absolute" in lowered
+
+
+def test_the_delete_contract_states_that_a_directory_delete_is_recursive():
+    """The one fact that makes `delete` unlike `write_file`.
+
+    OPEN-49's own argument for granting it was that `write_file` already
+    overwrites a sibling task's work (0.7.4, backends/filesystem.py:489).
+    That holds for a file and not for a tree: upstream's description
+    actively *recommends* deleting a directory in one call, and a
+    task-scoped coder that takes the advice removes work no task asked it
+    to touch.
+    """
+    from rudra.subagents.registry import _DELETE_RULES
+
+    lowered = _DELETE_RULES.lower()
+    assert "recursive" in lowered or "everything inside" in lowered
