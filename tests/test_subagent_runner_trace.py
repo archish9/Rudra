@@ -177,7 +177,8 @@ async def test_a_guard_halt_is_emitted_as_a_notice(monkeypatch):
     notices = [event for event in seen if event.kind is TraceKind.NOTICE]
     assert len(notices) == 1, "one notice per halt, and a halt ends the invocation"
     assert notices[0].role == "coder"
-    assert "/DONE" in notices[0].payload
+    # `DONE`, not `/DONE`: the halt names the resolved path since OPEN-50.
+    assert "'DONE'" in notices[0].payload
     assert notices[0].payload == result.halted_reason, "the trace and the caller agree"
 
 

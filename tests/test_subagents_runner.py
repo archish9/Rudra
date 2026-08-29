@@ -169,7 +169,7 @@ async def test_the_same_tool_on_different_files_does_not_halt(monkeypatch, patch
 # --- OPEN-35: paging a long file is not repeating -------------------------
 
 
-def test_the_call_key_separates_read_windows():
+def test_the_call_key_separates_read_windows(tmp_path):
     """`read_file` pages, so the window is part of what makes a call
     distinct. Without it the key for page 1 and page 3 of one file are the
     same string and the guard counts them as one call made three times."""
@@ -180,15 +180,93 @@ def test_the_call_key_separates_read_windows():
         "args": {"file_path": "/a.py", "offset": 100, "limit": 50},
     }
 
-    assert runner._call_key(whole) != runner._call_key(page_two)
-    assert runner._call_key(page_two) != runner._call_key(page_two_short)
+    assert runner._call_key(whole, tmp_path) != runner._call_key(page_two, tmp_path)
+    assert runner._call_key(page_two, tmp_path) != runner._call_key(page_two_short, tmp_path)
     # The identical call is still identical -- that is what the guard is for.
-    assert runner._call_key(page_two) == runner._call_key(dict(page_two))
+    assert runner._call_key(page_two, tmp_path) == runner._call_key(dict(page_two), tmp_path)
     # A tool with no window is unaffected: same name, same target, same key.
     write = {"name": "write_file", "args": {"file_path": "/a.py", "content": "x"}}
-    assert runner._call_key(write) == runner._call_key(
-        {"name": "write_file", "args": {"file_path": "/a.py", "content": "y"}}
+    assert runner._call_key(write, tmp_path) == runner._call_key(
+        {"name": "write_file", "args": {"file_path": "/a.py", "content": "y"}}, tmp_path
     )
+
+
+# --- OPEN-50: one file is one key, however the model spelled it ----------
+
+
+def test_the_call_key_collapses_every_spelling_of_one_file(tmp_path):
+    """The guard must name the same file the gate, the approval preview and
+    the backend name -- `compat/virtual_paths.py` is the one function that
+    says which that is (CR-B4), and before OPEN-50 this guard did not use
+    it. Run b593a6137c64 wrote `app.py` fourteen times under four
+    spellings, which is four keys of at most seven and never three."""
+    spellings = ["/app.py", "./app.py", "app.py", str(tmp_path / "app.py")]
+    keys = {
+        runner._call_key({"name": "write_file", "args": {"file_path": s}}, tmp_path)
+        for s in spellings
+    }
+    assert len(keys) == 1
+    assert next(iter(keys)) == ("write_file", "app.py", "", "")
+
+
+def test_the_call_key_keeps_different_files_apart(tmp_path):
+    """Resolving is not collapsing. `/app/tests/test_app.py` is a real
+    second file -- run b593a6137c64 created it by mistake and pytest
+    reported `import file mismatch` against `tests/test_app.py` -- so the
+    two must stay two keys."""
+    right = {"name": "write_file", "args": {"file_path": "/tests/test_app.py"}}
+    wrong = {"name": "write_file", "args": {"file_path": "/app/tests/test_app.py"}}
+    assert runner._call_key(right, tmp_path) != runner._call_key(wrong, tmp_path)
+
+
+def test_the_call_key_leaves_a_delegation_alone(tmp_path):
+    """`task` carries a `subagent_type`, not a path. Running that through a
+    path resolver would be meaningless, so the identifier is only resolved
+    when the argument is one of the path arguments."""
+    delegate = {"name": "task", "args": {"subagent_type": "general-purpose", "description": "x"}}
+    assert runner._call_key(delegate, tmp_path) == ("task", "general-purpose", "", "")
+
+
+def test_the_call_key_resolves_a_backend_route_the_way_the_gate_does(tmp_path):
+    """`/artifacts/` and `/skills/` are mounted outside the project root,
+    and `virtual_to_relative` returns a relative path for them rather than
+    None -- which is what the gate already reads them as. The guard is a
+    counter, not a resolver (CR-B4), so it agrees rather than special-casing."""
+    route = {"name": "read_file", "args": {"file_path": "/artifacts/note.md"}}
+    assert runner._call_key(route, tmp_path) == ("read_file", "artifacts/note.md", "", "")
+
+
+def test_the_call_key_survives_a_missing_identifier(tmp_path):
+    """A watched tool called with neither a path nor a subagent_type keys on
+    the empty string, as it did before OPEN-50. The guard must never be the
+    thing that raises inside the stream loop."""
+    assert runner._call_key({"name": "write_file", "args": {}}, tmp_path) == (
+        "write_file",
+        "",
+        "",
+        "",
+    )
+
+
+async def test_three_writes_in_three_spellings_halt(monkeypatch, patched):
+    """End to end, which is where OPEN-50 was actually paid for: run
+    b593a6137c64 halted ten times and every halt was a respelling, so the
+    guard both fired too late (twelve writes before anything counted three)
+    and fired anyway (both blocked tasks died of it). Three spellings of one
+    file are one call made three times."""
+    writes = [
+        ai("", [call("write_file", file_path="/app.py")]),
+        ai("", [call("write_file", file_path="./app.py")]),
+        ai("", [call("write_file", file_path="app.py")]),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": writes}))
+
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert result.ok is False
+    assert "repeated" in (result.halted_reason or "")
+    # The resolved spelling is the durable record (OPEN-44's Task.halts).
+    assert "'app.py'" in (result.halted_reason or "")
 
 
 async def test_paging_through_one_long_file_does_not_halt(monkeypatch, patched):
@@ -222,7 +300,9 @@ async def test_the_same_page_read_three_times_still_halts(monkeypatch, patched):
     result = await run_subagent("reviewer", "review it", context=patched)
     assert result.ok is False
     assert "repeated" in (result.halted_reason or "")
-    assert "/a.py" in (result.halted_reason or ""), "the halt must still name the file"
+    # `a.py`, not `/a.py`: the halt interpolates the resolved identifier
+    # since OPEN-50. Naming the file is what this asserts, not the spelling.
+    assert "'a.py'" in (result.halted_reason or ""), "the halt must still name the file"
 
 
 async def test_the_whole_file_read_three_times_still_halts(monkeypatch, patched):
@@ -361,4 +441,4 @@ async def test_repeats_separated_by_other_calls_still_halt(monkeypatch, patched)
     result = await run_subagent("coder", "write it", context=patched)
 
     assert result.ok is False
-    assert "/DONE" in (result.halted_reason or "")
+    assert "'DONE'" in (result.halted_reason or "")  # resolved, since OPEN-50

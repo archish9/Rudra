@@ -20,6 +20,7 @@ from typing import Any
 
 from rich.console import Console
 
+from rudra.compat.virtual_paths import virtual_to_relative
 from rudra.permissions.approval import run_with_approvals
 from rudra.subagents.build import build_agent
 from rudra.subagents.registry import REGISTRY
@@ -144,22 +145,47 @@ def _wants_token_stream(context: Any) -> bool:
     return bool(getattr(agent_cfg, "stream_tokens", False))
 
 
-def _call_key(tool_call: dict) -> tuple[str, ...]:
+def _call_key(tool_call: dict, project_root: Path) -> tuple[str, ...]:
     """What makes two tool calls "the same call" for the repeat guard.
+
+    THE PATH IS RESOLVED, NOT QUOTED (OPEN-50). `compat/virtual_paths.py`
+    is the one function that says which real file a model-written path
+    names, and the gate, the approval preview and the backend all route
+    through it "so they cannot disagree about which file a call touches"
+    (CR-B4). This guard did not, so `/app.py`, `./app.py`, `app.py` and
+    `<project>/app.py` were four keys for one file -- and it failed in both
+    directions at once. Run b593a6137c64 wrote two real files 34 times over
+    8 spellings: three-per-spelling means twelve writes before anything
+    counts three, and then it halted the invocation anyway, ten times, every
+    one a respelling. Both of that run's blocked tasks died of it.
+
+    A1.92 is the same weakness reached through glob patterns and is NOT
+    closed by this -- see MAX_TOTAL_CALLS above. Two patterns are not one
+    path, and `glob` is deliberately still unwatched.
+
+    Only the path arguments are resolved. `task` carries a `subagent_type`,
+    which is not a path and keys exactly as it did.
 
     The read window is part of it (OPEN-35). `read_file` pages -- 100 lines
     at a time, `offset`/`limit` on deepagents' ReadFileSchema -- so keying
     on the path alone made page 3 of a file the third repeat of page 1, and
     `MAX_REPEATED_CALLS` killed the subagent. No agent could read a file
     past ~200 lines; run 36023bb8bdd1 ended with the reviewer asking for
-    `offset: 200` of a 400-line test file.
+    `offset: 200` of a 400-line test file. **Resolving the path does not
+    retire the window** -- dropping it re-opens OPEN-35.
 
     The guard's target is unchanged: the identical call made again. Tools
-    with no window -- write_file, edit_file, task -- carry an empty one and
-    key exactly as before.
+    with no window -- write_file, edit_file, task -- carry an empty one.
     """
     args = tool_call.get("args") or {}
-    identifier = args.get("file_path") or args.get("path") or args.get("subagent_type") or ""
+    raw = args.get("file_path") or args.get("path")
+    if raw:
+        # `or str(raw)` covers a resolver that declines to place the path;
+        # the guard counts, it never rewrites the call, so an unresolvable
+        # spelling keys on itself rather than on nothing.
+        identifier = virtual_to_relative(str(raw), project_root) or str(raw)
+    else:
+        identifier = args.get("subagent_type") or ""
     window = (str(args.get("offset", "")), str(args.get("limit", "")))
     return (tool_call.get("name", ""), str(identifier), *window)
 
@@ -264,7 +290,7 @@ async def run_subagent(
                             break
                         if tool_call.get("name") not in _WATCHED_TOOLS:
                             continue
-                        key = _call_key(tool_call)
+                        key = _call_key(tool_call, context.project_path)
                         repeated[key] = repeated.get(key, 0) + 1
                         if repeated[key] >= MAX_REPEATED_CALLS:
                             halted = (
