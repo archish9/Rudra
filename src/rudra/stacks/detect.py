@@ -8,6 +8,7 @@ anything (that is C3.6's job, Step 8).
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -148,7 +149,31 @@ _VENV_DIRS = (".venv", "venv")
 # Windows puts executables in Scripts/, POSIX in bin/. Checking both costs
 # two stat calls and avoids a platform branch.
 _VENV_BIN_DIRS = ("bin", "Scripts")
-_PYTEST_DECLARATIONS = ("pyproject.toml", "requirements.txt", "setup.py")
+_PYTEST_DECLARATIONS = (
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "setup.cfg",
+    "tox.ini",
+)
+
+# Files that exist for no other tool. pytest reads `pytest.ini` as its
+# rootdir marker, so an EMPTY one still declares pytest and the text match
+# below would miss it (OPEN-47). run8's project had one, holding
+# `[pytest]`, `norecursedirs` and `testpaths`, and the gate ran unittest
+# anyway.
+_PYTEST_ONLY_FILES = ("pytest.ini",)
+
+# A test written for pytest rather than for unittest, by shape:
+#
+#   def test_x():        <- module level, no indent. `unittest discover`
+#                           enters the file and collects nothing from it.
+#   import pytest        <- the file cannot run under unittest either way.
+#
+# The anchor matters: a TestCase's `def test_x(self)` is INDENTED, and a
+# pattern that matched it would route every unittest project to pytest.
+_MODULE_LEVEL_TEST = re.compile(r"^def test", re.MULTILINE)
+_IMPORTS_PYTEST = re.compile(r"^\s*(?:import pytest\b|from pytest\b)", re.MULTILINE)
 
 
 def _venv_executable(project_path: Path, name: str) -> Path | None:
@@ -166,8 +191,15 @@ def _declares_pytest(project_path: Path) -> bool:
 
     Text matching, not parsing: pytest can be declared in [project]
     dependencies, a dependency-group, [tool.poetry], or requirements.txt,
-    and parsing four formats to answer one yes/no question is not worth it.
+    and parsing five formats to answer one yes/no question is not worth it.
+
+    `pytest.ini` is asked a different question -- does it EXIST -- because
+    it exists for nothing else, and an empty one is still a declaration
+    (OPEN-47).
     """
+    for filename in _PYTEST_ONLY_FILES:
+        if (project_path / filename).is_file():
+            return True
     for filename in _PYTEST_DECLARATIONS:
         try:
             if "pytest" in (project_path / filename).read_text(encoding="utf-8"):
@@ -253,6 +285,69 @@ def _has_undiscoverable_tests(project_path: Path) -> bool:
         except OSError:
             continue
         if any(not _is_discoverable(directory, module) for module in modules):
+            return True
+    return False
+
+
+def _python_test_modules(project_path: Path) -> list[Path]:
+    """Python test files at the root and under `tests/`, unbounded.
+
+    Deliberately not `find_test_files`: that one is capped at five and
+    exists to name files in a message, while this one answers a question
+    where a missed file is a wrong verdict.
+    """
+    modules: list[Path] = []
+    try:
+        modules.extend(
+            path
+            for path in project_path.glob("*.py")
+            if path.is_file() and _is_test_filename(path.name)
+        )
+    except OSError:
+        return modules
+    for name in _TEST_DIRS:
+        directory = project_path / name
+        if not directory.is_dir():
+            continue
+        try:
+            modules.extend(
+                path
+                for path in directory.rglob("*.py")
+                if path.is_file() and _is_test_filename(path.name)
+            )
+        except OSError:
+            continue
+    return modules
+
+
+def _has_uncollectable_tests(project_path: Path) -> bool:
+    """Are there tests `unittest discover` would silently not collect?
+
+    The question `_has_undiscoverable_tests` does NOT ask (OPEN-47). That
+    one asks whether unittest can *enter* a directory, which `__init__.py`
+    answers; this one asks whether unittest can *collect* what is inside,
+    which only the file's own shape answers. run8 failed on exactly that
+    gap: `tests/__init__.py` existed, so the directory was reachable, and
+    every test in it was a bare `def test_*`, so unittest collected none of
+    them. The gate ran 10 of 23 tests and reported `passed`.
+
+    Measured on the finished project, `/Users/archish/Documents/ai-ml/test-rudra-run8`:
+
+        python3 -m unittest discover        Ran 10 tests -- OK
+        python3 -m pytest --collect-only    23 tests collected
+
+    run6 failed loudly at "collected nothing" and OPEN-34 caught it; run8
+    failed silently at "collected 43% of them" and nothing did.
+
+    Shape, not execution, like everything else in this module -- the file is
+    read, never imported.
+    """
+    for module in _python_test_modules(project_path):
+        try:
+            text = module.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _MODULE_LEVEL_TEST.search(text) or _IMPORTS_PYTEST.search(text):
             return True
     return False
 
@@ -370,6 +465,11 @@ def _python_test_command(project_path: Path) -> list[str]:
     # "Ran 0 tests" forever, which the gate reports as `not_applicable` and
     # therefore PASSES.
     if _has_undiscoverable_tests(project_path):
+        return [interpreter, "-m", "pytest"]
+    # And one question further still (OPEN-47): a directory unittest CAN
+    # enter may hold tests it cannot collect. That is the silent half --
+    # "Ran 10 tests, OK" over a suite of 23 -- and it passes the gate.
+    if _has_uncollectable_tests(project_path):
         return [interpreter, "-m", "pytest"]
     return [interpreter, "-m", "unittest", "discover"]
 

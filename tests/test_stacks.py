@@ -299,6 +299,96 @@ def test_python_falls_back_to_unittest_with_no_venv_and_no_pytest(tmp_path: Path
     assert shutil.which(command[0]), "the interpreter must exist on PATH (A1.56)"
 
 
+def test_a_root_pytest_ini_declares_pytest(tmp_path: Path):
+    """OPEN-47. `pytest.ini` exists for no other tool, and run8 had one."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\ntestpaths =\n    tests\n", encoding="utf-8")
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_an_empty_pytest_ini_still_declares_pytest(tmp_path: Path):
+    """Its presence is the declaration; pytest treats it as the rootdir marker."""
+    (tmp_path / "pytest.ini").write_text("", encoding="utf-8")
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_setup_cfg_declares_pytest(tmp_path: Path):
+    (tmp_path / "setup.cfg").write_text("[tool:pytest]\naddopts = -q\n", encoding="utf-8")
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_tox_ini_declares_pytest(tmp_path: Path):
+    (tmp_path / "tox.ini").write_text("[testenv]\ndeps = pytest\n", encoding="utf-8")
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_bare_function_tests_are_a_pytest_layout_however_the_package_looks(tmp_path: Path):
+    """OPEN-47, and this is run8's exact shape.
+
+    `tests/__init__.py` makes the package *discoverable*, so
+    `_has_undiscoverable_tests` said no -- but every test in it is a bare
+    `def test_*`, which `unittest discover` enters and collects nothing
+    from. The gate ran 10 of the project's 23 tests and reported `passed`.
+    Structural reachability and collectability are different questions.
+    """
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "__init__.py").write_text("", encoding="utf-8")
+    (tests_dir / "test_db.py").write_text("def test_create():\n    assert True\n", encoding="utf-8")
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_a_root_level_bare_function_test_is_a_pytest_layout(tmp_path: Path):
+    """No `tests/` directory at all -- the walk must look at the root too."""
+    (tmp_path / "test_app.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_a_test_file_importing_pytest_is_a_pytest_layout(tmp_path: Path):
+    """Importing pytest means unittest cannot run the file either."""
+    (tmp_path / "test_app.py").write_text(
+        "import pytest\nimport unittest\n\n\n"
+        "class T(unittest.TestCase):\n"
+        "    def test_raises(self):\n"
+        "        with pytest.raises(ValueError):\n"
+        "            raise ValueError\n",
+        encoding="utf-8",
+    )
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "pytest"]
+
+
+def test_a_pure_unittest_project_still_gets_unittest(tmp_path: Path):
+    """The check must not swallow the branch it sits in front of.
+
+    Every test here is a TestCase method, which `unittest discover` collects
+    perfectly well, and nothing on disk names pytest.
+    """
+    (tmp_path / "test_app.py").write_text(
+        "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "unittest", "discover"]
+
+
+def test_an_indented_def_test_is_not_a_module_level_function(tmp_path: Path):
+    """A TestCase method is indented; reading it as a bare function would
+    route every unittest project to pytest."""
+    (tmp_path / "test_app.py").write_text(
+        "import unittest\n\n\nclass T(unittest.TestCase):\n"
+        "    def test_inside(self):\n        pass\n",
+        encoding="utf-8",
+    )
+    command = resolve_test_command(tmp_path, _python())
+    assert command[1:] == ["-m", "unittest", "discover"]
+
+
 def test_venv_resolution_never_reads_rudras_own_venv(tmp_path: Path):
     """D18: Rudra being a Python project and the target being one must not be conflated."""
     command = resolve_test_command(_python_project(tmp_path), _python())
