@@ -27,6 +27,21 @@ _CARGO_LINE = re.compile(
 _JEST_LINE = re.compile(r"^Tests:\s+(.+)$", re.MULTILINE)
 _JEST_PAIR = re.compile(r"(\d+)\s+(passed|failed|skipped|todo|total)")
 
+# unittest -- and therefore Django's `manage.py test` too:
+#
+#     Ran 6 tests in 0.000s
+#
+#     FAILED (failures=1, errors=1, skipped=1, expected failures=1, unexpected successes=1)
+#
+# "Ran 1 test" is singular, which is the shape run8 actually hit, so the `s`
+# is optional. `Ran N` already counts every outcome, so it IS the total --
+# unlike pytest's line, which has to be summed.
+_UNITTEST_RAN = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
+_UNITTEST_OUTCOME = re.compile(r"^(?:OK|FAILED)(?:\s+\((.*)\))?\s*$", re.MULTILINE)
+_UNITTEST_PAIR = re.compile(
+    r"(failures|errors|skipped|expected failures|unexpected successes)=(\d+)"
+)
+
 # node --test: "ℹ pass 1" / "ℹ fail 1" / "ℹ skipped 1" / "ℹ tests 3"
 #
 # `.*?` rather than `\W*` for the leading glyph: U+2139 INFORMATION SOURCE
@@ -105,6 +120,47 @@ def _parse_node_native(text: str) -> Counts:
     return Counts(total=total, failed=failed, skipped=skipped)
 
 
+def _parse_unittest(text: str) -> Counts:
+    """unittest's own two-line summary (OPEN-48).
+
+    Rudra emits `python3 -m unittest discover` itself
+    (`stacks/detect.py:374`), so before this existed the gate ran a runner it
+    could not read: `total` came back None for every unittest project, the
+    count vanished from the verdict line, and `_collected_nothing` fell
+    through to "non-zero exit means nothing was collected" -- which reported
+    run8's `ImportError` as a layout problem and cost that task 790.9s.
+
+    "NO TESTS RAN" prints a `Ran 0 tests` line and no OK/FAILED line at all,
+    and that is a real zero rather than an unparsed None -- the distinction
+    `_collected_nothing` is built on.
+    """
+    ran = _UNITTEST_RAN.findall(text)
+    if not ran:
+        return _UNKNOWN
+    outcomes = _UNITTEST_OUTCOME.findall(text)
+    detail = outcomes[-1] if outcomes else ""
+    tally = {label: int(number) for label, number in _UNITTEST_PAIR.findall(detail or "")}
+    # An expected failure is a skip and an unexpected success is a pass, for
+    # the same reason _parse_pytest folds xfailed and xpassed that way.
+    failed = tally.get("failures", 0) + tally.get("errors", 0)
+    skipped = tally.get("skipped", 0) + tally.get("expected failures", 0)
+    return Counts(total=int(ran[-1]), failed=failed, skipped=skipped)
+
+
+def _parse_python(text: str) -> Counts:
+    """Both runners Rudra can emit for a Python project, pytest first.
+
+    `_python_test_command` returns pytest for most projects and
+    `unittest discover` for the rest, so one parser was never enough. Same
+    shape as _parse_node below, and for the same reason.
+    """
+    for parser in (_parse_pytest, _parse_unittest):
+        counts = parser(text)
+        if counts != _UNKNOWN:
+            return counts
+    return _UNKNOWN
+
+
 def _parse_node(text: str) -> Counts:
     """`npm test` runs whatever the project declares, so try each shape.
 
@@ -120,7 +176,7 @@ def _parse_node(text: str) -> Counts:
 
 
 _PARSERS = {
-    "python": _parse_pytest,
+    "python": _parse_python,
     "rust": _parse_cargo,
     "node": _parse_node,
     "react": _parse_node,

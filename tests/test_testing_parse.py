@@ -48,6 +48,48 @@ Time:        0.118 s
 """
 
 
+# unittest, captured 2026-08-29 on CPython 3.12 (OPEN-48). One pass, one
+# failure, one error, one skip, one expected failure, one unexpected success.
+# unittest writes this to STDERR, not stdout.
+UNITTEST_MIXED = """\
+======================================================================
+UNEXPECTED SUCCESS: test_xpass (test_mix.T.test_xpass)
+----------------------------------------------------------------------
+Ran 6 tests in 0.000s
+
+FAILED (failures=1, errors=1, skipped=1, expected failures=1, unexpected successes=1)
+"""
+
+# Two passes and a skip.
+UNITTEST_OK_WITH_SKIP = """\
+----------------------------------------------------------------------
+Ran 3 tests in 0.000s
+
+OK (skipped=1)
+"""
+
+# run8's own t5, quoted from
+# /Users/archish/Documents/ai-ml/test-rudra-run8/run8-terminal.log:1547.
+# Note "Ran 1 test" -- singular, no plural s. This is the output that was
+# reported to the coder as "the test command collected nothing".
+UNITTEST_RUN8_IMPORT_ERROR = """\
+ImportError: cannot import name 'create_app' from 'app'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)
+"""
+
+# An empty discover run. unittest exits 5 here, exactly as pytest does.
+UNITTEST_NO_TESTS = """\
+----------------------------------------------------------------------
+Ran 0 tests in 0.000s
+
+NO TESTS RAN
+"""
+
+
 def test_pytest_mixed_counts():
     counts = parse_counts("python", PYTEST_MIXED, "")
     assert counts.failed == 1
@@ -131,3 +173,45 @@ def test_empty_output_is_not_a_zero_count():
 def test_a_word_ending_in_a_label_is_not_a_count():
     """The node prefix glyph is a LETTER, so the regex leans on \\b instead."""
     assert parse_counts("node", "ℹ bypass 9\n", "") == Counts(None, None, None)
+
+
+def test_unittest_mixed_counts():
+    """Ran N is authoritative: it already counts every outcome (OPEN-48)."""
+    counts = parse_counts("python", UNITTEST_MIXED, "")
+    assert counts.total == 6
+    assert counts.failed == 2, "failures and errors are both failures"
+    assert counts.skipped == 2, "an expected failure is a skip, as xfailed is for pytest"
+
+
+def test_unittest_ok_line_carries_its_skips():
+    counts = parse_counts("python", UNITTEST_OK_WITH_SKIP, "")
+    assert counts.total == 3
+    assert counts.failed == 0
+    assert counts.skipped == 1
+
+
+def test_unittest_singular_ran_one_test_is_parsed():
+    """run8's t5. "Ran 1 test" has no plural s, and a \bs\b regex misses it."""
+    counts = parse_counts("python", UNITTEST_RUN8_IMPORT_ERROR, "")
+    assert counts.total == 1
+    assert counts.failed == 1
+
+
+def test_unittest_no_tests_ran_is_a_zero_count_not_an_unparsed_one():
+    """Zero and None are different claims: only zero means "collected nothing"."""
+    counts = parse_counts("python", UNITTEST_NO_TESTS, "")
+    assert counts.total == 0
+    assert counts.failed == 0
+
+
+def test_unittest_summary_is_read_from_stderr():
+    """Where unittest actually writes it -- measured, not assumed."""
+    counts = parse_counts("python", "", UNITTEST_MIXED)
+    assert counts.total == 6
+
+
+def test_pytest_output_is_still_parsed_as_pytest():
+    """The python stack now has two shapes; adding one must not cost the other."""
+    counts = parse_counts("python", PYTEST_MIXED, "")
+    assert counts.total == 3
+    assert counts.failed == 1

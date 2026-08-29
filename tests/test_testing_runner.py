@@ -183,3 +183,63 @@ def test_a_passing_suite_is_not_mistaken_for_an_empty_suite(tmp_path: Path, env:
     result = run_tests(tmp_path, **env)
     assert result.no_tests_collected is False
     assert result.passed is True
+
+
+def _unittest_project(tmp_path: Path, body: str) -> None:
+    """A project `_python_test_command` resolves to `unittest discover`.
+
+    Nothing here is contrived: no `.venv`, no `manage.py`, no pytest
+    declaration and no `tests/` directory is exactly run8's finished
+    project, and `detect.py:374` is the branch it lands on.
+    """
+    (tmp_path / "test_unit.py").write_text(body, encoding="utf-8")
+
+
+UNITTEST_ONE_FAILING = """\
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_ok(self):
+        pass
+
+    def test_bad(self):
+        self.fail("boom")
+"""
+
+UNITTEST_TWO_PASSING = """\
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_a(self):
+        pass
+
+    def test_b(self):
+        pass
+"""
+
+
+def test_a_failing_unittest_suite_is_not_reported_as_an_empty_suite(tmp_path: Path, env: dict):
+    """OPEN-48. This is run8's t5, and it cost that run 790.9s.
+
+    Unparsed output made `total` None, so `_collected_nothing` fell back to
+    `exit_code != 0` and called a suite that ran and failed "collected
+    nothing" -- sending the coder to hunt a layout problem instead of the
+    failing test.
+    """
+    _unittest_project(tmp_path, UNITTEST_ONE_FAILING)
+    result = run_tests(tmp_path, **env)
+    assert list(result.command[-2:]) == ["unittest", "discover"], "the branch under test"
+    assert result.no_tests_collected is False, "the suite ran; it did not collect nothing"
+    assert result.total == 2
+    assert result.failed == 1
+
+
+def test_a_passing_unittest_suite_reports_its_count(tmp_path: Path, env: dict):
+    """The count the verdict line prints -- `## test: passed` said nothing."""
+    _unittest_project(tmp_path, UNITTEST_TWO_PASSING)
+    result = run_tests(tmp_path, **env)
+    assert result.passed is True
+    assert result.total == 2
+    assert result.failed == 0
