@@ -69,6 +69,52 @@ def test_a_fully_clean_verdict_says_so_plainly():
     assert verdict_line(report) == "passed — all 5 stages ran clean"
 
 
+def test_an_advisory_failure_is_named_in_the_verdict():
+    """CR-E9: a non-blocking FAILED stage counted as clean, so the verdict
+    heading verify.log read "all 5 stages ran clean" over a lint stage
+    reporting 12 problems. The stage must be named, and its detail carried."""
+    report = VerifyReport.from_stages(
+        [
+            stage("syntax", PASSED),
+            stage("lint", PASSED, blocking=False),
+            stage(
+                "typecheck",
+                FAILED,
+                blocking=False,
+                detail="Rudra's bundled mypy; project dependencies are not resolved",
+            ),
+            stage("test", PASSED),
+            stage("stubs", PASSED),
+        ]
+    )
+    line = verdict_line(report)
+    assert line == (
+        "passed — typecheck (Rudra's bundled mypy; project dependencies are "
+        "not resolved) failed (advisory)"
+    )
+
+
+def test_an_advisory_failure_with_no_detail_carries_no_empty_brackets():
+    """OPEN-51. The parenthetical was unconditional, so a stage with no
+    detail headed verify.log as `lint ()` -- which reads as a truncation
+    bug rather than as "no detail". Run b593a6137c64's lint stage failed
+    with three E712 findings and an empty detail.
+
+    CR-E9 is why this sentence exists at all: only the empty bracket goes,
+    the stage is still named.
+    """
+    report = VerifyReport.from_stages(
+        [
+            stage("syntax", PASSED),
+            stage("lint", FAILED, blocking=False),
+            stage("typecheck", PASSED),
+            stage("test", PASSED),
+            stage("stubs", PASSED),
+        ]
+    )
+    assert verdict_line(report) == "passed — lint failed (advisory)"
+
+
 def test_a_failed_verdict_names_the_blocker():
     report = VerifyReport.from_stages([stage("syntax", PASSED), stage("typecheck", FAILED)])
     assert verdict_line(report).startswith("failed — typecheck")

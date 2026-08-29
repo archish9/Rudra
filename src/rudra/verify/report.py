@@ -81,7 +81,14 @@ def verdict_line(report: VerifyReport) -> str:
         # The module's own rule -- a gate reporting success while stages
         # were skipped is A1.57 at report level -- was broken by the
         # sentence itself, and this verdict heads verify.log (CR-E9).
-        names = ", ".join(f"{stage.name} ({stage.detail})" for stage in advisory)
+        # The parenthetical is conditional (OPEN-51): typecheck always
+        # carries a detail, so an unconditional one read correctly for the
+        # case this was written against and headed verify.log as `lint ()`
+        # for every other advisory stage. The stage is still NAMED -- that
+        # is CR-E9 and it is not what is being trimmed.
+        names = ", ".join(
+            f"{stage.name} ({stage.detail})" if stage.detail else stage.name for stage in advisory
+        )
         return f"passed — {names} failed (advisory)"
 
     reasons = [f"{stage.name}: {stage.detail or stage.outcome}" for stage in inconclusive]
