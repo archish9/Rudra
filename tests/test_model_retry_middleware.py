@@ -360,7 +360,7 @@ def test_a_retry_reaches_the_debug_log_and_usage_json(tmp_path, monkeypatch, ins
 
         usage_path = tmp_path / "usage.json"
         write_usage_log(usage_path, usage)
-        assert json.loads(usage_path.read_text(encoding="utf-8"))["coder"]["retries"] == 2
+        assert json.loads(usage_path.read_text(encoding="utf-8"))["roles"]["coder"]["retries"] == 2
     finally:
         if handler is not None:
             logger.removeHandler(handler)

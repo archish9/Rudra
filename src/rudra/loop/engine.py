@@ -22,7 +22,7 @@ from typing import Any
 from rich.console import Console
 from rich.markup import escape
 
-from rudra.context.usage import render_usage
+from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
 from rudra.git.core import is_repo, status
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
 from rudra.loop.ledger import Ledger, Task, TaskStatus
@@ -800,8 +800,45 @@ def write_usage_log(path: Path, usage: Any) -> None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(usage.as_dict(), indent=2), encoding="utf-8")
+        path.write_text(json.dumps(usage.as_log(), indent=2), encoding="utf-8")
     except OSError:
+        return
+
+
+def notice_if_suspended(trace: Any, usage: Any) -> None:
+    """Say once, at run end, that the machine slept through part of it.
+
+    Every clock Rudra keeps counts only time the process was running, so a
+    suspended machine leaves them all honest and all disagreeing with the
+    user's stopwatch. run10 was 4888 seconds of wall clock over 1243
+    seconds of counted time, and three sessions read the difference as a
+    missing instrument before `pmset -g log` put macOS Deep Idle sleep in
+    exactly the three gaps (OPEN-53).
+
+    A NOTICE rather than a print, on OPEN-44's and OPEN-45's precedent: it
+    is something that happened TO the run rather than something a model
+    did, so it renders at VERBOSE and reaches the debug log at every
+    level. `role="rudra"` for the reason the palace uses that name -- it
+    marks what Rudra observed itself, as against what an agent said.
+
+    Nothing here may raise, the rule `write_usage_log` follows: a run that
+    finished its work must not be reported failed over its own
+    bookkeeping (C7.5).
+    """
+    if trace is None or usage is None:
+        return
+    try:
+        suspended = usage.suspended_seconds(wall_now=time.time(), mono_now=time.monotonic())
+        if suspended < SUSPENDED_NOTICE_SECONDS:
+            return
+        wall = time.time() - usage.started_wall
+        trace.notice(
+            f"the machine was suspended for {suspended:.1f}s of this run's "
+            f"{wall:.1f}s wall clock; every reported duration excludes it",
+            role="rudra",
+            name="suspended",
+        )
+    except Exception:  # noqa: BLE001 -- observability never ends a run
         return
 
 
@@ -1027,6 +1064,7 @@ async def work(
             await review_once(context, ledger)
         await summarise_architecture(context, ledger)
 
+    notice_if_suspended(getattr(context.subagents, "trace", None), run_usage)
     write_usage_log(context.paths.logs / "usage.json", run_usage)
     return summarise(ledger, context.console, run_usage, cancelled=cancelled)
 
@@ -1077,6 +1115,7 @@ __all__ = [
     "record_plan_memory",
     "summarise",
     "summarise_architecture",
+    "notice_if_suspended",
     "write_usage_log",
     "work",
 ]

@@ -7,6 +7,8 @@ the end.
 
 from __future__ import annotations
 
+import pytest
+
 from rudra.context.usage import RunUsage, render_usage
 
 
@@ -355,3 +357,103 @@ def test_render_omits_seconds_per_call_for_a_role_that_made_no_calls() -> None:
 
     assert "s/call" not in rendered
     assert "coder" in rendered
+
+
+# --- the two clocks (OPEN-53) ----------------------------------------------
+
+
+def test_a_fresh_run_reports_no_suspension() -> None:
+    """Both clocks start together, so their difference starts at zero.
+
+    This is the guard for the whole feature: `wall - mono` is not an
+    estimate of anything, it is exactly the time the process was not
+    running, and on a machine that never slept it must be 0.
+    """
+    usage = RunUsage()
+
+    assert usage.suspended_seconds(wall_now=usage.started_wall, mono_now=usage.started_mono) == 0.0
+
+
+def test_suspension_is_the_difference_between_the_two_clocks() -> None:
+    """run10's numbers, which is what this exists for: 4888s of wall clock
+    against 1243s the monotonic clock counted. macOS `time.monotonic()` is
+    `mach_absolute_time()`, which does not tick while the machine is
+    suspended, so the gap IS the sleep -- no threshold, no inference."""
+    usage = RunUsage(started_wall=1000.0, started_mono=50.0)
+
+    suspended = usage.suspended_seconds(wall_now=1000.0 + 4888.0, mono_now=50.0 + 1243.0)
+
+    assert suspended == pytest.approx(3645.0)
+
+
+def test_a_clock_that_ran_backwards_reports_no_suspension() -> None:
+    """`time.time()` is not monotonic: an NTP step backwards would make the
+    subtraction negative, and a negative "suspended" is a nonsense the
+    panel must never print. Clamped at the source, not at the renderer."""
+    usage = RunUsage(started_wall=1000.0, started_mono=50.0)
+
+    assert usage.suspended_seconds(wall_now=1000.0 + 10.0, mono_now=50.0 + 30.0) == 0.0
+
+
+def test_render_is_silent_about_suspension_on_a_normal_run() -> None:
+    """The regression that matters most, on the OPEN-45 precedent: a run
+    that never slept must produce the panel it produced before OPEN-53."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1)
+
+    assert "suspend" not in render_usage(usage)
+
+
+def test_render_names_suspension_when_the_machine_slept() -> None:
+    import time
+
+    usage = RunUsage(started_wall=time.time() - 4888.0, started_mono=time.monotonic() - 1243.0)
+    usage.record("coder", input_tokens=10, output_tokens=1)
+
+    rendered = render_usage(usage)
+
+    assert "suspended" in rendered
+    assert "3645" in rendered
+
+
+def test_a_short_clock_step_is_below_the_notice_threshold() -> None:
+    """SUSPENDED_NOTICE_SECONDS exists for NTP, not for sleep: a few
+    seconds of clock adjustment is not a suspended machine and must not
+    put a line in every panel."""
+    import time
+
+    from rudra.context.usage import SUSPENDED_NOTICE_SECONDS
+
+    usage = RunUsage(
+        started_wall=time.time() - 100.0,
+        started_mono=time.monotonic() - (100.0 - SUSPENDED_NOTICE_SECONDS / 2),
+    )
+    usage.record("coder", input_tokens=10, output_tokens=1)
+
+    assert "suspend" not in render_usage(usage)
+
+
+def test_the_log_shape_separates_the_roles_from_the_run() -> None:
+    """usage.json gains a run block, and the roles move under `roles`
+    rather than gaining a fifth sibling that reads as a role. It breaks
+    every reader once and loudly, which is the point -- a "run" key beside
+    "coder" would be counted as a role by anything that iterates."""
+    usage = RunUsage(started_wall=1000.0, started_mono=50.0)
+    usage.record("coder", input_tokens=10, output_tokens=1)
+
+    log = usage.as_log(wall_now=1000.0 + 4888.0, mono_now=50.0 + 1243.0)
+
+    assert set(log) == {"roles", "run"}
+    assert log["roles"]["coder"]["input_tokens"] == 10
+    assert log["run"]["wall_seconds"] == pytest.approx(4888.0)
+    assert log["run"]["suspended_seconds"] == pytest.approx(3645.0)
+
+
+def test_as_dict_still_returns_the_roles_alone() -> None:
+    """`as_dict` is the per-role snapshot the panel reads; `as_log` is the
+    file. Two shapes, two callers, so neither has to carry the other's
+    concern."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1)
+
+    assert set(usage.as_dict()) == {"coder"}

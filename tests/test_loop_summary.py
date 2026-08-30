@@ -135,7 +135,7 @@ def test_work_writes_the_usage_log(tmp_path):
 
     write_usage_log(target, usage)
 
-    assert json.loads(target.read_text(encoding="utf-8"))["coder"]["input_tokens"] == 100
+    assert json.loads(target.read_text(encoding="utf-8"))["roles"]["coder"]["input_tokens"] == 100
 
 
 def test_writing_the_usage_log_never_ends_a_run(tmp_path):
@@ -165,3 +165,87 @@ def test_writing_the_usage_log_skips_an_empty_tally(tmp_path):
     target = tmp_path / "usage.json"
     write_usage_log(target, RunUsage())
     assert not target.exists()
+
+
+# --- the two clocks reach the log and the trace (OPEN-53) -------------------
+
+
+def test_the_usage_log_carries_the_run_block(tmp_path):
+    """run10 was 4888s of wall clock over 1243s of counted time and nothing
+    on disk said so, which cost three sessions before `pmset -g log` named
+    the cause. The file now carries both clocks and their difference."""
+    import json
+
+    from rudra.context.usage import RunUsage
+    from rudra.loop.engine import write_usage_log
+
+    usage = RunUsage(started_wall=1000.0, started_mono=50.0)
+    usage.record("coder", input_tokens=100, output_tokens=10)
+    target = tmp_path / "logs" / "usage.json"
+
+    write_usage_log(target, usage)
+
+    written = json.loads(target.read_text(encoding="utf-8"))
+    assert written["roles"]["coder"]["input_tokens"] == 100
+    assert written["run"]["suspended_seconds"] >= 0.0
+    assert set(written) == {"roles", "run"}
+
+
+def test_a_suspended_run_says_so_in_the_trace(tmp_path):
+    """NOTICE, on the OPEN-44/OPEN-45 precedent: it is a thing RUDRA did
+    (or had done to it), not a thing the model did, so it renders at
+    VERBOSE and reaches the debug log at every level."""
+    import time
+
+    from rudra.context.usage import RunUsage
+    from rudra.loop.engine import notice_if_suspended
+
+    emitted = []
+
+    class Sink:
+        def notice(self, payload, *, role, name="", **kwargs):
+            emitted.append((payload, role, name))
+
+    usage = RunUsage(started_wall=time.time() - 4888.0, started_mono=time.monotonic() - 1243.0)
+
+    notice_if_suspended(Sink(), usage)
+
+    assert len(emitted) == 1
+    payload, role, name = emitted[0]
+    assert name == "suspended"
+    assert role == "rudra"
+    assert "3645" in payload
+
+
+def test_a_run_that_never_slept_says_nothing(tmp_path):
+    from rudra.context.usage import RunUsage
+    from rudra.loop.engine import notice_if_suspended
+
+    emitted = []
+
+    class Sink:
+        def notice(self, payload, *, role, name="", **kwargs):
+            emitted.append(payload)
+
+    notice_if_suspended(Sink(), RunUsage())
+
+    assert emitted == []
+
+
+def test_reporting_suspension_never_ends_a_run(tmp_path):
+    """C7.5's rule, which every run-end writer here follows: a finished run
+    must not be reported failed because its own bookkeeping raised."""
+    import time
+
+    from rudra.context.usage import RunUsage
+    from rudra.loop.engine import notice_if_suspended
+
+    class Sink:
+        def notice(self, payload, *, role, name="", **kwargs):
+            raise RuntimeError("the sink is gone")
+
+    usage = RunUsage(started_wall=time.time() - 4888.0, started_mono=time.monotonic() - 1243.0)
+
+    notice_if_suspended(Sink(), usage)  # must not raise
+    notice_if_suspended(None, usage)
+    notice_if_suspended(Sink(), None)

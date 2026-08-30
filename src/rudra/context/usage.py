@@ -18,6 +18,7 @@ langchain.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -81,11 +82,38 @@ def _add(total: int | None, reported: int | None) -> int | None:
     return reported if total is None else total + reported
 
 
+# Below this, a wall/monotonic disagreement is a clock adjustment rather
+# than a suspended machine, and a line in every panel would be noise
+# (OPEN-53). NTP steps in seconds; idle sleep costs minutes -- run10's
+# three gaps were 900s, 900s and 1800s against a 0.4s baseline for every
+# other task boundary in the run.
+SUSPENDED_NOTICE_SECONDS = 60.0
+
+
 @dataclass
 class RunUsage:
-    """Every model call this run made, grouped by role."""
+    """Every model call this run made, grouped by role.
+
+    It also holds the run's two start clocks, because it is already the
+    one object built at run start and shared by reference -- a second
+    object for two floats would be a second thing to thread through
+    `create_main_agent`.
+
+    `started_wall` and `started_mono` are both captured, and the pair is
+    the whole point of OPEN-53. EVERY clock in Rudra is `monotonic` or
+    `perf_counter` (trace/stream.py:109, loop/engine.py:398,
+    subagents/runner.py:324, context/middleware.py:60, llm/probe.py:127),
+    and on macOS both are `mach_absolute_time()`, which does not tick
+    while the machine is suspended. So the instruments are honest and
+    consistent, and a user comparing them against a stopwatch sees a
+    quarter of the run -- run10 was 4888s of clock over 1243s of counted
+    time, and three sessions read that as a missing instrument before
+    `pmset -g log` put Deep Idle sleep in exactly the three gaps.
+    """
 
     per_role: dict[str, RoleUsage] = field(default_factory=dict)
+    started_wall: float = field(default_factory=time.time)
+    started_mono: float = field(default_factory=time.monotonic)
 
     def _slot(self, role: str) -> RoleUsage:
         if role not in self.per_role:
@@ -149,6 +177,23 @@ class RunUsage:
         """
         self._slot(role).retries += 1
 
+    def suspended_seconds(self, *, wall_now: float, mono_now: float) -> float:
+        """Seconds of this run the process was not running.
+
+        Not an estimate. The wall clock counts suspended time and the
+        monotonic clock does not, so their difference is exactly it --
+        which is why there is no threshold here and no platform check.
+
+        Clamped at zero because `time.time()` is not monotonic: an NTP
+        step backwards would otherwise render as negative sleep, and a
+        panel that prints one is worse than a panel that prints none.
+
+        Both "now" values are arguments rather than read here, so this is
+        pure and testable without patching the clock -- the same reason
+        budget.py takes a config rather than reading one.
+        """
+        return max(0.0, (wall_now - self.started_wall) - (mono_now - self.started_mono))
+
     def roles(self) -> tuple[str, ...]:
         """Roles in the order they first appeared -- the run's own order."""
         return tuple(self.per_role)
@@ -169,6 +214,36 @@ class RunUsage:
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()
+        }
+
+    def as_log(
+        self, *, wall_now: float | None = None, mono_now: float | None = None
+    ) -> dict[str, Any]:
+        """The shape written to usage.json: the roles, and the run itself.
+
+        The roles are NESTED under `roles` rather than given a `run`
+        sibling, and that is deliberate. A top-level `run` beside `coder`
+        and `planner` is counted as a fifth role by anything that iterates
+        the file -- including the reproduction scripts in this project's
+        own ledger. Nesting breaks every reader once, loudly, at the point
+        the schema changed; a sibling key would go on quietly producing a
+        wrong total for as long as anybody kept summing it.
+
+        `as_dict` is unchanged and still returns the roles alone: the
+        panel reads that one, the file reads this one, and neither has to
+        carry the other's concern.
+        """
+        wall_now = time.time() if wall_now is None else wall_now
+        mono_now = time.monotonic() if mono_now is None else mono_now
+        return {
+            "roles": self.as_dict(),
+            "run": {
+                "wall_seconds": round(wall_now - self.started_wall, 3),
+                "counted_seconds": round(mono_now - self.started_mono, 3),
+                "suspended_seconds": round(
+                    self.suspended_seconds(wall_now=wall_now, mono_now=mono_now), 3
+                ),
+            },
         }
 
 
@@ -226,5 +301,19 @@ def render_usage(usage: Any) -> str:
         if tally["retries"]:
             line += f", {tally['retries']} {'retry' if tally['retries'] == 1 else 'retries'}"
         lines.append(line + ")[/dim]")
+
+    # The one thing in this panel that is NOT about a model (OPEN-53).
+    # Every number above counts only time the process was running, so a
+    # suspended machine makes them disagree with the user's stopwatch by
+    # however long it slept -- silently, and by a factor of four on run10.
+    # Guarded exactly as `compactions` and `retries` are, so a run that
+    # never slept prints the panel it printed before this landed.
+    suspended = usage.suspended_seconds(wall_now=time.time(), mono_now=time.monotonic())
+    if suspended >= SUSPENDED_NOTICE_SECONDS:
+        wall = time.time() - usage.started_wall
+        lines.append(
+            f"  [dim]suspended {suspended:.1f}s of {wall:.1f}s wall clock "
+            f"(machine asleep; the seconds above exclude it)[/dim]"
+        )
 
     return "Tokens:\n" + "\n".join(lines)

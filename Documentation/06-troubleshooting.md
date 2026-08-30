@@ -449,6 +449,36 @@ first](02-configuration.md#which-role-to-change-first), and mind the 32B
 floor: a smaller coder that needs more attempts costs more calls than it
 saves in latency.
 
+### The clock says an hour, Rudra says twenty minutes
+
+Your machine went to sleep mid-run. An unattended `--auto` run holds no
+wake lock, so a laptop left alone can suspend between one model call and
+the next.
+
+Every duration Rudra reports — `s/call`, per-task seconds, the trace
+timeline — comes from a monotonic clock, which by design does not count
+time the process was suspended. Those numbers stay correct. What they
+stop matching is your stopwatch.
+
+The final summary says so when it happens:
+
+```
+suspended 3645.4s of 4888.0s wall clock (machine asleep; the seconds above exclude it)
+```
+
+and `.rudra/run/logs/usage.json` carries the same three figures under its
+`run` key: `wall_seconds`, `counted_seconds`, `suspended_seconds`.
+
+The fix is to keep the machine awake for the run:
+
+```bash
+caffeinate -i rudra --auto --allow-shell "..."     # macOS
+systemd-inhibit --what=idle rudra --auto ...       # Linux with systemd
+```
+
+Measured, on the run that produced this section: 81 minutes of wall clock
+over 27 minutes of work, in three sleeps of 15, 15 and 30 minutes.
+
 ### Searching a large repo feels slow
 
 Check `rudra doctor` for the `ripgrep` row. Without `rg` on your `PATH`,
