@@ -258,14 +258,16 @@ def models_test(
     entries = [((role,), cfg.models[role])] if role else roles_to_probe(cfg)
 
     table = Table(title="Model check", header_style="bold")
-    for column in ("Roles", "Provider", "Model", "Construct", "Reach", "Tools", "Ctx"):
+    for column in ("Roles", "Provider", "Model", "Construct", "Reach", "Tools", "Latency", "Ctx"):
         table.add_column(column, overflow="fold")
 
     failed = False
+    timed = False
     for roles, _model in entries:
         # One probe per distinct endpoint; the Roles column says who shares it.
         result = probe_role(roles[0], cfg)
         failed = failed or not result.ok
+        timed = timed or result.tools_seconds is not None
         style = "green" if result.ok else "red"
         # Every cell but Roles is model- or provider-derived: a model id
         # like `vendor/model[preview]` lost its suffix to Rich markup, and
@@ -278,11 +280,25 @@ def models_test(
             escape(result.construct),
             escape(result.reach),
             escape(result.tools),
+            # The TOOL call, not the reach call (OPEN-40): it is the shape
+            # an agent actually makes, and being the second call it is not
+            # paying connection setup. Rudra-derived like Ctx, so it is not
+            # escaped -- a formatted float cannot carry markup, which is the
+            # whole of what CR-G4 escapes the model-derived cells against.
+            f"{result.tools_seconds:.1f}s" if result.tools_seconds is not None else "-",
             str(result.context_tokens) if result.context_tokens else "-",
             style=style,
         )
 
     console.print(table)
+    if timed:
+        # A bare number invites the wrong conclusion. Two probe calls is not
+        # a benchmark -- what it ranks is endpoints, and the multiplicand
+        # that turns it into a run's wall clock is the call count.
+        console.print(
+            "[dim]Latency is one tool-call round trip. A run makes hundreds — run6 made "
+            "208, 114 of them the coder's. Multiply.[/dim]"
+        )
     if failed:
         raise typer.Exit(code=1)
 

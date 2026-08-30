@@ -302,6 +302,13 @@ rudra models test
 
 If the table shows all `ok`, you're set. If not, [Troubleshooting](06-troubleshooting.md) decodes the message.
 
+The table's **Latency** column is one tool-call round trip against each
+endpoint. It is worth reading before you settle on a provider: a run's
+duration is calls × latency, the coder makes the majority of the calls, and
+`[model.coder]` need not name the same model as the rest. See
+[Configuration → Which role to change
+first](02-configuration.md#which-role-to-change-first).
+
 ---
 
 **Next:** [CLI Reference](04-cli-reference.md) · [Configuration](02-configuration.md)

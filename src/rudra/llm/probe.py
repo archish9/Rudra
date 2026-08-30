@@ -8,6 +8,7 @@ tool call, and deepagents requires tool calls for every agent.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -64,6 +65,19 @@ class ProbeResult:
     tools: str
     context_tokens: int | None
     ok: bool
+    # How long each of the two live calls took, in seconds (OPEN-40). Both
+    # calls were already being made and neither was timed, so `models test`
+    # answered "is this model usable?" without the half of the answer that
+    # decides a run's wall clock: a run is `calls x latency`, and run6 spent
+    # 91% of its clock inside the model.
+    #
+    # `None` on every failure path rather than an elapsed time. How long a
+    # connection took to refuse is the error's number, not the model's, and
+    # a duration printed beside an error invites reading it as one. It also
+    # keeps the two states distinguishable: "not measured" and "measured at
+    # zero" are different facts.
+    reach_seconds: float | None = None
+    tools_seconds: float | None = None
 
 
 @tool
@@ -110,6 +124,7 @@ def probe_role(role: str, cfg: Any = None) -> ProbeResult:
 
     context_tokens = (model.profile or {}).get("max_input_tokens")
 
+    started = time.perf_counter()
     try:
         model.invoke("Reply with the single word: ok")
     except Exception as error:  # noqa: BLE001
@@ -124,9 +139,17 @@ def probe_role(role: str, cfg: Any = None) -> ProbeResult:
             ok=False,
         )
 
+    reach_seconds = time.perf_counter() - started
+
+    # A round trip that returned no tool calls is still a round trip: the
+    # model answered, it just answered wrong, so the duration is the
+    # model's and is kept. Only the exception path loses its number.
+    tools_seconds: float | None = None
+    started = time.perf_counter()
     try:
         response = model.bind_tools([echo]).invoke("Call the echo tool with text hello.")
         tools = "ok" if response.tool_calls else "no tool_calls emitted"
+        tools_seconds = time.perf_counter() - started
     except Exception as error:  # noqa: BLE001
         tools = _short(error)
 
@@ -139,4 +162,6 @@ def probe_role(role: str, cfg: Any = None) -> ProbeResult:
         tools=tools,
         context_tokens=context_tokens,
         ok=tools == "ok",
+        reach_seconds=reach_seconds,
+        tools_seconds=tools_seconds,
     )

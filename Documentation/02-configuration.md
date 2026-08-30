@@ -131,6 +131,38 @@ Role names are still not a closed list — an unknown one falls back to
 `rudra models test` probes **distinct endpoints**, not roles. Five roles
 pointing at one model is one row, listing all five; the split above is two.
 
+### Which role to change first
+
+A run's duration is **model calls × per-call latency**. In one measured
+33-minute run, 208 calls at 8.95s each were **91% of the wall clock** —
+Rudra's own code accounted for about 28 seconds of it. So the two things
+worth tuning are how many calls a run makes and how long each one takes,
+and only the second is a line in this file.
+
+**The coder makes the majority of the calls** — 114 of those 208. It
+retries per task and reads before it writes, while the planner runs a
+handful of times per run and the reviewer runs once. That makes
+`[model.coder]` the highest-leverage line here, and it does not have to
+name the same model as `[model.planner]`: the planner decides the shape of
+everything and runs rarely; the coder runs constantly and writes one file
+at a time.
+
+Measure before choosing. `rudra models test` prints a **Latency** column —
+one tool-call round trip against each configured endpoint, which is the
+shape of call an agent actually makes. Multiply it by the call counts in
+`.rudra/run/logs/usage.json`, which the end-of-run panel also reports as
+`s/call` per role.
+
+The floor on any "use a smaller coder" conclusion is Rudra's 32B minimum
+target model. Below it, the workarounds in `[compat]` exist because smaller
+models failed in ways that cost more calls than the faster model saved —
+which is the same arithmetic in the other direction.
+
+Rudra reports latency and never a price. Token counts are frequently not
+reported at all by local backends, prices are provider-specific and change,
+and a failed call still costs you the wait — so latency is the one number
+every backend has.
+
 ### API keys
 
 Two settings, and `api_key` wins where both are set:

@@ -95,10 +95,18 @@ Every finished run reports its usage:
 ✅ Complete
 Files created:  3
 Files modified: 1
-Tokens: planner  41,204 in / 3,118 out   (7 calls, 31.4s)
-        coder    88,930 in / 12,455 out  (19 calls, 402.7s, 2 compactions)
-        tester   14,002 in /  1,203 out  (4 calls, 55.1s)
+Tokens: planner  41,204 in / 3,118 out   (7 calls, 31.4s, 4.49s/call)
+        coder    88,930 in / 12,455 out  (19 calls, 402.7s, 21.19s/call, 2 compactions)
+        tester   14,002 in /  1,203 out  (4 calls, 55.1s, 13.78s/call)
 ```
+
+`s/call` is the number that says **which role to change**: a run's duration
+is calls × latency, and the coder is normally the majority of both. It is
+derived here and deliberately not stored — `usage.json` keeps `calls` and
+`seconds`, and one division in the renderer cannot drift from the two
+numbers it divides. `rudra models test` reports the other half, per
+endpoint, before you have paid for a run. See [Configuration → Which role
+to change first](02-configuration.md#which-role-to-change-first).
 
 The same numbers, machine-readable, in `.rudra/run/logs/usage.json`:
 

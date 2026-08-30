@@ -133,13 +133,14 @@ rudra models test --role planner
 Output:
 
 ```
-                          Model check
-┏━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━┓
-┃ Role    ┃ Provider ┃ Model            ┃ Construct ┃ Reach ┃ Tools ┃ Ctx    ┃
-┡━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━┩
-│ planner │ ollama   │ qwen3:32b        │ ok        │ ok    │ ok    │ 131072 │
-│ coder   │ ollama   │ qwen3:32b        │ ok        │ ok    │ ok    │ 131072 │
-└─────────┴──────────┴──────────────────┴───────────┴───────┴───────┴────────┘
+                              Model check
+┏━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
+┃ Role    ┃ Provider ┃ Model     ┃ Construct ┃ Reach ┃ Tools ┃ Latency ┃ Ctx    ┃
+┡━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
+│ planner │ ollama   │ qwen3:32b │ ok        │ ok    │ ok    │ 2.4s    │ 131072 │
+│ coder   │ ollama   │ qwen3:32b │ ok        │ ok    │ ok    │ 2.6s    │ 131072 │
+└─────────┴──────────┴───────────┴───────────┴───────┴───────┴─────────┴────────┘
+Latency is one tool-call round trip. A run makes hundreds. Multiply.
 ```
 
 | Stage | Proves | Network? |
@@ -147,7 +148,19 @@ Output:
 | **Construct** | Config is valid, provider known, key variable present, package installed | No |
 | **Reach** | The model answers | Yes |
 | **Tools** | The model emits a real tool call | Yes |
+| **Latency** | How long that tool call took, in seconds — `-` when the probe never got that far | Already made |
 | **Ctx** | The context window in effect | No |
+
+**Latency** times the **Tools** call, not the **Reach** one: it is the shape
+of call an agent actually makes, and being the second call it is not paying
+connection setup. Both calls were already being made, so the number is free.
+A failed stage reports `-` rather than an elapsed time — how long a
+connection took to refuse is the error's number, not the model's.
+
+Two probe calls is not a benchmark. What it ranks is endpoints; what turns
+that into a run's wall clock is the call count, which the end-of-run
+`Tokens:` panel reports as `s/call` per role. See [Configuration → Which
+role to change first](02-configuration.md#which-role-to-change-first).
 
 The stages are reported separately because they fail independently. A green **Reach** with a failed **Tools** means your connection is perfect and the model simply can't drive Rudra — a distinction a single pass/fail would hide.
 

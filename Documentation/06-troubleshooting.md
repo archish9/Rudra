@@ -423,6 +423,32 @@ A long gap on a single line is the model thinking, not Rudra hanging. The
 per-task timings in the final summary tell you afterwards where the time
 actually went.
 
+### My runs are slow
+
+Nearly all of it is the model, not Rudra. In one measured 33-minute run,
+208 model calls at 8.95s each were 91% of the wall clock; Rudra's own code
+accounted for about 28 seconds.
+
+That means a run's duration is **calls × latency**, and you can see both
+numbers:
+
+```bash
+rudra models test           # the Latency column: one tool-call round trip
+```
+
+and, after any run, the `Tokens:` block in the final summary, which reports
+`s/call` per role beside the call count. The same figures are written to
+`.rudra/run/logs/usage.json`.
+
+Read the role with the largest **total** seconds, not the largest `s/call`.
+The coder usually wins by a wide margin — it retries per task and reads
+before it writes — which makes `[model.coder]` the highest-leverage line in
+your config. It does not have to be the same model as `[model.planner]`.
+See [Configuration → Which role to change
+first](02-configuration.md#which-role-to-change-first), and mind the 32B
+floor: a smaller coder that needs more attempts costs more calls than it
+saves in latency.
+
 ### Searching a large repo feels slow
 
 Check `rudra doctor` for the `ripgrep` row. Without `rg` on your `PATH`,

@@ -302,3 +302,56 @@ def test_a_role_that_never_got_a_listing_reports_zero_not_none() -> None:
     usage = RunUsage()
     usage.record("reviewer", input_tokens=5, output_tokens=5)
     assert usage.as_dict()["reviewer"]["tree_chars"] == 0
+
+
+# --- OPEN-40: seconds per call, derived in the renderer ---------------------
+
+
+def test_render_divides_seconds_by_calls() -> None:
+    """OPEN-40. `usage.json` has `calls` and `seconds`; the panel printed
+    both and never divided them, so the number that says WHICH ROLE TO
+    CHANGE was left as arithmetic for the reader. Run6's coder: 114 calls
+    over 1108.502s."""
+    usage = RunUsage()
+    for _ in range(4):
+        usage.record("coder", input_tokens=10, output_tokens=1, seconds=0.5)
+
+    assert "0.50s/call" in render_usage(usage)
+
+
+def test_seconds_per_call_is_never_stored() -> None:
+    """Derived in the renderer, never in the schema: two representations of
+    one fact drift, and this project has a ledger full of examples. A
+    division in render_usage cannot disagree with the numbers it divides."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1, seconds=2.0)
+
+    assert "s/call" not in str(usage.as_dict()["coder"].keys())
+    assert set(usage.as_dict()["coder"]) == {
+        "calls",
+        "input_tokens",
+        "output_tokens",
+        "compactions",
+        "retries",
+        "recall_chars",
+        "recall_injections",
+        "tree_chars",
+        "tree_injections",
+        "seconds",
+    }
+
+
+def test_render_omits_seconds_per_call_for_a_role_that_made_no_calls() -> None:
+    """The only new failure mode OPEN-40 introduces, and its document says
+    to write this test first. A slot can exist with `calls == 0`:
+    `record_recall`, `record_tree` and `record_retry` all reach `_slot`
+    without recording a call, so the denominator is reachable at zero."""
+    from rudra.context.usage import RoleUsage
+
+    usage = RunUsage()
+    usage.per_role["coder"] = RoleUsage(calls=0, seconds=5.0)
+
+    rendered = render_usage(usage)
+
+    assert "s/call" not in rendered
+    assert "coder" in rendered

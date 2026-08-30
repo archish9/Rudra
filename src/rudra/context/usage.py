@@ -203,6 +203,20 @@ def render_usage(usage: Any) -> str:
         )
         if tally["seconds"]:
             line += f", {tally['seconds']}s"
+            # OPEN-40. `calls` and `seconds` were both here and the reader
+            # was left to divide them, which is the number that says which
+            # role to change -- run6's coder was 55% of every call in the
+            # run. Derived here and never stored: `as_dict` is unchanged,
+            # because two representations of one fact drift.
+            #
+            # `calls` is guarded rather than assumed non-zero. `_slot`
+            # creates a row for `record_recall`, `record_tree` and
+            # `record_retry` without recording a call, so a role can reach
+            # this line at zero and a division would raise inside the
+            # end-of-run panel -- reporting a finished run as failed over
+            # bookkeeping, which C7.5 exists to prevent.
+            if tally["calls"]:
+                line += f", {tally['seconds'] / tally['calls']:.2f}s/call"
         if tally["compactions"]:
             plural = "s" if tally["compactions"] != 1 else ""
             line += f", {tally['compactions']} compaction{plural}"
