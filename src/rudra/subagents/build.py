@@ -244,7 +244,15 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped -- otherwise two
         # spellings of one path count as two different calls (OPEN-10).
-        RepeatGuardMiddleware(),
+        RepeatGuardMiddleware(
+            # OPEN-39 Phase 2. The guard answers repeated reads itself, and
+            # a call that never happens leaves no mark on tokens, seconds
+            # or tool results -- so without this the saving is unmeasurable
+            # and the next session re-runs the ledger's re-read script by
+            # hand, which is the third time that would have happened.
+            role=spec.role,
+            usage=getattr(context, "usage", None),
+        ),
         # Before the FilesystemMiddleware that BUILDS the execute tool, which
         # is only where it has to sit in the list -- the description swap
         # happens per model call, on whatever tools the request carries, so

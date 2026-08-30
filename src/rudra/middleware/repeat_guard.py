@@ -21,6 +21,30 @@ is deliberately outside `_GUARDED_TOOLS`.
 The count is per (tool, arguments) and resets the moment that exact call
 succeeds, so a read that fails while a file is being written and then works
 is never held against the model.
+
+**Two rules, one mechanism (OPEN-39 Phase 2).** Since 2026-08-30 the same
+no-progress test also covers calls that SUCCEEDED: a guarded read repeated
+with identical arguments, and nothing in between that could have changed the
+answer, is refused rather than re-run. Measured on run 83f34f50210c: 47
+`read_file` calls over 6 distinct files -- 41 re-reads, 16 of them inside a
+single invocation, where the bytes were already in the model's own
+transcript. The dominant shape is read-after-own-write, the coder confirming
+a write it had just made.
+
+Nothing is cached and nothing is served from a copy. The refusal is safe for
+exactly the reason the failure rule is: `_record` drops all state on any
+non-guarded call, so a short-circuit can only happen when no write, edit,
+delete or command has intervened. The one case it gets wrong is a process
+OUTSIDE Rudra editing a project file mid-turn, which the loop already assumes
+away -- `loop/engine.py::attempt_snapshot` compares a before and an after on
+the same assumption.
+
+**The refusal must never read as a tool failure.** `trace/stream.py` counts a
+result whose first line begins "Error"/"Traceback"/"Errno"/"[Errno"/"BLOCKED:"
+as one, and `subagents/runner.py` halts a subagent after three consecutive
+failures -- so an "Error:"-prefixed dedupe message would convert this saving
+into three dead invocations, which is OPEN-16's shape. The failure refusal
+leads with "Error:" because it IS one; this one leads with "Already read:".
 """
 
 from __future__ import annotations
@@ -43,6 +67,21 @@ itself on the second attempt is normal, and a guard that fires on the
 first failure would be indistinguishable from the tool simply being
 broken. The third identical call is the one that has stopped being a
 retry and started being a loop.
+"""
+
+
+MAX_IDENTICAL_READS = 1
+"""Successful answers to one exact call before the next is refused.
+
+One, not two, and the asymmetry with MAX_IDENTICAL_FAILURES is the point.
+A failure earns its retry because a model correcting itself on the second
+attempt is normal. A success has nothing to correct -- the answer is in the
+transcript verbatim -- so the second identical call is already the waste.
+
+Refusing only the third would also be too late to help: `runner.py`'s
+MAX_REPEATED_CALLS halts the whole invocation on the third, and two of run
+83f34f50210c's five halts were exactly that (`read_file` on `models.py`,
+then on `app.py`), each costing an attempt.
 """
 
 
@@ -77,11 +116,32 @@ class RepeatGuardMiddleware(AgentMiddleware):
     other middleware it constructs.
     """
 
-    def __init__(self, max_identical_failures: int = MAX_IDENTICAL_FAILURES) -> None:
+    def __init__(
+        self,
+        max_identical_failures: int = MAX_IDENTICAL_FAILURES,
+        max_identical_reads: int = MAX_IDENTICAL_READS,
+        *,
+        role: str | None = None,
+        usage: Any = None,
+    ) -> None:
+        """`role` and `usage` are optional and duck-typed, on
+        ModelRetryMiddleware's precedent (`subagents/build.py:239-243`):
+        callers outside a full run build stand-in contexts, and half of them
+        have no accounting to hand. Both are needed before anything is
+        counted -- `RunUsage._slot` would otherwise open a row named None.
+        """
         super().__init__()
         self.max_identical_failures = max_identical_failures
+        self.max_identical_reads = max_identical_reads
+        self.role = role
+        self.usage = usage
         self._failures: dict[str, int] = {}
         self._last_error: dict[str, str] = {}
+        # How many times each signature has already been answered
+        # successfully with nothing since that could have changed the
+        # answer. A count rather than a set, so `max_identical_reads` is a
+        # real dial and the two rules read the same way.
+        self._answered: dict[str, int] = {}
 
     def _refusal(self, signature: str, name: str) -> str:
         seen = self._failures[signature]
@@ -94,15 +154,54 @@ class RepeatGuardMiddleware(AgentMiddleware):
             f"without this file."
         )
 
+    def _repeat_refusal(self, name: str, args: dict[str, Any]) -> str:
+        """The answer to a read that has already been answered.
+
+        Leads with "Already read", never "Error" -- see the module
+        docstring. It carries the target because a bare "you did that
+        already" leaves the model to work out WHICH of its calls was
+        refused, and the whole saving is one round trip.
+        """
+        target = args.get("file_path") or args.get("path") or args.get("pattern") or ""
+        return (
+            f"Already read: `{name}` on '{target}' was answered earlier in this "
+            f"turn and nothing has changed it since, so it was not run again. "
+            f"That earlier result is still current -- use it. To see something "
+            f"else, call a different path or pattern; to change the file, write "
+            f"or edit it."
+        )
+
     def _blocked(self, request) -> str | None:
-        """The refusal to return instead of running this call, or None."""
+        """The refusal to return instead of running this call, or None.
+
+        Failures are tested first. The two rules cannot both apply to one
+        signature -- a success clears the failure count and a failure is
+        never in `_answered` -- but the order is fixed anyway, because a
+        reader should not have to prove that to know which message wins.
+        """
         name = request.tool_call.get("name")
         if name not in _GUARDED_TOOLS:
             return None
-        signature = _signature(name, request.tool_call.get("args", {}))
-        if self._failures.get(signature, 0) < self.max_identical_failures:
-            return None
-        return self._refusal(signature, name)
+        args = request.tool_call.get("args", {})
+        signature = _signature(name, args)
+        if self._failures.get(signature, 0) >= self.max_identical_failures:
+            return self._refusal(signature, name)
+        if self._answered.get(signature, 0) >= self.max_identical_reads:
+            self._count_dedupe()
+            return self._repeat_refusal(name, args)
+        return None
+
+    def _count_dedupe(self) -> None:
+        """One re-read this guard answered instead of running (OPEN-39).
+
+        Counted only for the repeat rule, never for the failure one: the
+        saving OPEN-39 Phase 2 claims is re-reads avoided, and OPEN-10's
+        saving was banked in 2026-08-24. Two things in one number would be
+        neither.
+        """
+        if self.usage is None or self.role is None:
+            return
+        self.usage.record_dedupe(self.role)
 
     def _record(self, request, result: Any) -> None:
         name = request.tool_call.get("name")
@@ -121,14 +220,21 @@ class RepeatGuardMiddleware(AgentMiddleware):
             # lift because the read that would clear it never runs.
             self._failures.clear()
             self._last_error.clear()
+            # And the successes, for the stronger version of the same
+            # reason: a write is exactly how the answer to a read changes,
+            # so every previous answer stops being current here. This one
+            # line is the whole correctness argument for the repeat rule.
+            self._answered.clear()
             return
         signature = _signature(name, request.tool_call.get("args", {}))
         if _is_error(result):
             self._failures[signature] = self._failures.get(signature, 0) + 1
             self._last_error[signature] = str(getattr(result, "content", result))[:200]
+            self._answered.pop(signature, None)
         else:
             self._failures.pop(signature, None)
             self._last_error.pop(signature, None)
+            self._answered[signature] = self._answered.get(signature, 0) + 1
 
     def wrap_tool_call(self, request, handler):
         refusal = self._blocked(request)
@@ -147,4 +253,4 @@ class RepeatGuardMiddleware(AgentMiddleware):
         return result
 
 
-__all__ = ["MAX_IDENTICAL_FAILURES", "RepeatGuardMiddleware"]
+__all__ = ["MAX_IDENTICAL_FAILURES", "MAX_IDENTICAL_READS", "RepeatGuardMiddleware"]

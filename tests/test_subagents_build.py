@@ -872,3 +872,33 @@ def test_build_agent_passes_the_listing_to_create_deep_agent(context, monkeypatc
 
     assert "## PROJECT FILES" in captured["system_prompt"]
     assert "app.py" in captured["system_prompt"]
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_repeat_guard_can_report_what_it_saved(name, context):
+    # OPEN-39 Phase 2, and it is OPEN-45's lesson applied before the fact:
+    # registered is not wired. A re-read the guard answers is a model call
+    # that never happens, so it leaves no mark on calls, tokens or seconds
+    # -- if the guard cannot reach the accounting, the saving is provable
+    # only by re-running a script over a debug log, which this item's
+    # document exists because of.
+    import dataclasses
+
+    usage = object()
+    wired = dataclasses.replace(context, usage=usage)
+    middleware = _middleware_for(REGISTRY[name], wired, _model_for(REGISTRY[name], wired.cfg))
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+
+    assert guard.usage is usage
+    assert guard.role == REGISTRY[name].role
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_a_subagent_repeat_guard_still_builds_with_no_run_around_it(name, context):
+    # The context fixture carries no usage, as every 9b-era stand-in does,
+    # and the guard must go on guarding without one -- counting is the
+    # optional half.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+
+    assert guard.usage is None

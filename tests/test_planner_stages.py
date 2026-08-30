@@ -259,3 +259,29 @@ def test_planner_middleware_reports_its_usage():
     assert len(recorders) == 1
     assert recorders[0].role == "planner"
     assert recorders[0].usage is usage
+
+
+def test_the_planner_repeat_guard_reports_what_it_saved():
+    """OPEN-39 Phase 2. The planner re-reads too -- 9 of run
+    83f34f50210c's 41 -- and it is a different problem from a coder
+    re-reading its own writes, so the two must not land in one row."""
+    from rudra.agent.planner_agent import build_planner_middleware
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    middleware = build_planner_middleware("a task", usage=usage)
+
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+    assert guard.role == "planner"
+    assert guard.usage is usage
+
+
+def test_the_planner_repeat_guard_builds_without_accounting():
+    """Counting is the optional half: `build_planner_middleware` is called
+    with no usage by every caller that is not a full run."""
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    middleware = build_planner_middleware("a task")
+
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+    assert guard.usage is None

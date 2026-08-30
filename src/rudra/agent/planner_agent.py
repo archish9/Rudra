@@ -340,7 +340,7 @@ def build_planner_middleware(
         # became rather than as the one the model mistyped. The planner is
         # where OPEN-10 was measured: four identical failing read_file calls
         # in a row, and nothing to stop a fifth.
-        RepeatGuardMiddleware(),
+        RepeatGuardMiddleware(role="planner", usage=usage),
         # OPEN-37, and it is OPEN-26 one agent up. `create_deep_agent` below
         # passes no `subagents=`, so deepagents auto-adds its own
         # general-purpose spec (graph.py:750-751 -- the auto-add is skipped

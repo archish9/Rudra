@@ -62,6 +62,16 @@ class RoleUsage:
     # system prompt growth is otherwise unmeasured.
     tree_chars: int = 0
     tree_injections: int = 0
+    # Guarded reads this role repeated with identical arguments, and
+    # nothing in between that could have changed the answer, which
+    # RepeatGuardMiddleware answered instead of running (OPEN-39 Phase 2).
+    # Counted for the reason tree_chars is, and it is the same question
+    # asked from the other side: the listing buys model calls WITH prompt
+    # tokens, and this one takes model calls back for nothing. Run
+    # 83f34f50210c made 41 re-reads over 6 distinct files -- 22% of its
+    # counted time -- and the only way anyone knew was a script run by hand
+    # over a debug log, three separate times.
+    reads_deduped: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -157,6 +167,16 @@ class RunUsage:
         slot.tree_chars += int(chars)
         slot.tree_injections += 1
 
+    def record_dedupe(self, role: str) -> None:
+        """One repeated guarded read answered by the guard, not the tool.
+
+        Mirrors record_retry: both count something Rudra did on the run's
+        behalf that `calls` cannot show -- and this one is invisible in
+        every other number, since a call that never happens leaves no
+        trace in tokens, seconds or tool results.
+        """
+        self._slot(role).reads_deduped += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -211,6 +231,7 @@ class RunUsage:
                 "recall_injections": tally.recall_injections,
                 "tree_chars": tally.tree_chars,
                 "tree_injections": tally.tree_injections,
+                "reads_deduped": tally.reads_deduped,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

@@ -46,6 +46,11 @@ def test_recording_accumulates_per_role():
         # cost, and the trade it makes is model calls bought with tokens.
         "tree_chars": 0,
         "tree_injections": 0,
+        # Added by OPEN-39 Phase 2: guarded reads the repeat guard answered
+        # instead of running. Asserted at zero rather than omitted, because
+        # a key that appears only on runs that deduped is a key every
+        # reader of usage.json has to guard.
+        "reads_deduped": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -339,6 +344,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "recall_injections",
         "tree_chars",
         "tree_injections",
+        "reads_deduped",
         "seconds",
     }
 
@@ -457,3 +463,52 @@ def test_as_dict_still_returns_the_roles_alone() -> None:
     usage.record("coder", input_tokens=10, output_tokens=1)
 
     assert set(usage.as_dict()) == {"coder"}
+
+
+def test_deduped_reads_are_counted_per_role():
+    """OPEN-39 Phase 2. Mirrors retries, and for a sharper version of the
+    same reason: a re-read the guard answered is a model call that never
+    happened, so it leaves no mark on calls, tokens or seconds. Nothing
+    else in this file could show it."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+    usage.record_dedupe("coder")
+    usage.record_dedupe("coder")
+    assert usage.as_dict()["coder"]["reads_deduped"] == 2
+
+
+def test_deduped_reads_are_not_shared_between_roles():
+    """The planner re-reads too -- 9 of run 83f34f50210c's 41 -- and it is
+    a different problem from a coder that re-reads its own writes."""
+    usage = RunUsage()
+    usage.record_dedupe("planner")
+    assert usage.as_dict()["planner"]["reads_deduped"] == 1
+    assert usage.as_dict().get("coder") is None
+
+
+def test_a_run_with_no_deduped_reads_reports_zero_not_absence():
+    """usage.json is read by scripts in this project's own ledger, so a
+    key that appears only sometimes is a key every reader has to guard."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+    assert usage.as_dict()["coder"]["reads_deduped"] == 0
+
+
+def test_deduped_reads_reach_the_usage_log():
+    """as_log nests as_dict under `roles`, so this is inherited rather than
+    plumbed -- asserted because that inheritance is what OPEN-53 changed."""
+    usage = RunUsage()
+    usage.record_dedupe("coder")
+    log = usage.as_log(wall_now=usage.started_wall, mono_now=usage.started_mono)
+    assert log["roles"]["coder"]["reads_deduped"] == 1
+
+
+def test_render_is_silent_about_deduped_reads():
+    """It is a saving, not something to act on, so it belongs in the file
+    and not in the panel -- and a clean run's panel stays byte-identical to
+    the one before this landed, the same rule OPEN-45 kept."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1)
+    usage.record_dedupe("coder")
+
+    assert "dedup" not in render_usage(usage)
