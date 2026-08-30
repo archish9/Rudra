@@ -902,3 +902,29 @@ def test_a_subagent_repeat_guard_still_builds_with_no_run_around_it(name, contex
     guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
 
     assert guard.usage is None
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_repeat_guard_can_report_what_it_refused(name, context):
+    # OPEN-57. Registered is not wired: the guard held a counter and no
+    # sink, so its refusal reached the trace as a HumanMessage -- Rudra's
+    # words wearing the user's name -- and nothing said a refusal had
+    # happened at all. ModelRetryMiddleware above is the precedent.
+    import dataclasses
+
+    sink = object()
+    wired = dataclasses.replace(context, trace=sink)
+    middleware = _middleware_for(REGISTRY[name], wired, _model_for(REGISTRY[name], wired.cfg))
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+
+    assert guard.trace is sink
+    assert guard.role == REGISTRY[name].role
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_a_subagent_repeat_guard_still_builds_with_no_trace(name, context):
+    # The context fixture carries none, as every 9b-era stand-in does.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+
+    assert guard.trace is None

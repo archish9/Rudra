@@ -285,3 +285,30 @@ def test_the_planner_repeat_guard_builds_without_accounting():
 
     guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
     assert guard.usage is None
+
+
+def test_the_planner_repeat_guard_can_report_what_it_refused():
+    """OPEN-57. The planner is where OPEN-10 was measured, so it is where a
+    refusal was first mis-attributed to the user."""
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    class _Sink:
+        def notice(self, payload, *, role, name="", namespace=(), index=0, at=0.0):
+            return None
+
+    sink = _Sink()
+    middleware = build_planner_middleware("a task", trace=sink)
+
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+    assert guard.trace is sink
+
+
+def test_the_planner_repeat_guard_builds_without_a_trace():
+    """Optional for the reason `usage` is: compat tests build this with
+    neither, and a run that built no sink must still get its guard."""
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    middleware = build_planner_middleware("a task")
+
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+    assert guard.trace is None

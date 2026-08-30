@@ -340,7 +340,10 @@ def build_planner_middleware(
         # became rather than as the one the model mistyped. The planner is
         # where OPEN-10 was measured: four identical failing read_file calls
         # in a row, and nothing to stop a fifth.
-        RepeatGuardMiddleware(role="planner", usage=usage),
+        # `trace` for the reason ModelRetryMiddleware above has one
+        # (OPEN-57): without it a refusal is recorded as something the USER
+        # said, and nothing anywhere says the guard fired.
+        RepeatGuardMiddleware(role="planner", usage=usage, trace=trace),
         # OPEN-37, and it is OPEN-26 one agent up. `create_deep_agent` below
         # passes no `subagents=`, so deepagents auto-adds its own
         # general-purpose spec (graph.py:750-751 -- the auto-add is skipped

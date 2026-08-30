@@ -45,6 +45,26 @@ as one, and `subagents/runner.py` halts a subagent after three consecutive
 failures -- so an "Error:"-prefixed dedupe message would convert this saving
 into three dead invocations, which is OPEN-16's shape. The failure refusal
 leads with "Error:" because it IS one; this one leads with "Already read:".
+
+**A refusal answers the call it refused, and says so as Rudra (OPEN-57).**
+Both refusals used to be returned as a bare `str`. langgraph puts a
+wrapper's return value straight into `{messages: [...]}`
+(prebuilt/tool_node.py:881-886), where `add_messages` coerces a bare string
+to a HumanMessage -- so run11's debug log holds Rudra's own dedupe text as
+`"kind": "user"`, the model's `tool_call` was left with nothing answering
+it, and every consumer that pairs a call with its result lost the pair. Two
+halves fix it and both are needed: the returned `ToolMessage` is what the
+MODEL reads, and the `TraceKind.NOTICE` is what says RUDRA did this rather
+than a tool. The text is unchanged -- prefixing it to make it classifiable
+is what the paragraph above forbids.
+
+One consequence is deliberate and was decided rather than inherited: the
+failure refusal is a ToolMessage whose content leads with "Error:", so
+`subagents/runner.py:302` now counts it, and a third identical failing read
+is the third consecutive failure that halts the invocation. That is what
+would have happened before this guard existed -- returning something the
+counter could not see was masking those halts. The dedupe refusal is not an
+error and RESETS that counter, which is the same rule read the other way.
 """
 
 from __future__ import annotations
@@ -53,6 +73,7 @@ import json
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
+from langchain_core.messages import ToolMessage
 
 # Deterministic reads. A repeat of one of these after a failure cannot
 # succeed, which is what makes short-circuiting safe. `execute` is
@@ -123,18 +144,22 @@ class RepeatGuardMiddleware(AgentMiddleware):
         *,
         role: str | None = None,
         usage: Any = None,
+        trace: Any = None,
     ) -> None:
-        """`role` and `usage` are optional and duck-typed, on
+        """`role`, `usage` and `trace` are optional and duck-typed, on
         ModelRetryMiddleware's precedent (`subagents/build.py:239-243`):
         callers outside a full run build stand-in contexts, and half of them
-        have no accounting to hand. Both are needed before anything is
-        counted -- `RunUsage._slot` would otherwise open a row named None.
+        have no accounting to hand. `role` and `usage` are both needed
+        before anything is counted -- `RunUsage._slot` would otherwise open
+        a row named None -- and `trace` is what makes a refusal audible
+        (OPEN-57).
         """
         super().__init__()
         self.max_identical_failures = max_identical_failures
         self.max_identical_reads = max_identical_reads
         self.role = role
         self.usage = usage
+        self.trace = trace
         self._failures: dict[str, int] = {}
         self._last_error: dict[str, str] = {}
         # How many times each signature has already been answered
@@ -142,6 +167,14 @@ class RepeatGuardMiddleware(AgentMiddleware):
         # answer. A count rather than a set, so `max_identical_reads` is a
         # real dial and the two rules read the same way.
         self._answered: dict[str, int] = {}
+
+    def _target(self, args: dict[str, Any]) -> str:
+        """What the call was aimed at, for the refusal and for the notice.
+
+        One function, because a notice naming a different path from the
+        refusal beside it is worse than a notice with no path at all.
+        """
+        return str(args.get("file_path") or args.get("path") or args.get("pattern") or "")
 
     def _refusal(self, signature: str, name: str) -> str:
         seen = self._failures[signature]
@@ -162,7 +195,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
         already" leaves the model to work out WHICH of its calls was
         refused, and the whole saving is one round trip.
         """
-        target = args.get("file_path") or args.get("path") or args.get("pattern") or ""
+        target = self._target(args)
         return (
             f"Already read: `{name}` on '{target}' was answered earlier in this "
             f"turn and nothing has changed it since, so it was not run again. "
@@ -185,11 +218,64 @@ class RepeatGuardMiddleware(AgentMiddleware):
         args = request.tool_call.get("args", {})
         signature = _signature(name, args)
         if self._failures.get(signature, 0) >= self.max_identical_failures:
+            self._announce(
+                f"refused: `{name}` on '{self._target(args)}' failed "
+                f"{self._failures[signature]} times identically -- not run again"
+            )
             return self._refusal(signature, name)
         if self._answered.get(signature, 0) >= self.max_identical_reads:
             self._count_dedupe()
+            self._announce(
+                f"dedupe: `{name}` on '{self._target(args)}' was already answered "
+                f"this turn -- not run again"
+            )
             return self._repeat_refusal(name, args)
         return None
+
+    def _announce(self, payload: str) -> None:
+        """Say that a refusal happened, to whoever is listening (OPEN-57).
+
+        One `name` for both rules, because a reader looking up
+        `repeat-guard` must find the whole middleware there; the payload is
+        what says which rule fired. VERBOSE on screen and in the debug log
+        at every level, which is OPEN-44's choice inherited through
+        OPEN-45: a refusal annotates a run rather than reporting on it.
+
+        `trace` is the second half of the fix and the returned message is
+        the first. A NOTICE alone would leave the model's tool_call
+        unanswered; a ToolMessage alone would say the tool answered, when
+        what happened is that RUDRA did.
+
+        Swallowing follows ModelRetryMiddleware._report and TraceSink.emit:
+        a guard that exists to save a round trip must not end a run over
+        its own bookkeeping.
+        """
+        if self.trace is None:
+            return
+        try:
+            self.trace.notice(payload, role=self.role or "agent", name="repeat-guard")
+        except Exception:  # noqa: BLE001 -- observability never ends a run
+            pass
+
+    def _as_message(self, request, refusal: str) -> ToolMessage:
+        """The refusal, addressed to the call it refused (OPEN-57).
+
+        A bare `str` return goes straight into `{messages: [...]}`
+        (langgraph prebuilt/tool_node.py:881-886), where `add_messages`
+        coerces it to a HumanMessage -- so Rudra's own words were recorded,
+        rendered and replayed as a line the human typed, the AIMessage's
+        tool_call was left with nothing answering it, and every consumer
+        that pairs a call with its result lost the pair.
+
+        Only what this middleware invents is wrapped. A result that came
+        back from the handler is already a message and is returned
+        untouched: re-wrapping one would drop its status and its id.
+        """
+        return ToolMessage(
+            content=refusal,
+            name=str(request.tool_call.get("name") or ""),
+            tool_call_id=str(request.tool_call.get("id") or ""),
+        )
 
     def _count_dedupe(self) -> None:
         """One re-read this guard answered instead of running (OPEN-39).
@@ -239,7 +325,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         refusal = self._blocked(request)
         if refusal is not None:
-            return refusal
+            return self._as_message(request, refusal)
         result = handler(request)
         self._record(request, result)
         return result
@@ -247,7 +333,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
     async def awrap_tool_call(self, request, handler):
         refusal = self._blocked(request)
         if refusal is not None:
-            return refusal
+            return self._as_message(request, refusal)
         result = await handler(request)
         self._record(request, result)
         return result

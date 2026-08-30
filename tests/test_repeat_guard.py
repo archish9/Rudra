@@ -17,8 +17,17 @@ import pytest
 from rudra.middleware.repeat_guard import RepeatGuardMiddleware
 
 
-def _request(name: str, **args):
-    return SimpleNamespace(tool_call={"name": name, "args": args})
+def _request(name: str, call_id: str | None = "call-1", **args):
+    """A ToolCallRequest stand-in.
+
+    `id` is part of a real ToolCall and is what the refusal ToolMessage
+    answers (OPEN-57); `call_id=None` builds the shape every stand-in in
+    this file had before it, which must still work.
+    """
+    tool_call = {"name": name, "args": args}
+    if call_id is not None:
+        tool_call["id"] = call_id
+    return SimpleNamespace(tool_call=tool_call)
 
 
 class _Backend:
@@ -57,7 +66,7 @@ def test_the_third_identical_failure_is_refused_without_running():
     result = guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
 
     assert backend.calls == 2, "the third call must not reach the backend"
-    assert "already failed 2 times" in result
+    assert "already failed 2 times" in _text(result)
 
 
 def test_the_refusal_repeats_the_original_error_and_says_what_to_do():
@@ -70,9 +79,9 @@ def test_the_refusal_repeats_the_original_error_and_says_what_to_do():
         guard.wrap_tool_call(_request("read_file", file_path="/. rudra/AGENTS.md"), backend)
     result = guard.wrap_tool_call(_request("read_file", file_path="/. rudra/AGENTS.md"), backend)
 
-    assert "not found" in result, "the original error must survive into the refusal"
-    assert "ls" in result
-    assert "same arguments" in result
+    assert "not found" in _text(result), "the original error must survive into the refusal"
+    assert "ls" in _text(result)
+    assert "same arguments" in _text(result)
 
 
 def test_a_different_argument_is_a_different_call():
@@ -161,8 +170,8 @@ def test_a_success_clears_that_calls_own_failure_history():
         result = guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
 
     assert backend.calls == 2
-    assert "Already read" in result
-    assert "already failed" not in result
+    assert "Already read" in _text(result)
+    assert "already failed" not in _text(result)
 
 
 def test_execute_is_never_short_circuited():
@@ -233,7 +242,7 @@ async def test_the_async_path_guards_identically():
         result = await guard.awrap_tool_call(_request("read_file", file_path="/x"), handler)
 
     assert calls == 2
-    assert "already failed" in result
+    assert "already failed" in _text(result)
 
 
 @pytest.mark.parametrize("threshold", [1, 3, 5])
@@ -271,7 +280,7 @@ def test_the_second_identical_successful_read_is_refused_without_running():
 
     assert first == CONTENTS
     assert backend.calls == 1, "the second call must not reach the backend"
-    assert "Already read" in second
+    assert "Already read" in _text(second)
 
 
 def test_the_threshold_for_a_success_is_one_not_two():
@@ -296,9 +305,9 @@ def test_the_dedupe_refusal_names_the_call_and_says_what_to_do():
     guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
     result = guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
 
-    assert "read_file" in result
-    assert "/models.py" in result
-    assert "nothing has changed it since" in result
+    assert "read_file" in _text(result)
+    assert "/models.py" in _text(result)
+    assert "nothing has changed it since" in _text(result)
 
 
 def test_the_dedupe_refusal_does_not_read_as_a_tool_failure():
@@ -316,7 +325,7 @@ def test_the_dedupe_refusal_does_not_read_as_a_tool_failure():
     guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
     result = guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
 
-    assert looks_like_error(result) is False
+    assert looks_like_error(_text(result)) is False
 
 
 def test_a_write_in_between_lets_the_same_read_run_again():
@@ -473,7 +482,7 @@ def test_the_guard_runs_without_a_usage_object():
     guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
     result = guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
 
-    assert "Already read" in result
+    assert "Already read" in _text(result)
 
 
 async def test_the_async_path_dedupes_identically():
@@ -492,7 +501,7 @@ async def test_the_async_path_dedupes_identically():
         result = await guard.awrap_tool_call(_request("read_file", file_path="/m.py"), handler)
 
     assert calls == 1
-    assert "Already read" in result
+    assert "Already read" in _text(result)
 
 
 @pytest.mark.parametrize("threshold", [1, 2, 4])
@@ -506,3 +515,342 @@ def test_the_read_threshold_is_configurable(threshold: int):
         guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
 
     assert backend.calls == threshold
+
+
+# --------------------------------------------------------------------------
+# OPEN-57: the refusal must answer the call it refused, and say so as RUDRA.
+#
+# Both refusals returned a bare `str`. langgraph puts a wrapper's return
+# value straight into `{messages: [...]}` (prebuilt/tool_node.py:881-886) and
+# `add_messages` coerces a bare string to a HumanMessage -- so run11's debug
+# log records Rudra's own dedupe message as `"kind": "user"`, the AIMessage's
+# tool_call is left with nothing answering it, and every script that pairs a
+# call with its result loses the pair.
+# --------------------------------------------------------------------------
+
+
+def _text(result):
+    """The refusal text, whether it arrives as a message or a bare string.
+
+    Reads through `.content` the way `_is_error` does, so the assertions
+    above this line say what they always said.
+    """
+    return str(getattr(result, "content", result))
+
+
+def test_the_dedupe_refusal_is_a_tool_message_answering_the_call():
+    """The call must have a result, and the result must be the tool's.
+
+    A bare string became a HumanMessage, which is Rudra's words wearing the
+    user's name -- and it left the AIMessage's tool_call unanswered, which
+    is a transcript strict providers reject.
+    """
+    from langchain_core.messages import ToolMessage
+
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+    result = guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+
+    assert isinstance(result, ToolMessage)
+    assert result.tool_call_id == "call-1"
+    assert result.name == "read_file"
+    assert "Already read" in result.content
+
+
+def test_the_failure_refusal_is_a_tool_message_answering_the_call():
+    """OPEN-10's refusal has had the same shape since 2026-08-24, and
+    nothing counted it, so nobody noticed it arriving as the user saying
+    "Error:"."""
+    from langchain_core.messages import ToolMessage
+
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(NOT_FOUND)
+
+    for _ in range(2):
+        guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
+    result = guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
+
+    assert isinstance(result, ToolMessage)
+    assert result.tool_call_id == "call-1"
+    assert result.name == "read_file"
+    assert "already failed 2 times" in result.content
+
+
+def test_a_call_with_no_id_still_gets_a_refusal():
+    """Every stand-in in this file predates the id, and a guard that raises
+    inside wrap_tool_call breaks the call it exists to protect."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", call_id=None, file_path="/m.py"), backend)
+    result = guard.wrap_tool_call(_request("read_file", call_id=None, file_path="/m.py"), backend)
+
+    assert result.tool_call_id == ""
+    assert "Already read" in result.content
+
+
+def test_the_dedupe_refusal_is_not_an_error_to_the_trace():
+    """The message-level answer to what `looks_like_error` asserts on the
+    text: `runner.py:300` reads ToolMessages, and a dedupe that counted as
+    a failure would turn a saving into three dead invocations (OPEN-16)."""
+    from rudra.trace.stream import message_is_error
+
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+    result = guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+
+    assert message_is_error(result) is False
+
+
+def test_the_failure_refusal_is_an_error_to_the_trace():
+    """The decided half of OPEN-57, and the one behaviour change in it.
+
+    A third identical failing read is now the third consecutive tool
+    failure `runner.py:302-304` halts on. That is what would have happened
+    before OPEN-10's guard existed: the guard has been masking halts by
+    returning something the counter could not see.
+    """
+    from rudra.trace.stream import message_is_error
+
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(NOT_FOUND)
+
+    for _ in range(2):
+        guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
+    result = guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
+
+    assert message_is_error(result) is True
+
+
+def test_a_call_that_runs_is_returned_exactly_as_the_backend_gave_it():
+    """The guard wraps only what it invents. A real result is already a
+    ToolMessage and re-wrapping one would lose its status and its id."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(CONTENTS)
+
+    assert guard.wrap_tool_call(_request("read_file", file_path="/m.py"), backend) == CONTENTS
+
+
+async def test_the_async_refusal_is_a_tool_message_too():
+    """deepagents calls the async path at run time, so a fix on the sync
+    path alone would never reach production."""
+    from langchain_core.messages import ToolMessage
+
+    guard = RepeatGuardMiddleware()
+
+    async def handler(request):
+        return CONTENTS
+
+    await guard.awrap_tool_call(_request("read_file", file_path="/m.py"), handler)
+    result = await guard.awrap_tool_call(_request("read_file", file_path="/m.py"), handler)
+
+    assert isinstance(result, ToolMessage)
+    assert result.tool_call_id == "call-1"
+
+
+class _Sink:
+    """A TraceSink stand-in, duck-typed on `notice` alone.
+
+    Same shape as test_model_retry_middleware.py's: a fake carrying more
+    would let this file pass against a guard reaching for something else.
+    """
+
+    def __init__(self) -> None:
+        self.notices: list[dict] = []
+
+    def notice(self, payload, *, role, name="", namespace=(), index=0, at=0.0):
+        self.notices.append({"payload": payload, "role": role, "name": name})
+        return None
+
+
+def test_a_dedupe_emits_one_notice():
+    """OPEN-44's rule, arriving a third time: anything that changes what a
+    run does emits a trace event when it fires. Phase 2 shipped a counter
+    and no event."""
+    sink = _Sink()
+    guard = RepeatGuardMiddleware(role="coder", trace=sink)
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+    guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+
+    assert len(sink.notices) == 1
+    assert sink.notices[0]["role"] == "coder"
+    assert sink.notices[0]["name"] == "repeat-guard"
+    assert "read_file" in sink.notices[0]["payload"]
+    assert "/models.py" in sink.notices[0]["payload"]
+
+
+def test_a_failure_refusal_emits_one_notice():
+    """One name for both rules, because a reader looking up
+    `repeat-guard` must find the whole middleware there. The payload is
+    what says which rule fired."""
+    sink = _Sink()
+    guard = RepeatGuardMiddleware(role="planner", trace=sink)
+    backend = _Backend(NOT_FOUND)
+
+    for _ in range(3):
+        guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
+
+    assert len(sink.notices) == 1
+    assert sink.notices[0]["role"] == "planner"
+    assert sink.notices[0]["name"] == "repeat-guard"
+    assert "read_file" in sink.notices[0]["payload"]
+
+
+def test_the_two_rules_are_distinguishable_in_the_trace():
+    """A reader must not have to re-derive which rule fired from the count
+    of prior calls."""
+    sink = _Sink()
+    guard = RepeatGuardMiddleware(role="coder", trace=sink)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/ok.py"), _Backend(CONTENTS))
+    guard.wrap_tool_call(_request("read_file", file_path="/ok.py"), _Backend(CONTENTS))
+    deduped = sink.notices[-1]["payload"]
+
+    missing = _Backend(NOT_FOUND)
+    for _ in range(3):
+        guard.wrap_tool_call(_request("read_file", file_path="/gone.py"), missing)
+    refused = sink.notices[-1]["payload"]
+
+    assert deduped != refused
+    assert "/ok.py" in deduped
+    assert "/gone.py" in refused
+
+
+def test_a_call_that_runs_emits_nothing():
+    """The regression that matters most: a healthy turn's trace is exactly
+    what it was before OPEN-57."""
+    sink = _Sink()
+    guard = RepeatGuardMiddleware(role="coder", trace=sink)
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/a.py"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/a.py", content="x"), backend)
+    guard.wrap_tool_call(_request("execute", command="pytest"), backend)
+
+    assert sink.notices == []
+
+
+def test_the_guard_runs_without_a_trace():
+    """Optional for the reason `usage` is: the machinery must stay
+    constructible without a run, and every test above builds it that way."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/m.py"), backend)
+    result = guard.wrap_tool_call(_request("read_file", file_path="/m.py"), backend)
+
+    assert "Already read" in result.content
+
+
+def test_a_broken_sink_does_not_break_the_call():
+    """Observability never ends a run -- TraceSink.emit, write_usage_log and
+    ModelRetryMiddleware._report all swallow for the same reason."""
+
+    class _Broken:
+        def notice(self, *args, **kwargs):
+            raise RuntimeError("sink is on fire")
+
+    guard = RepeatGuardMiddleware(role="coder", trace=_Broken())
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/m.py"), backend)
+    result = guard.wrap_tool_call(_request("read_file", file_path="/m.py"), backend)
+
+    assert "Already read" in result.content
+
+
+async def test_the_async_path_emits_a_notice_too():
+    sink = _Sink()
+    guard = RepeatGuardMiddleware(role="tester", trace=sink)
+
+    async def handler(request):
+        return CONTENTS
+
+    await guard.awrap_tool_call(_request("grep", pattern="def x", path="/"), handler)
+    await guard.awrap_tool_call(_request("grep", pattern="def x", path="/"), handler)
+
+    assert len(sink.notices) == 1
+    assert sink.notices[0]["role"] == "tester"
+
+
+# --- the whole path, with nothing faked, which is the RUN #6 row -----------
+
+
+def test_a_refusal_reaches_the_debug_log_and_the_trace_as_rudra(tmp_path):
+    """A real TraceSink, a real debug recorder, and the real classifier.
+
+    Every test above uses a `_Sink` stand-in, so all of them would stay
+    green against a notice that never survived redaction, the level filter
+    or JSON serialisation -- and against a ToolMessage that `stream.py`
+    still read as something the user said. This is OPEN-57's checklist row
+    made deterministic: after it, `grep '"kind": "notice"'` on
+    `debug-<id>.jsonl` answers "did the guard fire", and no event in a run
+    carries `"kind": "user"` for a line Rudra wrote.
+    """
+    import json
+    import logging
+
+    from rudra.trace.debug import LOGGER_NAME, configure_debug_logging, debug_consumer
+    from rudra.trace.events import TraceKind
+    from rudra.trace.render import TraceLevel
+    from rudra.trace.sink import TraceSink
+    from rudra.trace.stream import StreamState, _events_for
+
+    logger = logging.getLogger(LOGGER_NAME)
+    before = list(logger.handlers), logger.level, logger.propagate
+    debug_path = tmp_path / "debug-test.jsonl"
+    handler = configure_debug_logging(debug_path, enabled=True)
+    try:
+        # NORMAL, not VERBOSE: a NOTICE renders at VERBOSE but must reach
+        # the debug log at every level -- that is what makes it the
+        # COMPLETE record (OPEN-7). At VERBOSE this test would pass even
+        # if that broke.
+        sink = TraceSink(level=TraceLevel.NORMAL)
+        sink.add_recorder(debug_consumer())
+
+        guard = RepeatGuardMiddleware(role="coder", trace=sink)
+        backend = _Backend(CONTENTS)
+        guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+        refusal = guard.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+        handler.flush()
+
+        lines = [
+            json.loads(line) for line in debug_path.read_text(encoding="utf-8").splitlines() if line
+        ]
+        notices = [line for line in lines if line.get("kind") == "notice"]
+        assert len(notices) == 1
+        assert notices[0]["name"] == "repeat-guard"
+        assert notices[0]["role"] == "coder"
+        assert "/models.py" in notices[0]["payload"]
+
+        # And the refusal itself, through the classifier that mislabelled
+        # it: a result for the call that asked for it, attributed to the
+        # tool and not to the human.
+        events = _events_for(refusal, state=StreamState(role="coder"), namespace=(), index=1)
+        assert [event.kind for event in events] == [TraceKind.TOOL_RESULT]
+        assert events[0].name == "read_file"
+
+        # And the shape this replaced, kept as the statement of the defect:
+        # the same text as a bare string reaches the message list as a
+        # HumanMessage (langgraph coerces it), and the only branch that fits
+        # one is USER. The fix is the message TYPE, not the text -- which is
+        # why the text above is asserted unchanged.
+        from langchain_core.messages import HumanMessage
+
+        stale = _events_for(
+            HumanMessage(content=refusal.content),
+            state=StreamState(role="coder"),
+            namespace=(),
+            index=1,
+        )
+        assert [event.kind for event in stale] == [TraceKind.USER]
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+        logger.handlers, logger.level, logger.propagate = before

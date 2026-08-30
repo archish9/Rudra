@@ -252,6 +252,11 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             # hand, which is the third time that would have happened.
             role=spec.role,
             usage=getattr(context, "usage", None),
+            # OPEN-57. The counter above says a refusal happened; only this
+            # says WHICH call was refused, and it is what stops the refusal
+            # reaching the trace as a line the user typed. Same getattr and
+            # the same reason as ModelRetryMiddleware's above.
+            trace=getattr(context, "trace", None),
         ),
         # Before the FilesystemMiddleware that BUILDS the execute tool, which
         # is only where it has to sit in the list -- the description swap
