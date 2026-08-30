@@ -21,7 +21,8 @@ from rudra.subagents.registry import REGISTRY
 
 
 class _Model:
-    context_tokens = 32_000
+    def __init__(self, context_tokens=32_000):
+        self.context_tokens = context_tokens
 
 
 class _Memory:
@@ -29,20 +30,29 @@ class _Memory:
 
 
 class _Cfg:
+    """`context_tokens` is a constructor argument because every _Cfg in
+    this file used to declare 32_000 unconditionally, and that is why
+    OPEN-54 went three runs undetected: the undeclared window -- which is
+    what `rudra init` actually ships (config/template.py:43) -- was the one
+    case with no test."""
+
     memory = _Memory()
 
+    def __init__(self, context_tokens=32_000):
+        self._model = _Model(context_tokens)
+
     def model_for(self, role):
-        return _Model()
+        return self._model
 
 
 class _Ctx:
     """The fields build.py reads. Mirrors SubagentContext without needing
     a gate, a backend or a checkpointer."""
 
-    def __init__(self, project_path, memory):
+    def __init__(self, project_path, memory, context_tokens=32_000):
         self.project_path = project_path
         self.memory = memory
-        self.cfg = _Cfg()
+        self.cfg = _Cfg(context_tokens)
         self.gate = None
         self.console = Console()
         self.facts = None
@@ -67,6 +77,32 @@ def ctx(tmp_path: Path) -> _Ctx:
 
 def test_the_coder_prompt_carries_recalled_memories(ctx: _Ctx) -> None:
     assert "uv over pip" in _prompt_for(_spec("coder"), ctx)
+
+
+def test_the_coder_recalls_when_no_context_window_is_declared(tmp_path: Path) -> None:
+    """OPEN-54, and this is the assertion that pins the decision.
+
+    `rudra init` comments `context_tokens` out (config/template.py:43).
+    That made `recall_limit` return None (budget.py:149), which made
+    `recall_block` return "" (render.py:41), which made `if block:` at
+    build.py:181 false -- so the palace was searched on every build and
+    the result thrown away. Three runs reported `recall_chars: 0` for all
+    four roles against a palace that answers `rudra memory search` in
+    0.42s.
+
+    The fix floors the budget instead of disabling the block, so recall
+    degrades open the way eviction and summarization always did. If a
+    future change reinstates None here, this test is what says so.
+    """
+    project = tmp_path / "undeclared"
+    project.mkdir()
+    store = MemoryStore(project)
+    store.write(MemoryEntry(content="we chose uv over pip", room="decisions", added_by="rudra"))
+
+    prompt = _prompt_for(_spec("coder"), _Ctx(project, store, context_tokens=None))
+
+    assert "## WHAT THIS PROJECT HAS LEARNED" in prompt
+    assert "uv over pip" in prompt
 
 
 def test_the_reviewer_prompt_does_not(ctx: _Ctx) -> None:

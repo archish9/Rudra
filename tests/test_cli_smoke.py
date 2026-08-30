@@ -188,7 +188,12 @@ def test_an_unquoted_multi_word_task_is_rejoined() -> None:
 
 
 def test_doctor_reports_roles_without_a_declared_context_window(tmp_path, monkeypatch):
-    """S12.9: an undeclared window is a real setting, not an absence."""
+    """S12.9: an undeclared window is a real setting, not an absence.
+
+    OPEN-54 added the third consequence. The row listed eviction and
+    summarization and stopped, which was true and incomplete: the same
+    unset key also drops every role's recall block to the floor, and
+    nothing anywhere said so."""
     from typer.testing import CliRunner
 
     from rudra.cli import app
@@ -200,6 +205,10 @@ def test_doctor_reports_roles_without_a_declared_context_window(tmp_path, monkey
 
     assert result.exit_code == 0
     assert "context window" in result.stdout
+    # OPEN-54: recall is the third consumer of this key and the only one
+    # the user could not see. `rudra init` ships it commented out, so this
+    # is the warning a scaffolded project actually gets.
+    assert "recall" in result.stdout
 
 
 def test_doctor_reports_the_derived_limits_when_windows_are_declared(tmp_path, monkeypatch):
@@ -227,3 +236,6 @@ def test_doctor_reports_the_derived_limits_when_windows_are_declared(tmp_path, m
     # so declaring it once on `default` reaches every role.
     assert "13107" in result.stdout
     assert "No context_tokens" not in result.stdout
+    # int(131072 * 0.02) -- the recall half of the same number, which this
+    # branch did not report before OPEN-54.
+    assert "2621" in result.stdout

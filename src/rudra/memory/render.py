@@ -33,9 +33,15 @@ _PREAMBLE = (
 def recall_block(hits: Sequence[Any], token_budget: int | None) -> str:
     """The recalled memories as a markdown block, or "" when there are none.
 
-    `token_budget` of None means the role declared no context window, and
-    nothing is injected -- S12.9's rule, because guessing a budget for an
-    unknown window is how this crowds out the task.
+    `token_budget` of None injects nothing. Since OPEN-54 that is this
+    function's own guard and no longer a policy: context/budget.py's
+    recall_limit never returns None any more -- an undeclared window
+    takes MIN_RECALL_TOKENS instead, because this branch was failing
+    closed while the other two consumers of context_tokens failed open.
+
+    None still reaches here from build_planner_prompt, whose
+    `recall_tokens` argument defaults to None (agent/planner_agent.py:211)
+    for callers that build a prompt without a budget at all.
     """
     if token_budget is None or not hits:
         return ""

@@ -640,7 +640,7 @@ def doctor_command(
 
     from rudra.compat.version_guard import EXPECTED_DEEPAGENTS_VERSION
     from rudra.config.schema import BUILTIN_ROLES
-    from rudra.context.budget import evict_limit
+    from rudra.context.budget import MIN_RECALL_TOKENS, evict_limit, recall_limit
     from rudra.state.paths import rudra_paths
 
     project_path = get_project_path(project_dir)
@@ -826,19 +826,26 @@ def doctor_command(
     # an absence (S12.9): tool results then evict at deepagents' default
     # instead of at a tenth of the model's actual window. escape() because
     # Rich would parse "[model.<role>]" as a style tag (A1.48).
+    #
+    # Both branches name all three consumers since OPEN-54. This row used
+    # to list eviction and summarization and stop, which was true and
+    # incomplete -- the same unset key also drops recall to its floor, and
+    # this row is the only place a user would ever find that out.
     undeclared = [role for role in BUILTIN_ROLES if evict_limit(cfg, role) is None]
     limits = ", ".join(
         f"{role} {evict_limit(cfg, role)}" for role in BUILTIN_ROLES if evict_limit(cfg, role)
     )
+    recalls = ", ".join(f"{role} {recall_limit(cfg, role)}" for role in BUILTIN_ROLES)
     table.add_row(
         "context window",
         "warn" if undeclared else "ok",
         escape(
             f"No context_tokens for: {', '.join(undeclared)}. Tool results evict at "
-            f"deepagents' 20000-token default for those roles, and summarization "
-            f"triggers at 170000 — set [model.<role>] context_tokens."
+            f"deepagents' 20000-token default for those roles, summarization "
+            f"triggers at 170000, and recalled memories get the "
+            f"{MIN_RECALL_TOKENS}-token floor — set [model.<role>] context_tokens."
             if undeclared
-            else f"Tool results evict at: {limits}."
+            else f"Tool results evict at: {limits}. Recall budget: {recalls}."
         ),
     )
 

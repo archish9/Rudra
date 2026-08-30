@@ -130,7 +130,7 @@ RECALL_FRACTION = 0.02
 MIN_RECALL_TOKENS = 300
 
 
-def recall_limit(cfg: Any, role: str) -> int | None:
+def recall_limit(cfg: Any, role: str) -> int:
     """Tokens the injected recall block may occupy, for one role.
 
     Args:
@@ -141,12 +141,35 @@ def recall_limit(cfg: Any, role: str) -> int | None:
         role: A BUILTIN_ROLES member, or any string.
 
     Returns:
-        A token count, or None when the role declares no context window.
-        None means "inject nothing": guessing a budget for a model whose
-        size we do not know is how a recall block crowds out the task
-        itself, and that is S12.9's rule for evict_limit applied unchanged.
+        A token count, always. An undeclared window takes
+        MIN_RECALL_TOKENS.
+
+    This returned None on an undeclared window until OPEN-54, on the
+    reading that S12.9's rule for evict_limit applied here unchanged.
+    It does not, and the difference is which way each one fails:
+
+      - evict_limit's None is *open*. evict_kwargs omits the argument
+        (:79) so upstream's 20000-token default stands, and the agent
+        keeps working with a documented number.
+      - recall_limit's None was *closed*. recall_block returns "" on it
+        (memory/render.py:41), `if block:` at subagents/build.py:181 is
+        false, and the feature is off with nothing in any log saying so.
+
+    Since `rudra init` ships context_tokens commented out
+    (config/template.py:43), that was the shipped default: three runs
+    reported recall_chars: 0 for all four roles against a palace that
+    answers a search in 0.42s, and the feature had been presented as
+    working since Step 14.
+
+    S12.9's reasoning is about the cost of guessing wrong, and the two
+    costs are not comparable. Guessing low for eviction throws away a
+    tool result the agent needed; guessing low here spends 300 tokens of
+    prompt. And 300 is not a guess: 0.02 * 15000 is exactly
+    MIN_RECALL_TOKENS, so it is already what every declared window below
+    15k receives. An undeclared model is handed the smallest supported
+    model's budget, which is the conservative direction.
     """
     declared = cfg.model_for(role).context_tokens
     if declared is None:
-        return None
+        return MIN_RECALL_TOKENS
     return max(int(declared * RECALL_FRACTION), MIN_RECALL_TOKENS)

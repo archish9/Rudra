@@ -147,10 +147,30 @@ def test_recall_limit_never_drops_below_the_floor() -> None:
     assert recall_limit(_cfg(planner=4_000), "planner") == MIN_RECALL_TOKENS
 
 
-def test_recall_limit_is_none_when_no_window_is_declared() -> None:
-    """Same rule evict_limit follows (S12.9): guessing for a model whose
-    size we do not know is worse than leaving the feature off."""
-    assert recall_limit(_cfg(planner=None), "planner") is None
+def test_recall_limit_falls_to_the_floor_when_no_window_is_declared() -> None:
+    """OPEN-54: this returned None, and None reached recall_block, which
+    returns "" on it -- so the shipped config, which comments
+    context_tokens out (config/template.py:43), switched recall off in
+    silence. Three runs reported recall_chars: 0 for all four roles before
+    anyone read the zero.
+
+    S12.9 is why it returned None, and S12.9 stops at eviction. Guessing
+    low there discards a tool result the agent needed; guessing low here
+    costs 300 tokens of prompt. And 300 is not a guess: it is the number
+    every declared window under 15k already gets, since 0.02 * 15000 is
+    exactly MIN_RECALL_TOKENS.
+    """
+    assert recall_limit(_cfg(planner=None), "planner") == MIN_RECALL_TOKENS
+
+
+def test_recall_limit_is_never_none() -> None:
+    """The property OPEN-54 bought, stated on its own: recall degrades
+    open, the way eviction and summarization always did. evict_limit's
+    None is untouched and deliberate -- evict_kwargs omits the argument
+    rather than passing it (budget.py:79), and the two failure modes are
+    not the same one (OPEN-54 doc section 7)."""
+    for declared in (None, 4_000, 32_000, 131_072):
+        assert recall_limit(_cfg(planner=declared), "planner") is not None
 
 
 def test_recall_limit_is_much_smaller_than_the_eviction_threshold() -> None:
