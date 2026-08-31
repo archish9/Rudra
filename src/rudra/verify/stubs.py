@@ -18,7 +18,7 @@ import io
 import re
 import tokenize
 from collections.abc import Sequence
-from pathlib import Path, PurePath
+from pathlib import Path, PurePath, PurePosixPath
 
 from rudra.stacks.registry import ALL_SKIP_DIRS
 from rudra.verify.result import Finding
@@ -45,9 +45,42 @@ _SKIP_DIRS = SKIP_DIRS
 
 # Mirrors filesystem/tree.py's split, and for the same measured reason
 # (A1.29). Kept as its own pair rather than imported so this module stays
-# readable on its own; tests/test_verify_stubs.py checks the two agree.
+# readable on its own; tests/test_verify_stubs.py checks the two agree --
+# and since OPEN-64 that test actually exists, as
+# `test_the_three_copies_of_the_pruning_rule_agree`. It did not, and three
+# copies of this rule drifted twice in two days while this comment said
+# they could not: OPEN-63 on the suffix filter, OPEN-64 on the scoping. A
+# comment asserting two things are the same needs a test, or it becomes
+# the reason nobody checks.
 _ROOT_ANCHORED_SKIP_DIRS = frozenset({"out", "build", "dist", "target", "coverage"})
 _ALWAYS_SKIP_DIRS = SKIP_DIRS - _ROOT_ANCHORED_SKIP_DIRS
+
+
+def is_build_output(relative: str) -> bool:
+    """Is this project-relative path inside a build-output directory?
+
+    THE definition, not a definition (OPEN-64). `project_files` walks the
+    tree and `loop/engine.py::git_snapshot` filters a list git already
+    produced -- different questions, so they stay separate walks, but they
+    must prune identically or what a run recorded depended on whether the
+    project had a `.git`. `git_snapshot` kept its own copy that matched the
+    five ambiguous names at EVERY depth, so `src/out/handler.py` -- the
+    file A1.29's own comment names as its casualty -- never reached
+    `files_touched`, was never stub-scanned, and as an attempt's only write
+    read as "the coder wrote nothing", spending an attempt toward BLOCKED.
+
+    `parts[:-1]` because the filename is never a directory name: a *file*
+    called `dist` at the root is a deliverable. `filesystem/tree.py` still
+    prunes that one, which is a smaller divergence in the same family and
+    is its own item.
+
+    Takes a POSIX-separated relative path -- what `git status --porcelain`
+    reports and what `Path.relative_to` yields under `as_posix()`.
+    """
+    parts = PurePosixPath(relative).parts[:-1]
+    if any(part in _ALWAYS_SKIP_DIRS for part in parts):
+        return True
+    return bool(parts) and parts[0] in _ROOT_ANCHORED_SKIP_DIRS
 
 
 def _read(path: Path) -> str | None:
@@ -186,17 +219,9 @@ def project_files(project_path: Path) -> tuple[str, ...]:
             continue
         relative = path.relative_to(project_path)
         # Root-anchored for the five ambiguous names, any-depth for the
-        # rest -- the split filesystem/tree.py already makes, and for its
-        # reason (A1.29): `build`, `out`, `dist`, `target` and `coverage`
-        # are build output by convention AT THE PROJECT ROOT and ordinary
-        # English words anywhere else. Matched at every depth here, they
-        # hid `src/out/handler.py` from the gate while project_tree showed
-        # it to the model, and dropped such files from files_touched on the
-        # first task of a non-git project (CR-E8).
-        parts = relative.parts[:-1]
-        if any(part in _ALWAYS_SKIP_DIRS for part in parts):
-            continue
-        if parts and parts[0] in _ROOT_ANCHORED_SKIP_DIRS:
+        # rest -- see `is_build_output`, which is now the ONE copy of this
+        # rule the loop shares (OPEN-64). It used to be spelled out here.
+        if is_build_output(relative.as_posix()):
             continue
         found.append(str(relative))
 

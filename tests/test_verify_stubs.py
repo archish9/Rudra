@@ -185,3 +185,56 @@ def test_source_files_is_project_files_plus_the_suffix_filter(tmp_path):
 
     assert set(source_files(tmp_path)) <= set(project_files(tmp_path))
     assert set(project_files(tmp_path)) - set(source_files(tmp_path)) == {"notes.md"}
+
+
+def test_the_three_copies_of_the_pruning_rule_agree(tmp_path):
+    """The pin this module's own comment has claimed since A1.29 (OPEN-64).
+
+    `stubs.py` says "tests/test_verify_stubs.py checks the two agree" and
+    no such test existed, so three copies of one rule drifted twice in two
+    days: OPEN-63 on the suffix filter, OPEN-64 on the scoping. The
+    root-anchored names must be identical everywhere; the any-depth sets
+    may differ only by the editor directories §7 of OPEN-64's document
+    records as a separate, unfiled question.
+    """
+    from rudra.filesystem import tree
+    from rudra.verify import stubs
+
+    assert tree._ROOT_ANCHORED_SKIP_DIRS == stubs._ROOT_ANCHORED_SKIP_DIRS
+
+    # `.idea`/`.vscode`: the gate skips them, the model's tree does not.
+    # Known, recorded, and not this item -- but pinned so a fourth
+    # divergence cannot arrive unnoticed.
+    assert stubs._ALWAYS_SKIP_DIRS - tree._ALWAYS_SKIP_DIRS == {".idea", ".vscode"}
+    assert tree._ALWAYS_SKIP_DIRS - stubs._ALWAYS_SKIP_DIRS == set()
+
+
+def test_is_build_output_applies_the_root_anchored_split(tmp_path):
+    """The one predicate both walks call, and the whole of OPEN-64.
+
+    `loop/engine.py` kept its own any-depth copy, so in a git project
+    `src/out/handler.py` never reached `files_touched`.
+    """
+    from rudra.verify.stubs import is_build_output
+
+    assert is_build_output("out/bundle.js") is True
+    assert is_build_output("node_modules/pkg/index.js") is True
+    assert is_build_output("src/out/handler.py") is False
+    assert is_build_output("packages/web/dist/index.ts") is False
+    assert is_build_output("app.py") is False
+
+
+def test_a_file_named_like_a_build_dir_is_not_build_output(tmp_path):
+    """A *file* called `dist` at the root is a deliverable, not a directory.
+
+    `parts[:-1]` -- the filename is never a directory name. Recorded as a
+    behaviour change rather than smuggled: `filesystem/tree.py` still
+    prunes it, so the model is not shown a file the ledger records. That
+    divergence is a smaller member of this family and is its own item.
+    """
+    from rudra.verify.stubs import is_build_output
+
+    assert is_build_output("dist") is False
+    write(tmp_path, "dist", "the deliverable\n")
+
+    assert project_files(tmp_path) == ("dist",)

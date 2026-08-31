@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -31,7 +31,7 @@ from rudra.memory.degrade import last_failure
 from rudra.memory.entry import MemoryEntry
 from rudra.subagents import SubagentContext, run_subagent
 from rudra.verify import verify_project
-from rudra.verify.stubs import SKIP_DIRS, project_files
+from rudra.verify.stubs import is_build_output, project_files
 
 
 class Outcome(StrEnum):
@@ -80,16 +80,6 @@ class LoopContext:
     run_errors: int = 0
 
 
-def _is_build_output(path: str) -> bool:
-    """Is this path inside a directory nothing should ever attribute to the coder?
-
-    One definition, shared with the gate (verify/stubs.py): every stack
-    profile already declares its build-output dirs, and the loop must not
-    keep a second opinion.
-    """
-    return any(part in SKIP_DIRS for part in PurePosixPath(path).parts)
-
-
 def _digest(path: Path) -> str:
     """A cheap content fingerprint, or "" when the file cannot be read.
 
@@ -127,6 +117,13 @@ def git_snapshot(context: LoopContext) -> dict[str, str] | None:
 
     Hashing is bounded by what git already reports and by the build-output
     pruning below, so this reads the changed files, not the project.
+
+    That pruning is `verify.stubs.is_build_output`, which `project_files`
+    calls too. It used to be a private copy here that matched `out`,
+    `build`, `dist`, `target` and `coverage` at EVERY depth while both
+    other copies applied A1.29's root-anchored split, so in a project that
+    HAS a `.git` -- which no test run ever has -- `src/out/handler.py`
+    never reached `files_touched` (OPEN-64).
     """
     gate = context.subagents.gate
     if not is_repo(context.project_path, gate=gate, console=context.console, cfg=context.cfg):
@@ -146,7 +143,7 @@ def git_snapshot(context: LoopContext) -> dict[str, str] | None:
     return {
         entry.path: _digest(context.project_path / entry.path)
         for entry in entries
-        if entry.path and not _is_build_output(entry.path)
+        if entry.path and not is_build_output(entry.path)
     }
 
 

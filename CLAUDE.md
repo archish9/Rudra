@@ -395,6 +395,30 @@ questions separately: `source_files` is what the stub scanner may read,
 walk without the suffix filter, so the gate and the ledger keep one opinion
 about build output. **Both are needed; do not collapse them again.**
 
+Corrected a third time 2026-08-31 (OPEN-64), the same defect with the two
+paths swapped. The pruning rule had **three** copies and one was different:
+`filesystem/tree.py` and `verify/stubs.py` applied A1.29's root-anchored
+split, while the loop's own `_is_build_output` matched `out`, `build`,
+`dist`, `target` and `coverage` at **any depth**. So in a project that HAS
+a `.git`, `src/out/handler.py` — the file A1.29's own comment names as its
+casualty — never reached `files_touched`, was never stub-scanned, and as an
+attempt's only write read as "the coder wrote nothing", spending an attempt
+toward `BLOCKED`. **OPEN-63 lost a record; this lost the task.** The two are
+exactly inverted, which is why neither was caught: OPEN-63 bit only projects
+with **no** git, so every test run hit it and no real user would; OPEN-64
+bites only projects **with** git, so no test run could reach it and every
+real user is in it.
+
+There is now **one** implementation, `verify/stubs.py::is_build_output`,
+which both `project_files` and `git_snapshot` call — not one definition read
+from two places. **Do not add a fourth copy of that literal.** Both copies
+that drifted carried a docstring asserting they could not: `stubs.py` named
+a test in `tests/test_verify_stubs.py` that did not exist, and
+`_is_build_output` claimed "one definition, shared with the gate". The pin
+exists now (`test_the_three_copies_of_the_pruning_rule_agree`), and that is
+the rule to carry: **a comment asserting two things are the same needs a
+test, or it becomes the reason nobody checks.**
+
 ### `.rudra/` state directory
 
 Split into durable and volatile subtrees by D15 (implemented Step 6, C0.9).

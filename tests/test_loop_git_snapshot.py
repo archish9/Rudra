@@ -395,6 +395,12 @@ def test_the_same_writes_are_reported_the_same_with_and_without_git(
         (root / "requirements.txt").write_text("flask\n", encoding="utf-8")
         (root / "README.md").write_text("All tests should now pass.\n", encoding="utf-8")
         (root / "DONE").write_text("finished\n", encoding="utf-8")
+        # OPEN-64: `out` below the root is the coder's own work, and `out`
+        # AT the root is build output. Both paths must say so.
+        (root / "src" / "out").mkdir(parents=True, exist_ok=True)
+        (root / "src" / "out" / "handler.py").write_text("def handle(): ...\n", encoding="utf-8")
+        (root / "out").mkdir(exist_ok=True)
+        (root / "out" / "bundle.js").write_text("// generated\n", encoding="utf-8")
 
     git_before = attempt_snapshot(context)
     write_the_same_project(context.project_path)
@@ -405,7 +411,13 @@ def test_the_same_writes_are_reported_the_same_with_and_without_git(
     without_git = changed_since(plain, tree_before)
 
     assert with_git == without_git
-    assert with_git == ("DONE", "README.md", "app.py", "requirements.txt")
+    assert with_git == (
+        "DONE",
+        "README.md",
+        "app.py",
+        "requirements.txt",
+        "src/out/handler.py",
+    )
 
 
 def test_build_output_is_still_pruned_from_the_wider_walk(no_repo: FakeContext):
@@ -434,3 +446,58 @@ def test_rudra_s_own_directory_is_pruned_from_the_wider_walk(no_repo: FakeContex
     (no_repo.project_path / "real.py").write_text("x = 1\n", encoding="utf-8")
 
     assert changed_since(no_repo, before) == ("real.py",)
+
+
+def test_out_below_the_root_is_the_coders_work_in_a_repo(context: FakeContext):
+    """OPEN-64: the git path called `src/out/handler.py` build output.
+
+    `_is_build_output` matched the five root-anchored names at any depth
+    while the gate and the model's tree applied A1.29's split, so in a
+    project that HAS a `.git` this file never reached `files_touched`,
+    was never stub-scanned, and as an attempt's only write read as "the
+    coder wrote nothing" -- three of those is BLOCKED. No test run ever
+    had a `.git`, which is why it was never caught.
+    """
+    before = git_snapshot(context)
+    handler = context.project_path / "src" / "out"
+    handler.mkdir(parents=True)
+    (handler / "handler.py").write_text("def handle(): ...\n", encoding="utf-8")
+    dist = context.project_path / "packages" / "web" / "dist"
+    dist.mkdir(parents=True)
+    (dist / "index.ts").write_text("export const x = 1;\n", encoding="utf-8")
+
+    assert changed_since(context, before) == (
+        "packages/web/dist/index.ts",
+        "src/out/handler.py",
+    )
+
+
+def test_build_output_at_the_root_is_still_pruned_in_a_repo(context: FakeContext):
+    """The other half, and the one a lazy fix breaks (A1.66).
+
+    Turning `_is_build_output` into a no-op passes the test above and is
+    wrong: a Rust `target/` arrives from `all_untracked=True` as thousands
+    of files the coder did not write.
+    """
+    before = git_snapshot(context)
+    for directory in ("out", "build", "dist", "target", "coverage"):
+        built = context.project_path / directory
+        built.mkdir()
+        (built / "artifact.js").write_text("// generated\n", encoding="utf-8")
+    (context.project_path / "real.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert changed_since(context, before) == ("real.py",)
+
+
+def test_a_file_named_dist_at_the_root_is_reported_in_a_repo(context: FakeContext):
+    """`parts[:-1]` -- the filename is never a directory name.
+
+    A behaviour change, stated rather than smuggled. `filesystem/tree.py`
+    still prunes a root file called `dist`, so the model is not shown a
+    file the ledger records; that is a smaller member of this family and
+    belongs in its own item, not this one.
+    """
+    before = git_snapshot(context)
+    (context.project_path / "dist").write_text("the deliverable\n", encoding="utf-8")
+
+    assert changed_since(context, before) == ("dist",)
