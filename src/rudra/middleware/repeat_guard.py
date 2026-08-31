@@ -106,12 +106,23 @@ same 3,818 characters back -- real work, because the file was gone. run9's
 log disagrees. The deletes named `app/tests/test_app.py` and
 `app/tests/__pycache__`; the file rewritten was `tests/test_app.py`, which
 was never deleted. **27 of the 28 were refusable, not 26**, and the sentence
-had been repeated into four files. What remains is run11's: it wrote
-`app.py` and then `/app.py`, two spellings of ONE file, and `_target` reads
-the path the model typed rather than resolving it through
-`compat/virtual_paths.py`. That is OPEN-52 exactly, it is deliberately not
-fixed here (one guard per commit), and it is the first non-zero number that
-item has ever had.
+had been repeated into four files. The other was run11's: it wrote
+`app.py` and then `/app.py`, two spellings of ONE file, because `_target`
+read the path the model typed. **That was OPEN-52, and it is fixed
+(OPEN-62 6b)** -- `_target` and `_key_args` both resolve through
+`compat/virtual_paths.py` now, so this middleware answers "which file" the
+way the gate, the approval preview and the backend do (CR-B4). The item had
+been measured four times at +0 on the read rules and was one run from
+`WONTFIX`; the write rule is what changed the answer, and only in company
+with 6a -- resolving the spelling finds nothing if the belief died with the
+invocation, and the belief finds nothing if the spelling is a different key.
+Driven over run8-run13 the three together refuse 30 of the 32
+byte-identical rewrites those runs contain, ~23,542 output tokens. The two
+they do not are an artifact of the replay rather than a gap: it reads each
+project's END state, so a file that kept changing after its rewrite
+(run10's `models.py` -- 1,830 characters written, 2,538 on disk today)
+cannot confirm the belief and the write is performed. Every measurement
+here is a lower bound for that reason.
 
 **A claim in a closed record is evidence about what was believed, not about
 what happened.** That one survived a review, a ledger entry and three
@@ -166,7 +177,7 @@ from typing import Any
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
-from rudra.compat.virtual_paths import virtual_to_host
+from rudra.compat.virtual_paths import virtual_to_host, virtual_to_relative
 
 # Deterministic reads. A repeat of one of these after a failure cannot
 # succeed, which is what makes short-circuiting safe. `execute` is
@@ -399,12 +410,57 @@ class RepeatGuardMiddleware(AgentMiddleware):
             return None
 
     def _target(self, args: dict[str, Any]) -> str:
-        """What the call was aimed at, for the refusal and for the notice.
+        """What the call was aimed at, for the KEY, the refusal and the notice.
 
         One function, because a notice naming a different path from the
-        refusal beside it is worse than a notice with no path at all.
+        refusal beside it is worse than a notice with no path at all -- and
+        since OPEN-62 6b it is also the write rule's key, so the three
+        cannot disagree about which file was meant either.
+
+        **The path is resolved, not quoted (OPEN-52).**
+        `compat/virtual_paths.py` is the one function that says which real
+        file a model-written path names, and the gate
+        (`permissions/rules.py`), the approval preview (`permissions/diff.py`)
+        and the backend all route through it so they cannot disagree about
+        which file a call touches (CR-B4). This middleware did not, so
+        `app.py` and `/app.py` were two keys for one file: run11 wrote 303
+        characters that way and run13 wrote 3,022. OPEN-50 landed exactly
+        this for the other repeat guard (`subagents/runner.py::_call_key`)
+        on 2026-08-29, and its halt text has named the resolved path since.
+
+        Only a path argument is resolved. `pattern` is a grep expression
+        that can look exactly like a path, and rewriting it would make two
+        different searches one key -- the same carve-out `_call_key` makes
+        for `subagent_type`. Without a project path there is nothing to
+        resolve against and the spelling is the key, which is the behaviour
+        that shipped with OPEN-10.
         """
-        return str(args.get("file_path") or args.get("path") or args.get("pattern") or "")
+        raw = args.get("file_path") or args.get("path")
+        if raw and self.project_path is not None:
+            # `or str(raw)` covers a resolver that declines to place the
+            # path -- a backend route like `/artifacts/`. The guard counts,
+            # it never rewrites the call, so an unresolvable spelling keys
+            # on itself rather than on nothing (`runner.py:203-206`).
+            return virtual_to_relative(str(raw), Path(self.project_path)) or str(raw)
+        return str(raw or args.get("pattern") or "")
+
+    def _key_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """`args` with its path argument resolved, for the read rules' key.
+
+        A copy, never the call's own dict: this middleware counts calls and
+        must not change the one the model made. Every other argument is
+        left exactly as it arrived, the read window (OPEN-35) included --
+        page 2 of a file is not a repeat of page 1, however either was
+        spelled.
+        """
+        if self.project_path is None:
+            return args
+        keyed = dict(args)
+        for field in ("file_path", "path"):
+            raw = keyed.get(field)
+            if raw:
+                keyed[field] = virtual_to_relative(str(raw), Path(self.project_path)) or str(raw)
+        return keyed
 
     def _forget(self, target: str) -> None:
         """Drop the write-belief about ONE file, however it was spelled.
@@ -511,7 +567,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
             return self._blocked_write(name, args)
         if name not in _GUARDED_TOOLS:
             return None
-        signature = _signature(name, args)
+        signature = _signature(name, self._key_args(args))
         if self._failures.get(signature, 0) >= self.max_identical_failures:
             self._announce(
                 f"refused: `{name}` on '{self._target(args)}' failed "
@@ -706,7 +762,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
         # call that can change a file. Restoring them costs ~4,059 output
         # tokens and protects against nothing this module does not already
         # assume away (a process outside Rudra editing mid-turn).
-        signature = _signature(name, request.tool_call.get("args", {}))
+        signature = _signature(name, self._key_args(request.tool_call.get("args", {})))
         if _is_error(result):
             self._failures[signature] = self._failures.get(signature, 0) + 1
             self._last_error[signature] = str(getattr(result, "content", result))[:200]

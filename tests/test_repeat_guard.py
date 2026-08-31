@@ -1578,3 +1578,135 @@ async def test_the_async_path_refuses_a_no_op_write_too():
 
     assert len(seen) == 1
     assert "Already written" in _text(result)
+
+
+# --- OPEN-62 6b / OPEN-52: the KEY is the file, not the spelling ------------
+#
+# `compat/virtual_paths.py` is the one function that says which real file a
+# model-written path names, and the gate, the approval preview and the
+# backend all route through it so they cannot disagree about which file a
+# call touches (CR-B4). This middleware did not, so `/app.py`, `./app.py`
+# and `<project>/app.py` were three keys for one file.
+#
+# OPEN-50 landed exactly this for the OTHER repeat guard
+# (`subagents/runner.py::_call_key`) on 2026-08-29. OPEN-52 has been the
+# read-rule half of it, measured four times at +0 and once at +3, and it
+# was one measurement away from `WONTFIX`. What changed is the write rule:
+# with the belief carried across invocations (6a) the respellings are the
+# only thing left in the way, and they are worth 3 rewrites over run8-run13.
+
+
+def test_two_spellings_of_one_failing_read_are_one_signature(tmp_path):
+    """OPEN-52's original shape, and the reason it was filed by reading:
+    the third identical failure is refused, but only if the guard can see
+    that it IS identical."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(NOT_FOUND)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/missing.py"), backend)
+    guard.wrap_tool_call(_request("read_file", file_path="./missing.py"), backend)
+    result = guard.wrap_tool_call(_request("read_file", file_path="missing.py"), backend)
+
+    assert backend.calls == 2, "the third spelling is the third identical call"
+    assert "already failed 2 times" in _text(result)
+
+
+def test_two_spellings_of_one_answered_read_are_one_signature(tmp_path):
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="app.py"), backend)
+    result = guard.wrap_tool_call(_request("read_file", file_path="/app.py"), backend)
+
+    assert backend.calls == 1
+    assert "Already read" in _text(result)
+
+
+def test_a_rewrite_under_a_DIFFERENT_SPELLING_is_refused(tmp_path):
+    """run11's 303 characters, and the first non-zero number OPEN-52 ever
+    had: the coder wrote `app.py` and then `/app.py`. One file, two keys."""
+    (tmp_path / "app.py").write_text(BODY)
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="app.py", content=BODY), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 1
+    assert "Already written" in _text(result)
+
+
+def test_run13s_case_end_to_end(tmp_path):
+    """The run that filed OPEN-62, whole: task 1 writes `database.py`, task
+    2 is a fresh coder invocation that writes `/database.py` with the same
+    1,480 characters. It needs BOTH halves -- the belief has to survive the
+    invocation (6a) and the two spellings have to be one key (6b)."""
+    (tmp_path / "database.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    first = RepeatGuardMiddleware(role="coder", usage=usage, project_path=tmp_path)
+    first.wrap_tool_call(_request("write_file", file_path="database.py", content=BODY), backend)
+    second = RepeatGuardMiddleware(role="coder", usage=usage, project_path=tmp_path)
+    result = second.wrap_tool_call(
+        _request("write_file", file_path="/database.py", content=BODY), backend
+    )
+
+    assert backend.calls == 1
+    assert "Already written" in _text(result)
+
+
+def test_the_host_spelling_of_a_path_is_the_same_file(tmp_path):
+    """run9 typed the full host path for a file it had written relatively,
+    which is the third spelling in play and the one a naive `lstrip('/')`
+    misses."""
+    (tmp_path / "app.py").write_text(BODY)
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="app.py", content=BODY), backend)
+    guard.wrap_tool_call(
+        _request("write_file", file_path=str(tmp_path / "app.py"), content=BODY), backend
+    )
+
+    assert backend.calls == 1
+
+
+def test_without_a_project_path_the_spelling_is_still_the_key(tmp_path):
+    """The degraded mode, stated so it cannot drift: no root means no
+    resolution, and the middleware behaves exactly as it did before."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 2
+
+
+def test_a_grep_PATTERN_is_never_resolved(tmp_path):
+    """Only path arguments are resolved -- `subagents/runner.py:167` says
+    the same thing about `subagent_type`. A grep pattern can look exactly
+    like a path, and rewriting it would make two different searches one
+    key."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("grep", pattern="/app.py", path="/src"), backend)
+    guard.wrap_tool_call(_request("grep", pattern="app.py", path="/src"), backend)
+
+    assert backend.calls == 2
+
+
+def test_a_read_window_is_still_part_of_the_key(tmp_path):
+    """OPEN-35's window, pinned here because 6b touches the key: page 2 of
+    a file is not a repeat of page 1, however either was spelled."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/app.py", offset=0), backend)
+    guard.wrap_tool_call(_request("read_file", file_path="app.py", offset=100), backend)
+
+    assert backend.calls == 2
