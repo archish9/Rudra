@@ -11,9 +11,26 @@ Fixtures span the D18 target stacks so no Python assumption calcifies.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import get_args, get_type_hints
 
+from rudra.agent import planner_agent
 from rudra.agent.main_agent import _ensure_agents_md
+from rudra.agent.planner_agent import PLANNER_FS_TOOLS
 from rudra.facts import FactStore
+
+
+def _tools_the_planner_is_denied() -> set[str]:
+    """deepagents' full filesystem tool set, minus what the planner keeps.
+
+    Read off `PLANNER_FS_TOOLS`'s own annotation rather than restated here.
+    The declaration is `list[Literal[...8 names]]` and the value is the
+    four the planner may call, so the difference is the denied set and it
+    grows by itself if deepagents adds a tool.
+    """
+    hint = get_type_hints(planner_agent)["PLANNER_FS_TOOLS"]
+    every = set(get_args(get_args(hint)[0]))
+    assert every >= set(PLANNER_FS_TOOLS), "the annotation stopped covering the value"
+    return every - set(PLANNER_FS_TOOLS)
 
 
 def _store() -> FactStore:
@@ -195,3 +212,44 @@ def test_a_provider_failure_offers_nothing_when_every_task_is_finished():
     text = _provider_failure_message(_error(), _ledger_with("done", "blocked"))
 
     assert "--continue" not in text
+
+
+def test_the_template_names_no_tool_the_planner_does_not_have(tmp_path: Path):
+    """OPEN-66. AGENTS.md is read by the planner and nothing else.
+
+    `planner_agent.py` passes `memory=[".rudra/AGENTS.md"]`, so this file
+    lands in the planner's system prompt -- and the planner's filesystem
+    middleware is built with `tools=PLANNER_FS_TOOLS`, which is read-only
+    by CR-C2's decision. The shipped template told it to
+    "Update it using edit_file after completing any task", so on run14 the
+    planner called `edit_file`, was told it was not a valid tool, read the
+    file, and was told the same thing again (debug events 31-34).
+
+    Both directions on purpose, which is what OPEN-36 used and OPEN-64's
+    rule asks for: a template naming a tool the planner lacks is the
+    defect, and a test enumerating today's four names would pass while
+    saying nothing about tomorrow's fifth.
+    """
+    _ensure_agents_md(tmp_path, _store())
+    content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+
+    withheld = _tools_the_planner_is_denied()
+    assert withheld, "the planner is denied nothing; this test would be vacuous"
+    named = sorted(tool for tool in withheld if tool in content)
+    assert not named, (
+        f"AGENTS.md is the planner's prompt and names {named}, which "
+        f"PLANNER_FS_TOOLS withholds. The planner obeys it and burns a call."
+    )
+
+
+def test_the_template_does_not_claim_an_agent_maintains_it(tmp_path: Path):
+    """OPEN-66's other half. Since C7.3 the file is written by PYTHON.
+
+    `record_task_in_memory` and `summarise_architecture` in
+    `loop/engine.py` own it. No agent has been meant to update it since
+    Step 14, so an instruction to do so is not merely unusable -- it is
+    false about who maintains the file.
+    """
+    _ensure_agents_md(tmp_path, _store())
+    content = (tmp_path / "AGENTS.md").read_text(encoding="utf-8")
+    assert "Update it using" not in content

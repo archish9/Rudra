@@ -484,6 +484,25 @@ def _ensure_agents_md(rudra_dir: Path, facts: Any = None) -> None:
     Renders whatever facts exist rather than four fixed fields (C6.8a).
     Still create-once: A1.9 -- this file is never written again -- is real
     and belongs to C7.3, which makes it a living document.
+
+    **The template must name no tool the planner does not have (OPEN-66).**
+    This file goes into the PLANNER's system prompt and no other agent's
+    (`planner_agent.py`, `memory=[".rudra/AGENTS.md"]`), and that agent's
+    filesystem middleware is built read-only with `tools=PLANNER_FS_TOOLS`
+    (CR-C2). It used to say "Update it using edit_file after completing any
+    task": on run14 the planner obeyed, was told `edit_file is not a valid
+    tool`, read the file, and was told the same thing again. That is
+    OPEN-36's shape with Rudra's own prose in it -- a prompt cannot outrank
+    a prompt, so the sentence goes rather than gets qualified.
+
+    Naming `write_file` instead would recreate the defect with a second
+    tool the planner also lacks. Nothing writes here but Python:
+    `record_task_in_memory` and `summarise_architecture` in `loop/engine.py`
+    (C7.3), which is what the replacement sentence says.
+
+    `tests/test_main_agent_helpers.py` pins it in both directions off the
+    annotation rather than a restated list, so a tool deepagents adds is
+    covered without editing the test.
     """
     agents_md = rudra_dir / "AGENTS.md"
     if agents_md.exists():
@@ -497,7 +516,7 @@ def _ensure_agents_md(rudra_dir: Path, facts: Any = None) -> None:
     agents_md.write_text(
         f"# Project Memory\n\n"
         f"This file is your persistent memory across sessions.\n"
-        f"Update it using edit_file after completing any task.\n\n"
+        f"Rudra maintains it; you do not need to write to it.\n\n"
         f"{stack_section}\n\n"
         f"## Project Structure\n(not yet built)\n\n"
         f"## Architecture Notes\n(none yet)\n\n"
