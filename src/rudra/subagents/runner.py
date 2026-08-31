@@ -12,6 +12,7 @@ killing a run and discarding completed work.
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from dataclasses import dataclass
@@ -174,6 +175,25 @@ def _call_key(tool_call: dict, project_root: Path) -> tuple[str, ...]:
     `offset: 200` of a 400-line test file. **Resolving the path does not
     retire the window** -- dropping it re-opens OPEN-35.
 
+    THE PAYLOAD IS PART OF IT (OPEN-60). Resolving the path answered
+    "which file", and this answers "the same write, or the next one". Until
+    it did, three DIFFERENT writes to one file tripped the same halt as
+    three identical ones -- and the halt is fatal, so a coder legitimately
+    building a file up had its whole invocation killed and its work thrown
+    away. Measured over run9 and run11: of thirteen sequences that reached
+    MAX_REPEATED_CALLS, 4 carried identical content, 5 were mixed, and 4
+    were entirely different content, i.e. an agent doing real work. run11
+    invocation 3 wrote `app.py` at 45 bytes, then 404, then 352 -- three
+    distinct shas -- and was halted for it.
+
+    Hashed, never stored: this key lives in a dict for the life of an
+    invocation, and keeping raw file bodies there would hold a file's worth
+    of memory per write.
+
+    `edit_file` carries a patch rather than a body, so its discriminator is
+    the (old_string, new_string) pair. `read_file` and `task` carry no
+    payload at all and key exactly as they did.
+
     The guard's target is unchanged: the identical call made again. Tools
     with no window -- write_file, edit_file, task -- carry an empty one.
     """
@@ -187,7 +207,24 @@ def _call_key(tool_call: dict, project_root: Path) -> tuple[str, ...]:
     else:
         identifier = args.get("subagent_type") or ""
     window = (str(args.get("offset", "")), str(args.get("limit", "")))
-    return (tool_call.get("name", ""), str(identifier), *window)
+    return (tool_call.get("name", ""), str(identifier), *window, _payload_key(args))
+
+
+def _payload_key(args: dict) -> str:
+    """A digest of what a call would put on disk, or "" if it carries none.
+
+    Separate from `_call_key` because the two answer different questions
+    and only one of them is about paths. NUL-joined so an edit whose
+    old_string ends where its new_string begins cannot collide with one
+    split the other way.
+    """
+    body = args.get("content")
+    if not isinstance(body, str):
+        old, new = args.get("old_string"), args.get("new_string")
+        if not isinstance(old, str) and not isinstance(new, str):
+            return ""
+        body = f"{old}\x00{new}"
+    return hashlib.sha256(body.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 async def run_subagent(

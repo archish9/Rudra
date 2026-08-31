@@ -391,18 +391,28 @@ def test_every_guarded_read_tool_is_deduped(name: str, args: dict):
     assert backend.calls == 1
 
 
-def test_a_repeated_successful_write_is_never_deduped():
-    """Writing the same content twice is wasteful and is NOT this guard's
-    business: a write has an effect, and short-circuiting one would be a
-    correctness bug rather than a saving. runner.py's MAX_REPEATED_CALLS is
-    what stops that, and it stopped three of run10's five halts."""
+def test_a_repeated_write_is_never_deduped_by_the_read_rule():
+    """A write is outside `_GUARDED_TOOLS` and stays outside it.
+
+    This test used to read "a repeated successful write is never deduped",
+    on the argument that "a write has an effect, and short-circuiting one
+    would be a correctness bug". OPEN-60 measured that argument and found
+    it true of a write that CHANGES the file and false of one that does
+    not -- 30 of 127 writes over five runs put back bytes already on disk.
+    So the boundary moved, and what is asserted here is the part that did
+    not move: repeated writes of DIFFERENT content all run, and they run
+    through the write rule rather than the read one. `_GUARDED_WRITES` is a
+    separate set for exactly that reason -- sharing `_GUARDED_TOOLS` would
+    key a write on `json.dumps(args)`, which is the file body.
+    """
     guard = RepeatGuardMiddleware()
     backend = _Backend("written")
 
-    for _ in range(4):
-        guard.wrap_tool_call(_request("write_file", file_path="/x.py", content="y"), backend)
+    for body in ("y", "yy", "yyy", "yyyy"):
+        guard.wrap_tool_call(_request("write_file", file_path="/x.py", content=body), backend)
 
     assert backend.calls == 4
+    assert guard._answered == {}, "a write is never counted as an answered read"
 
 
 def test_a_repeated_successful_command_is_never_deduped():
@@ -439,9 +449,13 @@ class _Usage:
 
     def __init__(self):
         self.deduped: list[str] = []
+        self.skipped: list[tuple[str, int]] = []
 
     def record_dedupe(self, role: str) -> None:
         self.deduped.append(role)
+
+    def record_write_skipped(self, role: str, chars: int) -> None:
+        self.skipped.append((role, chars))
 
 
 def test_a_dedupe_is_counted_in_usage():
@@ -854,3 +868,325 @@ def test_a_refusal_reaches_the_debug_log_and_the_trace_as_rudra(tmp_path):
         logger.removeHandler(handler)
         handler.close()
         logger.handlers, logger.level, logger.propagate = before
+
+
+# --- OPEN-60 Half A: a write of bytes already on disk -----------------------
+#
+# The read rules refuse a call whose ANSWER is already in the transcript.
+# This one refuses a call whose POST-CONDITION is already satisfied, which
+# is the strongest of the three cases in the module docstring's table --
+# nothing is cached and nothing is served from a copy.
+#
+# Measured over five runs before it was written: 30 of 127 writes were
+# byte-identical rewrites, ~23,320 OUTPUT tokens. Under the strict
+# invalidation rule this implements -- any other tool call drops the belief
+# -- 20 of those 127 are refusable, ~17,697 tokens.
+
+WROTE = "Updated file '/app.py'"
+BODY = "def main():\n    return 1\n"
+
+
+def test_a_second_identical_write_to_one_path_is_refused():
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 1, "the second write must not reach the backend"
+    assert "Already written" in _text(result)
+
+
+def test_the_write_refusal_is_not_classified_as_an_error():
+    """OPEN-16's shape. `runner.py` halts a subagent after three
+    consecutive tool failures, so an "Error:"-prefixed refusal would
+    convert this saving into three dead invocations."""
+    from rudra.trace.stream import looks_like_error
+
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert "Already written" in _text(result), "the refusal must exist to be classified"
+    assert looks_like_error(_text(result)) is False
+
+
+def test_the_write_refusal_answers_the_call_it_refused():
+    """OPEN-57: a bare string becomes a HumanMessage, so Rudra's own words
+    arrive wearing the user's name and the tool_call is left unanswered."""
+    from langchain_core.messages import ToolMessage
+
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(
+        _request("write_file", "call-7", file_path="/app.py", content=BODY), backend
+    )
+    result = guard.wrap_tool_call(
+        _request("write_file", "call-8", file_path="/app.py", content=BODY), backend
+    )
+
+    assert isinstance(result, ToolMessage)
+    assert result.name == "write_file"
+    assert result.tool_call_id == "call-8"
+
+
+def test_different_content_to_the_same_path_is_never_refused():
+    """The correctness half of this item, at the middleware level: a coder
+    building a file up must not be stopped."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content="a"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content="ab"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content="abc"), backend)
+
+    assert backend.calls == 3
+
+
+def test_the_same_content_to_a_different_path_is_never_refused():
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/other.py", content=BODY), backend)
+
+    assert backend.calls == 2
+
+
+def test_a_command_between_two_writes_restores_the_second():
+    """`execute` can do anything to a file, so the belief is dropped rather
+    than reasoned about. This is the half of the invalidation rule that is
+    about safety."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("execute", command="rm /app.py"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 3, "a command between the two writes must restore the second"
+
+
+def test_a_delete_between_two_writes_restores_the_second():
+    """The one no-op rewrite in five runs that the guard is RIGHT to let
+    through: run9 wrote `tests/test_app.py`, deleted it, and wrote the same
+    3,818 characters back. The file was gone -- that is real work."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("delete", file_path="/app.py"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 3
+
+
+def test_an_edit_between_two_writes_restores_the_second():
+    """`edit_file` changes the file, and is outside `_GUARDED_WRITES` for a
+    different reason (see the module docstring) -- so it invalidates like
+    any other non-read."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(
+        _request("edit_file", file_path="/app.py", old_string="a", new_string="b"), backend
+    )
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 3
+
+
+def test_a_read_between_two_writes_does_not_restore_the_second():
+    """A READ CANNOT CHANGE A FILE, so the belief survives it.
+
+    This is the whole difference between the two directions of the rule,
+    and getting it backwards was measured. `_record` drops read-belief on a
+    write because a write is how a read's answer changes; the converse does
+    not hold. Dropping write-belief on a read costs 6 of 28 refusals across
+    five runs -- ~4,059 output tokens -- and buys nothing, because the only
+    thing it would protect against is a process OUTSIDE Rudra editing the
+    file mid-turn, which `loop/engine.py::attempt_snapshot` already assumes
+    away on the same grounds.
+
+    Measured after the fix shipped strict: every single no-op rewrite that
+    still got through was let through by a read -- `read_file` 6, `ls` 1,
+    `glob` 1 -- and not one by a call that can change a file.
+    """
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("read_file", file_path="/app.py"), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2, "the read must not have restored the redundant write"
+    assert "Already written" in _text(result)
+
+
+def test_a_listing_between_two_writes_does_not_restore_the_second():
+    """`ls` and `glob` are reads too, and both appear in the measured
+    residue. One rule over `_GUARDED_TOOLS`, no per-tool branch."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("ls", path="/"), backend)
+    guard.wrap_tool_call(_request("glob", pattern="**/*.py"), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 3
+    assert "Already written" in _text(result)
+
+
+def test_writing_a_second_file_does_not_forget_the_first():
+    """Files are independent, and `_written` is a dict for that reason.
+
+    Measured: an implementation that REPLACED the dict instead of adding to
+    it -- believing exactly one path at a time -- refused 23 of the 28 no-op
+    rewrites across five runs instead of 26. The coder's real shape is
+    app.py, test_app.py, app.py, and the middle write was throwing away the
+    belief that made the third refusable.
+    """
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(
+        _request("write_file", file_path="/test_app.py", content="import app"), backend
+    )
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2, "the second file must not have erased belief about the first"
+    assert "Already written" in _text(result)
+
+
+def test_a_read_still_loses_its_own_belief_to_a_write():
+    """The other direction is untouched, and must be: a write IS how a
+    read's answer changes. Asserted here because this file now holds both
+    directions and they are deliberately asymmetric."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(CONTENTS)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/app.py"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("read_file", file_path="/app.py"), backend)
+
+    assert backend.calls == 3, "the write must have invalidated the earlier read"
+
+
+def test_an_edit_is_not_guarded_here():
+    """`edit_file` is deliberately out of Half A. An identical patch is not
+    a no-op: re-applying old_string -> new_string after it applied fails to
+    find old_string, so the tool errors and the failure rule covers it.
+    Measured at 10 calls over five runs, 1 repeat."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend("Edited '/app.py'")
+
+    for _ in range(3):
+        guard.wrap_tool_call(
+            _request("edit_file", file_path="/app.py", old_string="a", new_string="b"), backend
+        )
+
+    assert backend.calls == 3
+
+
+def test_a_failed_write_is_not_believed():
+    """The post-condition argument is the whole justification, and a write
+    that errored did not satisfy it."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend("Error: permission denied")
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 2
+
+
+def test_a_skipped_write_is_counted_separately_from_a_deduped_read():
+    """Two claims, two numbers. OPEN-39 Phase 2's saving is re-reads
+    avoided and this one is rewrites avoided; one field carrying both would
+    be neither."""
+    usage = _Usage()
+    guard = RepeatGuardMiddleware(role="coder", usage=usage)
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert usage.skipped == [("coder", len(BODY))]
+    assert usage.deduped == [], "reads_deduped must not absorb this"
+
+
+def test_a_skipped_write_emits_one_notice_naming_the_path():
+    sink = _Sink()
+    guard = RepeatGuardMiddleware(role="coder", trace=sink)
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert len(sink.notices) == 1
+    assert sink.notices[0]["name"] == "repeat-guard", "one name for the whole middleware"
+    assert sink.notices[0]["role"] == "coder"
+    assert "write_file" in sink.notices[0]["payload"]
+    assert "/app.py" in sink.notices[0]["payload"]
+
+
+def test_the_three_rules_are_told_apart_by_their_payload_verb():
+    """`repeat-guard` is one name, so the payload is the only thing that
+    says which rule fired."""
+    sink = _Sink()
+    guard = RepeatGuardMiddleware(role="coder", trace=sink)
+
+    guard.wrap_tool_call(_request("read_file", file_path="/m.py"), _Backend(CONTENTS))
+    guard.wrap_tool_call(_request("read_file", file_path="/m.py"), _Backend(CONTENTS))
+    assert sink.notices[-1]["payload"].startswith("dedupe:")
+
+    guard = RepeatGuardMiddleware(role="coder", trace=sink)
+    backend = _Backend(WROTE)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    assert sink.notices[-1]["payload"].startswith("skipped:")
+
+
+def test_a_write_is_refused_without_usage_or_trace():
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert "Already written" in _text(result)
+
+
+async def test_the_async_path_refuses_a_no_op_write_too():
+    guard = RepeatGuardMiddleware()
+    seen = []
+
+    async def handler(request):
+        seen.append(request)
+        return WROTE
+
+    await guard.awrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), handler)
+    result = await guard.awrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), handler
+    )
+
+    assert len(seen) == 1
+    assert "Already written" in _text(result)

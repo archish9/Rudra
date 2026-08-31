@@ -248,3 +248,80 @@ def test_a_marker_file_is_invisible_without_git(no_repo: FakeContext):
     (no_repo.project_path / "task_complete.txt").write_text("Task t5 done.\n", encoding="utf-8")
 
     assert changed_since(no_repo, before) == ()
+
+
+# --- OPEN-60 §8.3: refusing a no-op write cannot change the loop's verdict --
+#
+# A PIN, not a new behaviour. `RepeatGuardMiddleware` now refuses a write
+# whose bytes are already on disk, and the empty-diff guard
+# (`run_task`, OPEN-13) fails an attempt that touched nothing. If refusing
+# the write made an attempt look emptier than performing it would have, a
+# task that passes today could start failing -- so the equivalence is
+# asserted here rather than assumed.
+#
+# It holds because `changed_since` compares FINGERPRINTS, not events: a
+# write that puts back identical bytes moves no fingerprint, so it was
+# already invisible before it could be refused.
+
+
+def test_rewriting_a_file_with_identical_bytes_touches_nothing(context: FakeContext):
+    """In a repository. `git status --porcelain` reports content, not writes."""
+    tracked = context.project_path / "src" / "main.rs"
+    tracked.parent.mkdir(parents=True, exist_ok=True)
+    tracked.write_text("fn main() {}\n", encoding="utf-8")
+    git(context.project_path, "add", "src/main.rs")
+    git(context.project_path, "commit", "-q", "-m", "add main")
+
+    before = attempt_snapshot(context)
+    tracked.write_text("fn main() {}\n", encoding="utf-8")
+
+    assert changed_since(context, before) == ()
+
+
+def test_rewriting_a_file_with_identical_bytes_touches_nothing_without_git(
+    no_repo: FakeContext,
+):
+    """Outside one, where the fingerprint is Rudra's own (OPEN-12/13)."""
+    source = no_repo.project_path / "app.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+
+    before = attempt_snapshot(no_repo)
+    source.write_text("x = 1\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ()
+
+
+def test_a_refused_write_and_a_performed_no_op_write_are_indistinguishable(
+    no_repo: FakeContext,
+):
+    """The equivalence stated directly, which is what §8.3 asked for.
+
+    One attempt performs the redundant write, the other has it refused by
+    the guard and never reaches the filesystem. `changed_since` must answer
+    the same both times, or the guard would be changing what the loop
+    believes an attempt did.
+    """
+    source = no_repo.project_path / "app.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+
+    performed_before = attempt_snapshot(no_repo)
+    source.write_text("x = 1\n", encoding="utf-8")  # the write, performed
+    performed = changed_since(no_repo, performed_before)
+
+    refused_before = attempt_snapshot(no_repo)
+    # the write, refused: nothing happens to the filesystem at all
+    refused = changed_since(no_repo, refused_before)
+
+    assert performed == refused == ()
+
+
+def test_a_real_change_is_still_seen_after_a_no_op_rewrite(no_repo: FakeContext):
+    """The pin must not be satisfiable by a snapshot that sees nothing."""
+    source = no_repo.project_path / "app.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+
+    before = attempt_snapshot(no_repo)
+    source.write_text("x = 1\n", encoding="utf-8")
+    source.write_text("x = 2\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ("app.py",)

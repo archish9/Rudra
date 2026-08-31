@@ -51,6 +51,12 @@ def test_recording_accumulates_per_role():
         # a key that appears only on runs that deduped is a key every
         # reader of usage.json has to guard.
         "reads_deduped": 0,
+        # Added by OPEN-60: writes the repeat guard skipped because the
+        # bytes were already on disk, and what they would have cost. Two
+        # fields for the reason recall_chars has two: the claim is OUTPUT
+        # tokens, and a bare count of 3 cannot say 300 chars or 34,000.
+        "writes_skipped": 0,
+        "writes_skipped_chars": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -345,6 +351,8 @@ def test_seconds_per_call_is_never_stored() -> None:
         "tree_chars",
         "tree_injections",
         "reads_deduped",
+        "writes_skipped",
+        "writes_skipped_chars",
         "seconds",
     }
 
@@ -512,3 +520,41 @@ def test_render_is_silent_about_deduped_reads():
     usage.record_dedupe("coder")
 
     assert "dedup" not in render_usage(usage)
+
+
+def test_skipped_writes_are_counted_per_role_with_their_size():
+    """OPEN-60 Half A. A rewrite the guard refused is OUTPUT tokens that
+    were never emitted, so like a deduped read it leaves no mark on calls,
+    tokens or seconds -- and unlike one, its size is the whole claim."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+    usage.record_write_skipped("coder", 303)
+    usage.record_write_skipped("coder", 1200)
+    assert usage.as_dict()["coder"]["writes_skipped"] == 2
+    assert usage.as_dict()["coder"]["writes_skipped_chars"] == 1503
+
+
+def test_skipped_writes_do_not_touch_the_deduped_read_count():
+    """Two claims, two numbers. OPEN-39 Phase 2 banked re-reads avoided;
+    this banks rewrites avoided. One field carrying both would be neither."""
+    usage = RunUsage()
+    usage.record_write_skipped("coder", 10)
+    assert usage.as_dict()["coder"]["reads_deduped"] == 0
+    usage.record_dedupe("coder")
+    assert usage.as_dict()["coder"]["writes_skipped"] == 1
+
+
+def test_a_run_with_no_skipped_writes_reports_zero_not_absence():
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+    assert usage.as_dict()["coder"]["writes_skipped"] == 0
+    assert usage.as_dict()["coder"]["writes_skipped_chars"] == 0
+
+
+def test_skipped_writes_reach_the_usage_log():
+    """The RUN #7 checklist reads usage.json, not as_dict."""
+    usage = RunUsage()
+    usage.record_write_skipped("coder", 303)
+    log = usage.as_log(wall_now=usage.started_wall, mono_now=usage.started_mono)
+    assert log["roles"]["coder"]["writes_skipped"] == 1
+    assert log["roles"]["coder"]["writes_skipped_chars"] == 303

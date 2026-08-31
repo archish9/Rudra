@@ -184,10 +184,12 @@ def test_the_call_key_separates_read_windows(tmp_path):
     assert runner._call_key(page_two, tmp_path) != runner._call_key(page_two_short, tmp_path)
     # The identical call is still identical -- that is what the guard is for.
     assert runner._call_key(page_two, tmp_path) == runner._call_key(dict(page_two), tmp_path)
-    # A tool with no window is unaffected: same name, same target, same key.
+    # A tool with no window carries an empty one, and two writes of the same
+    # bytes are still one key. (Two writes of DIFFERENT bytes are not -- that
+    # is OPEN-60 Half B, tested below.)
     write = {"name": "write_file", "args": {"file_path": "/a.py", "content": "x"}}
     assert runner._call_key(write, tmp_path) == runner._call_key(
-        {"name": "write_file", "args": {"file_path": "/a.py", "content": "y"}}, tmp_path
+        {"name": "write_file", "args": {"file_path": "/a.py", "content": "x"}}, tmp_path
     )
 
 
@@ -206,7 +208,7 @@ def test_the_call_key_collapses_every_spelling_of_one_file(tmp_path):
         for s in spellings
     }
     assert len(keys) == 1
-    assert next(iter(keys)) == ("write_file", "app.py", "", "")
+    assert next(iter(keys)) == ("write_file", "app.py", "", "", "")
 
 
 def test_the_call_key_keeps_different_files_apart(tmp_path):
@@ -224,7 +226,7 @@ def test_the_call_key_leaves_a_delegation_alone(tmp_path):
     path resolver would be meaningless, so the identifier is only resolved
     when the argument is one of the path arguments."""
     delegate = {"name": "task", "args": {"subagent_type": "general-purpose", "description": "x"}}
-    assert runner._call_key(delegate, tmp_path) == ("task", "general-purpose", "", "")
+    assert runner._call_key(delegate, tmp_path) == ("task", "general-purpose", "", "", "")
 
 
 def test_the_call_key_resolves_a_backend_route_the_way_the_gate_does(tmp_path):
@@ -233,7 +235,7 @@ def test_the_call_key_resolves_a_backend_route_the_way_the_gate_does(tmp_path):
     None -- which is what the gate already reads them as. The guard is a
     counter, not a resolver (CR-B4), so it agrees rather than special-casing."""
     route = {"name": "read_file", "args": {"file_path": "/artifacts/note.md"}}
-    assert runner._call_key(route, tmp_path) == ("read_file", "artifacts/note.md", "", "")
+    assert runner._call_key(route, tmp_path) == ("read_file", "artifacts/note.md", "", "", "")
 
 
 def test_the_call_key_survives_a_missing_identifier(tmp_path):
@@ -242,6 +244,7 @@ def test_the_call_key_survives_a_missing_identifier(tmp_path):
     thing that raises inside the stream loop."""
     assert runner._call_key({"name": "write_file", "args": {}}, tmp_path) == (
         "write_file",
+        "",
         "",
         "",
         "",
@@ -442,3 +445,92 @@ async def test_repeats_separated_by_other_calls_still_halt(monkeypatch, patched)
 
     assert result.ok is False
     assert "'DONE'" in (result.halted_reason or "")  # resolved, since OPEN-50
+
+
+# --- OPEN-60 Half B: content is the other half of the key -----------------
+#
+# `MAX_REPEATED_CALLS` halts the WHOLE invocation and throws its work away.
+# Before this, three writes to one file tripped it whether or not they
+# carried the same bytes -- so a coder building a file up was killed at its
+# third edit. Measured over run9 and run11: of thirteen sequences that
+# reached the threshold, 4 were byte-identical, 5 mixed, and 4 were entirely
+# different content, i.e. an agent doing real work.
+
+
+def test_the_call_key_separates_writes_that_carry_different_content(tmp_path):
+    """run11 invocation 3: `app.py` at 45 bytes, then 404, then 352 -- three
+    distinct shas, a coder building a file up, halted for it."""
+    keys = {
+        runner._call_key(
+            {"name": "write_file", "args": {"file_path": "/app.py", "content": body}}, tmp_path
+        )
+        for body in ("a" * 45, "b" * 404, "c" * 352)
+    }
+    assert len(keys) == 3
+
+
+def test_the_call_key_still_joins_writes_that_carry_the_same_content(tmp_path):
+    """Half A refuses these, but the halt must still be able to see them --
+    a write that reaches the runner having survived the middleware is
+    genuine repetition."""
+    same = [
+        {"name": "write_file", "args": {"file_path": "/app.py", "content": "x"}},
+        {"name": "write_file", "args": {"file_path": "./app.py", "content": "x"}},
+        {"name": "write_file", "args": {"file_path": str(tmp_path / "app.py"), "content": "x"}},
+    ]
+    assert len({runner._call_key(call, tmp_path) for call in same}) == 1
+
+
+def test_the_call_key_separates_edits_that_carry_different_patches(tmp_path):
+    """`edit_file` is in _WATCHED_TOOLS and carries a patch rather than a
+    body, so its discriminator is the pair, not `content`."""
+    first = {
+        "name": "edit_file",
+        "args": {"file_path": "/app.py", "old_string": "a", "new_string": "b"},
+    }
+    second = {
+        "name": "edit_file",
+        "args": {"file_path": "/app.py", "old_string": "c", "new_string": "d"},
+    }
+    assert runner._call_key(first, tmp_path) != runner._call_key(second, tmp_path)
+    assert runner._call_key(first, tmp_path) == runner._call_key(dict(first), tmp_path)
+
+
+def test_the_call_key_does_not_hold_the_content_it_keys_on(tmp_path):
+    """This key lives in a dict for the life of an invocation. Keeping raw
+    file bodies there would hold a file's worth of memory per write."""
+    body = "z" * 5000
+    key = runner._call_key(
+        {"name": "write_file", "args": {"file_path": "/app.py", "content": body}}, tmp_path
+    )
+    assert body not in key
+    assert all(len(part) <= 64 for part in key)
+
+
+def test_a_read_is_unaffected_by_the_content_term(tmp_path):
+    """`read_file` carries no body, so its key is what it was."""
+    read = {"name": "read_file", "args": {"file_path": "/app.py", "offset": 100}}
+    assert runner._call_key(read, tmp_path) == ("read_file", "app.py", "100", "", "")
+
+
+def test_three_different_writes_to_one_file_do_not_reach_the_halt(tmp_path):
+    """The regression this item exists to close, stated as the guard's own
+    arithmetic rather than as a key comparison."""
+    repeated: dict[tuple[str, ...], int] = {}
+    for body in ("a", "ab", "abc"):
+        key = runner._call_key(
+            {"name": "write_file", "args": {"file_path": "/app.py", "content": body}}, tmp_path
+        )
+        repeated[key] = repeated.get(key, 0) + 1
+    assert max(repeated.values()) < runner.MAX_REPEATED_CALLS
+
+
+def test_three_identical_writes_to_one_file_still_reach_the_halt(tmp_path):
+    """Half B narrows the halt; it must not disable it."""
+    repeated: dict[tuple[str, ...], int] = {}
+    for _ in range(3):
+        key = runner._call_key(
+            {"name": "write_file", "args": {"file_path": "/app.py", "content": "a"}}, tmp_path
+        )
+        repeated[key] = repeated.get(key, 0) + 1
+    assert max(repeated.values()) >= runner.MAX_REPEATED_CALLS

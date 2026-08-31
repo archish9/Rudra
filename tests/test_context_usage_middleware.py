@@ -58,6 +58,11 @@ def test_sync_hook_records_the_reported_counts():
         # the same reason: a deduped read is a TOOL call the repeat guard
         # answered, and this middleware wraps model calls.
         "reads_deduped": 0,
+        # Added by OPEN-60, and zero here for the fourth instance of the same
+        # reason: a skipped write is a TOOL call the repeat guard refused, and
+        # this middleware wraps model calls.
+        "writes_skipped": 0,
+        "writes_skipped_chars": 0,
     }
     assert result.result[0].content == "hi"
 

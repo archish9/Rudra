@@ -72,6 +72,23 @@ class RoleUsage:
     # counted time -- and the only way anyone knew was a script run by hand
     # over a debug log, three separate times.
     reads_deduped: int = 0
+    # Writes this role emitted whose bytes were already on disk, which
+    # RepeatGuardMiddleware refused instead of performing (OPEN-60 Half A),
+    # and what those payloads would have cost.
+    #
+    # TWO fields, and the pair is the point. `writes_skipped` mirrors
+    # reads_deduped -- a call that never happened leaves no mark on tokens,
+    # seconds or tool results -- but this item's claim is OUTPUT tokens, the
+    # expensive kind, and a bare count of 3 cannot tell 300 characters from
+    # 34,000. Measured over five runs before the rule existed: 30 of 127
+    # writes were byte-identical rewrites, ~93,280 characters; run9
+    # re-emitted 33% of everything it wrote.
+    #
+    # Characters rather than tokens for the reason recall_chars is: that is
+    # what is actually counted here, and a second approximation would only
+    # add error.
+    writes_skipped: int = 0
+    writes_skipped_chars: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -177,6 +194,19 @@ class RunUsage:
         """
         self._slot(role).reads_deduped += 1
 
+    def record_write_skipped(self, role: str, chars: int) -> None:
+        """One no-op rewrite the guard refused, and what it would have cost.
+
+        Deliberately NOT folded into record_dedupe. OPEN-39 Phase 2's
+        saving is re-reads avoided and this one is rewrites avoided; the
+        two are different claims about different tools, and one number
+        carrying both would be neither -- which is the sentence
+        record_dedupe's own docstring already makes about retries.
+        """
+        slot = self._slot(role)
+        slot.writes_skipped += 1
+        slot.writes_skipped_chars += int(chars)
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -232,6 +262,8 @@ class RunUsage:
                 "tree_chars": tally.tree_chars,
                 "tree_injections": tally.tree_injections,
                 "reads_deduped": tally.reads_deduped,
+                "writes_skipped": tally.writes_skipped,
+                "writes_skipped_chars": tally.writes_skipped_chars,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

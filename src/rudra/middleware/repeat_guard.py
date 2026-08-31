@@ -58,6 +58,45 @@ MODEL reads, and the `TraceKind.NOTICE` is what says RUDRA did this rather
 than a tool. The text is unchanged -- prefixing it to make it classifiable
 is what the paragraph above forbids.
 
+**Three rules now, and the third is about writes (OPEN-60).** A write whose
+content is byte-identical to what this middleware last saw written to that
+same path, with no intervening tool call of any kind, is refused rather than
+performed. It is the safest of the cases in this file and the argument is
+not the read one: a repeated read is refused because the ANSWER is already
+in the transcript, and a no-op write is refused because the POST-CONDITION
+is already satisfied -- the bytes requested are the bytes present. Nothing
+is cached and nothing is served from a copy.
+
+Measured over five runs before it existed: 30 of 127 writes were
+byte-identical rewrites, ~93,280 characters of OUTPUT -- the expensive kind
+-- and run9 re-emitted 33% of everything it wrote. Under the strict
+invalidation this implements, 20 of those 127 are refusable.
+
+**Invalidation is by capability, not by symmetry.** Any call that CAN change
+a file -- `execute`, `edit_file`, `delete`, anything unguarded -- drops the
+belief. A read does not, because a read cannot change a file. That
+asymmetry with the read rules above is deliberate and was measured: the
+symmetric version shipped first, and every no-op rewrite that still got
+through it was let through by a read (`read_file` 6, `ls` 1, `glob` 1 across
+five runs), not one by a call that can change anything. Measured by driving
+this middleware over all five runs of evidence, refusing them takes the catch
+rate from **20 of 28 to 26 of 28**, ~17,697 to ~21,756 output tokens.
+
+Of the two rewrites still performed, one is correct and one is OPEN-52's.
+run9 wrote `tests/test_app.py`, DELETED it, and wrote the same 3,818
+characters back -- the file was gone, so that is real work. run11 wrote
+`app.py` and then `/app.py`: two spellings of ONE file, and `_target` reads
+the path the model typed rather than resolving it through
+`compat/virtual_paths.py`. That is OPEN-52 exactly, it is deliberately not
+fixed here (one guard per commit), and it is the first non-zero number that
+item has ever had.
+
+Note also that this middleware is built PER INVOCATION
+(`subagents/runner.py:263`), so `_written` starts empty each time and a
+rewrite repeated across invocations is never refused. That is by design:
+across-invocation repetition belongs to `loop/bounds.py`, and D9 is why it
+stays there.
+
 One consequence is deliberate and was decided rather than inherited: the
 failure refusal is a ToolMessage whose content leads with "Error:", so
 `subagents/runner.py:302` now counts it, and a third identical failing read
@@ -69,6 +108,7 @@ error and RESETS that counter, which is the same rule read the other way.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -79,6 +119,20 @@ from langchain_core.messages import ToolMessage
 # succeed, which is what makes short-circuiting safe. `execute` is
 # excluded on purpose -- see the module docstring.
 _GUARDED_TOOLS = frozenset({"read_file", "ls", "glob", "grep"})
+
+# Writes whose repeat is refusable, and it is a SEPARATE set on purpose
+# (OPEN-60). `_GUARDED_TOOLS` means "reads whose repeat is refusable" and
+# both read rules iterate it, so adding a write to it would apply the
+# failure and dedupe rules to writes as a side effect -- and the dedupe
+# rule keys on `json.dumps(args)`, which for a write is the file body.
+#
+# `edit_file` is deliberately outside it. An identical patch is not a
+# no-op: re-applying old_string -> new_string once it has applied fails to
+# find old_string, so the tool errors and the failure rule already covers
+# it. Measured at 10 calls over five runs with 1 repeat, so there is no
+# saving to weigh against that. `execute` is outside it for the reason the
+# module docstring gives.
+_GUARDED_WRITES = frozenset({"write_file"})
 
 MAX_IDENTICAL_FAILURES = 2
 """Failures of one exact call before the next is refused rather than run.
@@ -167,6 +221,12 @@ class RepeatGuardMiddleware(AgentMiddleware):
         # answer. A count rather than a set, so `max_identical_reads` is a
         # real dial and the two rules read the same way.
         self._answered: dict[str, int] = {}
+        # What we believe is on disk at each path, as a digest of the last
+        # content successfully written there, with nothing since that could
+        # have changed it. A digest rather than the body: this dict lives
+        # for the whole agent run, and holding raw file contents in it
+        # would cost a file's worth of memory per write.
+        self._written: dict[str, str] = {}
 
     def _target(self, args: dict[str, Any]) -> str:
         """What the call was aimed at, for the refusal and for the notice.
@@ -204,6 +264,45 @@ class RepeatGuardMiddleware(AgentMiddleware):
             f"or edit it."
         )
 
+    def _write_refusal(self, name: str, args: dict[str, Any]) -> str:
+        """The answer to a write whose bytes are already on disk.
+
+        Leads with "Already written", never "Error" -- the module docstring
+        says why, and OPEN-16 is what happens when it does not: three
+        refusals in a row would read as three tool failures and
+        `subagents/runner.py` would halt the invocation.
+
+        It says what the model should do next for the reason the read
+        refusal does. "You already did that" leaves the model to work out
+        which call was refused, and the whole saving is one round trip.
+        """
+        target = self._target(args)
+        return (
+            f"Already written: '{target}' already contains exactly these bytes, "
+            f"so `{name}` was not run again. The file is in the state you asked "
+            f"for -- nothing needs writing. Move on to the next piece of work, "
+            f"or edit the file if you meant to change it."
+        )
+
+    def _content_digest(self, args: dict[str, Any]) -> str | None:
+        """The payload this write would put on disk, fingerprinted.
+
+        None when the call carries no string body, which is what makes a
+        malformed write fall through to being performed rather than
+        refused: the guard counts, it never repairs a call.
+
+        Hashed AFTER FixWriteParamsMiddleware, which `build.py:243` orders
+        ahead of this one for exactly this class of reason -- that
+        middleware strips markdown fences on the way to disk, so hashing
+        the pre-repair payload would compare a fenced body against an
+        unfenced one. Measured at 0 fences in 127 writes over five runs, so
+        the ordering is what holds this rather than the data.
+        """
+        content = args.get("content")
+        if not isinstance(content, str):
+            return None
+        return hashlib.sha256(content.encode("utf-8", "surrogatepass")).hexdigest()
+
     def _blocked(self, request) -> str | None:
         """The refusal to return instead of running this call, or None.
 
@@ -213,9 +312,11 @@ class RepeatGuardMiddleware(AgentMiddleware):
         reader should not have to prove that to know which message wins.
         """
         name = request.tool_call.get("name")
+        args = request.tool_call.get("args", {})
+        if name in _GUARDED_WRITES:
+            return self._blocked_write(name, args)
         if name not in _GUARDED_TOOLS:
             return None
-        args = request.tool_call.get("args", {})
         signature = _signature(name, args)
         if self._failures.get(signature, 0) >= self.max_identical_failures:
             self._announce(
@@ -231,6 +332,26 @@ class RepeatGuardMiddleware(AgentMiddleware):
             )
             return self._repeat_refusal(name, args)
         return None
+
+    def _blocked_write(self, name: str, args: dict[str, Any]) -> str | None:
+        """The refusal for a write that would change nothing, or None.
+
+        Its own function rather than a third branch of `_blocked`, because
+        it shares neither the signature nor the state of the two read
+        rules: those key on the whole argument dict, this one on the path
+        and a digest of the body.
+        """
+        digest = self._content_digest(args)
+        if digest is None:
+            return None
+        target = self._target(args)
+        if self._written.get(target) != digest:
+            return None
+        self._count_write_skipped(len(args.get("content", "")))
+        self._announce(
+            f"skipped: `{name}` on '{target}' would write the bytes already there -- not run again"
+        )
+        return self._write_refusal(name, args)
 
     def _announce(self, payload: str) -> None:
         """Say that a refusal happened, to whoever is listening (OPEN-57).
@@ -289,8 +410,42 @@ class RepeatGuardMiddleware(AgentMiddleware):
             return
         self.usage.record_dedupe(self.role)
 
+    def _count_write_skipped(self, chars: int) -> None:
+        """One rewrite this guard refused instead of performing (OPEN-60).
+
+        Kept off `reads_deduped` deliberately: that number is OPEN-39
+        Phase 2's saving in re-reads, this one is output characters never
+        emitted, and two things in one number would be neither.
+        """
+        if self.usage is None or self.role is None:
+            return
+        self.usage.record_write_skipped(self.role, chars)
+
     def _record(self, request, result: Any) -> None:
         name = request.tool_call.get("name")
+        if name in _GUARDED_WRITES:
+            # A write is still "anything else" to the read rules -- it is
+            # exactly how the answer to a read changes -- so their state
+            # drops here as it always did. What is new is that this call
+            # also SETS what we believe is on disk, which is why it cannot
+            # simply fall through to the branch below.
+            self._failures.clear()
+            self._last_error.clear()
+            self._answered.clear()
+            digest = self._content_digest(request.tool_call.get("args", {}))
+            if digest is None or _is_error(result):
+                # A write that errored did not satisfy the post-condition,
+                # and a write we could not fingerprint is one we cannot
+                # claim anything about. Either way the safe belief is none.
+                self._written.clear()
+                return
+            # Added, not replaced. Files are independent -- writing b.py
+            # says nothing about a.py -- and a version of this that kept
+            # one path at a time refused 23 of 28 across five runs instead
+            # of 26, because the coder's real shape is app.py, test_app.py,
+            # app.py.
+            self._written[self._target(request.tool_call.get("args", {}))] = digest
+            return
         if name not in _GUARDED_TOOLS:
             # Anything else -- a write, an edit, a command -- may have
             # changed what the guarded reads would see, so every count is
@@ -311,7 +466,26 @@ class RepeatGuardMiddleware(AgentMiddleware):
             # so every previous answer stops being current here. This one
             # line is the whole correctness argument for the repeat rule.
             self._answered.clear()
+            # And the same rule read once more, for writes (OPEN-60): any
+            # other call may have changed the file, so what we believe is
+            # on disk stops being current. This is the STRICT policy, and
+            # it was chosen over a scoped one that invalidated only on
+            # edit/delete/execute because it is the rule already written
+            # two lines above -- one invalidation model in this file, not
+            # two. Measured cost of the choice: 8 catches of 28.
+            self._written.clear()
             return
+        # `self._written` is deliberately NOT cleared here, and the
+        # asymmetry with `_answered` above is the point. A write is how a
+        # read's answer changes, so a write drops read-belief. A read
+        # changes nothing, so it does not drop write-belief.
+        #
+        # Measured, after this file shipped the symmetric version: every
+        # no-op rewrite that still got through was let through by a read --
+        # read_file 6, ls 1, glob 1 across five runs -- and not one by a
+        # call that can change a file. Restoring them costs ~4,059 output
+        # tokens and protects against nothing this module does not already
+        # assume away (a process outside Rudra editing mid-turn).
         signature = _signature(name, request.tool_call.get("args", {}))
         if _is_error(result):
             self._failures[signature] = self._failures.get(signature, 0) + 1
