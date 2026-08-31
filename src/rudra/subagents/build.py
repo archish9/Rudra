@@ -362,7 +362,22 @@ def _interrupt_on_for(spec: RudraSubagent, context: Any, tools: list) -> dict | 
     return {name: cfg for name, cfg in context.gate.interrupt_on.items() if name in granted}
 
 
-def _nested_subagents(context: Any) -> list[dict]:
+_SUPPRESSION_PROMPT = (
+    "This subagent is registered to suppress deepagents' ungated "
+    "general-purpose auto-add (OPEN-14) and is unreachable: "
+    "DelegationGuardMiddleware withholds `task` from the agent that carries "
+    "it.\n\nReaching this prompt means delegation was enabled without "
+    "re-rendering it -- see subagents/build.py::_nested_subagents."
+)
+"""What stands in for a rendered prompt no model can reach (OPEN-58).
+
+Self-reporting on purpose. If a model ever reads this, the capability branch
+in `_nested_subagents` was made true without the spec being re-rendered, and
+the text says where to look rather than leaving a mute stub.
+"""
+
+
+def _nested_subagents(context: Any, *, can_delegate: bool) -> list[dict]:
     """The gated `general-purpose` spec every subagent must carry (OPEN-14).
 
     `create_deep_agent` auto-adds its OWN `general-purpose` subagent unless
@@ -385,10 +400,31 @@ def _nested_subagents(context: Any) -> list[dict]:
     against it for the MAIN agent. This is the same defence for the subagent
     path, which never had it: every Rudra subagent holds `task` (its own
     error messages list it) and nothing said where that led.
+
+    **`can_delegate` is the parent's, and it decides whether the prompt is
+    rendered at all (OPEN-58).** Passing the spec is the suppression; it is not
+    a delegation Rudra wants. `DelegationGuardMiddleware` strips `task` from
+    every model call of a spec that does not grant delegation -- which is every
+    shipped spec (`spec.py:97`, `test_no_shipped_subagent_may_delegate`) -- and
+    deepagents builds `SubAgentMiddleware` with no `system_prompt=`
+    (`graph.py:829`), so the name never reaches a prompt either. The rendered
+    prompt was therefore unreachable, and it cost a ChromaDB query on every
+    coder, tester and reviewer invocation: twelve in run11, and 13,068 of that
+    run's 23,519 recall characters -- 56% -- billed to a prompt no model saw.
+
+    **OPEN-54 did not cause that.** Before it closed, `recall_limit` returned
+    None on an undeclared window, `recall_block` returned "", and `if block:`
+    was false, so the search ran and nothing was recorded. It made this visible
+    and made it cost; there is no 2026-08-30 change to this file to look for.
+
+    Keyed on the capability rather than on `GENERAL_PURPOSE`'s name because a
+    name check is the special case the next never-invoked spec would not
+    inherit (OPEN-17), and because a capability branch is testable on any
+    machine (CLAUDE.md 1.8) -- both halves of this one are.
     """
     from rudra.subagents.registry import GENERAL_PURPOSE
 
-    return [to_subagent_spec(GENERAL_PURPOSE, context)]
+    return [to_subagent_spec(GENERAL_PURPOSE, context, render_prompt=can_delegate)]
 
 
 def build_agent(spec: RudraSubagent, context: Any, task: str = "") -> Any:
@@ -427,11 +463,11 @@ def build_agent(spec: RudraSubagent, context: Any, task: str = "") -> Any:
         skills=_skills_for(spec, context),
         # Not "delegation Rudra wants" -- suppression of delegation Rudra
         # did not choose. See _nested_subagents (OPEN-14).
-        subagents=_nested_subagents(context),
+        subagents=_nested_subagents(context, can_delegate=spec.can_delegate),
     )
 
 
-def to_subagent_spec(spec: RudraSubagent, context: Any) -> dict:
+def to_subagent_spec(spec: RudraSubagent, context: Any, *, render_prompt: bool = True) -> dict:
     """A deepagents SubAgent dict, for a parent that delegates via `task`.
 
     Nothing in 9b passes this to create_deep_agent -- the parent that
@@ -441,13 +477,22 @@ def to_subagent_spec(spec: RudraSubagent, context: Any) -> dict:
 
     `model` and `tools` are always set because create_sub_agent raises
     without them (subagents.py:358-363).
+
+    `render_prompt=False` substitutes `_SUPPRESSION_PROMPT` for the rendered
+    one and changes nothing else -- same name, description, model, tools,
+    middleware and interrupts. It is for a spec supplied only so upstream
+    skips its own auto-add, whose prompt no model can reach (OPEN-58). The
+    prompt is the only part worth skipping: `_model_for` and `_tools_for`
+    make no network call (CLAUDE.md 5), and the spec is compiled EAGERLY for
+    every registered subagent whether or not it is ever delegated to
+    (subagents.py:451), so its tools are what keep that compiled agent gated.
     """
     _spec_model = _model_for(spec, context.cfg)
     _spec_tools = _tools_for(spec, context)
     return {
         "name": spec.name,
         "description": spec.description,
-        "system_prompt": _prompt_for(spec, context),
+        "system_prompt": _prompt_for(spec, context) if render_prompt else _SUPPRESSION_PROMPT,
         "model": _spec_model,
         "tools": _spec_tools,
         "middleware": _middleware_for(spec, context, _spec_model),

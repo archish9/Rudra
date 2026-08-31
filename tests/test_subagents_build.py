@@ -227,7 +227,8 @@ def test_the_gated_general_purpose_spec_is_still_passed(context):
     skips only on a spec literally named this (graph.py:750-751)."""
     from rudra.subagents.build import _nested_subagents
 
-    assert [spec["name"] for spec in _nested_subagents(context)] == ["general-purpose"]
+    specs = _nested_subagents(context, can_delegate=False)
+    assert [spec["name"] for spec in specs] == ["general-purpose"]
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
@@ -388,7 +389,13 @@ def test_the_nested_general_purpose_cannot_write(context, monkeypatch):
     build_agent(REGISTRY["coder"], context)
 
     nested = captured["subagents"][0]
-    assert nested["system_prompt"].startswith(REGISTRY["general-purpose"].system_prompt[:40])
+    # Identity used to be checked through the rendered prompt. Since OPEN-58
+    # the coder cannot delegate, so that prompt is the stub and would say
+    # nothing about WHICH spec was passed -- name, description and the tool
+    # list carry the claim instead, and the tool list is the half that was
+    # always load-bearing.
+    assert nested["name"] == REGISTRY["general-purpose"].name
+    assert nested["description"] == REGISTRY["general-purpose"].description
     granted = {tool.name for tool in nested["tools"]}
     assert not ({"write_file", "edit_file", "delete", "execute"} & granted)
 
