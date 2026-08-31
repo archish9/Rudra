@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from rudra.verify.stubs import scan_stubs, source_files
+from rudra.verify.stubs import project_files, scan_stubs, source_files
 
 
 def write(tmp_path, name, text):
@@ -113,3 +113,75 @@ def test_source_files_prunes_skip_dirs(tmp_path):
     write(tmp_path, ".venv/lib/thing.py", "x = 1\n")
     write(tmp_path, "target/debug/build.rs", "fn a() {}\n")
     assert source_files(tmp_path) == ("app.py",)
+
+
+# --- OPEN-63: two questions, one walk ---
+#
+# `source_files` answers "what can I scan for placeholders?" and
+# `project_files` answers "what does this project contain?". They were one
+# function, so `loop/engine.py::tree_snapshot` -- which asks the second --
+# got the first one's answer and could not see a file the coder wrote
+# unless it ended in a source suffix.
+
+
+def test_project_files_reports_what_source_files_filters_out(tmp_path):
+    """The four shapes the suffix filter drops, and all four are real.
+
+    `requirements.txt` is run12's: a deliverable the ledger lost. The
+    SQLite-URI name is run13's, twice. `README.md` is run10's completion
+    message. `DONE` is OPEN-42's marker, the only one of the four the old
+    behaviour was right about, and it was right by accident.
+    """
+    write(tmp_path, "app.py", "x = 1\n")
+    write(tmp_path, "requirements.txt", "flask\n")
+    write(tmp_path, "README.md", "All tests should now pass.\n")
+    write(tmp_path, "DONE", "finished\n")
+    write(tmp_path, "file::memory:?cache=shared", "SQLite format 3\n")
+
+    assert source_files(tmp_path) == ("app.py",)
+    assert project_files(tmp_path) == (
+        "DONE",
+        "README.md",
+        "app.py",
+        "file::memory:?cache=shared",
+        "requirements.txt",
+    )
+
+
+def test_project_files_prunes_skip_dirs(tmp_path):
+    """Widening the suffix filter must not widen the directory pruning.
+
+    Every one of these would otherwise be fingerprinted on every attempt --
+    `node_modules` alone by the thousand -- and `.rudra/run/ledger.json`
+    changes *during* the attempt that would be reading it.
+    """
+    write(tmp_path, "app.py", "x = 1\n")
+    write(tmp_path, "node_modules/pkg/package.json", "{}\n")
+    write(tmp_path, "__pycache__/app.cpython-312.pyc", "\n")
+    write(tmp_path, ".rudra/run/ledger.json", '{"tasks": []}\n')
+    write(tmp_path, ".venv/pyvenv.cfg", "home = /usr\n")
+
+    assert project_files(tmp_path) == ("app.py",)
+
+
+def test_project_files_keeps_the_root_anchored_split(tmp_path):
+    """A1.29 survives the widening: `out`, `build`, `dist`, `target` and
+    `coverage` are build output AT THE ROOT and ordinary English words
+    below it. Matched at every depth they hid `src/out/handler.py` from the
+    gate, and a non-source file in the same place would go the same way."""
+    write(tmp_path, "out/bundle.txt", "generated\n")
+    write(tmp_path, "src/out/notes.txt", "hand-written\n")
+
+    assert project_files(tmp_path) == ("src/out/notes.txt",)
+
+
+def test_source_files_is_project_files_plus_the_suffix_filter(tmp_path):
+    """The pin that keeps them one walk. If they ever diverge on pruning,
+    the gate and the ledger have two opinions about build output again."""
+    write(tmp_path, "app.py", "x = 1\n")
+    write(tmp_path, "src/main.rs", "fn main() {}\n")
+    write(tmp_path, "notes.md", "hello\n")
+    write(tmp_path, "node_modules/pkg/index.js", "module.exports = 1;\n")
+
+    assert set(source_files(tmp_path)) <= set(project_files(tmp_path))
+    assert set(project_files(tmp_path)) - set(source_files(tmp_path)) == {"notes.md"}

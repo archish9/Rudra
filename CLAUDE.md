@@ -375,13 +375,25 @@ the ledger tools *cannot express* `DONE`, not because a prompt asks nicely.
 Two edges worth knowing before touching it: an **empty diff is a failed attempt**
 (with no changed files the gate reports "0 files parsed" and would pass an
 untouched task), and `files_touched` comes from the **filesystem**, not from the
-model — `git status` where there is a repo, a fingerprinted `source_files` walk
+model — `git status` where there is a repo, a fingerprinted `project_files` walk
 where there is not. Corrected 2026-08-24 (OPEN-12/OPEN-13): this said "from
 **git**", full stop, and the code agreed — `git_snapshot` returned `None`
 outside a repo and the empty-diff guard was written `before is not None and
 not files_touched`, so in a project with no `.git` the guard above never ran
 and two tasks were marked `DONE` having created no file. `attempt_snapshot`
 is now the single entry point and never returns `None`.
+
+Corrected again 2026-08-31 (OPEN-63): the walk was `source_files`, which
+keeps nine source suffixes, while `git_snapshot` prunes build output and
+nothing else — so **whether a file the coder wrote was recorded at all
+depended on whether the project had a `.git`**, and no project Rudra has been
+run against has ever had one. run12's t1 wrote a `requirements.txt` its
+`files_touched` does not name, and t2 — whose brief *was* that file — then
+reported "the coder wrote nothing". `verify/stubs.py` now answers the two
+questions separately: `source_files` is what the stub scanner may read,
+`project_files` is what the project contains, and the second is the first's
+walk without the suffix filter, so the gate and the ledger keep one opinion
+about build output. **Both are needed; do not collapse them again.**
 
 ### `.rudra/` state directory
 

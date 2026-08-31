@@ -18,7 +18,7 @@ import io
 import re
 import tokenize
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from rudra.stacks.registry import ALL_SKIP_DIRS
 from rudra.verify.result import Finding
@@ -159,16 +159,30 @@ def scan_stubs(project_path: Path, files: Sequence[str]) -> tuple[Finding, ...]:
     return tuple(findings)
 
 
-def source_files(project_path: Path) -> tuple[str, ...]:
-    """Every scannable source file in the project, build output pruned.
+def project_files(project_path: Path) -> tuple[str, ...]:
+    """Every file in the project, build output pruned. No suffix filter.
 
-    Backs `rudra verify --all`. Sorted so the report is stable between runs.
+    The other question this module is asked, and it is not the stub
+    scanner's (OPEN-63). "What can I scan for placeholders?" is answered by
+    `source_files`; "what does this project contain?" is answered here, and
+    conflating them made `loop/engine.py::tree_snapshot` blind to every file
+    without a source suffix. Since no test project has a `.git`, that was
+    every run: run12's coder wrote a `requirements.txt` its `files_touched`
+    does not name, and the task whose brief WAS that file then reported
+    "the coder wrote nothing".
+
+    The filter cannot tell a marker from a deliverable because it never
+    looks at anything but the suffix -- it drops `DONE` and
+    `task_complete.txt`, which is lucky, and `requirements.txt`,
+    `Cargo.toml`, `package.json` and `Dockerfile`, which is not.
+
+    Sorted so callers comparing two walks get a stable answer.
     """
     project_path = Path(project_path)
     found: list[str] = []
 
     for path in project_path.rglob("*"):
-        if not path.is_file() or path.suffix.lower() not in _SCANNED_SUFFIXES:
+        if not path.is_file():
             continue
         relative = path.relative_to(project_path)
         # Root-anchored for the five ambiguous names, any-depth for the
@@ -189,4 +203,19 @@ def source_files(project_path: Path) -> tuple[str, ...]:
     return tuple(sorted(found))
 
 
-__all__ = ["SKIP_DIRS", "scan_stubs", "source_files"]
+def source_files(project_path: Path) -> tuple[str, ...]:
+    """Every scannable source file in the project, build output pruned.
+
+    Backs `rudra verify --all` and scopes the stub scan. One walk and one
+    set of pruning rules, shared with `project_files` -- this is that walk
+    plus the suffix filter, so the two can never disagree about what build
+    output is (OPEN-63).
+    """
+    return tuple(
+        relative
+        for relative in project_files(project_path)
+        if PurePath(relative).suffix.lower() in _SCANNED_SUFFIXES
+    )
+
+
+__all__ = ["SKIP_DIRS", "project_files", "scan_stubs", "source_files"]

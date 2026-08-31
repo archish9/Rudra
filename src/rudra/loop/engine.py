@@ -31,7 +31,7 @@ from rudra.memory.degrade import last_failure
 from rudra.memory.entry import MemoryEntry
 from rudra.subagents import SubagentContext, run_subagent
 from rudra.verify import verify_project
-from rudra.verify.stubs import SKIP_DIRS, source_files
+from rudra.verify.stubs import SKIP_DIRS, project_files
 
 
 class Outcome(StrEnum):
@@ -151,19 +151,35 @@ def git_snapshot(context: LoopContext) -> dict[str, str] | None:
 
 
 def tree_snapshot(context: LoopContext) -> dict[str, str]:
-    """Every scannable source file in the project, each with a fingerprint.
+    """Every file in the project, each with a fingerprint.
 
-    What `git_snapshot` is for a project that has no git. `source_files`
-    already prunes build output and non-source suffixes (verify/stubs.py),
-    so this reads the project's code, not the project -- the same bound
-    `git_snapshot` gets from git plus `_is_build_output`.
+    What `git_snapshot` is for a project that has no git, and it must mean
+    the same thing (OPEN-63). This used to walk `source_files`, which keeps
+    nine source suffixes, while `git_snapshot` prunes build output and
+    nothing else -- so whether a file the coder wrote was recorded at all
+    depended on whether the project had a `.git`, and no project Rudra has
+    been run against has ever had one. run12's t1 wrote `requirements.txt`;
+    its `files_touched` names `src/app.py` and `tests/test_app.py`, and t2
+    -- whose brief WAS that file -- reported "the coder wrote nothing".
+
+    The docstring here used to claim the two bounds were already the same
+    ("plus `_is_build_output`"), which is how it survived: the tree path
+    carried a second filter git has no equivalent of. `project_files` is
+    now that same walk without it.
+
+    A marker file therefore counts as a touch on both paths now. That does
+    not weaken the empty-diff guard, because the branch it skips is not
+    where the protection lives: `changed_files` scopes the STUB SCAN only
+    (verify/__init__.py:65-70), so lint, typecheck and test are
+    whole-project either way, and a gate that judged nothing routes to the
+    tester rather than to DONE.
 
     It is a whole-tree walk where the git path is a `git status` call, and
     that is the price of the answer: without it there is no answer at all,
     which is OPEN-13.
     """
     root = Path(context.project_path)
-    return {path: _digest(root / path) for path in source_files(root)}
+    return {path: _digest(root / path) for path in project_files(root)}
 
 
 def attempt_snapshot(context: LoopContext) -> dict[str, str]:
@@ -199,10 +215,13 @@ def changed_since(context: LoopContext, before: dict[str, str] | None) -> tuple[
     `before is None` still means "no snapshot was taken", and still answers
     with the whole project. Nothing in the loop passes it any more --
     `run_task` uses `attempt_snapshot`, which always has one -- but the
-    contract is kept for callers outside it.
+    contract is kept for callers outside it. It walks `project_files` for
+    the reason `tree_snapshot` does (OPEN-63): "the whole project" and "the
+    project's source files" were the same answer here, and they are not the
+    same question.
     """
     if before is None:
-        return source_files(context.project_path)
+        return project_files(context.project_path)
     after = attempt_snapshot(context)
     touched = {path for path, digest in after.items() if before.get(path) != digest}
     touched |= {path for path in before if path not in after}

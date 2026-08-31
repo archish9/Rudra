@@ -234,20 +234,27 @@ def test_a_marker_file_registers_as_work_in_a_git_project(context: FakeContext):
     assert changed_since(context, before) == ("DONE", "task_complete.txt")
 
 
-def test_a_marker_file_is_invisible_without_git(no_repo: FakeContext):
-    """Run7's own case, recorded so the asymmetry is documented rather than
-    surprising.
+def test_a_marker_file_registers_as_work_without_git_too(no_repo: FakeContext):
+    """Was `test_a_marker_file_is_invisible_without_git`, and it asserted the
+    invisibility was *correct* -- "which is why run7's t4 and t5 correctly
+    show `files_touched: []` despite three marker writes each".
 
-    `tree_snapshot` walks `source_files`, which filters on `_SCANNED_SUFFIXES`
-    (verify/stubs.py:30-33). `DONE` has no suffix and `.txt` is not in the
-    set, so both markers are invisible -- which is why run7's t4 and t5
-    correctly show `files_touched: []` despite three marker writes each.
+    OPEN-63 is why that reading did not hold. It works for `DONE` and
+    `task_complete.txt`, which are noise, and fails for `requirements.txt`,
+    `Cargo.toml`, `package.json` and `Dockerfile`, which are deliverables --
+    the filter cannot tell them apart, because it never looks at anything
+    but the suffix. run12 wrote a `requirements.txt` nobody recorded.
+
+    So the marker files are visible now, on both paths, and the loop's
+    protection against a marker faking progress is where it always actually
+    was: an attempt that writes only a marker reaches a whole-project gate
+    (verify/__init__.py:65-70) which judges the project, not the marker.
     """
     before = attempt_snapshot(no_repo)
     (no_repo.project_path / "DONE").write_text("The task is complete.\n", encoding="utf-8")
     (no_repo.project_path / "task_complete.txt").write_text("Task t5 done.\n", encoding="utf-8")
 
-    assert changed_since(no_repo, before) == ()
+    assert changed_since(no_repo, before) == ("DONE", "task_complete.txt")
 
 
 # --- OPEN-60 §8.3: refusing a no-op write cannot change the loop's verdict --
@@ -325,3 +332,105 @@ def test_a_real_change_is_still_seen_after_a_no_op_rewrite(no_repo: FakeContext)
     source.write_text("x = 2\n", encoding="utf-8")
 
     assert changed_since(no_repo, before) == ("app.py",)
+
+
+# --- OPEN-63: the two snapshot paths must answer the same question ---
+#
+# `tree_snapshot` walked `source_files`, which filters on `_SCANNED_SUFFIXES`
+# (verify/stubs.py:33), while `git_snapshot` prunes build output and nothing
+# else. So the same coder writing the same file was work in a git project
+# and invisible outside one -- and every project Rudra has been run against
+# so far is outside one.
+#
+# Measured on run12 (`2796039bde32`): t1 wrote `requirements.txt`, its
+# `files_touched` recorded `['src/app.py', 'tests/test_app.py']`, and t2 --
+# whose brief WAS requirements.txt -- then reported "the coder wrote
+# nothing, and nothing needed writing". The file the user got was absent
+# from the ledger, from AGENTS.md's Session Log, and from the reviewer's
+# file list, and TODO.md had to reconstruct it from the debug log by hand.
+
+
+def test_a_non_source_deliverable_is_reported_without_git(no_repo: FakeContext):
+    """run12's defect, reduced. `requirements.txt` is work, not noise."""
+    before = attempt_snapshot(no_repo)
+    (no_repo.project_path / "requirements.txt").write_text("flask\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ("requirements.txt",)
+
+
+def test_a_file_a_connection_string_named_is_reported_without_git(no_repo: FakeContext):
+    """OPEN-55's other half, which nothing in Rudra has ever reported.
+
+    A SQLite URI reaching `open()` as a literal filename left a real
+    database on disk in three runs of five -- run9, run10 and run13, four
+    files -- and the gate reported `test: passed` over two of them. Rudra
+    does not prevent generated code from being wrong. It stops being silent
+    about what the run left behind.
+    """
+    before = attempt_snapshot(no_repo)
+    (no_repo.project_path / "file::memory:?cache=shared").write_bytes(b"SQLite format 3\x00")
+
+    assert changed_since(no_repo, before) == ("file::memory:?cache=shared",)
+
+
+def test_the_same_writes_are_reported_the_same_with_and_without_git(
+    context: FakeContext, tmp_path_factory: pytest.TempPathFactory
+):
+    """The pin, and the only thing here that is really the item.
+
+    Whatever the pruning rules turn out to be, both paths must share them.
+    A separate directory rather than the `no_repo` fixture because both
+    fixtures take `tmp_path` and `context` turns it into a repository.
+    """
+    plain_root = tmp_path_factory.mktemp("no_git")
+    plain = FakeContext(
+        subagents=FakeSubagents(gate=AutoGate(plain_root)),
+        project_path=plain_root,
+        console=Console(quiet=True),
+        cfg=build_config(plain_root),
+    )
+
+    def write_the_same_project(root: Path) -> None:
+        (root / "app.py").write_text("x = 1\n", encoding="utf-8")
+        (root / "requirements.txt").write_text("flask\n", encoding="utf-8")
+        (root / "README.md").write_text("All tests should now pass.\n", encoding="utf-8")
+        (root / "DONE").write_text("finished\n", encoding="utf-8")
+
+    git_before = attempt_snapshot(context)
+    write_the_same_project(context.project_path)
+    with_git = changed_since(context, git_before)
+
+    tree_before = attempt_snapshot(plain)
+    write_the_same_project(plain.project_path)
+    without_git = changed_since(plain, tree_before)
+
+    assert with_git == without_git
+    assert with_git == ("DONE", "README.md", "app.py", "requirements.txt")
+
+
+def test_build_output_is_still_pruned_from_the_wider_walk(no_repo: FakeContext):
+    """Widening the suffix filter must not widen the directory pruning.
+
+    `node_modules` holds non-source files by the thousand, and every one of
+    them would otherwise be fingerprinted on every attempt.
+    """
+    before = attempt_snapshot(no_repo)
+    build = no_repo.project_path / "node_modules" / "pkg"
+    build.mkdir(parents=True)
+    (build / "package.json").write_text("{}\n", encoding="utf-8")
+    (build / "README.md").write_text("vendored\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ()
+
+
+def test_rudra_s_own_directory_is_pruned_from_the_wider_walk(no_repo: FakeContext):
+    """`.rudra/` is now full of files with no source suffix -- ledger.json,
+    the transcripts, the debug log -- and every one of them changes during
+    the attempt that would be reading them."""
+    before = attempt_snapshot(no_repo)
+    state = no_repo.project_path / ".rudra" / "run"
+    state.mkdir(parents=True)
+    (state / "ledger.json").write_text('{"tasks": []}\n', encoding="utf-8")
+    (no_repo.project_path / "real.py").write_text("x = 1\n", encoding="utf-8")
+
+    assert changed_since(no_repo, before) == ("real.py",)
