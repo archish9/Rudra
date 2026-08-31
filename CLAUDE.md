@@ -365,6 +365,21 @@ after `!` is a lie printed once per turn.
    before. The degraded mode is the old blocking one, never the passing one.
 6. Two identical failure signatures in a row → `BLOCKED` (C6.5a). A gate `escalate` → the whole run stops.
 7. The planner is consulted again **only** on a block or an empty ledger — never after an ordinary success, and only the `breakdown` stage is re-entered (S10b.3). Clarify and architect run once: re-opening the questions after code exists churns decisions the coder already built on.
+
+   **Every re-consult is SHOWN the ledger, and that is not politeness
+   (OPEN-65).** A stage's consults all share one thread
+   (`thread_id=f"{session_id}-{stage}"`), so the model reads each new
+   message against whatever `read_ledger` last returned it — and
+   `ledger_empty` asserts *"Every task is finished"*, which contradicts
+   any snapshot taken before the last task was worked. Told that and
+   given nothing to reconcile with, run11's planner re-declared a DONE
+   task, reworded; the run spent 133.1s writing nothing. Measured over
+   six runs, `ledger_empty` fired six times and reached for `read_ledger`
+   **zero** times. `loop/tools.py::render_ledger` is the one spelling,
+   shared with the tool, so what the planner is shown and what it can
+   fetch cannot drift. This is OPEN-39's rule in the other half of the
+   system: **an agent that writes into something is shown it, never
+   merely offered a tool that would fetch it.**
 8. Reviewer runs once at the end, advisory, printed, gating nothing.
 
 **The split that makes this work (S9c.1):** the model decides what work exists;

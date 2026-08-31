@@ -188,3 +188,122 @@ async def test_stale_failures_cannot_re_enter_clarify_or_architect(captured):
     for stage in ("clarify", "architect"):
         with pytest.raises(ValueError, match="runs once"):
             await _consult(stage, reason="stale_failures", feedback="  x.py:1")
+
+
+# --- OPEN-65: every re-consult is shown the ledger it is writing into ---
+
+
+def _ledger_with_history() -> Ledger:
+    """run11's ledger at the moment its `ledger_empty` consult fired."""
+    ledger = Ledger()
+    for description in (
+        "create the flask app in app.py",
+        "define the Todo model in models.py",
+        "write the routes blueprint",
+        "write unit tests in test_app.py",
+        "fix the delete endpoint's success message",
+    ):
+        ledger.add(description)
+    for task in ledger.tasks:
+        task.status = TaskStatus.DONE
+    ledger.tasks[3].status = TaskStatus.BLOCKED
+    return ledger
+
+
+@pytest.mark.parametrize(
+    ("reason", "extra"),
+    [
+        ("ledger_empty", {}),
+        ("stale_failures", {"feedback": "  tests/test_app.py:11"}),
+        ("revision", {"feedback": "add a task for the README"}),
+    ],
+)
+async def test_every_re_consult_is_shown_the_ledger(captured, reason, extra):
+    """OPEN-65. `ledger_empty` used to assert "Every task is finished" and
+    interpolate nothing, into a thread whose last `read_ledger` snapshot was
+    taken before the last task was worked. Measured over run8-run13
+    (`docs/superpowers/plans/2026-08-31-open59-duplicate-rate.py` §4): six
+    such consults, `read_ledger` called on none of them, and the one that
+    added a task added a reworded duplicate of a task already DONE.
+    """
+    ledger = _ledger_with_history()
+
+    await consult_planner(
+        object(),
+        ledger,
+        "build it",
+        stage="breakdown",
+        reason=reason,
+        gate=None,
+        console=Console(quiet=True),
+        session_id="sess",
+        **extra,
+    )
+
+    message = captured[0]["message"]
+    for task in ledger.tasks:
+        assert task.id in message, f"{reason} hides {task.id}"
+        assert task.description in message, f"{reason} hides what {task.id} was"
+        assert task.status.value in message, f"{reason} hides that {task.id} is settled"
+
+
+async def test_a_blocked_consult_is_shown_the_ledger_too(captured):
+    """The blocked branch already names the one task it is about; the other
+    four are what tell the planner whether its next task duplicates one."""
+    ledger = _ledger_with_history()
+    blocked = ledger.tasks[3]
+    blocked.note = "typecheck failed"
+
+    await consult_planner(
+        object(),
+        ledger,
+        "build it",
+        stage="breakdown",
+        reason="blocked",
+        task=blocked,
+        gate=None,
+        console=Console(quiet=True),
+        session_id="sess",
+    )
+
+    message = captured[0]["message"]
+    assert "typecheck failed" in message, "the blocker still goes back verbatim"
+    for task in ledger.tasks:
+        assert task.id in message
+
+
+async def test_the_initial_breakdown_is_not_shown_an_empty_ledger(captured):
+    """There is nothing to show, and a heading over no tasks is prompt spend
+    that buys nothing. Every RE-consult has a ledger by construction."""
+    await _consult("breakdown")
+    assert "ledger" not in captured[0]["message"].lower()
+
+
+async def test_the_ledger_shown_is_the_one_read_ledger_returns(captured):
+    """One renderer, not two. A second copy would drift, and the planner
+    would be shown a ledger in a spelling its own tool never produces."""
+    from rudra.loop.tools import create_ledger_tools, render_ledger
+
+    ledger = _ledger_with_history()
+    tools = {tool.name: tool for tool in create_ledger_tools(ledger, tmp_ledger_path())}
+
+    await consult_planner(
+        object(),
+        ledger,
+        "build it",
+        stage="breakdown",
+        reason="ledger_empty",
+        gate=None,
+        console=Console(quiet=True),
+        session_id="sess",
+    )
+
+    assert render_ledger(ledger) in captured[0]["message"]
+    assert tools["read_ledger"].invoke({}) == render_ledger(ledger)
+
+
+def tmp_ledger_path():
+    import pathlib
+    import tempfile
+
+    return pathlib.Path(tempfile.mkdtemp()) / "ledger.json"

@@ -24,7 +24,16 @@ from rudra.loop.ledger import Ledger, Task, TaskStatus
 _SETTLED = frozenset({TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.DROPPED})
 
 
-def _render(ledger: Ledger) -> str:
+def render_ledger(ledger: Ledger) -> str:
+    """Every task, one line each: id, status, description.
+
+    Public, and the ONLY spelling of the ledger a model is ever shown.
+    `read_ledger` returns it when the planner asks, and consult_planner
+    interpolates it into every re-consult so the planner does not have to
+    ask (OPEN-65). Two renderers would drift, and the drift would land in a
+    prompt -- the planner would be told the ledger in one spelling and shown
+    it in another, which is the class of defect OPEN-64 was filed on.
+    """
     if not ledger.tasks:
         return "The ledger has no tasks yet."
     return "\n".join(
@@ -169,9 +178,9 @@ def create_ledger_tools(ledger: Ledger, path: Path) -> list:
         Returns:
             One line per task: id, status, description.
         """
-        return _render(ledger)
+        return render_ledger(ledger)
 
     return [add_tasks, drop_task, read_ledger]
 
 
-__all__ = ["create_ledger_tools"]
+__all__ = ["create_ledger_tools", "render_ledger"]

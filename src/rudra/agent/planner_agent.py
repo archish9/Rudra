@@ -37,7 +37,7 @@ from rudra.context.middleware import UsageMiddleware
 from rudra.facts import facts_block
 from rudra.filesystem import project_tree
 from rudra.llm import build_model
-from rudra.loop.tools import create_ledger_tools
+from rudra.loop.tools import create_ledger_tools, render_ledger
 from rudra.middleware import (
     DelegationGuardMiddleware,
     FixWriteParamsMiddleware,
@@ -811,6 +811,31 @@ async def consult_planner(
         )
     else:  # pragma: no cover - guarded by the caller
         raise ValueError(f"unknown consult reason {reason!r}")
+
+    if reason != "initial":
+        # OPEN-65. Every re-consult asks about a ledger the planner is not
+        # otherwise shown -- and `ledger_empty` ASSERTS its state ("Every
+        # task is finished") without carrying it. That is not merely terse,
+        # because a stage's consults all run on one thread
+        # (`thread_id` below): the model reads the assertion against
+        # whatever `read_ledger` last returned it, which in run11 was a
+        # snapshot taken one turn after t5 was created and long before it
+        # was worked -- t5 [pending]. Contradicted and given nothing to
+        # reconcile with, it re-declared t5, reworded, and the run spent
+        # 133.1s writing nothing.
+        #
+        # Measured over run8-run13 by
+        # docs/superpowers/plans/2026-08-31-open59-duplicate-rate.py: six
+        # `ledger_empty` consults, `read_ledger` called on NONE of them, and
+        # the one that added a task added that duplicate. The tool has
+        # always been there; being shown is what the coder gets and this
+        # did not (OPEN-39 -- an agent that writes into something is shown
+        # it, never offered a tool that would fetch it).
+        #
+        # Before the ask, not after it: this is the state the instructions
+        # that follow are about, and `blocked` already opens with the state
+        # of the one task it names.
+        message = f"The task ledger as it stands:\n\n{render_ledger(ledger)}\n\n{message}"
 
     await _stream_planner_turn(
         agent,
