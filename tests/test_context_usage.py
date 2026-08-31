@@ -558,3 +558,19 @@ def test_skipped_writes_reach_the_usage_log():
     log = usage.as_log(wall_now=usage.started_wall, mono_now=usage.started_mono)
     assert log["roles"]["coder"]["writes_skipped"] == 1
     assert log["roles"]["coder"]["writes_skipped_chars"] == 303
+
+
+def test_the_write_belief_map_is_shared_by_role_and_never_reported():
+    """OPEN-62 6a. It is run state a guard reads across agent rebuilds, not
+    an accounting number anything reports -- and `usage.json`'s schema is
+    read by this repo's own ledger scripts, which iterate its roles."""
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    usage.beliefs_for("coder")["app.py"] = "sha"
+    usage.record("coder", input_tokens=1, output_tokens=1)
+
+    assert usage.beliefs_for("coder") == {"app.py": "sha"}, "the map is returned live"
+    assert usage.beliefs_for("tester") == {}, "one role's writes are not another's"
+    assert "write_beliefs" not in usage.as_dict()
+    assert "write_beliefs" not in usage.as_dict()["coder"]

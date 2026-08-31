@@ -901,6 +901,19 @@ def test_every_subagent_repeat_guard_can_report_what_it_saved(name, context):
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_repeat_guard_can_confirm_a_belief_against_the_disk(name, context):
+    # OPEN-62 6a, and it is the same lesson twice over: registered is not
+    # wired. The run-scoped belief is only allowed to refuse a write it did
+    # not make itself once the file on disk agrees, so a guard without a
+    # project path carries the belief and can never act on it -- which is
+    # the shipped behaviour with an extra dict.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+
+    assert guard.project_path == context.project_path
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
 def test_a_subagent_repeat_guard_still_builds_with_no_run_around_it(name, context):
     # The context fixture carries no usage, as every 9b-era stand-in does,
     # and the guard must go on guarding without one -- counting is the

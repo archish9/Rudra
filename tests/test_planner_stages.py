@@ -276,6 +276,19 @@ def test_the_planner_repeat_guard_reports_what_it_saved():
     assert guard.usage is usage
 
 
+def test_the_planner_repeat_guard_can_confirm_a_belief_against_the_disk(tmp_path):
+    """OPEN-62 6a. The planner builds a fresh agent PER STAGE, so it
+    crosses the boundary this fixes without a subagent being involved --
+    and a belief it inherits refuses nothing until the file agrees, which
+    needs this path."""
+    from rudra.agent.planner_agent import build_planner_middleware
+
+    middleware = build_planner_middleware("a task", project_path=tmp_path)
+
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+    assert guard.project_path == tmp_path
+
+
 def test_the_planner_repeat_guard_builds_without_accounting():
     """Counting is the optional half: `build_planner_middleware` is called
     with no usage by every caller that is not a full run."""

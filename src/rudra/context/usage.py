@@ -157,6 +157,31 @@ class RunUsage:
     # from it.
     served_roles: set[str] = field(default_factory=set)
 
+    # What each role believes is on disk at each path, as a digest of the
+    # last content it successfully wrote there (OPEN-62 6a). Here for the
+    # reason `served_roles` above is here, and it is the same problem: the
+    # belief has to outlive the agent, because `subagents/runner.py:263`
+    # builds a fresh middleware on every dispatch and run13 spent two whole
+    # coder invocations re-emitting files a previous task had written.
+    #
+    # Keyed by ROLE, because the coder and the tester write different files
+    # for different reasons and a shared unkeyed map would let either
+    # silence the other. Deliberately NOT in `as_dict`: run state a guard
+    # reads, not an accounting number anything reports, and `usage.json`'s
+    # schema is read by scripts in this repo's own ledger.
+    write_beliefs: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def beliefs_for(self, role: str) -> dict[str, str]:
+        """`role`'s write-belief map, created on first use.
+
+        Returned live and mutated in place by the caller, which is what
+        makes one map shared across every middleware instance this run
+        builds for that role.
+        """
+        if role not in self.write_beliefs:
+            self.write_beliefs[role] = {}
+        return self.write_beliefs[role]
+
     def record_served(self, role: str) -> None:
         """A model call by `role` returned -- the endpoint serves it."""
         self.served_roles.add(role)

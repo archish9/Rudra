@@ -257,6 +257,13 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             # reaching the trace as a line the user typed. Same getattr and
             # the same reason as ModelRetryMiddleware's above.
             trace=getattr(context, "trace", None),
+            # OPEN-62 6a. The write-belief now outlives this invocation, on
+            # `usage`, because every task builds a new one of these
+            # (`runner.py:263`) and run13 spent two whole coder invocations
+            # re-emitting files an earlier task had written. A belief it did
+            # not make itself refuses nothing until the file on disk agrees,
+            # and this is the path that makes that check possible.
+            project_path=getattr(context, "project_path", None),
         ),
         # Before the FilesystemMiddleware that BUILDS the execute tool, which
         # is only where it has to sit in the list -- the description swap

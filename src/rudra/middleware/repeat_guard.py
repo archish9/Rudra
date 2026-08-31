@@ -118,11 +118,34 @@ what happened.** That one survived a review, a ledger entry and three
 restatements because every reader checked it against the sentence rather
 than against run9's log.
 
-Note also that this middleware is built PER INVOCATION
-(`subagents/runner.py:263`), so `_written` starts empty each time and a
-rewrite repeated across invocations is never refused. That is by design:
-across-invocation repetition belongs to `loop/bounds.py`, and D9 is why it
-stays there.
+**The belief outlives the invocation, and the refusal is a fact (OPEN-62
+6a).** This middleware is built PER INVOCATION (`subagents/runner.py:263`),
+so `_written` starts empty each time -- and run13 spent two entire coder
+invocations, 137 of its 368 task-loop seconds, re-emitting files an earlier
+task had already written. The belief therefore also lives on `RunUsage`,
+keyed by role, which is the object that already outlives an agent rebuild
+and the shape OPEN-61 reached for one day earlier for the same reason.
+
+The two maps are not the same kind of claim, and that is the whole design.
+`_written` is what THIS invocation did and watched: it refuses on its own
+authority, and it is invalidated by anything that could have changed a file.
+The run map is what SOME EARLIER invocation did, across a boundary where
+Rudra ran the gate, the fix loop and git and this middleware saw none of it
+-- so it refuses nothing until `_disk_digest` has read the target and found
+exactly those bytes. Nothing invalidates it, because the file answers every
+question invalidation would have guessed at, and a rule that dropped the
+belief on any intervening command was measured to be worth exactly zero:
+coders run tests.
+
+**This corrects a disposition that was written before there was a case to
+test it against.** The paragraph here used to say across-invocation
+repetition belongs to `loop/bounds.py` and that D9 is why it stays there.
+`bounds.py` takes a `VerifyReport` and fires on two identical gate FAILURES
+in a row (`loop/bounds.py:16,48`); run13's rewrites happened on tasks the
+gate PASSED, so it never saw them and structurally cannot. And D9 forbids an
+LLM deciding termination -- comparing two digests and then reading a file is
+Python deciding, exactly as `_blocked_write` already was one invocation
+lower down.
 
 One consequence is deliberate and was decided rather than inherited: the
 failure refusal is a ToolMessage whose content leads with "Error:", so
@@ -137,10 +160,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
+
+from rudra.compat.virtual_paths import virtual_to_host
 
 # Deterministic reads. A repeat of one of these after a failure cannot
 # succeed, which is what makes short-circuiting safe. `execute` is
@@ -270,6 +296,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
         role: str | None = None,
         usage: Any = None,
         trace: Any = None,
+        project_path: Any = None,
     ) -> None:
         """`role`, `usage` and `trace` are optional and duck-typed, on
         ModelRetryMiddleware's precedent (`subagents/build.py:239-243`):
@@ -285,6 +312,11 @@ class RepeatGuardMiddleware(AgentMiddleware):
         self.role = role
         self.usage = usage
         self.trace = trace
+        # Where a virtual path lands on this host, and the only reason this
+        # middleware needs one: an inherited belief is confirmed against the
+        # file before it refuses anything (OPEN-62 6a). None disables that
+        # confirmation, and with it every cross-invocation refusal.
+        self.project_path = project_path
         self._failures: dict[str, int] = {}
         self._last_error: dict[str, str] = {}
         # How many times each signature has already been answered
@@ -298,6 +330,73 @@ class RepeatGuardMiddleware(AgentMiddleware):
         # for the whole agent run, and holding raw file contents in it
         # would cost a file's worth of memory per write.
         self._written: dict[str, str] = {}
+
+    def _shared(self) -> dict[str, str] | None:
+        """The RUN's write-belief map for this role, or None.
+
+        **Nothing invalidates it, and that is the design rather than an
+        omission.** `_written` is invalidated because it refuses on its own
+        authority; this one refuses nothing until `_disk_digest` has read
+        the file and found exactly those bytes, so a `delete`, an
+        `edit_file` or an `execute` between the two writes is already
+        answered by the file itself -- gone, changed, or genuinely still
+        holding them. Invalidating it as well would only make the guard
+        forget things that are true, and measured over run8-run13 that is
+        not hypothetical: clearing it on any intervening command dropped
+        every cross-invocation belief a coder held, because coders run
+        tests.
+
+        `_written` above is this invocation's own, and it is not enough:
+        `subagents/runner.py:263` builds a new middleware per dispatch, so
+        the coder that wrote `database.py` for task 1 and the one that
+        rewrote it byte-identically for task 2 shared nothing at all
+        (OPEN-62 6a). The map that outlives them is `RunUsage`'s, which is
+        the shape OPEN-61 reached for one day earlier and for the same
+        reason.
+
+        Duck-typed on `RunUsage` the way `usage` already is
+        (`build.py:239-243`): a stand-in without the method degrades to the
+        per-instance behaviour rather than raising inside a tool call.
+        """
+        if self.usage is None or self.role is None:
+            return None
+        beliefs_for = getattr(self.usage, "beliefs_for", None)
+        if beliefs_for is None:
+            return None
+        try:
+            beliefs = beliefs_for(self.role)
+        except Exception:  # noqa: BLE001 -- accounting never ends a run
+            return None
+        return beliefs if isinstance(beliefs, dict) else None
+
+    def _disk_digest(self, target: str) -> str | None:
+        """What is ACTUALLY at `target` right now, fingerprinted, or None.
+
+        This is what turns an inherited belief into a fact. Within one
+        invocation the guard performed the write itself and watched
+        everything since, so the post-condition argument stands on its own.
+        Across a boundary it does not: Rudra runs the gate, the fix loop
+        and git in between and this middleware sees none of it, so a
+        run-scoped belief that trusted itself would eventually refuse a
+        write that genuinely needed making -- and work that never happens
+        is strictly worse than a wasted turn (OPEN-59).
+
+        None means "cannot confirm", which is always the answer that
+        PERFORMS the write: no project path, a backend route outside the
+        project (`/artifacts/`, `/skills/`), a file that is gone, or bytes
+        that will not compare -- a text-mode write that translated newlines
+        is the one to expect on Windows, and it degrades to the old
+        behaviour rather than to a wrong refusal.
+        """
+        if self.project_path is None or not target:
+            return None
+        try:
+            host = virtual_to_host(target, Path(self.project_path))
+            if host is None:
+                return None
+            return hashlib.sha256(host.read_bytes()).hexdigest()
+        except (OSError, ValueError):
+            return None
 
     def _target(self, args: dict[str, Any]) -> str:
         """What the call was aimed at, for the refusal and for the notice.
@@ -441,7 +540,16 @@ class RepeatGuardMiddleware(AgentMiddleware):
             return None
         target = self._target(args)
         if self._written.get(target) != digest:
-            return None
+            # Not this invocation's own write, so the run's belief is the
+            # only one left -- and it refuses nothing until the file says
+            # the same thing (OPEN-62 6a). A hit here is the coder that
+            # wrote `database.py` for task 1 meeting the coder rewriting it
+            # for task 2, which shares no instance state with it.
+            shared = self._shared()
+            if shared is None or shared.get(target) != digest:
+                return None
+            if self._disk_digest(target) != digest:
+                return None
         self._count_write_skipped(len(args.get("content", "")))
         self._announce(
             f"skipped: `{name}` on '{target}' would write the bytes already there -- not run again"
@@ -542,7 +650,11 @@ class RepeatGuardMiddleware(AgentMiddleware):
             # one path at a time refused 23 of 28 across five runs instead
             # of 26, because the coder's real shape is app.py, test_app.py,
             # app.py.
-            self._written[self._target(request.tool_call.get("args", {}))] = digest
+            target = self._target(request.tool_call.get("args", {}))
+            self._written[target] = digest
+            shared = self._shared()
+            if shared is not None:
+                shared[target] = digest
             return
         if name not in _GUARDED_TOOLS:
             # Anything else -- a write, an edit, a command -- may have

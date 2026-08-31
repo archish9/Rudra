@@ -1109,6 +1109,272 @@ def test_an_edit_is_not_guarded_here():
     assert backend.calls == 3
 
 
+# --- OPEN-62 6a: the belief outlives the invocation, the REFUSAL is a fact --
+#
+# `_written` lives on the middleware instance and `subagents/runner.py:263`
+# builds a fresh one per dispatch, so the coder that wrote `database.py` in
+# task 1 and the coder that rewrote it byte-identically in task 2 shared no
+# state at all. Measured over run8-run13: 4 occurrences in 3 runs, 5,155
+# characters, ~1,288 output tokens.
+#
+# Two halves, and the second is what makes the first safe. The belief moves
+# to the object that already outlives an agent rebuild (`RunUsage`, the
+# shape OPEN-61 used one day earlier for the same reason), and a belief that
+# came from a PREVIOUS invocation refuses nothing until the file on disk is
+# read and found to hold exactly those bytes. Across a boundary Rudra runs
+# the gate, the fix loop and git, and a run-scoped belief that trusted
+# itself would eventually refuse a write that genuinely needed making --
+# work that never happens is strictly worse than a wasted turn (OPEN-59).
+
+
+class _RunScopedUsage(_Usage):
+    """`_Usage` plus the one method the run-scoped belief needs."""
+
+    def __init__(self):
+        super().__init__()
+        self.write_beliefs: dict[str, dict[str, str]] = {}
+
+    def beliefs_for(self, role: str) -> dict[str, str]:
+        return self.write_beliefs.setdefault(role, {})
+
+
+def _across(usage, project_path, role="coder"):
+    """A SECOND invocation: a brand new middleware sharing one run."""
+    return RepeatGuardMiddleware(role=role, usage=usage, project_path=project_path)
+
+
+def test_a_rewrite_by_the_NEXT_invocation_is_refused(tmp_path):
+    """run13's case. t1 wrote `database.py`; t2 was a whole coder
+    invocation whose only output was the same 1,480 characters again."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    first = _across(usage, tmp_path)
+    first.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    second = _across(usage, tmp_path)
+    result = second.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 1, "the second invocation's rewrite must not reach the backend"
+    assert "Already written" in _text(result)
+
+
+def test_a_CHANGED_write_by_the_next_invocation_is_always_performed(tmp_path):
+    """The false-positive guard, and the one that matters most: a coder
+    picking a file up where the last task left it must not be stopped."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY + "# more\n"), backend
+    )
+
+    assert backend.calls == 2
+
+
+def test_a_belief_the_DISK_contradicts_refuses_nothing(tmp_path):
+    """The whole safety argument for carrying a belief across a boundary.
+
+    Between two invocations Rudra runs the gate, the fix loop and git, and
+    this middleware sees none of it. So an inherited belief is a HINT: the
+    refusal is issued only after reading the file and finding exactly those
+    bytes. Here something changed the file, and the write is real work."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    (tmp_path / "app.py").write_text("something else entirely\n")
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2
+
+
+def test_a_belief_whose_file_is_GONE_refuses_nothing(tmp_path):
+    """The same rule with the strongest case: the file was deleted between
+    the two invocations, so the bytes are not there to be already written."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    (tmp_path / "app.py").unlink()
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2
+
+
+def test_an_inherited_belief_with_no_project_path_refuses_nothing(tmp_path):
+    """No project path means no file to check, and an unverifiable belief
+    from another invocation is not enough to refuse on. This is the
+    degraded mode, and it is the behaviour that shipped with OPEN-60."""
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    RepeatGuardMiddleware(role="coder", usage=usage).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    RepeatGuardMiddleware(role="coder", usage=usage).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2
+
+
+def test_the_guard_still_refuses_ITS_OWN_rewrite_without_reading_the_disk(tmp_path):
+    """OPEN-60's rule is untouched and does not become conditional on a
+    file read. Within one invocation the guard performed the write itself
+    and nothing has intervened, so the post-condition argument stands on
+    its own -- here the file on disk says something else entirely and the
+    refusal still fires."""
+    (tmp_path / "app.py").write_text("stale, and irrelevant\n")
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+    guard = _across(usage, tmp_path)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 1
+    assert "Already written" in _text(result)
+
+
+def test_one_role_does_not_suppress_another_roles_write(tmp_path):
+    """The coder and the tester write different files for different
+    reasons. A shared unkeyed map would let either silence the other."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    _across(usage, tmp_path, role="coder").wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    _across(usage, tmp_path, role="tester").wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2
+
+
+def test_a_command_that_CHANGED_the_file_restores_the_write(tmp_path):
+    """A shell command can touch any file, and across a boundary the guard
+    sees none of it. It does not have to: the file is read at refusal time,
+    so a command that changed it is answered by the bytes rather than by a
+    rule about what commands can do."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    second = _across(usage, tmp_path)
+    second.wrap_tool_call(_request("execute", command="sed -i s/1/2/ app.py"), backend)
+    (tmp_path / "app.py").write_text("def main():\n    return 2\n")
+    second.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 3
+
+
+def test_a_command_that_changed_NOTHING_does_not_restore_the_write(tmp_path):
+    """The other half, and the reason the run map is never invalidated: a
+    coder runs the test suite between two tasks, which changes no source
+    file, and a rule that dropped the belief on any command would forget
+    something true. Measured over run8-run13, that is what made a
+    run-scoped belief worth exactly zero -- coders run tests."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    second = _across(usage, tmp_path)
+    second.wrap_tool_call(_request("execute", command="pytest -q"), backend)
+    result = second.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2
+    assert "Already written" in _text(result)
+
+
+def test_a_delete_in_a_LATER_invocation_restores_the_write(tmp_path):
+    """Same rule, reached through the strongest case: the file is gone, so
+    there are no bytes on disk to already be the ones asked for."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    backend = _Backend(WROTE)
+
+    _across(usage, tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    second = _across(usage, tmp_path)
+    second.wrap_tool_call(_request("delete", file_path="/app.py"), backend)
+    (tmp_path / "app.py").unlink()
+    second.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 3
+
+
+def test_a_usage_without_the_method_keeps_the_old_per_instance_behaviour(tmp_path):
+    """Duck-typed on RunUsage the way ModelRetryMiddleware is
+    (`build.py:239-243`): a stand-in that predates this field must not
+    raise, and must behave exactly as it did before."""
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _Usage()  # no `beliefs_for`
+    backend = _Backend(WROTE)
+
+    RepeatGuardMiddleware(role="coder", usage=usage, project_path=tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+    RepeatGuardMiddleware(role="coder", usage=usage, project_path=tmp_path).wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2
+
+
+def test_a_cross_invocation_refusal_is_counted_and_announced(tmp_path):
+    """A refusal must stay loud however it was reached (OPEN-60's own
+    rule): one `writes_skipped`, one `skipped:` notice, one ToolMessage
+    answering the call that was refused (OPEN-57)."""
+    from langchain_core.messages import ToolMessage
+
+    (tmp_path / "app.py").write_text(BODY)
+    usage = _RunScopedUsage()
+    trace = _Sink()
+    backend = _Backend(WROTE)
+
+    RepeatGuardMiddleware(
+        role="coder", usage=usage, trace=trace, project_path=tmp_path
+    ).wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    result = RepeatGuardMiddleware(
+        role="coder", usage=usage, trace=trace, project_path=tmp_path
+    ).wrap_tool_call(_request("write_file", "call-9", file_path="/app.py", content=BODY), backend)
+
+    assert usage.skipped == [("coder", len(BODY))]
+    assert [n for n in trace.notices if n["payload"].startswith("skipped:")]
+    assert isinstance(result, ToolMessage)
+    assert result.tool_call_id == "call-9"
+
+
 # --- OPEN-62 6c: invalidation is by PATH, not wholesale ---------------------
 #
 # `_record` used to clear the WHOLE `_written` map on any call that can

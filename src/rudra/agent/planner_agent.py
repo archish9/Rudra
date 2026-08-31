@@ -279,6 +279,7 @@ def build_planner_middleware(
     evict_tokens: int | None = None,
     usage: Any = None,
     trace: Any = None,
+    project_path: Any = None,
 ) -> list:
     """The planner's middleware stack, with both D4 workarounds gated.
 
@@ -343,7 +344,12 @@ def build_planner_middleware(
         # `trace` for the reason ModelRetryMiddleware above has one
         # (OPEN-57): without it a refusal is recorded as something the USER
         # said, and nothing anywhere says the guard fired.
-        RepeatGuardMiddleware(role="planner", usage=usage, trace=trace),
+        # `project_path` is OPEN-62 6a: the write-belief lives on `usage`
+        # for the run, and the planner needs it for the reason a subagent
+        # does -- it builds a fresh agent PER STAGE, so its own three
+        # stages already cross the boundary this fixes. A belief inherited
+        # rather than made is confirmed against the file before it refuses.
+        RepeatGuardMiddleware(role="planner", usage=usage, trace=trace, project_path=project_path),
         # OPEN-37, and it is OPEN-26 one agent up. `create_deep_agent` below
         # passes no `subagents=`, so deepagents auto-adds its own
         # general-purpose spec (graph.py:750-751 -- the auto-add is skipped
@@ -526,6 +532,7 @@ def create_planner_agent(
         evict_tokens=evict_limit(cfg, "planner"),
         usage=usage,
         trace=trace,
+        project_path=project_path,
     )
     if gate is not None:
         # First in the list: a denied call must be stopped before any other
