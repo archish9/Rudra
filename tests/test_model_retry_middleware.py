@@ -117,6 +117,183 @@ async def test_the_async_half_reports_exhaustion(instant) -> None:
     assert "planner" in str(excinfo.value)
 
 
+# --- OPEN-61: the 404 that was a flap ---------------------------------------
+
+
+class _Sequence:
+    """Raises each error in turn, returning a sentinel where None appears."""
+
+    def __init__(self, script: list[BaseException | None]) -> None:
+        self.script = list(script)
+        self.calls = 0
+
+    def __call__(self, request):
+        self.calls += 1
+        step = self.script.pop(0) if self.script else None
+        if step is not None:
+            raise step
+        return "response"
+
+    async def acall(self, request):
+        return self(request)
+
+
+def test_a_404_on_the_first_call_of_a_run_is_not_retried(instant) -> None:
+    """Unchanged behaviour, and it is the half that must not move.
+
+    A typo in a model name has no served call behind it, so it still gets
+    one attempt and the vendor's own error -- retrying it four times would
+    bury the one cause the user could act on under "check your quota".
+    """
+    handler = _Handler(failures=1, error=_Status(404))
+
+    with pytest.raises(_Status):
+        ModelRetryMiddleware("coder").wrap_model_call({}, handler)
+
+    assert handler.calls == 1
+
+
+def test_a_404_after_a_served_call_is_retried(instant) -> None:
+    """RUN #7's first attempt, reduced to two calls.
+
+    The model answered once, so the 404 that follows cannot mean "no such
+    model" -- and the endpoint that produced it was measured returning 200
+    for the same id one second later.
+    """
+    handler = _Sequence([None, _Status(404), None])
+    middleware = ModelRetryMiddleware("planner")
+
+    assert middleware.wrap_model_call({}, handler) == "response"
+    assert middleware.wrap_model_call({}, handler) == "response"
+    assert handler.calls == 3
+
+
+def test_a_404_is_served_evidence_across_a_REBUILT_middleware(instant) -> None:
+    """The case that actually killed run `8c4e949eeccf`.
+
+    The planner builds a fresh agent -- and so a fresh middleware -- per
+    stage, and the 404 struck on the FIRST call of the third stage. An
+    instance flag is False there; the shared RunUsage is not, which is why
+    the evidence lives on the run and not on the middleware.
+    """
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    served = _Handler(failures=0, error=_Status(404))
+    ModelRetryMiddleware("planner", usage=usage).wrap_model_call({}, served)
+
+    later_stage = ModelRetryMiddleware("planner", usage=usage)
+    handler = _Sequence([_Status(404), None])
+
+    assert later_stage.wrap_model_call({}, handler) == "response"
+    assert handler.calls == 2
+    assert usage.has_served("planner") is True
+
+
+def test_one_role_being_served_does_not_vouch_for_another(instant) -> None:
+    """Errs toward the old behaviour: a role answers only for itself.
+
+    Roles usually share one spec, but they need not -- `[model.coder]` can
+    name a model `[model.planner]` does not -- so a coder 404 is judged on
+    the coder's own evidence.
+    """
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    ModelRetryMiddleware("planner", usage=usage).wrap_model_call(
+        {}, _Handler(failures=0, error=_Status(404))
+    )
+
+    handler = _Handler(failures=1, error=_Status(404))
+    with pytest.raises(_Status):
+        ModelRetryMiddleware("coder", usage=usage).wrap_model_call({}, handler)
+
+    assert handler.calls == 1
+
+
+def test_a_usage_object_that_cannot_answer_is_not_evidence(instant) -> None:
+    """Observability never decides a run, in either direction.
+
+    A `usage` that raises falls back to the narrow policy rather than to a
+    crash -- the same swallow `_report` makes, for the same reason.
+    """
+
+    class _Broken:
+        def record_served(self, role):
+            raise RuntimeError("no")
+
+        def has_served(self, role):
+            raise RuntimeError("no")
+
+    handler = _Handler(failures=1, error=_Status(404))
+    with pytest.raises(_Status):
+        ModelRetryMiddleware("coder", usage=_Broken()).wrap_model_call({}, handler)
+
+    assert handler.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_the_async_half_carries_the_served_evidence_too(instant) -> None:
+    """Every real run takes this half -- Rudra invokes through `astream`."""
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    first = ModelRetryMiddleware("planner", usage=usage)
+    await first.awrap_model_call({}, _Handler(failures=0, error=_Status(404)).acall)
+
+    handler = _Sequence([_Status(404), None])
+    later = ModelRetryMiddleware("planner", usage=usage)
+
+    assert await later.awrap_model_call({}, handler.acall) == "response"
+    assert handler.calls == 2
+
+
+def test_an_exhausted_404_is_still_a_readable_error(instant) -> None:
+    """A model that 404s forever after answering is a dead endpoint, and
+    the user gets A1.39's sentence rather than 850 lines of vendor frames.
+    """
+    usage_free = ModelRetryMiddleware("coder")
+    usage_free.wrap_model_call({}, _Handler(failures=0, error=_Status(404)))
+
+    handler = _Handler(failures=99, error=_Status(404))
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        usage_free.wrap_model_call({}, handler)
+
+    assert handler.calls == 4
+    assert "404" in str(excinfo.value)
+
+
+def test_a_retried_404_is_counted_and_announced(instant) -> None:
+    """It is a retry like any other: `usage.json` and the trace both say so.
+
+    OPEN-45's rule, and OPEN-61 must not open a silent second path through
+    it -- a run absorbing 404 flaps has to look different from a slow one.
+    """
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    middleware = ModelRetryMiddleware("planner", trace=_Sink(), usage=usage)
+    middleware.wrap_model_call({}, _Handler(failures=0, error=_Status(404)))
+    middleware.wrap_model_call({}, _Sequence([_Status(404), None]))
+
+    assert usage.as_dict()["planner"]["retries"] == 1
+    assert middleware.trace.notices
+    assert "404" in middleware.trace.notices[-1]["payload"]
+
+
+def test_served_state_stays_out_of_the_usage_json_schema() -> None:
+    """`as_dict` is read by scripts in this repo's own ledger (row 17 of the
+    RUN #7 checklist iterates roles), so run state must not appear as a
+    role's key or as a fifth role.
+    """
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    usage.record_served("planner")
+
+    assert usage.as_dict() == {}
+
+
 # --- registration, which is what makes any of the above reach a run ---------
 
 

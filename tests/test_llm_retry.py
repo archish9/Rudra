@@ -30,6 +30,39 @@ def test_client_errors_are_not_retryable(code: int) -> None:
     assert is_transient(_Status(code)) is False
 
 
+# --- OPEN-61: a 404 with evidence behind it ---------------------------------
+
+
+@pytest.mark.parametrize("code", [400, 401, 403, 422])
+def test_served_does_not_widen_the_other_client_errors(code: int) -> None:
+    """`served` buys exactly one status back, not the 4xx family.
+
+    A 401 after a hundred good calls is a key that just expired or a quota
+    that just ran out, and retrying it four times is the behaviour A1.39's
+    message exists to avoid.
+    """
+    assert is_transient(_Status(code), served=True) is False
+
+
+def test_a_404_is_transient_once_the_model_has_answered() -> None:
+    """OPEN-61, and the measurement is in `llm/retry.py`'s comment.
+
+    Four probes against integrate.api.nvidia.com, same key, same body:
+    404, then 200 for the SAME model id. RUN #7's first attempt died on one
+    of those after 12 served calls.
+    """
+    assert is_transient(_Status(404), served=True) is True
+
+
+def test_a_404_before_anything_was_served_is_still_a_missing_model() -> None:
+    """The default is unchanged, which is the point of the parameter.
+
+    A typo in a model name cannot reach the served state, so it keeps the
+    old verdict: no retries, and the vendor's own message.
+    """
+    assert is_transient(_Status(404)) is False
+
+
 def test_connection_errors_are_retryable_by_name() -> None:
     """Providers raise their own connection classes; match on the name.
 

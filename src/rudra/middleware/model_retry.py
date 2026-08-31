@@ -28,6 +28,17 @@ That is the whole reason this granularity works without resume (C7.2).
 Composes with `_stream_with_retry` rather than replacing it: the stream
 retry still covers a failure that kills the invocation before any chunk,
 and this covers every call inside it.
+
+Since OPEN-61 it also carries the run's evidence that a role's endpoint
+works. A `404` is not transient on the first call of a run -- that is a
+missing model, and retrying it four times buries the one message the user
+could act on -- but it cannot mean "no such model" once that model has
+answered, and `https://integrate.api.nvidia.com/v1` was measured returning
+`404` and then `200` for the same id one second apart. So this middleware
+records every answered call and passes `served=` to `is_transient`, which
+still owns the policy: the fact is collected here because this is where a
+model call succeeds, and it is judged there because that is where a status
+code is judged.
 """
 
 from __future__ import annotations
@@ -62,9 +73,44 @@ class ModelRetryMiddleware(AgentMiddleware):
         self.role = role
         self.trace = trace
         self.usage = usage
+        self._served = False
 
     def _provider(self) -> str:
         return f"the {self.role} model"
+
+    def _mark_served(self) -> None:
+        """Record that this role's endpoint answered (OPEN-61).
+
+        Both halves, because neither alone covers a run. The instance flag
+        is what works with `usage=None`, which every OPEN-41 test builds and
+        which the machinery must stay constructible as. The RunUsage set is
+        what survives an agent REBUILD -- the planner constructs a fresh
+        agent, and so a fresh middleware, per stage (`planner_agent.py:338`
+        is called once per `create_planner_agent`), and RUN #7's first
+        attempt died on the first call of the THIRD stage after two stages
+        had been served. An instance flag alone would have been False there,
+        which is the case this exists for.
+        """
+        self._served = True
+        if self.usage is None:
+            return
+        try:
+            self.usage.record_served(self.role)
+        except Exception:  # noqa: BLE001 -- observability never ends a run
+            pass
+
+    def _has_served(self) -> bool:
+        """Has anything in this run had a call to this role answered?"""
+        if self._served:
+            return True
+        if self.usage is None:
+            return False
+        try:
+            return bool(self.usage.has_served(self.role))
+        except Exception:  # noqa: BLE001 -- a usage object that cannot
+            # answer is not evidence, and the caller falls back to the
+            # narrow policy rather than to a crash.
+            return False
 
     def _report(self, error: BaseException, attempt: int, budget: int) -> None:
         """Say that a retry is about to happen, to whoever is listening.
@@ -110,28 +156,36 @@ class ModelRetryMiddleware(AgentMiddleware):
         delays = retry_delays()
         for attempt in range(len(delays) + 1):
             try:
-                return handler(request)
+                response = handler(request)
             except Exception as error:  # noqa: BLE001 -- re-raised below
-                if not is_transient(error) or attempt == len(delays):
-                    if is_transient(error):
+                transient = is_transient(error, served=self._has_served())
+                if not transient or attempt == len(delays):
+                    if transient:
                         raise ProviderUnavailable(self._provider(), attempt + 1, error) from error
                     raise
                 self._report(error, attempt + 1, len(delays))
                 time.sleep(delays[attempt])
+            else:
+                self._mark_served()
+                return response
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
         delays = retry_delays()
         for attempt in range(len(delays) + 1):
             try:
-                return await handler(request)
+                response = await handler(request)
             except Exception as error:  # noqa: BLE001 -- re-raised below
-                if not is_transient(error) or attempt == len(delays):
-                    if is_transient(error):
+                transient = is_transient(error, served=self._has_served())
+                if not transient or attempt == len(delays):
+                    if transient:
                         raise ProviderUnavailable(self._provider(), attempt + 1, error) from error
                     raise
                 self._report(error, attempt + 1, len(delays))
                 await asyncio.sleep(delays[attempt])
+            else:
+                self._mark_served()
+                return response
         raise AssertionError("unreachable")  # pragma: no cover
 
 

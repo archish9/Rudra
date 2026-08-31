@@ -142,6 +142,29 @@ class RunUsage:
     started_wall: float = field(default_factory=time.time)
     started_mono: float = field(default_factory=time.monotonic)
 
+    # Which roles' endpoints have actually ANSWERED a call this run
+    # (OPEN-61). Here for the reason the two clocks above are here: this is
+    # already the one object built at run start and shared by reference,
+    # and a second object for one set would be a second thing to thread
+    # through `create_main_agent`. It is deliberately NOT in `as_dict` --
+    # it is run state a retry policy reads, not an accounting number
+    # anything reports, and `usage.json`'s schema is read by scripts in
+    # this repo's own ledger.
+    #
+    # A ROLE and not a model id, because a role is what every construction
+    # site already has. Two roles sharing one spec each answer for
+    # themselves, which errs toward the old behaviour rather than away
+    # from it.
+    served_roles: set[str] = field(default_factory=set)
+
+    def record_served(self, role: str) -> None:
+        """A model call by `role` returned -- the endpoint serves it."""
+        self.served_roles.add(role)
+
+    def has_served(self, role: str) -> bool:
+        """Has `role`'s endpoint answered at least one call this run?"""
+        return role in self.served_roles
+
     def _slot(self, role: str) -> RoleUsage:
         if role not in self.per_role:
             self.per_role[role] = RoleUsage()

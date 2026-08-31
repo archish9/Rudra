@@ -23,6 +23,17 @@ import random
 # briefly unable to serve it.
 _TRANSIENT_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
+# 404 is deliberately NOT in the set above, and is retryable only with
+# evidence -- see `is_transient`. Measured 2026-08-31 against
+# `https://integrate.api.nvidia.com/v1`, four probes one after another with
+# the same key and the same body: `404`, then `200` for the SAME model id,
+# which `GET /v1/models` lists among 83. RUN #7's first attempt
+# (`8c4e949eeccf`) died on one of those after 12 model calls had already
+# been served on that spec, and reached the terminal as 850 lines of vendor
+# frames -- OPEN-61. A first-call 404 is still a missing model, which is
+# what the docstring below says and what this set does not change.
+_SERVED_TRANSIENT_STATUS = frozenset({404})
+
 # Class names, because the classes live in provider packages this module
 # must not import. Substring match: `openai.APIConnectionError` and
 # `httpx.ConnectError` both carry the telling word.
@@ -68,14 +79,25 @@ def status_of(error: BaseException) -> int | None:
     return None
 
 
-def is_transient(error: BaseException) -> bool:
+def is_transient(error: BaseException, *, served: bool = False) -> bool:
     """Would trying this again plausibly work?
 
     A bad key, a missing model or a malformed request will fail identically
     on every attempt, so retrying them only delays the real message.
+
+    `served` is the caller saying "this endpoint has already answered a
+    call for this model in this run" (OPEN-61). It widens the answer by
+    exactly one status: a 404 cannot mean "no such model" once the model
+    has served a call, so it is a flap and worth another attempt -- while
+    the first call of a run, where a typo in a model name is the likelier
+    cause, is judged exactly as before. Evidence rather than a guess, which
+    is the `CLAUDE.md` §1.8 rule applied to a provider instead of an OS:
+    a caller that has no evidence passes nothing and gets the old answer.
     """
     status = status_of(error)
     if status is not None:
+        if served and status in _SERVED_TRANSIENT_STATUS:
+            return True
         return status in _TRANSIENT_STATUS
 
     name = type(error).__name__.lower()
