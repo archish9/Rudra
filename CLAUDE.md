@@ -209,7 +209,24 @@ src/rudra/
 │                           twice with identical args and nothing in between.
 │                           execute is excluded — a command can legitimately
 │                           succeed on retry, and guarding it would turn a
-│                           token cost into a correctness bug
+│                           token cost into a correctness bug. THREE rules
+│                           since OPEN-60: a WRITE whose bytes are already
+│                           on disk is refused too, and that one is about
+│                           the POST-CONDITION rather than the answer —
+│                           the bytes asked for are the bytes present.
+│                           It keys on the file, not the spelling
+│                           (compat/virtual_paths.py, OPEN-52), so it
+│                           agrees with the gate, the approval preview and
+│                           the backend about which file a call touches.
+│                           Its write-belief lives in TWO places and they
+│                           are different claims (OPEN-62): the instance
+│                           map is what THIS invocation did and watched, so
+│                           it refuses on its own authority and any
+│                           file-changing call drops it; RunUsage's is what
+│                           an EARLIER invocation did, across a boundary
+│                           this middleware sees nothing of, so it is never
+│                           invalidated and refuses nothing until the file
+│                           on disk is read and holds exactly those bytes
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           interaction (record_fact · ask_user) · git_tools ·
 │                           testing_tools · memory_tools (remember ·
