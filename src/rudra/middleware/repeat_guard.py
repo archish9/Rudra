@@ -82,14 +82,41 @@ five runs), not one by a call that can change anything. Measured by driving
 this middleware over all five runs of evidence, refusing them takes the catch
 rate from **20 of 28 to 26 of 28**, ~17,697 to ~21,756 output tokens.
 
-Of the two rewrites still performed, one is correct and one is OPEN-52's.
-run9 wrote `tests/test_app.py`, DELETED it, and wrote the same 3,818
-characters back -- the file was gone, so that is real work. run11 wrote
-`app.py` and then `/app.py`: two spellings of ONE file, and `_target` reads
+**And by PATH, since OPEN-62 6c, wherever there is one path to be by.** A
+`delete` or an `edit_file` changes the one file it names, so it drops that
+file's belief and leaves the rest standing; `execute` -- and an MCP tool, and
+`task`, and anything else this file has never heard of -- still drops
+everything, because a blast radius that is unknown has to be assumed total.
+The old rule cleared the whole map on any of them, which is path-blind: run9
+deleted `app/tests/__pycache__` and thereby discarded what the guard knew
+about `tests/test_app.py`, then rewrote it byte-identically. 3,818
+characters, the largest single waste measured over run8-run13, and the same
+driving method puts the catch rate at **27 of 28, ~22,711 output tokens**.
+
+Invalidation compares spellings loosely (`_same_file`) while the KEY stays
+the path the model typed. The two are different questions and they fail in
+opposite directions: a key that over-matches refuses a write that was needed,
+and an invalidation that over-matches costs one rewrite. Resolving the key
+is OPEN-52's change and its own commit (OPEN-62 6b).
+
+Of the two rewrites still performed after OPEN-60, ONE was OPEN-52's and the
+other was this file's own bug. Corrected 2026-08-31 (OPEN-62 §5): the record
+here used to say run9 wrote `tests/test_app.py`, DELETED it and wrote the
+same 3,818 characters back -- real work, because the file was gone. run9's
+log disagrees. The deletes named `app/tests/test_app.py` and
+`app/tests/__pycache__`; the file rewritten was `tests/test_app.py`, which
+was never deleted. **27 of the 28 were refusable, not 26**, and the sentence
+had been repeated into four files. What remains is run11's: it wrote
+`app.py` and then `/app.py`, two spellings of ONE file, and `_target` reads
 the path the model typed rather than resolving it through
 `compat/virtual_paths.py`. That is OPEN-52 exactly, it is deliberately not
 fixed here (one guard per commit), and it is the first non-zero number that
 item has ever had.
+
+**A claim in a closed record is evidence about what was believed, not about
+what happened.** That one survived a review, a ledger entry and three
+restatements because every reader checked it against the sentence rather
+than against run9's log.
 
 Note also that this middleware is built PER INVOCATION
 (`subagents/runner.py:263`), so `_written` starts empty each time and a
@@ -134,6 +161,16 @@ _GUARDED_TOOLS = frozenset({"read_file", "ls", "glob", "grep"})
 # module docstring gives.
 _GUARDED_WRITES = frozenset({"write_file"})
 
+# Tools that change exactly the ONE file they name, so what they invalidate
+# is that file's write-belief and nothing else (OPEN-62 6c). Everything not
+# in here -- `execute` above all, but equally an MCP tool, `task`, or
+# anything this file has never heard of -- keeps the wholesale answer,
+# because a call whose blast radius is unknown has to be assumed total.
+# That is the same capability argument OPEN-60 §14 settled for reads, read
+# the other way round: a read cannot change a file, a command can change
+# any file, and these two can change one file each.
+_PATH_SCOPED = frozenset({"delete", "edit_file"})
+
 MAX_IDENTICAL_FAILURES = 2
 """Failures of one exact call before the next is refused rather than run.
 
@@ -168,6 +205,40 @@ def _signature(name: str, args: dict[str, Any]) -> str:
     must degrade to a usable key rather than raise inside a tool call.
     """
     return f"{name}:{json.dumps(args, sort_keys=True, default=str)}"
+
+
+def _same_file(a: str, b: str) -> bool:
+    """Do these two spellings name one file, as far as invalidation cares?
+
+    Deliberately loose and deliberately not `virtual_paths.py`: that
+    function needs a project root this middleware is not given, and
+    resolving the KEY is OPEN-52's change (OPEN-62 6b). This answers a
+    narrower question -- may I keep believing something about the file this
+    call just changed? -- where a false "yes" costs a rewrite and a false
+    "no" costs the file, so it errs towards forgetting.
+
+    Suffix matching is what covers the shapes the runs actually produce:
+    `/app.py` after `app.py` (run11, run13) and an absolute host path after
+    a relative one (run9). It over-matches `app.py` against `sub/app.py`,
+    which is the direction that is safe.
+    """
+    a, b = _plain(a), _plain(b)
+    if not a or not b:
+        return False
+    return a == b or a.endswith(f"/{b}") or b.endswith(f"/{a}")
+
+
+def _plain(path: str) -> str:
+    """One spelling of a path, with the decoration that never distinguishes
+    two files removed: the separator, leading `./` segments, a leading `/`.
+
+    `lstrip(".")` would do the same job in one call and get `.env` wrong,
+    turning it into `env` -- which is only ever safe by accident.
+    """
+    plain = path.replace("\\", "/")
+    while plain.startswith("./"):
+        plain = plain[2:]
+    return plain.lstrip("/")
 
 
 def _is_error(result: Any) -> bool:
@@ -235,6 +306,30 @@ class RepeatGuardMiddleware(AgentMiddleware):
         refusal beside it is worse than a notice with no path at all.
         """
         return str(args.get("file_path") or args.get("path") or args.get("pattern") or "")
+
+    def _forget(self, target: str) -> None:
+        """Drop the write-belief about ONE file, however it was spelled.
+
+        The key stays the path the model typed -- resolving it is OPEN-52's
+        job and its own commit -- so invalidation compares LOOSELY instead:
+        `/app.py`, `app.py` and `/Users/.../project/app.py` all name the
+        same file, and a belief kept because the delete was spelled
+        differently from the write would refuse a write that genuinely
+        needed making. The asymmetry is deliberate and it points the safe
+        way: over-forgetting costs a rewrite, under-forgetting costs the
+        file. `loop/engine.py`'s own rule -- work that never happens is
+        strictly worse than a wasted turn (OPEN-59) -- is the same
+        preference stated one level up.
+
+        An empty target means the call named no file at all, and a call
+        this guard cannot attribute is one it cannot narrow: everything
+        goes.
+        """
+        if not target:
+            self._written.clear()
+            return
+        for believed in [k for k in self._written if _same_file(k, target)]:
+            del self._written[believed]
 
     def _refusal(self, signature: str, name: str) -> str:
         seen = self._failures[signature]
@@ -436,8 +531,11 @@ class RepeatGuardMiddleware(AgentMiddleware):
             if digest is None or _is_error(result):
                 # A write that errored did not satisfy the post-condition,
                 # and a write we could not fingerprint is one we cannot
-                # claim anything about. Either way the safe belief is none.
-                self._written.clear()
+                # claim anything about. Either way the safe belief about
+                # THAT PATH is none -- and about the others it is unchanged,
+                # because a failed write to app.py says nothing about what
+                # is on disk at test_app.py (OPEN-62 6c).
+                self._forget(self._target(request.tool_call.get("args", {})))
                 return
             # Added, not replaced. Files are independent -- writing b.py
             # says nothing about a.py -- and a version of this that kept
@@ -466,14 +564,24 @@ class RepeatGuardMiddleware(AgentMiddleware):
             # so every previous answer stops being current here. This one
             # line is the whole correctness argument for the repeat rule.
             self._answered.clear()
-            # And the same rule read once more, for writes (OPEN-60): any
-            # other call may have changed the file, so what we believe is
-            # on disk stops being current. This is the STRICT policy, and
-            # it was chosen over a scoped one that invalidated only on
-            # edit/delete/execute because it is the rule already written
-            # two lines above -- one invalidation model in this file, not
-            # two. Measured cost of the choice: 8 catches of 28.
-            self._written.clear()
+            # And the same rule read once more, for writes (OPEN-60): a
+            # call that can change a file means what we believe is on disk
+            # stops being current.
+            #
+            # Which beliefs, though, is not the same question (OPEN-62 6c).
+            # This used to clear the WHOLE map, which is path-blind: run9
+            # deleted `app/tests/__pycache__` and thereby discarded what
+            # the guard knew about `tests/test_app.py`, then rewrote it
+            # byte-identically -- 3,818 characters, the largest single
+            # waste measured over run8-run13. A `delete` or an `edit_file`
+            # changes the one file it names, so only that belief goes.
+            # Anything else still takes the whole map, and `execute` is
+            # why: a shell command can touch any file, and that is the
+            # safety half of the rule rather than the saving half.
+            if name in _PATH_SCOPED:
+                self._forget(self._target(request.tool_call.get("args", {})))
+            else:
+                self._written.clear()
             return
         # `self._written` is deliberately NOT cleared here, and the
         # asymmetry with `_answered` above is the point. A write is how a

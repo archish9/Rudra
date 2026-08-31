@@ -975,9 +975,14 @@ def test_a_command_between_two_writes_restores_the_second():
 
 
 def test_a_delete_between_two_writes_restores_the_second():
-    """The one no-op rewrite in five runs that the guard is RIGHT to let
-    through: run9 wrote `tests/test_app.py`, deleted it, and wrote the same
-    3,818 characters back. The file was gone -- that is real work."""
+    """A file that is gone has to be written again -- that is real work.
+
+    Corrected 2026-08-31 (OPEN-62 §5): this docstring used to cite run9 as
+    the case, saying it wrote `tests/test_app.py`, DELETED it and wrote the
+    same 3,818 characters back. run9's log disagrees -- the deletes named
+    `app/tests/test_app.py` and `app/tests/__pycache__`, and the file
+    rewritten was never deleted. The rule this test pins is right; the
+    example was not, and 27 of the 28 were refusable rather than 26."""
     guard = RepeatGuardMiddleware()
     backend = _Backend(WROTE)
 
@@ -1100,6 +1105,123 @@ def test_an_edit_is_not_guarded_here():
         guard.wrap_tool_call(
             _request("edit_file", file_path="/app.py", old_string="a", new_string="b"), backend
         )
+
+    assert backend.calls == 3
+
+
+# --- OPEN-62 6c: invalidation is by PATH, not wholesale ---------------------
+#
+# `_record` used to clear the WHOLE `_written` map on any call that can
+# change a file, so deleting X discarded what the guard knew about Y.
+# Measured over run8-run13: one occurrence, 3,818 characters, the single
+# largest waste in that table -- run9 deleted `app/tests/__pycache__` and
+# rewrote `tests/test_app.py` byte-identically straight after.
+#
+# The narrowing applies only to calls that name ONE file. `execute` stays
+# wholesale, because an arbitrary command can touch anything -- the same
+# capability argument OPEN-60 settled for reads, read the other way.
+
+
+def test_a_delete_of_a_DIFFERENT_file_leaves_the_belief_standing():
+    """run9's case, and the largest single line in OPEN-62 §5's table."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("delete", file_path="/tests/__pycache__"), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2, "deleting another file must not restore this write"
+    assert "Already written" in _text(result)
+
+
+def test_an_edit_of_a_DIFFERENT_file_leaves_the_belief_standing():
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(
+        _request("edit_file", file_path="/other.py", old_string="a", new_string="b"), backend
+    )
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 2
+
+
+def test_a_delete_naming_the_file_ANOTHER_WAY_still_restores_the_write():
+    """The false-positive guard, and the reason invalidation compares
+    loosely while the KEY stays exact (that is 6b's).
+
+    A belief kept because the delete was spelled differently would refuse a
+    write that genuinely needed making, and work that never happens is
+    strictly worse than a wasted turn."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/project/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("delete", file_path="app.py"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/project/app.py", content=BODY), backend)
+
+    assert backend.calls == 3
+
+
+def test_a_command_still_drops_every_belief():
+    """The half of the rule that is about safety, pinned so 6c's narrowing
+    cannot quietly widen to `execute`: a shell command can touch any file,
+    so nothing survives it."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/other.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("execute", command="rm -f /app.py /other.py"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/other.py", content=BODY), backend)
+
+    assert backend.calls == 5
+
+
+def test_an_unknown_tool_still_drops_every_belief():
+    """An MCP tool, `task`, anything this file has never heard of: its
+    blast radius is unknown, so it is treated as `execute` is."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("call_mcp_tool", server="x", tool="y"), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+
+    assert backend.calls == 3
+
+
+def test_a_failed_write_only_loses_the_belief_about_ITS_OWN_path():
+    """Same rule, same reason: a write to X that errored says nothing about
+    what is on disk at Y."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE, "Error: permission denied", WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/locked.py", content=BODY), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/app.py", content=BODY), backend
+    )
+
+    assert backend.calls == 2
+    assert "Already written" in _text(result)
+
+
+def test_a_call_naming_no_file_at_all_drops_every_belief():
+    """A call this guard cannot attribute to a file is one it cannot
+    reason about, so it falls back to the wholesale answer -- the narrowing
+    applies only where there IS a path to narrow to."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(WROTE, "Error: no such file", WROTE)
+
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", content=BODY), backend)
+    guard.wrap_tool_call(_request("write_file", file_path="/app.py", content=BODY), backend)
 
     assert backend.calls == 3
 
