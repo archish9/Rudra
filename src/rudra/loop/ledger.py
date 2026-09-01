@@ -62,6 +62,18 @@ class Task:
     # rewrites `note` used to erase the halt with it, including the
     # passing one, which is the case a reader most needs it in.
     halts: tuple[str, ...] = ()
+    # Every subagent invocation on this task that never ran at all, in the
+    # order they happened (OPEN-46). Beside `halts` rather than in it,
+    # because they are different events: a halt is an invocation Rudra
+    # STOPPED, and this is one the provider never started -- a build
+    # failure, or a retry budget that ran out.
+    #
+    # A list for exactly the reason `halts` is one. `note` was the only
+    # place this landed and every branch that finishes a task rewrites it,
+    # the passing one clearing it outright -- so run14's exhausted retry
+    # budget, which cost task t8 outright, left nothing on disk anybody
+    # could count afterwards. That is OPEN-44's failure one field over.
+    run_errors: tuple[str, ...] = ()
     # Wall clock this task consumed, in seconds (C9.6, Step 15a). Recorded
     # by loop/engine.py at every exit from run_task, including the failing
     # ones: a task that burned three attempts is the one a user most wants
@@ -178,6 +190,7 @@ class Ledger:
                 last_signature=entry.get("last_signature"),
                 note=entry.get("note", ""),
                 halts=tuple(entry.get("halts", ())),
+                run_errors=tuple(entry.get("run_errors", ())),
                 # .get, not [...]: a ledger written by an older Rudra is a
                 # volatile file, but a run in flight during an upgrade
                 # must not crash on it.

@@ -46,6 +46,11 @@ def test_sync_hook_records_the_reported_counts():
         # middleware never sees a retry. ModelRetryMiddleware sits OUTSIDE
         # it by design, so each attempt arrives here as its own call.
         "retries": 0,
+        # Added by OPEN-46 (reopened), and zero here for the same reason
+        # `retries` is: the give-up is raised by ModelRetryMiddleware, which
+        # sits outside this one, so an exhausted call arrives here as four
+        # ordinary attempts and nothing else.
+        "exhaustions": 0,
         # Added in Step 14b: the recall block's cost, isolated because it
         # otherwise rides invisibly inside input_tokens (spec 4.6).
         "recall_chars": 0,

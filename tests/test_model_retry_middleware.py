@@ -389,12 +389,19 @@ def test_a_non_transient_failure_emits_nothing(instant) -> None:
     assert sink.notices == []
 
 
-def test_exhaustion_does_not_double_report(instant) -> None:
-    """One notice per retry ACTUALLY MADE, and no give-up notice.
+def test_exhaustion_reports_the_retries_and_the_give_up_separately(instant) -> None:
+    """One notice per retry ACTUALLY MADE, plus exactly one for the give-up.
 
-    Giving up already raises ProviderUnavailable, which RudraAgent renders
-    as a sentence -- a second channel for one fact is how two descriptions
-    of one event drift.
+    This test used to assert three notices and no give-up notice, on the
+    reasoning that ProviderUnavailable "already reaches the user as a
+    sentence". OPEN-46 disproved that premise: on the SUBAGENT path
+    `subagents/runner.py:264` catches every exception into
+    `SubagentResult.error`, so the sentence reaches a task note rather
+    than a user, and run14's exhaustion left no trace anywhere.
+
+    The two names stay distinct because §8.1's per-attempt histogram
+    counts `retry` notices -- a give-up filed under the same name would be
+    absorbed into the very rate it is meant to correct.
     """
     sink = _Sink()
     handler = _Handler(failures=99, error=_Status(503))
@@ -402,9 +409,10 @@ def test_exhaustion_does_not_double_report(instant) -> None:
     with pytest.raises(ProviderUnavailable):
         ModelRetryMiddleware("coder", trace=sink).wrap_model_call({}, handler)
 
-    # Four attempts, three of which were followed by a retry.
+    # Four attempts, three of which were followed by a retry, and one
+    # give-up which is the fourth failure and is not a retry.
     assert handler.calls == 4
-    assert len(sink.notices) == 3
+    assert [n["name"] for n in sink.notices] == ["retry", "retry", "retry", "retry-exhausted"]
 
 
 def test_the_payload_never_carries_the_provider_body(instant) -> None:
@@ -609,3 +617,162 @@ async def test_a_500_on_the_second_model_call_no_longer_ends_the_run(instant) ->
     # produced the final answer. Without the middleware this run ends at
     # two with the provider's own exception on the terminal.
     assert len(calls) == 3
+
+
+# --- OPEN-46 (reopened): the give-up must say so -----------------------------
+#
+# `_report` fires per retry ACTUALLY MADE and never on the give-up, on the
+# reasoning that ProviderUnavailable "reaches the user as a sentence". True
+# on the planner and single-shot paths (main_agent.py:286 renders it);
+# FALSE on the subagent path, where subagents/runner.py:264 catches every
+# exception into SubagentResult.error and loop/engine.py:463 writes it to
+# task.note -- a field every later branch rewrites. run14 lost task t8 to
+# an exhaustion and its debug log holds zero record of it.
+#
+# So the exhaustion is now counted and announced, and `p` stops being a
+# lower bound: p = (retries + exhaustions) / calls.
+
+
+def test_an_exhaustion_emits_one_notice(instant) -> None:
+    """The defect in one line: a run could not tell a budget that held
+    from one that ran out."""
+    sink = _Sink()
+    handler = _Handler(failures=99, error=_Status(503))
+
+    with pytest.raises(ProviderUnavailable):
+        ModelRetryMiddleware("coder", trace=sink).wrap_model_call({}, handler)
+
+    exhausted = [n for n in sink.notices if n["name"] == "retry-exhausted"]
+    assert len(exhausted) == 1
+    assert exhausted[0]["role"] == "coder"
+    assert "503" in exhausted[0]["payload"]
+    # How many attempts it took, so a reader can tell a budget that was
+    # nearly enough from an endpoint that never answered.
+    assert "4" in exhausted[0]["payload"]
+
+
+async def test_an_exhaustion_emits_one_notice_on_the_async_half(instant) -> None:
+    """Both halves, because the subagent path is the async one -- and it
+    is the path where the sentence never reaches a user."""
+    sink = _Sink()
+    handler = _Handler(failures=99, error=_Status(503))
+
+    with pytest.raises(ProviderUnavailable):
+        await ModelRetryMiddleware("coder", trace=sink).awrap_model_call({}, handler.acall)
+
+    assert [n["name"] for n in sink.notices] == ["retry", "retry", "retry", "retry-exhausted"]
+
+
+def test_the_exhaustion_payload_never_carries_the_provider_body(instant) -> None:
+    """Same rule as the retry notice: a provider error body can echo the
+    request back, and trace/render.py escapes but does not redact."""
+    sink = _Sink()
+
+    class _Leaky(Exception):
+        def __init__(self) -> None:
+            super().__init__("upstream said: api_key=sk-secret-value")
+            self.status_code = 500
+
+    handler = _Handler(failures=99, error=_Leaky())
+    with pytest.raises(ProviderUnavailable):
+        ModelRetryMiddleware("coder", trace=sink).wrap_model_call({}, handler)
+
+    exhausted = [n for n in sink.notices if n["name"] == "retry-exhausted"][0]
+    assert "sk-secret-value" not in exhausted["payload"]
+    assert "_Leaky" in exhausted["payload"]
+
+
+def test_an_exhaustion_increments_the_usage_counter(instant) -> None:
+    """The measurement half. `retries` counts the three that were
+    re-issued; only this counts the fourth failure, which is the one that
+    cost the call."""
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    handler = _Handler(failures=99, error=_Status(500))
+
+    with pytest.raises(ProviderUnavailable):
+        ModelRetryMiddleware("coder", usage=usage).wrap_model_call({}, handler)
+
+    assert usage.as_dict()["coder"]["retries"] == 3
+    assert usage.as_dict()["coder"]["exhaustions"] == 1
+
+
+async def test_an_exhaustion_increments_the_usage_counter_on_the_async_half(instant) -> None:
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    handler = _Handler(failures=99, error=_Status(500))
+
+    with pytest.raises(ProviderUnavailable):
+        await ModelRetryMiddleware("coder", usage=usage).awrap_model_call({}, handler.acall)
+
+    assert usage.as_dict()["coder"]["exhaustions"] == 1
+
+
+def test_a_non_transient_failure_is_not_an_exhaustion(instant) -> None:
+    """It was never retried, so no budget ran out. Counting it would put a
+    bad API key into the provider's failure rate."""
+    from rudra.context.usage import RunUsage
+
+    sink = _Sink()
+    usage = RunUsage()
+    handler = _Handler(failures=1, error=_Status(401))
+
+    with pytest.raises(_Status):
+        ModelRetryMiddleware("coder", trace=sink, usage=usage).wrap_model_call({}, handler)
+
+    assert sink.notices == []
+    assert usage.as_dict().get("coder") is None
+
+
+def test_a_clean_call_records_no_exhaustion(instant) -> None:
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    handler = _Handler(failures=0, error=_Status(500))
+
+    ModelRetryMiddleware("coder", usage=usage).wrap_model_call({}, handler)
+
+    assert usage.as_dict().get("coder") is None
+
+
+def test_the_give_up_still_raises_with_neither_sink(instant) -> None:
+    """The machinery must stay constructible without a run: every OPEN-41
+    test builds it with both None, and an exhaustion must not become a
+    crash on a missing sink."""
+    handler = _Handler(failures=99, error=_Status(503))
+
+    with pytest.raises(ProviderUnavailable):
+        ModelRetryMiddleware("coder").wrap_model_call({}, handler)
+
+    assert handler.calls == 4
+
+
+def test_a_sink_that_raises_does_not_replace_the_provider_error(instant) -> None:
+    """Observability never ends a run, and here it must not end it with
+    the WRONG exception -- ProviderUnavailable is what the loop reads."""
+
+    class _Angry:
+        def notice(self, *a, **k):
+            raise RuntimeError("sink is down")
+
+    class _AngryUsage:
+        def record_retry(self, role):
+            raise RuntimeError("usage is down")
+
+        def record_exhaustion(self, role):
+            raise RuntimeError("usage is down")
+
+        def record_served(self, role):
+            raise RuntimeError("usage is down")
+
+        def has_served(self, role):
+            raise RuntimeError("usage is down")
+
+    handler = _Handler(failures=99, error=_Status(503))
+
+    with pytest.raises(ProviderUnavailable):
+        ModelRetryMiddleware("coder", trace=_Angry(), usage=_AngryUsage()).wrap_model_call(
+            {}, handler
+        )

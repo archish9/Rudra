@@ -34,6 +34,11 @@ def test_recording_accumulates_per_role():
         # each attempt is one recorded call and a reader finding calls=4
         # against three model turns cannot tell a retry from a miscount.
         "retries": 0,
+        # Added by OPEN-46 (reopened): the calls that ran OUT of retries.
+        # `retries` counts the attempts that were re-issued and recovered;
+        # this counts the ones the provider never served, which is the
+        # numerator the run's failure rate was silently missing.
+        "exhaustions": 0,
         # Added in Step 15a: wall clock, the one number a local backend
         # always has -- token counts are frequently absent (C9.6).
         "seconds": 0.0,
@@ -346,6 +351,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "output_tokens",
         "compactions",
         "retries",
+        "exhaustions",
         "recall_chars",
         "recall_injections",
         "tree_chars",
@@ -574,3 +580,83 @@ def test_the_write_belief_map_is_shared_by_role_and_never_reported():
     assert usage.beliefs_for("tester") == {}, "one role's writes are not another's"
     assert "write_beliefs" not in usage.as_dict()
     assert "write_beliefs" not in usage.as_dict()["coder"]
+
+
+# --- OPEN-46 (reopened): the retry that ran OUT ------------------------------
+#
+# `retries` counts a failed attempt that was RE-ISSUED. The attempt that
+# exhausted the budget is a failure too, and it was counted nowhere -- so
+# `p = retries / calls` was a lower bound and nothing said by how much.
+# run14 lost a whole task to an exhaustion whose only surviving trace was a
+# ledger note that every later branch overwrites.
+
+
+def test_exhaustions_are_counted_per_role():
+    """The number the item exists for: a failed attempt that was NOT
+    retried, which `retries` structurally cannot hold."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+    usage.record_exhaustion("coder")
+    assert usage.as_dict()["coder"]["exhaustions"] == 1
+
+
+def test_exhaustions_are_not_shared_between_roles():
+    """A coder whose endpoint gave up and a healthy planner are the split
+    ModelRetryMiddleware carries a role for."""
+    usage = RunUsage()
+    usage.record_exhaustion("coder")
+    assert usage.as_dict()["coder"]["exhaustions"] == 1
+    assert usage.as_dict().get("planner") is None
+
+
+def test_an_exhaustion_alone_still_registers_the_role():
+    """A role whose FIRST call exhausted has never recorded one."""
+    usage = RunUsage()
+    usage.record_exhaustion("tester")
+    assert usage.roles() == ("tester",)
+
+
+def test_a_run_with_no_exhaustion_reports_zero_not_absence():
+    """§8.3: the key exists even at 0. A healthy endpoint reporting an
+    honest zero is a result, not a missing instrument -- which is the
+    OPEN-45 lesson this row inherits."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=1, output_tokens=1)
+    assert usage.as_dict()["coder"]["exhaustions"] == 0
+
+
+def test_exhaustions_reach_the_usage_log():
+    """RUN #9's checklist reads usage.json, not as_dict."""
+    usage = RunUsage()
+    usage.record_exhaustion("coder")
+    log = usage.as_log(wall_now=usage.started_wall, mono_now=usage.started_mono)
+    assert log["roles"]["coder"]["exhaustions"] == 1
+
+
+def test_render_is_silent_about_exhaustions_when_there_were_none():
+    """Guarded exactly as retries and compactions are, so a clean run's
+    panel is byte-identical to the one before this landed."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1)
+    assert "exhaust" not in render_usage(usage)
+
+
+def test_render_names_exhaustions_when_they_happened():
+    """It is worse than a retry and must not read as one: a retry cost
+    seconds, an exhaustion cost the call."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1)
+    usage.record_exhaustion("coder")
+    assert "1 exhaustion" in render_usage(usage)
+
+    usage.record_exhaustion("coder")
+    assert "2 exhaustions" in render_usage(usage)
+
+
+def test_an_exhaustion_does_not_read_as_a_retry_in_the_panel():
+    """`retr` is what the OPEN-45 silence test greps for, and an
+    exhaustion must not trip it."""
+    usage = RunUsage()
+    usage.record("coder", input_tokens=10, output_tokens=1)
+    usage.record_exhaustion("coder")
+    assert "retr" not in render_usage(usage)

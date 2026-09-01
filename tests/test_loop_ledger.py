@@ -206,3 +206,32 @@ def test_a_ledger_written_before_halts_existed_still_loads(tmp_path):
         encoding="utf-8",
     )
     assert Ledger.load(path).tasks[0].halts == ()
+
+
+def test_a_tasks_run_errors_survive_a_save_and_load(tmp_path):
+    """OPEN-46 §5.3, and it is OPEN-44's failure re-run one field over.
+
+    `task.note` is where a subagent that never ran was recorded, and every
+    branch that finishes a task rewrites it -- so run14's exhaustion of the
+    retry budget, which cost t8 outright, left nothing on disk that a later
+    reader could count. A list, not a field that gets overwritten.
+    """
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    task.run_errors = ("the coder could not run: Provider error ... after 4 attempt(s)",)
+    path = tmp_path / "ledger.json"
+    ledger.save(path)
+
+    assert Ledger.load(path).tasks[0].run_errors == (
+        "the coder could not run: Provider error ... after 4 attempt(s)",
+    )
+
+
+def test_a_ledger_written_before_run_errors_existed_still_loads(tmp_path):
+    """Volatile file, but a run in flight during an upgrade must not crash."""
+    path = tmp_path / "ledger.json"
+    path.write_text(
+        json.dumps({"tasks": [{"id": "t1", "description": "x", "status": "pending"}]}),
+        encoding="utf-8",
+    )
+    assert Ledger.load(path).tasks[0].run_errors == ()

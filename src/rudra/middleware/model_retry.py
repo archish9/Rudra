@@ -112,45 +112,95 @@ class ModelRetryMiddleware(AgentMiddleware):
             # narrow policy rather than to a crash.
             return False
 
-    def _report(self, error: BaseException, attempt: int, budget: int) -> None:
-        """Say that a retry is about to happen, to whoever is listening.
+    @staticmethod
+    def _detail(error: BaseException) -> str:
+        """The exception CLASS and its status, and nothing else.
 
-        Called once per retry ACTUALLY MADE -- never on the give-up, which
-        already raises ProviderUnavailable and reaches the user as a
-        sentence. A second channel for one fact is how two descriptions of
-        one event drift.
+        Never `str(error)`: a provider error body can echo the request
+        back, and trace/render.py escapes but does not redact.
+        """
+        status = status_of(error)
+        detail = type(error).__name__
+        if status is not None:
+            detail += f" ({status})"
+        return detail
 
-        The payload carries the exception CLASS and its status, never
-        `str(error)`: a provider error body can echo the request back, and
-        trace/render.py escapes but does not redact.
+    def _notice(self, payload: str, name: str) -> None:
+        """Say one thing to the trace, or to nobody.
 
         Swallowing follows TraceSink.emit and write_usage_log
         (loop/engine.py): a run that is already surviving a provider
-        failure must not then die of its own bookkeeping.
+        failure must not then die of its own bookkeeping -- and here it
+        must not die of the WRONG exception either, since the loop reads
+        ProviderUnavailable.
+        """
+        if self.trace is None:
+            return
+        try:
+            self.trace.notice(
+                payload,
+                role=self.role,
+                # VERBOSE on screen, and in the debug log at every level --
+                # a retry annotates a run rather than reporting on it, so
+                # one console line per flaky call would bury the trace it
+                # is annotating (OPEN-44's choice, inherited).
+                name=name,
+            )
+        except Exception:  # noqa: BLE001 -- observability never ends a run
+            pass
+
+    def _report(self, error: BaseException, attempt: int, budget: int) -> None:
+        """Say that a retry is about to happen, to whoever is listening.
+
+        Called once per retry ACTUALLY MADE. The give-up is reported by
+        `_report_exhaustion` instead, under its own name -- see there for
+        why this function used to be the only one.
         """
         if self.usage is not None:
             try:
                 self.usage.record_retry(self.role)
             except Exception:  # noqa: BLE001 -- observability never ends a run
                 pass
-        if self.trace is None:
-            return
-        status = status_of(error)
-        detail = type(error).__name__
-        if status is not None:
-            detail += f" ({status})"
-        try:
-            self.trace.notice(
-                f"{self._provider()} failed with {detail}; retrying, attempt {attempt} of {budget}",
-                role=self.role,
-                # VERBOSE on screen, and in the debug log at every level --
-                # a retry annotates a run rather than reporting on it, so
-                # one console line per flaky call would bury the trace it
-                # is annotating (OPEN-44's choice, inherited).
-                name="retry",
-            )
-        except Exception:  # noqa: BLE001 -- observability never ends a run
-            pass
+        self._notice(
+            f"{self._provider()} failed with {self._detail(error)}; "
+            f"retrying, attempt {attempt} of {budget}",
+            "retry",
+        )
+
+    def _report_exhaustion(self, error: BaseException, attempts: int) -> None:
+        """Say that the budget ran out (OPEN-46, reopened).
+
+        This used to report nothing. `_report`'s own docstring said the
+        give-up "already raises ProviderUnavailable and reaches the user
+        as a sentence", and that a second channel for one fact is how two
+        descriptions drift. **The premise is false on the subagent path.**
+        `subagents/runner.py:264` catches every exception into
+        `SubagentResult.error`, and `loop/engine.py:463` writes it to
+        `task.note` -- which every branch that finishes a task rewrites.
+        So run14's exhaustion cost task t8 outright and left zero record
+        in the debug log, and `p = retries / calls` was a lower bound
+        with nothing saying by how much.
+
+        The name is `retry-exhausted` and NOT `retry`, deliberately: the
+        per-attempt histograms in this project's own ledger scripts count
+        `retry` notices, and a give-up filed under that name would be
+        absorbed into the very rate it exists to correct.
+
+        The payload carries the class and status only, on `_detail`'s
+        rule, and the count of attempts -- which is what separates a
+        budget that was nearly enough from an endpoint that never
+        answered at all.
+        """
+        if self.usage is not None:
+            try:
+                self.usage.record_exhaustion(self.role)
+            except Exception:  # noqa: BLE001 -- observability never ends a run
+                pass
+        self._notice(
+            f"{self._provider()} failed with {self._detail(error)}; "
+            f"giving up after {attempts} attempt(s)",
+            "retry-exhausted",
+        )
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         delays = retry_delays()
@@ -161,6 +211,9 @@ class ModelRetryMiddleware(AgentMiddleware):
                 transient = is_transient(error, served=self._has_served())
                 if not transient or attempt == len(delays):
                     if transient:
+                        # Reported before it is raised: on the subagent
+                        # path nothing downstream will (OPEN-46).
+                        self._report_exhaustion(error, attempt + 1)
                         raise ProviderUnavailable(self._provider(), attempt + 1, error) from error
                     raise
                 self._report(error, attempt + 1, len(delays))
@@ -179,6 +232,9 @@ class ModelRetryMiddleware(AgentMiddleware):
                 transient = is_transient(error, served=self._has_served())
                 if not transient or attempt == len(delays):
                     if transient:
+                        # The async half is the SUBAGENT path -- the one
+                        # where the sentence never reaches a user at all.
+                        self._report_exhaustion(error, attempt + 1)
                         raise ProviderUnavailable(self._provider(), attempt + 1, error) from error
                     raise
                 self._report(error, attempt + 1, len(delays))

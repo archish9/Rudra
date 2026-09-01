@@ -43,6 +43,20 @@ class RoleUsage:
     # It is also what makes OPEN-40's `seconds / calls` readable: a retried
     # call inflates the denominator with an attempt that produced no tokens.
     retries: int = 0
+    # How many of this role's model calls ran OUT of retries (OPEN-46,
+    # reopened). `retries` counts a failed attempt that WAS re-issued; the
+    # attempt that exhausts the budget is a failure too and was counted
+    # nowhere, so `p = retries / calls` was a lower bound with nothing
+    # saying by how much. run14 measured 37/233 = 15.9% that way against
+    # the 5.60% the item first closed on, and lost task t8 to an
+    # exhaustion that left no number anywhere.
+    #
+    # Separate from `retries` rather than folded in, for the reason
+    # reads_deduped is separate from writes_skipped: they are different
+    # claims. A retry cost seconds and recovered; an exhaustion cost the
+    # call, and on the subagent path it costs a task attempt
+    # (loop/engine.py:463). One number carrying both would be neither.
+    exhaustions: int = 0
     # What the injected recall block cost this role, in characters, summed
     # over every agent build (Step 14b, spec 4.6). Characters rather than
     # tokens because that is what render.py actually budgets in, and a
@@ -269,11 +283,27 @@ class RunUsage:
 
         Mirrors record_compaction, and the mirror is the point: both count
         something Rudra did on the run's behalf that `calls` alone cannot
-        show. Called by ModelRetryMiddleware once per retry ACTUALLY MADE
-        -- never on the give-up, which raises ProviderUnavailable and is
-        already reported as a sentence.
+        show. Called by ModelRetryMiddleware once per retry ACTUALLY MADE;
+        the give-up is `record_exhaustion`'s, and the two are separate
+        because a retry recovered and an exhaustion did not.
         """
         self._slot(role).retries += 1
+
+    def record_exhaustion(self, role: str) -> None:
+        """One model call by `role` that ran out of retries (OPEN-46).
+
+        Mirrors record_retry, and the pair is what makes the run's failure
+        rate computable at all: `p = (retries + exhaustions) / calls`,
+        where before this the numerator silently dropped every attempt
+        that was not re-issued.
+
+        Called by ModelRetryMiddleware on the give-up. That used to report
+        nothing, on the reasoning that ProviderUnavailable "reaches the
+        user as a sentence" -- true on the planner and single-shot paths,
+        and false on the subagent one, where subagents/runner.py:264
+        catches it into a result string.
+        """
+        self._slot(role).exhaustions += 1
 
     def suspended_seconds(self, *, wall_now: float, mono_now: float) -> float:
         """Seconds of this run the process was not running.
@@ -305,6 +335,7 @@ class RunUsage:
                 "output_tokens": tally.output_tokens,
                 "compactions": tally.compactions,
                 "retries": tally.retries,
+                "exhaustions": tally.exhaustions,
                 "recall_chars": tally.recall_chars,
                 "recall_injections": tally.recall_injections,
                 "tree_chars": tally.tree_chars,
@@ -401,6 +432,14 @@ def render_usage(usage: Any) -> str:
         # than "retry"+plural: the two words differ by more than an "s".
         if tally["retries"]:
             line += f", {tally['retries']} {'retry' if tally['retries'] == 1 else 'retries'}"
+        # OPEN-46. Guarded the same way, so a run whose budget always held
+        # prints the panel it printed before this landed. The word shares
+        # no prefix with "retry" on purpose: this is the count of calls the
+        # provider never served, and a reader skimming the line must not
+        # take it for the count of ones it eventually did.
+        if tally["exhaustions"]:
+            plural = "s" if tally["exhaustions"] != 1 else ""
+            line += f", {tally['exhaustions']} exhaustion{plural}"
         lines.append(line + ")[/dim]")
 
     # The one thing in this panel that is NOT about a model (OPEN-53).

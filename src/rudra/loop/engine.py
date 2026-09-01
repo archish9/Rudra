@@ -368,6 +368,30 @@ async def _verify(task: Task, context: LoopContext) -> Any:
 MAX_CONSECUTIVE_RUN_ERRORS = 3
 
 
+def _record_run_error(task: Task, role: str, error: str) -> str:
+    """Keep a subagent invocation that never happened (OPEN-46).
+
+    Returns the sentence, so the coder path can also put it in `note`
+    without the two spellings drifting.
+
+    `run_errors` is a list for the reason `halts` is one, and the reason
+    is the same failure: `note` is rewritten by every branch that finishes
+    a task and cleared outright by the passing one, so an invocation the
+    provider never served vanished exactly when the task later succeeded.
+    run14 lost task t8 to an exhausted retry budget and its debug log,
+    ledger and terminal held nothing about it afterwards.
+
+    It is separate from `halts` because the two are different events: a
+    halt is an invocation Rudra STOPPED, and this is one that never
+    started. And it is recorded WITHOUT classifying the string -- asking
+    "was this a retry exhaustion?" of a provider's prose is the guess
+    MAX_CONSECUTIVE_RUN_ERRORS exists to avoid making.
+    """
+    sentence = f"the {role} could not run: {error}"
+    task.run_errors = (*task.run_errors, sentence)
+    return sentence
+
+
 def _record_halt(task: Task, result: Any, context: LoopContext) -> None:
     """Keep a subagent guard halt, and say it happened (OPEN-44).
 
@@ -460,7 +484,9 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # (OPEN-33). So: spend the attempt, and stop only once the
             # errors have actually shown they recur.
             context.run_errors += 1
-            task.note = f"the coder could not run: {result.error}"
+            # Durably first, then in `note` -- which does not survive this
+            # task finishing (OPEN-46). One sentence, written once.
+            task.note = _record_run_error(task, "coder", result.error)
             if context.run_errors >= MAX_CONSECUTIVE_RUN_ERRORS:
                 return _stop(Outcome.STOP_RUN)
             ledger.save(context.paths.ledger_json)
@@ -521,6 +547,22 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                 thread_id=f"{context.subagents.session_id}-{task.id}-tester",
             )
             _record_halt(task, tester_result, context)
+            if tester_result.error:
+                # The tester's silence was worse than the coder's, and
+                # OPEN-46 is where it surfaced: the coder's error branch
+                # at least writes `note`, while this result went only to
+                # `_record_halt` -- which returns early unless a guard
+                # fired. So a tester whose model call exhausted the retry
+                # budget was recorded in no field at all, and the task
+                # went on to pass with the gate reporting no test
+                # judgement.
+                #
+                # NOT into `note`, and not into `context.run_errors`: a
+                # dead tester does not fail the task (the gate already
+                # passed), `note` is read by a MODEL later (CR-C4), and
+                # counting it toward MAX_CONSECUTIVE_RUN_ERRORS would end
+                # runs over optional work.
+                _record_run_error(task, "tester", tester_result.error)
             task.files_touched = changed_since(context, before)
             report = await _verify(task, context)
 

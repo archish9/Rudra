@@ -982,3 +982,97 @@ async def test_a_clean_task_records_no_halt(monkeypatch, context):
 
     assert task.halts == ()
     assert "stopped early" not in console.export_text()
+
+
+# --- OPEN-46 §5.3: a subagent that never ran must leave a durable record -----
+
+
+async def test_a_run_error_is_kept_in_a_list_not_only_in_the_note(monkeypatch, context):
+    """The failure this repeats is OPEN-44's, one field over.
+
+    `task.note` is the only place a run error has ever landed, and every
+    branch that finishes a task rewrites it -- the passing one clears it
+    outright. run14's t8 exhausted the retry budget twice and the only
+    surviving evidence anywhere was a note that a later attempt overwrote.
+    """
+
+    async def broken(name, prompt, *, context, thread_id=None):
+        return SubagentResult(
+            name=name,
+            text="",
+            ok=False,
+            error="Provider error from the coder model after 4 attempt(s): NotFoundError (404).",
+        )
+
+    monkeypatch.setattr(engine, "run_subagent", broken)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    _, task, _ = await run_one(context)
+
+    # Three attempts, three errors, each one kept.
+    assert len(task.run_errors) == 3
+    assert all("after 4 attempt(s)" in entry for entry in task.run_errors)
+
+
+async def test_a_run_error_survives_the_task_finishing(monkeypatch, context):
+    """The exact case `note` loses: the coder fails once, then succeeds,
+    and the passing branch clears the note. The record must remain."""
+    attempts = {"n": 0}
+
+    async def flaky(name, prompt, *, context, thread_id=None):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return SubagentResult(name=name, text="", ok=False, error="provider gave up")
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", flaky)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.status is TaskStatus.DONE
+    assert task.run_errors == ("the coder could not run: provider gave up",)
+
+
+async def test_a_task_whose_subagents_all_ran_records_no_run_error(monkeypatch, context):
+    """Zero is the honest answer on a healthy run, and it must be zero."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    _, task, _ = await run_one(context)
+    assert task.run_errors == ()
+
+
+async def test_a_tester_that_never_ran_is_recorded_too(monkeypatch, context):
+    """The same silence one dispatch site over, and this one is worse.
+
+    The coder's error branch at least writes `note`. The tester's result
+    goes only to `_record_halt`, which returns early unless
+    `halted_reason` is set -- so a tester whose model call exhausted the
+    retry budget was recorded in NO field at all, and the task went on to
+    pass with the gate reporting no test judgement.
+    """
+    reports = [no_test_judgement_report(), passing_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+
+    async def coder_ok_tester_dead(name, prompt, *, context, thread_id=None):
+        if name == "tester":
+            return SubagentResult(
+                name=name,
+                text="",
+                ok=False,
+                error="Provider error from the tester model after 4 attempt(s).",
+            )
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", coder_ok_tester_dead)
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE, "a dead tester does not fail the task"
+    assert task.run_errors == (
+        "the tester could not run: Provider error from the tester model after 4 attempt(s).",
+    )
+
+
+async def test_a_tester_that_ran_records_no_run_error(monkeypatch, context):
+    reports = [no_test_judgement_report(), passing_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+    _, task, _ = await run_one(context)
+    assert task.run_errors == ()
