@@ -24,6 +24,7 @@ import importlib
 import inspect
 from importlib.metadata import version
 
+import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -537,3 +538,81 @@ def test_upstream_execute_description_still_says_isolated_sandbox():
     assert "isolated sandbox" in EXECUTE_TOOL_DESCRIPTION
     assert 'cd "/path/with spaces"' in EXECUTE_TOOL_DESCRIPTION
     assert "Use absolute paths" in EXECUTE_TOOL_DESCRIPTION
+
+
+def test_upstream_still_orders_edit_file_in_the_memory_prompt():
+    """The reason Rudra ships its own memory prompt at all (OPEN-70).
+
+    `create_deep_agent(memory=[...])` builds a MemoryMiddleware with the
+    default MEMORY_SYSTEM_PROMPT (graph.py:861-869), and that template tells
+    the agent to call `edit_file` to persist what it learns -- twice in prose
+    and twice more as worked `Tool Call: edit_file(...)` examples. The
+    planner has no `edit_file`: absence is the enforcement
+    (`_tools_for_stage`). So the order cannot be obeyed and shows up as a
+    `tool_error`, which is what run14 and run15 both recorded.
+
+    **If this test fails, upstream changed the template and Rudra's override
+    should be re-read against the new one** -- the override exists to remove
+    exactly these lines and may be removable, or may need to remove
+    different ones.
+    """
+    from deepagents.middleware.memory import MEMORY_SYSTEM_PROMPT
+
+    guidelines = MEMORY_SYSTEM_PROMPT[MEMORY_SYSTEM_PROMPT.index("<memory_guidelines>") :]
+    assert "edit_file" in guidelines
+    assert "Tool Call: edit_file" in guidelines
+
+
+def test_memory_middleware_accepts_a_custom_system_prompt():
+    """The public seam OPEN-70's fix uses. Not a monkeypatch: `system_prompt`
+    is a documented constructor argument, and upstream validates it."""
+    import inspect as _inspect
+
+    from deepagents.middleware.memory import MemoryMiddleware
+
+    names = list(_inspect.signature(MemoryMiddleware.__init__).parameters)
+    assert "system_prompt" in names
+
+    with pytest.raises(ValueError, match="agent_memory"):
+        MemoryMiddleware(backend=object(), sources=["a"], system_prompt="no slot here")
+
+
+def test_custom_memory_middleware_replaces_the_default(monkeypatch, tmp_path):
+    """A custom MemoryMiddleware replaces the auto-added one (OPEN-70).
+
+    Same mechanism `test_custom_filesystem_middleware_replaces_the_default`
+    pins, one middleware over: `_apply_custom_middleware` matches on `.name`
+    and substitutes in place, and it runs at graph.py:883 -- AFTER the
+    `memory=` append at 861, which is what makes the replacement possible at
+    all.
+
+    A count of 2 means the agent carries BOTH prompts, so the `edit_file`
+    order is back and OPEN-70 reopens.
+    """
+    import deepagents.graph as graph
+    from deepagents.backends.filesystem import FilesystemBackend
+    from deepagents.middleware.memory import MemoryMiddleware
+
+    captured = {}
+    real_create_agent = graph.create_agent
+
+    def spy(*args, **kwargs):
+        captured["middleware"] = kwargs.get("middleware")
+        return real_create_agent(*args, **kwargs)
+
+    monkeypatch.setattr(graph, "create_agent", spy)
+
+    backend = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+    ours = MemoryMiddleware(
+        backend=backend, sources=["AGENTS.md"], system_prompt="<m>{agent_memory}</m>"
+    )
+    graph.create_deep_agent(
+        model=ScriptedToolModel(), backend=backend, memory=["AGENTS.md"], middleware=[ours]
+    )
+
+    memory = [m for m in captured["middleware"] if type(m).__name__ == "MemoryMiddleware"]
+    assert len(memory) == 1, (
+        f"expected 1 MemoryMiddleware, got {len(memory)} — upstream stopped replacing "
+        "by name; OPEN-70 reopens and the edit_file order is back in the prompt"
+    )
+    assert memory[0] is ours

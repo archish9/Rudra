@@ -204,6 +204,18 @@ src/rudra/
 │                           instead, so it applies to every run on every model
 │                           rather than when a model opens a file
 ├── middleware/             2 survivors of D4, both opt-in behind [compat],
+│                           plus memory_prompt.py (OPEN-70): Rudra's
+│                           replacement for deepagents' MEMORY_SYSTEM_PROMPT,
+│                           which spends ~1,280 tokens per planner call
+│                           teaching an agent with NO write tools to persist
+│                           memory by calling `edit_file`. Reached through
+│                           `system_prompt=` plus replace-by-name — the same
+│                           public seam FilesystemMiddleware uses (A1.47),
+│                           NOT a monkeypatch. The trust guidance is kept
+│                           (AGENTS.md is partly model-written); the write
+│                           orders go. OPEN-66 tried to fix this with a line
+│                           in AGENTS.md's body and lost, because upstream's
+│                           own prompt marks that body untrusted data,
 │                           plus repeat_guard.py (OPEN-10, always on): an
 │                           agent may not re-run a READ that already failed
 │                           twice with identical args and nothing in between.

@@ -39,11 +39,13 @@ from rudra.filesystem import project_tree
 from rudra.llm import build_model
 from rudra.loop.tools import create_ledger_tools, render_ledger
 from rudra.middleware import (
+    PLANNER_MEMORY_SOURCES,
     DelegationGuardMiddleware,
     FixWriteParamsMiddleware,
     ModelRetryMiddleware,
     RepeatGuardMiddleware,
     TaskAnchorMiddleware,
+    build_memory_middleware,
 )
 from rudra.permissions import run_with_approvals
 from rudra.tools.interaction_tools import create_interaction_tools
@@ -386,6 +388,15 @@ def build_planner_middleware(
         # enforcement". The planner prompt only ever asks it to read
         # (CR-C2).
         middleware.append(FilesystemMiddleware(backend=backend, tools=PLANNER_FS_TOOLS, **evict))
+        # The same seam, one middleware over (OPEN-70). create_deep_agent
+        # builds a MemoryMiddleware from `memory=` carrying upstream's
+        # MEMORY_SYSTEM_PROMPT, which spends ~1,268 tokens per call telling
+        # this agent to persist what it learns by calling `edit_file` -- a
+        # tool PLANNER_FS_TOOLS does not grant it. Passing our own replaces
+        # that instance by name and drops the order; see
+        # middleware/memory_prompt.py for why the fix could not be a line in
+        # AGENTS.md, which is what OPEN-66 tried.
+        middleware.append(build_memory_middleware(backend))
     if usage is not None:
         middleware.append(UsageMiddleware("planner", usage))
     if compat_task_anchor:
@@ -563,7 +574,11 @@ def create_planner_agent(
         system_prompt=system_prompt,
         backend=filesystem_backend,
         checkpointer=checkpointer,
-        memory=[".rudra/AGENTS.md"],
+        # One spelling, shared with the middleware built above: they must
+        # name the same file. Still passed, and must be -- it is what makes
+        # upstream build the instance ours replaces, and without it the
+        # memory would load into state and never reach the prompt.
+        memory=list(PLANNER_MEMORY_SOURCES),
         middleware=middleware,
         interrupt_on=gate.interrupt_on if gate is not None else None,
         # OPEN-17: the planner indexes NO skills, and that is the fix.
