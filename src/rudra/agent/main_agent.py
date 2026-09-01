@@ -216,11 +216,17 @@ class RudraAgent:
     async def close(self) -> None:
         if self._transcript is not None:
             self._transcript.close()
-        # After the transcript is flushed and before anything else: what is
-        # copied must be complete, and this is the last point at which every
-        # instrument this run wrote is still on disk under a directory the
-        # user is about to delete (OPEN-68). It cannot raise -- archive_run
-        # follows write_usage_log's rule -- so it needs no guard of its own.
+        if self.mcp is not None:
+            await self.mcp.aclose()
+        if self._db_conn is not None:
+            await self._db_conn.close()
+            self._db_conn = None
+        # LAST, and the order is OPEN-69. This used to run right after the
+        # transcript closed, reasoning that "what is copied must be complete"
+        # -- but every step above only ever APPENDS to the debug log, so
+        # archiving first copied strictly less and the stated reason argued
+        # for the wrong end. It cannot raise (archive_run follows
+        # write_usage_log's rule), so it needs no guard of its own.
         if self._archive_paths is not None:
             from rudra.state.archive import archive_run
 
@@ -230,11 +236,6 @@ class RudraAgent:
                 paths=self._archive_paths,
                 models=self._archive_models,
             )
-        if self.mcp is not None:
-            await self.mcp.aclose()
-        if self._db_conn is not None:
-            await self._db_conn.close()
-            self._db_conn = None
 
     def _log_always(self, message: str, style: str = "") -> None:
         if style:

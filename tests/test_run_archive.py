@@ -454,3 +454,114 @@ async def test_the_archive_never_contains_an_api_key(hermetic: Path) -> None:
         json.loads((where / META_NAME).read_text(encoding="utf-8"))["models"]["default"]["model"]
         == "m"
     )
+
+
+# --- OPEN-69: the archive must not be short by construction -----------------
+
+
+def test_the_archiver_logs_its_intent_before_copying(home: Path, tmp_path: Path) -> None:
+    """OPEN-69: `archive_run` logs to the `rudra` tree, and the project's debug
+    log IS that tree's handler -- so a line written after the copy lands in the
+    file it just copied and can never be in the copy. RUN #9 measured exactly
+    one such line, on every run, forever."""
+    import logging
+
+    from rudra.state.archive import LOGGER
+
+    project = _project_with_evidence(tmp_path / "app")
+    debug = project / ".rudra" / "run" / "logs" / "debug-abc123def456.jsonl"
+
+    records: list[str] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            # Append to the project's debug log the way the real handler does,
+            # so "was it copied" is a question about bytes and not about mocks.
+            records.append(record.getMessage())
+            with debug.open("a", encoding="utf-8") as handle:
+                handle.write('{"kind":"log"}\n')
+
+    handler = _Capture()
+    LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.DEBUG)
+    try:
+        where = archive_run(project_path=project, session_id="abc123def456", home=home, paths=None)
+    finally:
+        LOGGER.removeHandler(handler)
+
+    assert where is not None
+    assert records, "the archiver must say where the evidence went"
+    archived = (where / "debug-abc123def456.jsonl").read_bytes()
+    assert archived == debug.read_bytes()
+
+
+def test_the_archived_debug_log_is_a_prefix_of_the_project_s(home: Path, tmp_path: Path) -> None:
+    """The honest contract. The log is still OPEN when it is copied -- close()
+    has mcp and the checkpointer left to shut down and either may log -- so
+    byte-identity is not something this code can promise. A prefix is: later
+    records only ever append."""
+    project = _project_with_evidence(tmp_path / "app")
+    debug = project / ".rudra" / "run" / "logs" / "debug-abc123def456.jsonl"
+
+    where = archive_run(project_path=project, session_id="abc123def456", home=home, paths=None)
+    assert where is not None
+    with debug.open("a", encoding="utf-8") as handle:
+        handle.write('{"kind":"log","payload":"written after close"}\n')
+
+    archived = (where / "debug-abc123def456.jsonl").read_bytes()
+    assert debug.read_bytes().startswith(archived)
+
+
+async def test_close_archives_after_the_checkpointer_and_the_mcp_client(
+    home: Path, tmp_path: Path
+) -> None:
+    """OPEN-69: archiving is the LAST thing close() does. The comment that put
+    it first argued "what is copied must be complete" -- but every later step
+    only appends, so archiving last copies strictly more."""
+    from rich.console import Console
+
+    from rudra.agent.main_agent import AgentContext, RudraAgent
+    from rudra.state.paths import rudra_paths
+
+    project = _project_with_evidence(tmp_path / "app")
+    debug = project / ".rudra" / "run" / "logs" / "debug-abc123def456.jsonl"
+    order: list[str] = []
+
+    def _log(what: str) -> None:
+        """Write the way a real shutdown step's log record would. What the
+        archive holds is the evidence of when it ran -- not a mock's word."""
+        order.append(what)
+        with debug.open("a", encoding="utf-8") as handle:
+            handle.write('{"kind":"log","payload":"%s"}\n' % what)
+
+    class _Transcript:
+        def close(self) -> None:
+            _log("transcript")
+
+    class _Mcp:
+        async def aclose(self) -> None:
+            _log("mcp")
+
+    class _Db:
+        async def close(self) -> None:
+            _log("db")
+
+    agent = RudraAgent(
+        context=AgentContext(project_path=project, task="t", console=Console(quiet=True)),
+        session_id="abc123def456",
+        db_conn=_Db(),
+        loop_context=object(),
+        planner_callback=None,
+        ledger=None,
+        mcp=_Mcp(),
+        transcript=_Transcript(),
+        archive_paths=rudra_paths(project),
+    )
+    await agent.close()
+
+    assert order == ["transcript", "mcp", "db"]
+    archived = (run_dir(project, "abc123def456", home=home) / "debug-abc123def456.jsonl").read_text(
+        encoding="utf-8"
+    )
+    for step in order:
+        assert f'"{step}"' in archived, f"{step} ran after the copy, so the archive missed it"

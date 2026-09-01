@@ -35,6 +35,15 @@ Layout, one directory per run:
 `<project-slug>` is the directory's name plus a digest of its resolved
 path, because two projects called `app` are one name and two projects.
 
+**The archive is a PREFIX of what the project holds, not a copy of it**
+(OPEN-69). `usage.json`, `ledger.json` and the transcript are complete and
+closed before `close()` runs, so those are byte-identical. The debug log is
+still OPEN -- the checkpointer and the MCP client shut down after this and
+either may log -- so identity is not a contract this code can keep. What it
+keeps instead is that every archived line is in the project's file, in
+order, and that archiving happens LAST so the prefix is as long as it can
+be.
+
 **Nothing here may raise.** `write_usage_log`'s rule (loop/engine.py, C7.5):
 a run that finished its work must not be reported failed because its own
 bookkeeping could not be written. Every entry point returns `None` or an
@@ -251,6 +260,17 @@ def archive_run(
 
         destination = run_dir(project_path, session_id, home=home)
         destination.mkdir(parents=True, exist_ok=True)
+        # BEFORE the copy, and that is the whole of OPEN-69. This record goes
+        # to the `rudra` logger tree, whose handler IS the debug log two lines
+        # below is about to copy -- so logging the OUTCOME afterwards appends a
+        # line to the file just copied, and the archive is short by exactly one
+        # record on every run, forever. RUN #9's row 21 measured it.
+        #
+        # It is phrased as intent rather than outcome for the same reason:
+        # "archiving" is true when written, "archived" would not be if the copy
+        # then failed. The copy naming its own location is what a file read
+        # alone wants anyway.
+        LOGGER.debug("archiving run %s to %s", session_id, destination)
 
         copied: list[str] = []
         for source, name in present:
@@ -275,7 +295,6 @@ def archive_run(
         (destination / META_NAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
         prune_runs(destination.parent, keep=keep, max_bytes=max_bytes)
-        LOGGER.debug("archived run %s to %s", session_id, destination)
         return destination
     except Exception:  # noqa: BLE001 -- bookkeeping never ends a run (C7.5)
         return None
