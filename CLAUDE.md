@@ -1,17 +1,21 @@
 # CLAUDE.md — Rudra
 
-Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is done and what is pending.
+Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. It is empty as
+of 2026-09-01, and it says what to watch and what to do when you file the
+next item.
 
 **Three ledgers, and they are not interchangeable.**
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **What is open now, and nothing else.** Read it first. It opens with the order to fix the open items in, and carries everything a fresh session needs to reproduce them — baseline, how to configure a throwaway test project, model availability, where the logs are |
-| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — OPEN-1…OPEN-33 and the 75 `CR-*` code-review findings of 2026-08-21, with their reproductions. Split out 2026-08-25; OPEN-23…OPEN-33 moved here 2026-08-26 |
+| `TODO.md` | **What is open now, and nothing else.** Read it first. **As of 2026-09-01 nothing is open** — it opens by saying so, then carries the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. When items exist again it opens with the order to work them in |
+| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 71 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since; the **2026-09-01** block is the largest and has its own header, carrying all eleven run records and both ordering boards with it |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
-When it names an `OPEN-N` that is not in `TODO.md`, it means `TODO-closed.md`.
+When it names an `OPEN-N`, it means `TODO-closed.md` — every one of them is
+closed, so a citation in this file is a pointer to a record rather than to
+work outstanding.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
@@ -69,7 +73,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in (or, as of 2026-09-01, with the fact that nothing is open and the three trends to watch). For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
