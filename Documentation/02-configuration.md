@@ -341,6 +341,18 @@ this.
 | `stream_tokens` | Stream that prose token by token as it arrives. Default `false` |
 | `max_fix_attempts` | How many times the fix loop retries one task before giving up. Default 3 |
 | `max_questions` | How many clarifying questions the planner may ask across one whole run. Default 5; `0` never asks |
+| `run_archive` | Copy each run's evidence out of the project when it ends. Default `true` — see below |
+
+`run_archive` exists because everything Rudra records about a run —
+`usage.json`, the ledger, the transcript and `debug-<id>.jsonl` — is written
+under `.rudra/run/`, and deleting the project deletes all of it. With it on,
+each run's copy lands in `~/.local/state/rudra/runs/<project>/<run-id>/`
+(`$XDG_STATE_HOME/rudra/runs/` where that is set), keyed by the project's
+path so two projects of the same name stay apart, and pruned to the newest
+20 runs and 2 GiB per project. `meta.json` beside them names the project,
+the run and each role's provider, model and `base_url`; the API key is never
+recorded and `config.toml` is never copied. Set it `false` and nothing is
+written outside the project.
 
 `verbose = false` does **not** mean a silent run. Every tool call, result and
 error is printed either way — verbose adds the prose and stops truncating.

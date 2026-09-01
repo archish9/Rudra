@@ -24,6 +24,7 @@ from rudra.loop.plan_view import (
     render_plan,
 )
 from rudra.state import ensure_layout
+from rudra.state.archive import model_facts
 
 if TYPE_CHECKING:  # pragma: no cover - the import is lazy at runtime
     from rudra.permissions.grants import SessionGrants
@@ -162,6 +163,8 @@ class RudraAgent:
         resume: bool = False,
         mcp=None,
         transcript=None,
+        archive_paths=None,
+        archive_models=None,
     ):
         self.context = context
         # Kept for callers that pass one; a real run does not. Since
@@ -195,6 +198,17 @@ class RudraAgent:
         # and release it: an unflushed handle keeps the file locked on
         # Windows, and a record nobody closed is one somebody finds empty.
         self._transcript = transcript
+        # Where this run's evidence was written, so close() can copy it out
+        # of the project (OPEN-68). None means do not archive, and that is
+        # the default deliberately: a RudraAgent built by hand -- every test
+        # that does not go through create_main_agent -- must not write into
+        # the developer's home directory. A real run gets it from
+        # `[agent] run_archive`.
+        self._archive_paths = archive_paths
+        # {role: {provider, model, base_url}} for that archive's meta.json,
+        # built at construction because close() has no config. Never the
+        # api_key -- see archive.model_facts.
+        self._archive_models = archive_models or {}
         # A resume works the ledger already on disk and never plans (C7.2).
         self.resume = resume
         self.iterations = 0
@@ -202,6 +216,20 @@ class RudraAgent:
     async def close(self) -> None:
         if self._transcript is not None:
             self._transcript.close()
+        # After the transcript is flushed and before anything else: what is
+        # copied must be complete, and this is the last point at which every
+        # instrument this run wrote is still on disk under a directory the
+        # user is about to delete (OPEN-68). It cannot raise -- archive_run
+        # follows write_usage_log's rule -- so it needs no guard of its own.
+        if self._archive_paths is not None:
+            from rudra.state.archive import archive_run
+
+            archive_run(
+                project_path=self.context.project_path,
+                session_id=self.session_id,
+                paths=self._archive_paths,
+                models=self._archive_models,
+            )
         if self.mcp is not None:
             await self.mcp.aclose()
         if self._db_conn is not None:
@@ -943,6 +971,8 @@ async def create_main_agent(
             resume=resume,
             mcp=mcp_client,
             transcript=transcript,
+            archive_paths=paths if cfg.agent.run_archive else None,
+            archive_models=model_facts(cfg),
         )
     except BaseException:
         await db_conn.close()

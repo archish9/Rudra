@@ -76,6 +76,14 @@ max_questions = 5
 # and .rudra/run/ is gitignored. `--no-debug` skips it for a single run.
 debug_log = true
 
+# When a run ends, copy its evidence — usage.json, the ledger, the debug
+# log and the transcript — into $XDG_STATE_HOME/rudra/runs/<project>/<run>/
+# (~/.local/state/rudra/runs/... by default). Everything above is written
+# inside this project, so deleting the project deletes the record of what
+# Rudra did in it; this keeps a copy somewhere that outlives it. Newest 20
+# runs per project, and never more than 2 GiB of them.
+run_archive = true
+
 [permissions]
 # ask | auto | plan
 #

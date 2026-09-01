@@ -238,7 +238,18 @@ src/rudra/
 │                           testing/, whose APIs the orchestrator calls directly
 ├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
 ├── state/                  paths.py (D15 layout), session id (unused).
-│                           ProjectConfigManager died with C6.8a
+│                           ProjectConfigManager died with C6.8a.
+│                           archive.py is the ONE thing here that writes
+│                           OUTSIDE the project (OPEN-68): at run end it
+│                           copies usage.json, the ledger, the debug log
+│                           and the transcript to
+│                           $XDG_STATE_HOME/rudra/runs/<project>/<run>/,
+│                           because every instrument this project has is
+│                           written inside a directory the measured runs
+│                           are then deleted with. It imports nothing from
+│                           Rudra but state/paths.py, never raises, and
+│                           records the models a run used in meta.json --
+│                           NOT config.toml, which may hold an api_key
 ├── mcp/                    MCP client + config (Step 13). `.mcp.json` in
 │                           Claude Code's schema, so an existing config
 │                           pastes in unchanged; three meta-tools rather
@@ -459,6 +470,21 @@ only function that creates anything.
 | `memory/export/` | durable | `rudra memory export` | `rudra memory import` | The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
 | `memory/palace/` | volatile | `rudra.memory.store` | `rudra.memory.store` | ChromaDB, project-scoped per D14/S14.5. Opened only through `MemoryStore`; a failure degrades loudly and never fails a task (C8.6) |
 
+**Every row above is inside the project, and that is exactly what OPEN-68
+was filed on.** `usage.json` and `debug-<id>.jsonl` are the only instruments
+this ledger has, and on 2026-09-01 the whole pool six items had been sized
+against — run6 … run14 — was found deleted, because the measured runs live
+in throwaway sibling directories and `.rudra/` goes with them. Promoting
+those files from `run/` to a durable subtree would have changed nothing: the
+*project* was deleted, not its volatile subtree. So `state/archive.py` copies
+them **out**, to `$XDG_STATE_HOME/rudra/runs/<project-slug>/<run-id>/`, at
+`RudraAgent.close()` — the last moment every instrument is still on disk.
+`[agent] run_archive = false` turns it off. Automatic and not a command,
+because the pool was lost exactly the way a manual step gets skipped, and
+`docs/superpowers/plans/2026-08-31-open46-retry-rate.py` reads the archive
+root from `archive_home()` rather than spelling it again. **An instrument
+whose output is deleted is not an instrument; it is a print statement.**
+
 Agent-facing prompts used to name these paths as literal strings, and a path
 that moved without its prompt meant the coder wrote where nothing reads. Step 9c
 removed the hazard rather than guarding it: the ledger is reached only through
@@ -619,6 +645,7 @@ verbose = false                         # prose + untruncated payloads in the tr
 stream_tokens = false                   # stream that prose token by token; --stream for one run
 max_fix_attempts = 3                    # fix-loop retries per task (C6.5a)
 max_questions = 5                       # clarification budget for the run; 0 never asks
+run_archive = true                      # copy the run's evidence out of the project (OPEN-68)
 
 [tools]
 shell = true                            # false removes the execute tool

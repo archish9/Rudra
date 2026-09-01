@@ -322,6 +322,15 @@ and any traceback, with nothing truncated and no flag required. That is the
 file to attach to a bug report. Newest 20 runs are kept; `--no-debug` skips
 one run and `[agent] debug_log = false` turns it off.
 
+**And a copy of it outlives the project.** Everything above lives inside
+`.rudra/`, so deleting the project deletes the record of what Rudra did in
+it. As each run ends its evidence — that log, `usage.json`, the ledger and
+the transcript — is copied to
+`~/.local/state/rudra/runs/<project>/<run-id>/` (`$XDG_STATE_HOME` if you
+set it), with a `meta.json` naming the project, the run and the models it
+used. Never your API key. Newest 20 runs per project and at most 2 GiB of
+them; `[agent] run_archive = false` turns it off.
+
 Three of those are worth knowing about:
 
 **`facts.json`** holds what Rudra established about your project and *why* it

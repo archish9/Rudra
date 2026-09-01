@@ -66,3 +66,20 @@ def _ignore_the_developers_dotenv(monkeypatch):
         return real(dotenv_path, *args, **kwargs)
 
     monkeypatch.setattr(loader, "load_dotenv", _guarded)
+
+
+# The third leak, and it runs in the other direction: since OPEN-68 a run
+# copies its evidence OUT of the project, into `$XDG_STATE_HOME/rudra/runs/`.
+# Every test that reaches `create_main_agent` and closes the agent therefore
+# writes into the developer's real home directory -- measured 2026-09-01, one
+# `pytest -q` left 26 project folders of pytest tmp-dir garbage under
+# `~/.local/state/rudra/runs/`, and the retention bound is per project, so
+# nothing would ever have cleaned them up.
+#
+# Redirected rather than disabled: `[agent] run_archive` defaults to true and
+# the suite should exercise the shipped path, not a special one.
+@pytest.fixture(autouse=True)
+def _isolate_the_run_archive(monkeypatch, tmp_path):
+    """Send the run archive somewhere pytest deletes. Tests that assert on it
+    set XDG_STATE_HOME themselves, and theirs applies after this."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg-state"))

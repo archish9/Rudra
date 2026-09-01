@@ -121,6 +121,16 @@ class AgentConfig:
     # a flag to. Uncapped and unfiltered, so it is bounded by retention
     # rather than by size -- newest 20 runs, and .rudra/run/ is gitignored.
     debug_log: bool = True
+    # Copy this run's evidence -- usage.json, the ledger, the debug log and
+    # the transcript -- out of the project and into
+    # $XDG_STATE_HOME/rudra/runs/ when the run ends (OPEN-68). On by
+    # default, and the reason is a measured loss rather than a preference:
+    # every instrument above is written inside the project, the projects
+    # Rudra is measured against are throwaway directories, and on
+    # 2026-09-01 the whole pool of run evidence six items had been sized
+    # against was found deleted. A copy that stays inside the project
+    # survives nothing.
+    run_archive: bool = True
 
 
 @dataclass(frozen=True)
@@ -266,6 +276,7 @@ DEFAULTS: dict[str, Any] = {
         "max_questions": 5,
         "stream_tokens": False,
         "debug_log": True,
+        "run_archive": True,
     },
     "permissions": {"mode": "ask", "allow": [], "deny": [], "floor_disable": []},
     "compat": {"task_anchor": False, "sandbox_paths": False},

@@ -352,6 +352,16 @@ One file per run, newest 20 kept. `--no-debug` skips it for a single run;
 `[agent] debug_log = false` turns it off permanently. Read it before
 posting it — it contains file paths and whatever your model wrote.
 
+A copy is kept outside the project, because everything above is deleted
+with it: at the end of each run `debug-<id>.jsonl`, `usage.json`,
+`ledger.json` and the transcript are archived to
+`~/.local/state/rudra/runs/<project>/<run-id>/` — `$XDG_STATE_HOME/rudra/runs/`
+where that is set — beside a `meta.json` naming the project path, the run
+id and the provider, model and `base_url` of each role. The API key is
+never recorded and `config.toml` is never copied. Retention is per project:
+the newest 20 runs, and never more than 2 GiB of them, whole runs dropped
+rather than files truncated. `[agent] run_archive = false` turns it off.
+
 ```bash
 rudra "add error handling" -d ~/projects/api
 rudra "refactor the parser" --verbose

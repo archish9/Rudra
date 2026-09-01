@@ -48,7 +48,14 @@ from rudra.state.paths import rudra_paths
 
 _TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills", "mcp", "memory")
 _AGENT_KEYS = frozenset(
-    {"verbose", "max_fix_attempts", "max_questions", "stream_tokens", "debug_log"}
+    {
+        "verbose",
+        "max_fix_attempts",
+        "max_questions",
+        "stream_tokens",
+        "debug_log",
+        "run_archive",
+    }
 )
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
@@ -181,7 +188,7 @@ def validate(
     # `debug_log` joined the list with OPEN-7 for the same reason, and it
     # defaults to ON -- so the truthiness bug there would be inverted and
     # worse: `debug_log = "false"` would keep writing the log.
-    for key in ("verbose", "stream_tokens", "debug_log"):
+    for key in ("verbose", "stream_tokens", "debug_log", "run_archive"):
         value = agent.get(key)
         if value is not None and not isinstance(value, bool):
             raise ConfigError(f"{key} in [agent] must be true or false, got {value!r}.")
@@ -514,6 +521,7 @@ def build_config(
             max_questions=int(merged.get("agent", {}).get("max_questions", 5)),
             stream_tokens=bool(merged.get("agent", {}).get("stream_tokens", False)),
             debug_log=bool(merged.get("agent", {}).get("debug_log", True)),
+            run_archive=bool(merged.get("agent", {}).get("run_archive", True)),
         ),
         permissions=PermissionsConfig(
             mode=permissions.get("mode", "ask"),
