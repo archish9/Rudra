@@ -239,3 +239,52 @@ def test_doctor_reports_the_derived_limits_when_windows_are_declared(tmp_path, m
     # int(131072 * 0.02) -- the recall half of the same number, which this
     # branch did not report before OPEN-54.
     assert "2621" in result.stdout
+
+
+# --- OPEN-71: --dry-run advertised a preview and delivered nothing ---------
+# `cli.py` registered it as "Preview changes without writing files" and
+# `main_agent.run()` returned before the planner ever ran, reporting
+# success=True and showing nothing. Four documentation files said the flag
+# was broken; its own --help, the only one a user reads at the moment they
+# use it, did not. Removed 2026-09-01 -- `--plan` is the honest version.
+
+
+def test_dry_run_is_gone_from_help():
+    """It must not be advertised any more. A flag in --help is a promise."""
+    from typer.testing import CliRunner
+
+    from rudra.cli import app
+
+    result = CliRunner().invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "--dry-run" not in result.output
+    assert "Preview changes without writing files" not in result.output
+
+
+def test_dry_run_fails_loudly_and_names_plan():
+    """A bare removal would answer click's `No such option`, which tells the
+    author nothing about what to use instead. The precedent is this project's
+    own: the OLLAMA_* shim names its replacement, and config `_suggest`
+    answers a typo with the real key.
+
+    Loud on purpose: the old behaviour was a silent no-op reporting SUCCESS,
+    so a script passing this flag believed it had previewed something. Exiting
+    non-zero is what tells it otherwise.
+    """
+    from typer.testing import CliRunner
+
+    from rudra.cli import app
+
+    result = CliRunner().invoke(app, ["--dry-run", "build a thing"])
+    assert result.exit_code != 0
+    assert "--plan" in result.output
+
+
+def test_nothing_in_the_agent_still_branches_on_dry_run():
+    """The plumbing goes with the flag. A dead field that a future caller
+    could set -- and that would silently skip the whole run -- is worse than
+    the flag was, because nothing would advertise it at all."""
+    import rudra.agent.main_agent as main_agent
+
+    source = Path(main_agent.__file__).read_text(encoding="utf-8")
+    assert "dry_run" not in source

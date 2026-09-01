@@ -585,9 +585,15 @@ test_timeout = 1800
 
 Rudra's own `.rudra/` directory doesn't count — only your changes do. The run continues on your current branch either way; this is never fatal.
 
-### `--dry-run` did nothing
+### `--dry-run has been removed`
 
-Correct — it isn't implemented. It exits immediately without planning or previewing.
+Correct, and deliberately loud. The flag never previewed anything: it exited
+before the planner ran and reported *success*, so a script that used it
+believed it had inspected something. It now exits 2 and names its
+replacement.
+
+Use `--plan`. It runs the planner, prints the facts it established and the
+tasks it declared, and writes nothing.
 
 ### First run is slow
 

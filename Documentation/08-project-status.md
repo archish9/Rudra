@@ -159,7 +159,6 @@ Things that work, but not the way you'd hope.
 | Issue | What happens | Workaround |
 |---|---|---|
 | **A mid-stream model failure ends the run** | Transient errors are retried three times with backoff, but only before the model starts answering; after that the run stops | Check `.rudra/run/ledger.json` — tasks marked `done` genuinely passed the gate — then `rudra --continue` |
-| **`--dry-run` does nothing** | Exits immediately with no plan and no preview | Use `--plan`, which really does write a plan and touch nothing else |
 | **Ollama truncates silently** | Default 4096-token window, no warning, and the agent forgets its plan | Set `context_tokens` for the role. `rudra doctor` warns when it is missing |
 | **Free hosted models are unreliable** | `429` daily caps and transient `502`s mid-run | Rudra retries these automatically; if one lands mid-answer, `rudra --continue`. Or use a paid or local model |
 | **Review is advisory only** | The reviewer runs once at the end and prints its findings; nothing gates on them, by design — an LLM verdict doesn't decide completion here | Read the findings yourself. The deterministic gate is what blocks |

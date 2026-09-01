@@ -279,7 +279,7 @@ Characters: 24
 rudra "add type hints to wordcount.py" -d ~/rudra-playground
 ```
 
-> **A note on `--dry-run`:** the flag exists, but right now it exits immediately without doing anything or showing a preview. It is not a working preview mode yet. See [Project Status](08-project-status.md).
+> **`--dry-run` is gone.** It never showed a preview — it exited before the planner ran and reported success — so it was removed rather than left advertising something it did not do. Use `--plan`: it runs the planner, shows you the facts and the task list, and writes nothing.
 
 ---
 

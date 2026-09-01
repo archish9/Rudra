@@ -274,7 +274,6 @@ per-stack install matrix.
 | `--stream` | | Stream the model's prose token by token. Implies `--verbose` |
 | `--debug` / `--no-debug` | | The complete run log at `.rudra/run/logs/debug-<id>.jsonl`. **On by default** — `--no-debug` skips it for one run, `[agent] debug_log = false` for good |
 | `--version` | `-v` | Print the version and exit |
-| `--dry-run` | | **Not functional yet** — see below. Use `--plan` |
 | `--auto` / `--yolo` | | Approve every file operation without prompting |
 | `--allow-shell` | | Let `--auto` run commands too. Off by default |
 | `--allow-mcp` | | Let `--auto` call MCP tools too. Off by default |
@@ -436,7 +435,7 @@ behaviour behind both spellings.
 > context window. What an interruption actually costs you is finished work, and
 > the ledger is the record of that.
 
-> **`--dry-run` does not preview anything.** It exits immediately, reporting `Dry run completed (no files written)`, without planning or writing. It is a placeholder. Don't rely on it to inspect what Rudra *would* do.
+> **`--dry-run` was removed in v0.2.1.** It had never previewed anything — it exited before the planner ran and reported success, so a script using it believed it had inspected something. Passing it now fails with exit 2 and points here. Use `--plan`, which really does run the planner, show the facts and tasks it settled on, and write nothing.
 
 ---
 

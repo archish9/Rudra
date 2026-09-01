@@ -69,7 +69,6 @@ class AgentContext:
     task: str
     console: Console
 
-    dry_run: bool = False
     verbose: bool = False
     stop_on_error: bool = True
 
@@ -249,20 +248,10 @@ class RudraAgent:
     async def run(self) -> AgentResult:
         """Plan, work, verify, fix, and report. The whole run (C6.1)."""
         try:
-            if self.context.dry_run:
-                # A1.40: this still previews nothing. The flag's behaviour is
-                # unchanged by Step 9c; the row moved with the code.
-                self._status("Dry run — no files written.")
-                return AgentResult(
-                    success=True,
-                    message="Dry run completed (no files written)",
-                    files_created=[],
-                    files_modified=[],
-                )
-
-            # After the dry-run return, so --dry-run creates nothing; before
-            # the planner, so every file the run produces lands on the new
-            # branch rather than straddling two.
+            # Before the planner, so every file the run produces lands on the
+            # new branch rather than straddling two. (It used to be gated
+            # behind an early --dry-run return as well; that flag previewed
+            # nothing and was removed -- OPEN-71.)
             _maybe_auto_branch(
                 self.context.project_path,
                 self.context.task,
@@ -646,7 +635,6 @@ async def create_main_agent(
     task: str,
     command: str = "build",
     console: Optional[Console] = None,
-    dry_run: bool = False,
     verbose: Optional[bool] = None,
     # Three-state, like `verbose` and for the same reason (A1.15): None
     # means "consult [agent] debug_log", which defaults to writing the log.
@@ -670,7 +658,6 @@ async def create_main_agent(
         project_path=project_path,
         task=task,
         console=console,
-        dry_run=dry_run,
         verbose=bool(verbose),
         command=command,
         planner_model=cfg.model_for("planner").model,

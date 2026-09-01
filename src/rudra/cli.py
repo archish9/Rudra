@@ -1383,7 +1383,14 @@ def main(
     project_dir: Optional[Path] = typer.Option(
         None, "--project-dir", "-d", help="Project directory (defaults to current directory)"
     ),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview changes without writing files"),
+    # Registered, hidden, and fatal (OPEN-71). It was advertised as "Preview
+    # changes without writing files" and previewed nothing -- `run()` returned
+    # before the planner, reporting success. It CANNOT simply be deleted:
+    # this callback sets ignore_unknown_options, so an unregistered
+    # `--dry-run` is swallowed into ctx.args and becomes part of the PROMPT,
+    # turning a request to preview into a real run that writes files. Keeping
+    # it registered is what makes the removal safe as well as legible.
+    dry_run: bool = typer.Option(False, "--dry-run", hidden=True, help="Removed — use --plan"),
     auto: bool = typer.Option(
         False, "--auto", "--yolo", help="Approve every action without prompting"
     ),
@@ -1439,6 +1446,24 @@ def main(
     Start the REPL:      rudra
     Check your models:   rudra models test
     """
+    # Before the subcommand check and before anything else: whatever the user
+    # asked for, they did not ask for a real run, and that is exactly what
+    # every other path from here does (OPEN-71).
+    #
+    # Exit 2, not 0. The old behaviour reported SUCCESS having done nothing,
+    # so a script passing this believed it had previewed something; a
+    # non-zero exit is the only thing that tells it otherwise. The message
+    # names the replacement, on the OLLAMA_* shim's precedent (CLAUDE.md §5)
+    # and config/loader.py::_suggest's.
+    if dry_run:
+        console.print(
+            "[red]--dry-run has been removed.[/red] It never previewed anything: "
+            "it exited before the planner ran and reported success.\n"
+            "[dim]Use[/dim] --plan [dim]instead — it runs the planner, shows the "
+            "facts and the tasks it settled on, and writes nothing.[/dim]"
+        )
+        raise typer.Exit(2)
+
     # A subcommand was explicitly given — let it handle everything
     if ctx.invoked_subcommand is not None:
         return
@@ -1552,7 +1577,6 @@ def main(
                 task=prompt,
                 command="auto",
                 console=console,
-                dry_run=dry_run,
                 verbose=verbose,
                 debug=debug,
                 resume=continue_,
@@ -1700,7 +1724,6 @@ def main(
                         task=user_input,
                         command="auto",
                         console=console,
-                        dry_run=dry_run,
                         verbose=verbose,
                         debug=debug,
                         grants=session_grants,
