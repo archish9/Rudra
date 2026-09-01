@@ -179,7 +179,7 @@ async def test_a_subagent_that_keeps_erroring_stops_the_whole_run(monkeypatch, c
     assert "no provider package" in task.note
 
 
-async def test_one_transient_error_costs_an_attempt_and_not_the_run(monkeypatch, context):
+async def test_one_transient_error_costs_neither_an_attempt_nor_the_run(monkeypatch, context):
     """OPEN-33: run `eb2e1e2e2b2c` ended `0 done · 11 never attempted` on one
     HTTP 500 from the provider, 693 seconds into task 1.
 
@@ -188,6 +188,13 @@ async def test_one_transient_error_costs_an_attempt_and_not_the_run(monkeypatch,
     same value; the loop treated that value as fatal on the stated grounds
     that it "would recur on every remaining task". A 500 is the
     counterexample.
+
+    **This test used to assert `attempts == 2` and was named "costs an
+    attempt".** OPEN-46 §6 option C changed that half deliberately on
+    2026-09-01: the run not ending is OPEN-33's finding and still holds; the
+    attempt being spent was incidental to it and was the thing that cost
+    run14's t8 its whole budget. Both halves are asserted below so a future
+    change cannot trade one for the other.
     """
     results = [
         SubagentResult(name="coder", text="", ok=False, error="Error code: 500 - internal"),
@@ -201,8 +208,12 @@ async def test_one_transient_error_costs_an_attempt_and_not_the_run(monkeypatch,
     monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
     outcome, task, _ = await run_one(context)
 
+    # OPEN-33's half: the 500 did not end the run.
     assert outcome is Outcome.DONE
-    assert task.attempts == 2, "the errored attempt is spent, not fatal"
+    assert task.status is TaskStatus.DONE
+    # OPEN-46 §6 option C's half: the coder never ran, so the task had ONE try.
+    assert task.attempts == 1, "an invocation the provider never served is not a try"
+    assert task.run_errors == ("the coder could not run: Error code: 500 - internal",)
 
 
 async def test_errors_separated_by_a_success_do_not_accumulate(monkeypatch, context):
@@ -1076,3 +1087,107 @@ async def test_a_tester_that_ran_records_no_run_error(monkeypatch, context):
     monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
     _, task, _ = await run_one(context)
     assert task.run_errors == ()
+
+
+# --- OPEN-46 §6 option C: an invocation the provider never served ----------
+# is not a try the TASK had. run14's t8 spent all three of its attempts on a
+# coder that never ran once -- "after 4 attempt(s): NotFoundError (404).
+# Nothing was written." -- and the task was lost to a provider outage rather
+# than to anything about the work. The retry budget is for a coder that
+# produced a turn and got it wrong.
+
+
+async def test_a_provider_failure_does_not_spend_a_task_attempt(monkeypatch, context):
+    """The whole of option C. The coder never produced a turn, so the task
+    has not had a try yet and must not be charged for one."""
+    calls = {"n": 0}
+
+    async def flaky(name, prompt, *, context, thread_id=None):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return SubagentResult(name=name, text="", ok=False, error="provider gave up")
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", flaky)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    # Three dispatches, two of them never served. The task had ONE try.
+    assert calls["n"] == 3
+    assert task.attempts == 1
+    # And both failures are still on the record -- C removes the charge, not
+    # the evidence (OPEN-46 §5).
+    assert len(task.run_errors) == 2
+
+
+async def test_the_run_error_ceiling_still_bounds_the_loop(monkeypatch, context):
+    """Not counting the attempt must not make the loop unbounded. The ceiling
+    that stops it is MAX_CONSECUTIVE_RUN_ERRORS, which already existed --
+    which is why option C is small."""
+
+    async def broken(name, prompt, *, context, thread_id=None):
+        return SubagentResult(name=name, text="", ok=False, error="provider gave up")
+
+    monkeypatch.setattr(engine, "run_subagent", broken)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.STOP_RUN
+    assert len(task.run_errors) == engine.MAX_CONSECUTIVE_RUN_ERRORS
+    # Zero, not three: the coder never ran, so the task never tried.
+    assert task.attempts == 0
+
+
+async def test_a_task_stopped_by_a_dead_provider_resumes_with_its_budget(monkeypatch, context):
+    """The knock-on, and it is the point. `_stop` leaves a STOP_RUN task
+    PENDING so `--continue` picks it up (A1.93). Before C it came back having
+    already burned its attempts on an endpoint that never answered."""
+
+    async def broken(name, prompt, *, context, thread_id=None):
+        return SubagentResult(name=name, text="", ok=False, error="provider gave up")
+
+    monkeypatch.setattr(engine, "run_subagent", broken)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    _, task, _ = await run_one(context)
+
+    assert task.status is TaskStatus.PENDING
+    assert task.attempts < context.cfg.agent.max_fix_attempts
+
+
+async def test_a_real_attempt_is_still_charged(monkeypatch, context):
+    """The other half. A coder that RAN and got it wrong spends its attempt;
+    C must not turn the fix loop into an unbounded one.
+
+    Two and not `max_fix_attempts`: the same gate failure twice in a row is
+    the no-progress rule (C6.5a), which stops sooner than the budget does.
+    That it stops there at all is what says the attempt was charged."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report())
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.attempts == 2
+
+
+async def test_two_unserved_dispatches_never_share_a_thread(monkeypatch, context):
+    """A thread id keyed on `task.attempts` alone would REPEAT once the
+    attempt stops being spent, and the checkpointer would resume whatever
+    partial state the failed invocation left. The dispatch counter is what
+    keeps them apart."""
+    seen: list[str] = []
+    calls = {"n": 0}
+
+    async def flaky(name, prompt, *, context, thread_id=None):
+        calls["n"] += 1
+        if name == "coder":
+            seen.append(thread_id)
+        if calls["n"] <= 2:
+            return SubagentResult(name=name, text="", ok=False, error="provider gave up")
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", flaky)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    await run_one(context)
+
+    assert len(seen) == 3
+    assert len(set(seen)) == 3, f"thread ids repeated: {seen}"

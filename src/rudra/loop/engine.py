@@ -457,7 +457,15 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         ledger.save(context.paths.ledger_json)
         return outcome
 
+    # Every coder invocation this task makes, served or not. `task.attempts`
+    # counts only the ones that RAN (OPEN-46 §6 option C), so it can stay the
+    # same across two dispatches -- and a thread id keyed on it alone would
+    # then repeat, handing the second invocation whatever partial state the
+    # first one left in the checkpointer. This counter never goes backwards.
+    dispatch = 0
+
     while task.attempts < context.cfg.agent.max_fix_attempts:
+        dispatch += 1
         task.attempts += 1
         task.status = TaskStatus.IN_PROGRESS
         ledger.save(context.paths.ledger_json)
@@ -467,7 +475,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             "coder",
             _coder_prompt(task, blocker_text),
             context=context.subagents,
-            thread_id=f"{context.subagents.session_id}-{task.id}-a{task.attempts}",
+            thread_id=f"{context.subagents.session_id}-{task.id}-a{task.attempts}-{dispatch}",
         )
 
         if result.error:
@@ -487,6 +495,28 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # Durably first, then in `note` -- which does not survive this
             # task finishing (OPEN-46). One sentence, written once.
             task.note = _record_run_error(task, "coder", result.error)
+            # Give the attempt back (OPEN-46 §6, option C, chosen by the owner
+            # 2026-09-01). The retry budget is for a coder that produced a turn
+            # and got it wrong; this one never ran, so the task has not had a
+            # try and must not be charged for one. run14's t8 was lost exactly
+            # here -- "after 4 attempt(s): NotFoundError (404). Nothing was
+            # written." spent all three attempts on an endpoint that served no
+            # call, and the task that would have done the work was never
+            # attempted.
+            #
+            # This does NOT make the loop unbounded, and the bound is the one
+            # already above: MAX_CONSECUTIVE_RUN_ERRORS ends the RUN after
+            # three in a row, and any served invocation resets it. Uncharging
+            # the attempt is why option C is small -- §6 sized it as "the
+            # largest change" before §5 built the counter and the record it
+            # needs.
+            #
+            # The decrement happens BEFORE the ceiling returns, so a task the
+            # run stops on reports the tries it actually had. `_stop` leaves it
+            # PENDING (A1.93), so `--continue` resumes it with its budget
+            # intact rather than with three attempts already spent on a dead
+            # provider.
+            task.attempts -= 1
             if context.run_errors >= MAX_CONSECUTIVE_RUN_ERRORS:
                 return _stop(Outcome.STOP_RUN)
             ledger.save(context.paths.ledger_json)
