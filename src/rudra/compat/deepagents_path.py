@@ -39,12 +39,11 @@ NORMALIZATION LAYERS
    a. Strip actual project root prefix (matches real machine path)
    b. Strip known sandbox prefix (/testbed/, /workspace/, etc.)
    c. Plan-aware suffix matching against PLAN.md filenames
-   d. Last resort: bogus-dir-aware basename stripping, and ONLY for a path
-      whose leading component is itself a bogus dir (``/home/...``,
-      ``/var/...``).  A path that reaches (d) without that shape is left
-      alone: it is far likelier to be a real project layout than a
-      hallucination, and trimming it wrote files to the wrong place in
-      silence (OPEN-12).
+   d. Nothing left to match against: return the path AS WRITTEN.  This
+      step used to trim a container-shaped path down to its last two
+      components; it no longer does anything (OPEN-12, then OPEN-82).
+      There is no layer (e), and adding one that rewrites silently is
+      how both of those were filed.
 
    (a) precedes (b) deliberately — see the ordering note in ``_normalize``.
 
@@ -70,6 +69,21 @@ Under virtual-root semantics the layer rescues nothing by default.
 which does not exist -- so the model gets an error naming the path it asked
 for and can correct itself, instead of a silent rewrite naming one it did
 not.
+
+THAT PROMISE NOW HOLDS FOR THE WHOLE MODULE (OPEN-82)
+-----------------------------------------------------
+The paragraph above was written about layer (b) alone, and for six months
+layer (d) did the same thing ungated one step below it.  It is gone.  Every
+rewrite that remains matches against something knowable and true for this
+machine -- the real project root (a), a prefix the user opted into (b), a
+filename the planner wrote down (c) -- and a path matching none of them is
+returned exactly as the caller passed it.
+
+The rule to carry when touching this file: **a path this module cannot
+verify, it must not rewrite.**  Guessing is not free.  It costs a silently
+misplaced write when it guesses wrong, and the error message downstream is
+built from the guess, so the caller is told a path it never wrote does not
+exist and has nothing to correct.
 """
 
 from __future__ import annotations
@@ -77,7 +91,7 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional, Sequence
 
-from rudra.compat.path_constants import BOGUS_DIRS, SANDBOX_PREFIXES
+from rudra.compat.path_constants import SANDBOX_PREFIXES
 
 _ORIGINAL_KEY = "_rudra_original_validate_path"
 
@@ -270,34 +284,50 @@ def install_path_normalizer(
             if match is not None:
                 return original(match, allowed_prefixes=allowed_prefixes)
 
-        # Step 2d: Last resort — strip "/", and trim only a path that is
-        # SHAPED like a container's own directory tree.
+        # Step 2d: nothing matched -- return the path AS WRITTEN.
         #
-        # The trimming below used to run on every absolute path deeper than
-        # three components, which is not a hallucination signal -- it is an
-        # ordinary project layout. `/todoapp/src/models/todo.py` came back as
-        # `/models/todo.py` and `/.rudra/run/transcripts/x.jsonl` as
-        # `/transcripts/x.jsonl`: the write succeeded, at the wrong path, with
-        # nothing reporting a discrepancy, and the approval panel had already
-        # previewed the untrimmed one (OPEN-12).
+        # Every earlier step matches against something knowable: the real
+        # root (2a), a listed sandbox prefix (2b), PLAN.md (2c). Reaching
+        # here means none of them did, and there is no fourth thing to
+        # match against. Under `virtual_mode=True` the unrewritten answer
+        # is already correct-by-construction --
+        # `/home/user/Rudra/pytest.ini` means
+        # `<project>/home/user/Rudra/pytest.ini`, which does not exist --
+        # so the model gets an error naming its own string and can correct
+        # itself. That is this module's stated design (see the docstring),
+        # applied to the one step that used to break it.
         #
-        # Every earlier step matches against something knowable -- the real
-        # root (2a), a listed sandbox prefix (2b), PLAN.md (2c). This one
-        # matched against nothing, so the leading component now has to be a
-        # directory a container owns and a project root is not: `/home/...`,
-        # `/var/...`, `/workspace/...`. Anything else is returned as written,
-        # which deepagents reads as project-relative -- the correct answer,
-        # and the one `virtual_mode=True` is built on.
-        path = pp.relative_to("/").as_posix()
-        path_parts = path.split("/")
-        if len(path_parts) > 3 and path_parts[0] in BOGUS_DIRS:
-            second_to_last = path_parts[-2]
-            if second_to_last in BOGUS_DIRS:
-                path = path_parts[-1]
-            else:
-                path = "/".join(path_parts[-2:])
-
-        return original(path, allowed_prefixes=allowed_prefixes)
+        # There WAS a rewrite here: a path deeper than three components
+        # whose leading component was a container-owned directory kept only
+        # its last two. It is gone (OPEN-82), and this is the second time
+        # this branch has been cut back:
+        #
+        # * OPEN-12 found it running on EVERY deep absolute path.
+        #   `/todoapp/src/models/todo.py` came back as `/models/todo.py`,
+        #   `/.rudra/run/transcripts/x.jsonl` as `/transcripts/x.jsonl`:
+        #   the write succeeded, at the wrong path, with nothing reporting
+        #   a discrepancy and the approval panel having previewed the
+        #   untrimmed one. The fix narrowed it to container-shaped paths.
+        # * OPEN-82 found that narrowing to be the whole problem. A
+        #   hallucinating model PRODUCES container-shaped paths, so the
+        #   guard aimed the silent rewrite at exactly the population that
+        #   reaches it. Run `689f0ea263be`'s coder asked for
+        #   `/home/user/Rudra/src/config/settings.py` thirteen times and
+        #   was told `/config/settings.py` does not exist -- a path in no
+        #   argument it ever wrote, so it could only guess, never read.
+        #
+        # What this gives up, stated so it is not re-litigated: the trim
+        # did sometimes RESCUE a hallucination (`/home/user/proj/main.py`
+        # -> `/main.py` can hit). It was a coin flip that cost a silent
+        # misplaced write when it lost. The cause is addressed where it
+        # belongs instead -- by telling the writer subagents where the
+        # project actually is (OPEN-81) -- not by guessing here.
+        #
+        # Do NOT reintroduce a heuristic in this position. If a future one
+        # is genuinely wanted, it must announce itself through
+        # `TraceSink.notice` (CLAUDE.md §3): a rewrite the user cannot see
+        # is the thing OPEN-12 was filed on.
+        return original(pp.relative_to("/").as_posix(), allowed_prefixes=allowed_prefixes)
 
     _utils.validate_path = _normalize
     _fs_mw.validate_path = _normalize

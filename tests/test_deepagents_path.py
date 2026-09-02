@@ -39,6 +39,7 @@ def normalizer(tmp_path: Path):
         plan_lines: str | None = None,
         root: Path | None = None,
         strip_sandbox: bool = False,
+        route_prefixes: tuple[str, ...] = (),
     ):
         plan_path = None
         if plan_lines is not None:
@@ -48,6 +49,7 @@ def normalizer(tmp_path: Path):
         install_path_normalizer(
             (root or tmp_path).resolve(),
             plan_path=plan_path,
+            route_prefixes=route_prefixes,
             strip_sandbox_prefixes=strip_sandbox,
         )
         return utils.validate_path
@@ -172,15 +174,107 @@ def test_plan_matching_is_language_agnostic(normalizer):
     assert validate("/home/user/repos/myproj/Cargo.toml") == "/Cargo.toml"
 
 
-def test_a_container_shaped_deep_path_keeps_only_the_last_two_segments(normalizer):
-    """Last resort: avoid materialising deep hallucinated directory trees.
+# The six paths run 689f0ea263be's coder actually asked for, and the six
+# distinct error strings it got back. Before OPEN-82 the right-hand column
+# was what `validate_path` returned, so deepagents' "not found" error named
+# a path appearing in no argument the model ever wrote:
+#
+#   /home/user/Rudra/pytest.ini              -> /Rudra/pytest.ini
+#   /home/user/Rudra/requirements.txt        -> /Rudra/requirements.txt
+#   /home/user/Rudra/src/database/session.py -> /database/session.py
+#   /home/user/Rudra/src/config/settings.py  -> /config/settings.py
+#   /home/user/Rudra/src/models/models.py    -> /models/models.py
+#   /home/user/Rudra/src/config/__init__.py  -> /config/__init__.py
+#
+# All six are byte-identical to the errors in
+# `debug-689f0ea263be.jsonl`; 13 calls hit them, ~1,330 s at that run's
+# 51 s/call, and not one was recoverable because the model was never told
+# what it got wrong.
+_RUN_689F_HALLUCINATIONS = [
+    "/home/user/Rudra/pytest.ini",
+    "/home/user/Rudra/requirements.txt",
+    "/home/user/Rudra/src/database/session.py",
+    "/home/user/Rudra/src/config/settings.py",
+    "/home/user/Rudra/src/models/models.py",
+    "/home/user/Rudra/src/config/__init__.py",
+]
 
-    Narrowed by OPEN-12 to paths whose LEADING component is a directory a
-    container owns. `/home` qualifies; a project's own top-level name does
-    not, which is the case below.
+
+@pytest.mark.parametrize("path", _RUN_689F_HALLUCINATIONS)
+def test_a_hallucinated_path_is_reported_as_the_model_wrote_it(normalizer, path: str):
+    """OPEN-82: the error must name the path the caller passed.
+
+    This is the module docstring's own promise -- "the model gets an error
+    naming the path it asked for and can correct itself, instead of a
+    silent rewrite naming one it did not" -- applied to the one step that
+    did not keep it. Under `virtual_mode=True` an unrescued absolute path
+    is already correct-by-construction: it means `<project>/home/user/...`,
+    which does not exist, so the miss is honest and self-describing.
     """
     validate = normalizer()
-    assert validate("/home/someone/proj/e.py") == "/proj/e.py"
+    assert validate(path) == path
+
+
+def test_a_hallucinated_write_does_not_land_at_a_path_nobody_named(normalizer, tmp_path: Path):
+    """OPEN-82 / OPEN-12: the test that would have caught both, and did not exist.
+
+    Reads through the old trim were merely wasteful. A WRITE through it
+    succeeded, at a path the model never wrote and the user never saw --
+    the approval panel previews the resolved path, so there was no
+    discrepancy left to show by then.
+
+    Composed exactly as `deepagents.middleware.filesystem` composes it:
+    `validate_path(file_path)` then `backend.write(validated, ...)`
+    (`sync_write_file`, 0.7.4). Not a mock of the seam -- the seam.
+    """
+    from deepagents.backends.filesystem import FilesystemBackend
+
+    root = tmp_path / "project"
+    # The real layout the run had, so the decoy below is a plausible
+    # sibling rather than an empty directory.
+    (root / "src" / "models").mkdir(parents=True)
+    (root / "src" / "models" / "models.py").write_text("# real", encoding="utf-8")
+
+    validate = normalizer(root=root)
+    backend = FilesystemBackend(root_dir=str(root.resolve()), virtual_mode=True)
+
+    asked = "/home/user/Rudra/src/models/todo.py"
+    backend.write(validate(asked), "# written by the coder")
+
+    # The old branch put this here, beside the real src/models/, and said
+    # it had succeeded.
+    assert not (root / "models" / "todo.py").exists()
+    # It lands where the model named it: visible, greppable, and the same
+    # path the gate previewed and the error would report.
+    assert (root / "home" / "user" / "Rudra" / "src" / "models" / "todo.py").exists()
+
+
+def test_a_container_shaped_deep_path_is_no_longer_trimmed(normalizer):
+    """OPEN-82: depth plus a container-shaped leading component is not consent.
+
+    OPEN-12 narrowed this branch to paths whose leading component is a
+    directory a container owns, on the theory that the shape identified a
+    hallucination. It does -- and that is the objection: a hallucinating
+    model produces container-shaped paths, so the guard narrowed the
+    silent rewrite to exactly the population that reaches it.
+    """
+    validate = normalizer()
+    assert validate("/home/someone/proj/e.py") == "/home/someone/proj/e.py"
+
+
+@pytest.mark.parametrize(
+    "route_path",
+    [
+        "/artifacts/large_tool_results/abc123.txt",
+        "/skills/active/brainstorming/SKILL.md",
+    ],
+)
+def test_backend_routes_are_returned_untouched(normalizer, route_path: str):
+    """Step 0, A1.79: a CompositeBackend route is a real mount the model was
+    TOLD about, not a hallucination. It is returned before any rewriting can
+    reach it, and stays so."""
+    validate = normalizer(route_prefixes=("/artifacts/", "/skills/"))
+    assert validate(route_path) == route_path
 
 
 @pytest.mark.parametrize(
@@ -229,10 +323,13 @@ def test_a_symlinked_root_matches_the_path_the_user_typed(normalizer, tmp_path: 
     Built with a real symlink so it fails on Linux too, rather than leaning
     on a platform quirk to expose it.
 
-    The path is deliberately three levels deep. Step 2d's last-resort
-    heuristic keeps the final two components, so a shallower path would
-    yield the right answer by accident and the test would pass without the
-    root strip ever running.
+    The path is three levels deep for a reason that OPEN-82 retired: Step
+    2d used to keep the final two components, so a shallower path yielded
+    the right answer by accident and this test passed without the root
+    strip ever running. Step 2d no longer rewrites anything, so the depth
+    is now belt-and-braces -- a missed root strip returns the full host
+    path and fails here at any depth. Kept because it costs nothing and
+    the failure it guards against is a silent one.
     """
     real = tmp_path / "real_root"
     real.mkdir()
