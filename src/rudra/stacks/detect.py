@@ -13,6 +13,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from rudra.compat.own_interpreter import is_own_interpreter, search_path_without_own
 from rudra.stacks.profile import (
     MISSING_TOOL,
     NOT_APPLICABLE,
@@ -210,7 +211,7 @@ def _declares_pytest(project_path: Path) -> bool:
 
 
 def _system_interpreter() -> str:
-    """A python that actually exists on PATH.
+    """A python that actually exists on PATH, and that is not Rudra's own.
 
     `python` is not a safe name to emit. macOS has shipped no bare `python`
     since it dropped system Python 2, and on Linux it is a distribution
@@ -219,15 +220,37 @@ def _system_interpreter() -> str:
     Emitting it anyway would repeat A1.33(b) one level down: naming an
     executable and assuming PATH resolves it.
 
-    Deliberately NOT `sys.executable`. D18 forbids conflating Rudra's own
-    interpreter with the target project's, and the venv branches above
-    already handle a project that brought its own. Falls back to "python3"
-    so the argv is still reportable when neither is found -- `run_tests`
-    then surfaces a launch_error, which is the honest answer.
+    **PATH is searched PAST Rudra's own bin directory, not merely checked
+    against it (OPEN-80).** This docstring used to say "Deliberately NOT
+    `sys.executable`. D18 forbids conflating Rudra's own interpreter with
+    the target project's, and the venv branches above already handle a
+    project that brought its own" -- and then called `shutil.which("python3")`.
+    Rudra runs from its own virtualenv, so that directory is FIRST on PATH:
+    the answer was `sys.executable` by another route, and the second half of
+    that sentence is the assumption that fails, because a project which
+    brought NOTHING falls through to here.
+
+    Rejecting the match is not enough for the same reason. `shutil.which`
+    returns the first hit and stops, so on the very machine the defect lives
+    on a rejecting check would leave this with nothing to find. The search
+    is re-run over a PATH that does not contain Rudra
+    (`compat/own_interpreter.py`, one definition shared with
+    `permissions/env.py`).
+
+    Returns an ABSOLUTE path when it finds one. The bare name is what hid
+    this: `verify.log` recorded `command: python3 -m pytest`, which is the
+    same string on a machine that ran the right interpreter and one that ran
+    Rudra's, so no log of run `689f0ea263be` could have been read as wrong.
+
+    Falls back to "python3" so the argv is still reportable when nothing is
+    found -- `run_tests` then surfaces a launch_error, which is the honest
+    answer and which blocks and escalates (verify/pipeline.py:634).
     """
+    search = search_path_without_own()
     for name in ("python3", "python"):
-        if shutil.which(name):
-            return name
+        found = shutil.which(name, path=search) if search else None
+        if found is not None and not is_own_interpreter(found):
+            return found
     return "python3"
 
 

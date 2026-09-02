@@ -7,6 +7,8 @@ venv, nvm, rustup, and pyenv toolchain is invisible.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -82,3 +84,55 @@ def test_the_result_is_a_copy_not_the_live_environment(tmp_path):
     env = scrubbed_env(build_config(tmp_path))
     env["ADDED_BY_TEST"] = "x"
     assert "ADDED_BY_TEST" not in os.environ
+
+
+# --- OPEN-80: the child must not inherit RUDRA's Python -------------------
+#
+# `shutil.which("python3")` inside an agent's shell resolved to Rudra's own
+# interpreter, because Rudra runs from its own virtualenv and puts that bin
+# directory first on PATH. `pip install` did too, permanently: nine
+# distributions from an August Flask run were still in Rudra's `.venv` on
+# 2026-09-02, every one recording `pip` as its installer against a lock file
+# that names none of them.
+#
+# The rule is narrow on purpose. This is not a sandbox and A1.44 is still in
+# force: every other venv, nvm, rustup and pyenv path survives, because
+# removing them is what made the toolchain invisible in the first place.
+# Exactly one environment is taken away -- Rudra's own.
+
+
+def _rudra_bin() -> str:
+    return str(Path(sys.executable).parent)
+
+
+def test_rudras_own_bin_is_removed_from_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", os.pathsep.join([_rudra_bin(), "/usr/local/bin", "/usr/bin"]))
+    path = scrubbed_env(build_config(tmp_path))["PATH"].split(os.pathsep)
+    assert _rudra_bin() not in path
+    assert path == ["/usr/local/bin", "/usr/bin"]
+
+
+def test_every_other_path_entry_survives(tmp_path, monkeypatch):
+    """A1.44: this is a real-toolchains-work default, not a sandbox."""
+    entries = ["/opt/homebrew/bin", "/some/project/.venv/bin", "/usr/bin"]
+    monkeypatch.setenv("PATH", os.pathsep.join(entries))
+    assert scrubbed_env(build_config(tmp_path))["PATH"].split(os.pathsep) == entries
+
+
+def test_virtual_env_is_dropped_when_it_names_rudras_own(tmp_path, monkeypatch):
+    """`pip` reads VIRTUAL_ENV, so leaving it is leaving the install target."""
+    monkeypatch.setenv("VIRTUAL_ENV", str(Path(sys.executable).parent.parent))
+    assert "VIRTUAL_ENV" not in scrubbed_env(build_config(tmp_path))
+
+
+def test_virtual_env_survives_when_it_names_someone_elses(tmp_path, monkeypatch):
+    """The user's own project venv is exactly what A1.44 exists to keep."""
+    monkeypatch.setenv("VIRTUAL_ENV", str(tmp_path / "project" / ".venv"))
+    assert "VIRTUAL_ENV" in scrubbed_env(build_config(tmp_path))
+
+
+def test_a_path_entry_spelled_differently_is_still_removed(tmp_path, monkeypatch):
+    """Both spellings are compared, for A1.58's reason: on macOS a path behind
+    a symlink and its resolved form differ, and a miss reads as 'not Rudra'."""
+    monkeypatch.setenv("PATH", os.pathsep.join([_rudra_bin() + "/.", "/usr/bin"]))
+    assert scrubbed_env(build_config(tmp_path))["PATH"] == "/usr/bin"

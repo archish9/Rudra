@@ -98,6 +98,44 @@ def _collected_nothing(stack: str | None, exit_code: int | None, total: int | No
     return total == 0
 
 
+def _runner_not_importable(argv: tuple[str, ...] | None, stderr: str) -> str | None:
+    """`<python> -m <runner>` where <runner> is not installed, or None.
+
+    Reachable only since OPEN-80. Before it the test command always ran under
+    Rudra's own interpreter, which always has pytest; it now runs under one of
+    the user's, which may not.
+
+    Without this the case lands in `_collected_nothing` -- `total` is None
+    because there is no output to parse, the exit code is non-zero, so it
+    reads as "collected nothing" and `test_stage` tells the coder to look for
+    a missing `__init__.py`. An environment problem reported as a code
+    problem, which is the class that function's own docstring says it exists
+    to prevent, and OPEN-80's defect one layer down.
+
+    **Matched against the runner's OWN name, not against the shape of the
+    message.** A project whose own dependency is missing produces
+    `ModuleNotFoundError: No module named 'greenlet'` from inside a test, and
+    that is a real failure the fix loop must see -- it is the exact output
+    run `689f0ea263be` could not act on, and reclassifying it as a broken
+    runner would hide it again. The two are told apart by WHICH module is
+    named: only the one this command asked Python to run counts.
+    """
+    if not argv or "-m" not in argv:
+        return None
+    index = argv.index("-m")
+    if index + 1 >= len(argv):
+        return None
+    module = argv[index + 1]
+    if f"No module named {module}" not in stderr:
+        return None
+    return (
+        f"{argv[0]} has no {module} installed, so no test ran. "
+        f"Install it into the interpreter this project uses, or create a "
+        f"virtualenv in the project -- Rudra will not fall back to its own "
+        f"(D18)."
+    )
+
+
 def _tail(text: str, limit: int = MAX_TAIL_CHARS) -> str:
     if len(text) <= limit:
         return text
@@ -180,6 +218,16 @@ def run_tests(
             command=result.argv,
             stack=stack,
             launch_error=result.stderr.strip() or "the test command could not be started",
+            output_tail=_tail(combined),
+        )
+
+    unimportable = _runner_not_importable(result.argv, result.stderr)
+    if unimportable is not None:
+        return TestResult(
+            available=True,
+            command=result.argv,
+            stack=stack,
+            launch_error=unimportable,
             output_tail=_tail(combined),
         )
 

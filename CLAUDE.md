@@ -290,13 +290,24 @@ src/rudra/
 │                           order, not documentation (OPEN-17). Bodies are never
 │                           touched, and a test holds that line
 └── compat/                 monkeypatches + version guard into deepagents
-                            internals, and virtual_paths.py — the ONE
-                            function that says which real file a
-                            model-written path names, shared by the gate,
-                            the approval preview and the backend so they
-                            cannot disagree (CR-B4). Cross-platform by
+                            internals, and TWO shared facts about the
+                            machine, each with one definition and several
+                            consumers. virtual_paths.py says which real
+                            file a model-written path names, shared by the
+                            gate, the approval preview and the backend so
+                            they cannot disagree (CR-B4). Cross-platform by
                             shape, not by host OS: `C:\...`, UNC, `\x`
-                            and `/x` all resolve on every platform
+                            and `/x` all resolve on every platform.
+                            own_interpreter.py says which Python is RUDRA's
+                            own (OPEN-80), shared by stacks/detect.py —
+                            which must never pick it for the user's tests
+                            (D18) — and permissions/env.py, which must keep
+                            it out of the environment an agent's shell runs
+                            in, or `pip install` installs into Rudra. Inert
+                            unless `sys.prefix != sys.base_prefix`: a
+                            distribution-packaged Rudra's "own bin" is
+                            /usr/bin, and stripping that breaks the machine
+                            rather than protecting it
 ```
 
 **Permission flow (Step 7).** `build_gate(cfg, project_path)` returns a `Gate`

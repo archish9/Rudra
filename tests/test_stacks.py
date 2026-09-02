@@ -10,15 +10,24 @@ executes a subprocess; running the commands it reports belongs to C3.6.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
+import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 
+from rudra.compat.own_interpreter import (
+    is_own_interpreter,
+    path_without_own,
+    running_in_own_virtualenv,
+    search_path_without_own,
+)
 from rudra.stacks import ALL_SKIP_DIRS, PROFILES, detect, resolve_test_command
-from rudra.stacks.detect import _python_test_command
+from rudra.stacks.detect import _python_test_command, _system_interpreter
 
 
 def test_profile_is_immutable():
@@ -390,9 +399,124 @@ def test_an_indented_def_test_is_not_a_module_level_function(tmp_path: Path):
 
 
 def test_venv_resolution_never_reads_rudras_own_venv(tmp_path: Path):
-    """D18: Rudra being a Python project and the target being one must not be conflated."""
+    """D18: Rudra being a Python project and the target being one must not be conflated.
+
+    **The substring check alone was blind, which is OPEN-80.** `_system_interpreter`
+    returned the bare name `python3`, which contains no "Rudra" and passed this
+    assertion while resolving -- through `PATH`, because Rudra runs from its own
+    virtualenv -- to exactly the interpreter D18 forbids. Run `689f0ea263be` ran a
+    user's suite under `<rudra>/.venv/bin/python3` with this test green.
+
+    So the argv is now resolved the way a shell would resolve it before it is
+    judged. A bare name that finds Rudra's interpreter fails here.
+    """
     command = resolve_test_command(_python_project(tmp_path), _python())
     assert "Rudra" not in " ".join(command)
+    assert not _resolves_into_rudras_venv(command[0]), command
+
+
+def _resolves_into_rudras_venv(argv0: str) -> bool:
+    """Would a shell running `argv0` reach Rudra's own interpreter?
+
+    Both spellings of Rudra's bin directory are compared -- as `sys.executable`
+    gives it and as it resolves -- for the reason `virtual_paths` compares two
+    spellings of the project root: on macOS the two differ whenever the path
+    sits behind a symlink, and a miss reads as "not Rudra" (A1.58).
+
+    The candidate's own parent is compared, never where the candidate RESOLVES
+    to: a venv's `python3` is usually a symlink to the base interpreter it was
+    built from, so following it lands in `/usr/bin` and reports Rudra's own
+    binary as somebody else's.
+    """
+    found = shutil.which(argv0)
+    if found is None:
+        return False
+    own = {Path(sys.executable).parent.as_posix()}
+    with contextlib.suppress(OSError, RuntimeError):
+        own.add(Path(sys.executable).parent.resolve().as_posix())
+    parent = Path(found).parent
+    spellings = {parent.as_posix()}
+    with contextlib.suppress(OSError, RuntimeError):
+        spellings.add(parent.resolve().as_posix())
+    return bool(spellings & own)
+
+
+def test_system_interpreter_is_an_absolute_path(tmp_path: Path):
+    """OPEN-80: `verify.log` recorded `command: python3 -m pytest`, and that
+    string is the same on a machine that ran the right interpreter and one that
+    ran Rudra's. The log has to say which."""
+    command = resolve_test_command(_python_project(tmp_path), _python())
+    assert Path(command[0]).is_absolute(), command
+
+
+def test_system_interpreter_skips_rudras_bin_and_keeps_searching(tmp_path: Path, monkeypatch):
+    """Rejecting is not enough -- `PATH` must be searched PAST Rudra's entry.
+
+    Rudra runs from its own virtualenv, so its bin directory is FIRST on `PATH`
+    and `shutil.which` returns it and stops. A check that only rejects would
+    leave the fallback with nothing to find on the very machine the defect
+    lives on.
+    """
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    real = elsewhere / "python3"
+    real.write_text("#!/bin/sh\n", encoding="utf-8")
+    real.chmod(0o755)
+
+    rudra_bin = Path(sys.executable).parent
+    monkeypatch.setenv("PATH", os.pathsep.join([str(rudra_bin), str(elsewhere)]))
+
+    assert _system_interpreter() == str(real)
+
+
+def test_the_fallback_cannot_reach_rudra_through_the_env_it_will_run_in(monkeypatch):
+    """PATH holds Rudra's bin and nothing else: what does the fallback mean?
+
+    It stays the bare name `python3` -- A1.56 wants the argv reportable so
+    `run_tests` can surface a launch_error rather than a blank. The bare name
+    is only safe because the OTHER half of OPEN-80 landed with this one: the
+    environment the command actually runs in is `scrubbed_env`, whose PATH no
+    longer contains Rudra either. So this asserts the property that matters --
+    resolved through the *execution* environment, the fallback reaches nothing.
+
+    Resolving it through the parent's own PATH, as an earlier version of this
+    test did, asks a question no command is ever asked.
+    """
+    monkeypatch.setenv("PATH", str(Path(sys.executable).parent))
+    result = _system_interpreter()
+    assert result == "python3", "A1.56: the argv stays reportable when nothing is found"
+    # The literal stripped string, NOT `... or None`: `shutil.which(path=None)`
+    # falls back to the ambient PATH, which is the one thing the child will not
+    # have. An earlier version of this line asked that question and reported
+    # Rudra's interpreter -- correctly, for a question no command is ever asked.
+    assert shutil.which(result, path=path_without_own(os.environ["PATH"])) is None
+
+
+def test_the_two_halves_agree_about_which_python_is_rudras():
+    """One definition, two consumers -- the `is_build_output` lesson (OPEN-64).
+
+    `stacks/detect.py` picks the interpreter and `permissions/env.py` builds the
+    environment it runs in. If those disagreed, a resolution that carefully
+    avoided Rudra could be executed with a PATH that finds it again, or a
+    correct interpreter could be made unreachable. Both call
+    `compat/own_interpreter.py`, and this is what says so.
+    """
+    resolved = _system_interpreter()
+    if resolved != "python3":
+        assert not is_own_interpreter(resolved), resolved
+    assert path_without_own(os.environ["PATH"]) != os.environ["PATH"] or not (
+        running_in_own_virtualenv()
+    )
+
+
+@pytest.mark.skipif(
+    not running_in_own_virtualenv(),
+    reason="nothing to strip: Rudra is not running from a virtualenv of its own",
+)
+def test_the_search_path_actually_loses_rudras_bin():
+    """The guard above is not decoration -- see `own_interpreter`'s docstring on
+    what an unguarded version does to a distribution-packaged install."""
+    assert str(Path(sys.executable).parent) not in (search_path_without_own() or "")
 
 
 def test_resolution_still_executes_nothing(tmp_path: Path, monkeypatch):

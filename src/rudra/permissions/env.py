@@ -21,6 +21,8 @@ import os
 import re
 from typing import TYPE_CHECKING
 
+from rudra.compat.own_interpreter import is_own_virtualenv, path_without_own
+
 if TYPE_CHECKING:  # pragma: no cover
     from rudra.config.loader import Config
 
@@ -30,13 +32,40 @@ SECRET_NAME_RE = re.compile(r"(_KEY|_KEY_ID|_TOKEN|_SECRET|_PASSWORD|_CREDENTIAL
 
 
 def scrubbed_env(cfg: Config) -> dict[str, str]:
-    """`os.environ` minus every secret-shaped or configured key variable."""
+    """`os.environ` minus every secret-shaped key, and minus Rudra's own venv.
+
+    The second subtraction is OPEN-80. Rudra runs from its own virtualenv, so
+    that directory is first on `PATH` and `VIRTUAL_ENV` names it -- which made
+    `python3`, `pip` and `pip install` inside an agent's shell mean *Rudra's*
+    interpreter and *Rudra's* site-packages. Nine distributions from an August
+    Flask run were still in Rudra's `.venv` on 2026-09-02, every one recording
+    `pip` as its installer against a lock file that names none of them.
+
+    **Exactly one environment is removed, and A1.44 is why it is only one.**
+    LocalShellBackend's default is an EMPTY environment, which made every
+    venv, nvm, rustup and pyenv toolchain invisible; this function exists to
+    undo that. So every other `PATH` entry survives in its original order and
+    spelling, and a `VIRTUAL_ENV` naming the *user's* project venv survives
+    too -- that one is exactly what A1.44 exists to keep.
+
+    Not a deny rule on `pip install`, deliberately. That would be
+    `_system_interpreter`'s own mistake one level up: naming a spelling
+    instead of removing the capability. `pip`, `python -m pip`, `uv pip`,
+    `pip3`, a `setup.py`, a `Makefile` target and a test that shells out all
+    reach the same place.
+    """
     configured = {model.api_key_env for model in cfg.models.values() if model.api_key_env}
-    return {
+    env = {
         name: value
         for name, value in os.environ.items()
         if name not in configured and not SECRET_NAME_RE.search(name)
     }
+
+    if "PATH" in env:
+        env["PATH"] = path_without_own(env["PATH"])
+    if "VIRTUAL_ENV" in env and is_own_virtualenv(env["VIRTUAL_ENV"]):
+        del env["VIRTUAL_ENV"]
+    return env
 
 
 __all__ = ["SECRET_NAME_RE", "scrubbed_env"]

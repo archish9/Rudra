@@ -243,3 +243,57 @@ def test_a_passing_unittest_suite_reports_its_count(tmp_path: Path, env: dict):
     assert result.passed is True
     assert result.total == 2
     assert result.failed == 0
+
+
+# --- OPEN-80: an interpreter that cannot run the runner -------------------
+#
+# Reachable only since OPEN-80. Before it, the test command always ran under
+# Rudra's own interpreter, which always has pytest; now it runs under one of
+# the user's, which may not.
+#
+# `_collected_nothing` reads an unparseable non-zero exit as "collected
+# nothing", and `test_stage` then tells the coder to look for a missing
+# `__init__.py`. That is an environment problem reported as a code problem --
+# which is the class `_collected_nothing`'s own docstring says it exists to
+# prevent, and OPEN-80's defect one layer down.
+
+
+def test_a_runner_the_interpreter_cannot_import_is_a_launch_error(tmp_path: Path, env: dict):
+    """`python3 -m pytest` with no pytest installed is not "no tests"."""
+    _python_project(tmp_path)
+    (tmp_path / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    result = run_tests(
+        tmp_path,
+        _command_override=[sys.executable, "-m", "definitely_not_installed_xyz"],
+        **env,
+    )
+    assert result.launch_error is not None, "the runner was never imported, so nothing ran"
+    assert "definitely_not_installed_xyz" in result.launch_error
+    assert result.no_tests_collected is False, (
+        "a suite that never ran collected nothing by omission"
+    )
+    assert result.passed is False
+
+
+def test_a_genuinely_empty_suite_is_still_not_a_launch_error(tmp_path: Path, env: dict):
+    """The guard above must not swallow A1.57 -- an empty suite stays empty."""
+    _python_project(tmp_path)
+    result = run_tests(tmp_path, **env)
+    assert result.launch_error is None
+    assert result.no_tests_collected is True
+
+
+def test_an_import_error_inside_a_test_is_not_a_launch_error(tmp_path: Path, env: dict):
+    """A project whose OWN dependency is missing is a real failure to report.
+
+    This is the case OPEN-80 exists to surface honestly: run `689f0ea263be`
+    saw `No module named 'greenlet'` and could not act on it. It must reach
+    the fix loop as a test failure, not be reclassified as a broken runner.
+    """
+    _python_project(tmp_path)
+    (tmp_path / "test_dep.py").write_text(
+        "def test_dep():\n    import definitely_not_installed_xyz\n", encoding="utf-8"
+    )
+    result = run_tests(tmp_path, **env)
+    assert result.launch_error is None, "the runner started fine; the project's import failed"
+    assert result.passed is False
