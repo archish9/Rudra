@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import time
 
 import pytest
 
@@ -34,7 +35,9 @@ def test_an_event_carries_its_namespace_as_a_tuple():
 
 
 def test_as_dict_is_json_writable():
-    event = TraceEvent(kind=TraceKind.AI_TEXT, role="planner", namespace=(), index=1, payload="hi")
+    event = TraceEvent(
+        kind=TraceKind.AI_TEXT, role="planner", namespace=(), index=1, payload="hi", ts=1.5
+    )
     assert json.loads(json.dumps(event.as_dict())) == {
         "kind": "ai_text",
         "role": "planner",
@@ -43,7 +46,19 @@ def test_as_dict_is_json_writable():
         "name": "",
         "payload": "hi",
         "at": 0.0,
+        "ts": 1.5,
     }
+
+
+def test_every_event_carries_a_wall_clock(monkeypatch):
+    """`at` restarts at zero on every planner stage, so it cannot place a
+    line in a day on its own (OPEN-77). Both are kept: `at` is what makes
+    a transcript replayable on another day."""
+    before = time.time()
+    event = TraceEvent(kind=TraceKind.USER, role="planner")
+
+    assert before <= event.ts <= time.time()
+    assert event.at == 0.0
 
 
 def test_events_are_frozen():

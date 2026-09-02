@@ -132,8 +132,14 @@ def console_consumer(console: Any, level: TraceLevel = TraceLevel.NORMAL) -> Con
     """
 
     def consume_event(event: TraceEvent) -> None:
-        for line in render(event, level=level):
-            console.print(line)
+        # Printed, not recorded: this text IS an event, and the debug log
+        # already holds it whole (OPEN-76). Recording the rendering too
+        # would store a wrapped, truncated copy of a complete record.
+        from rudra.trace.console_log import suppress_console_record
+
+        with suppress_console_record():
+            for line in render(event, level=level):
+                console.print(line)
 
     return consume_event
 

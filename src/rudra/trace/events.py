@@ -11,7 +11,8 @@ Imports nothing from Rudra. tests/test_trace_wiring.py pins that.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from typing import Any
 
@@ -61,6 +62,18 @@ class TraceEvent:
     `at` is seconds since the run started (monotonic), not a wall-clock
     timestamp: a trace is read as a sequence, and an offset stays
     meaningful when the run is replayed from a transcript on another day.
+
+    `ts` is the wall clock, and both are carried because they answer
+    different questions (OPEN-77). `at` restarts at zero on every planner
+    stage -- `trace/stream.py` builds a fresh state per stream -- so a line
+    reading `at: 63.9` cannot be placed in a day without knowing which
+    stage it belongs to and how long the two before it ran. Reconstructing
+    one run's timeline meant summing three stage durations against
+    `meta.json`'s `archived_at`, and that arithmetic only worked because
+    the machine did not sleep: OPEN-53 exists because a monotonic clock in
+    this project already disagreed with a user's stopwatch by 3645
+    seconds. The pair follows RunUsage's rule (context/usage.py) --
+    anything compared against a human's experience needs a wall clock.
     """
 
     kind: TraceKind
@@ -70,6 +83,7 @@ class TraceEvent:
     name: str = ""
     payload: str = ""
     at: float = 0.0
+    ts: float = field(default_factory=time.time)
 
     def as_dict(self) -> dict[str, Any]:
         """A JSON-writable snapshot. Lists, not tuples -- json has no tuple."""
@@ -81,6 +95,7 @@ class TraceEvent:
             "name": self.name,
             "payload": self.payload,
             "at": self.at,
+            "ts": self.ts,
         }
 
 

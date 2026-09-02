@@ -594,3 +594,132 @@ async def test_close_detaches_the_run_log_after_archiving(tmp_path: Path, home: 
     await agent.close()
 
     assert handler not in logging.getLogger(LOGGER_NAME).handlers
+
+
+# --- OPEN-78: what machine and what settings produced this run --------------
+
+
+def test_env_facts_records_the_settings_that_change_behaviour() -> None:
+    """`interactive` decides whether ask_user is registered at all and
+    whether the plan gate prompts. A run that behaved unlike the reader's
+    expectation usually differed here first."""
+    from types import SimpleNamespace
+
+    from rudra.state.archive import env_facts
+
+    cfg = SimpleNamespace(
+        agent=SimpleNamespace(verbose=True, debug_log=True, max_fix_attempts=3, max_questions=5),
+        permissions=SimpleNamespace(mode="ask"),
+        tools=SimpleNamespace(shell=True, shell_in_auto=False),
+    )
+    env = env_facts(cfg)
+
+    assert env["mode"] == "ask"
+    assert env["shell_in_auto"] is False
+    assert env["max_questions"] == 5
+    assert isinstance(env["interactive"], bool)
+
+
+def test_env_facts_records_the_versions_a_bug_report_needs() -> None:
+    from types import SimpleNamespace
+
+    from rudra.state.archive import env_facts
+
+    env = env_facts(SimpleNamespace())
+
+    assert env["python"].count(".") == 2
+    assert env["platform"]
+    assert env["deepagents"]  # pinned exactly in pyproject; absent would be a finding
+
+
+def test_env_facts_never_reaches_a_key() -> None:
+    """model_facts' rule, one block over: config.toml is not copied because
+    it may hold a literal api_key (OPEN-6), and neither is anything derived
+    from it beyond settings, versions and capabilities."""
+    from types import SimpleNamespace
+
+    from rudra.state.archive import env_facts
+
+    cfg = SimpleNamespace(
+        agent=SimpleNamespace(verbose=False),
+        permissions=SimpleNamespace(mode="auto"),
+        tools=SimpleNamespace(shell=True),
+        models={"planner": SimpleNamespace(api_key="sk-secret", model="m")},
+    )
+    assert "sk-secret" not in json.dumps(env_facts(cfg))
+
+
+def test_env_facts_survives_a_config_missing_every_section() -> None:
+    """Bookkeeping never ends a run, and a hand-built cfg is what several
+    tests pass."""
+    from types import SimpleNamespace
+
+    from rudra.state.archive import env_facts
+
+    assert env_facts(SimpleNamespace())["mode"] is None
+
+
+# --- OPEN-79: every end writes the tally, and facts travel with it ----------
+
+
+async def test_close_writes_the_usage_log_on_an_end_work_never_reached(
+    tmp_path: Path, home: Path
+) -> None:
+    """work() writes usage.json as its last statement, so a declined plan,
+    a dead planner stage and a crash wrote none -- the failure class a bug
+    report is about is the one class with no cost data."""
+    from types import SimpleNamespace
+
+    from rich.console import Console
+
+    from rudra.agent.main_agent import AgentContext, RudraAgent
+    from rudra.context.usage import RunUsage
+    from rudra.state.paths import rudra_paths
+
+    project = _project_with_evidence(tmp_path / "app")
+    paths = rudra_paths(project)
+    usage_json = Path(paths.logs) / "usage.json"
+    usage_json.unlink(missing_ok=True)
+
+    agent = RudraAgent(
+        context=AgentContext(project_path=project, task="t", console=Console(quiet=True)),
+        session_id="abc123def456",
+        db_conn=None,
+        loop_context=SimpleNamespace(usage=RunUsage(), paths=paths),
+        planner_callback=None,
+        ledger=None,
+    )
+    await agent.close()
+
+    assert "run" in json.loads(usage_json.read_text(encoding="utf-8"))
+
+
+async def test_a_hand_built_loop_context_does_not_break_close(tmp_path: Path, home: Path) -> None:
+    """Several tests pass `object()`. Bookkeeping never ends a run."""
+    from rich.console import Console
+
+    from rudra.agent.main_agent import AgentContext, RudraAgent
+
+    agent = RudraAgent(
+        context=AgentContext(
+            project_path=_project_with_evidence(tmp_path / "app"),
+            task="t",
+            console=Console(quiet=True),
+        ),
+        session_id="abc123def456",
+        db_conn=None,
+        loop_context=object(),
+        planner_callback=None,
+        ledger=None,
+    )
+    await agent.close()
+
+
+def test_facts_travel_with_the_archive(tmp_path: Path) -> None:
+    """What the planner settled is in every agent's prompt and goes with
+    the project when the project is deleted."""
+    from rudra.state.archive import _sources
+    from rudra.state.paths import rudra_paths
+
+    names = [name for _source, name in _sources(rudra_paths(tmp_path), "abc123def456")]
+    assert "facts.json" in names

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from rich.console import Console
 
 from rudra.loop.engine import summarise
@@ -158,13 +160,24 @@ def test_writing_the_usage_log_never_ends_a_run(tmp_path):
     write_usage_log(target, usage)  # must not raise
 
 
-def test_writing_the_usage_log_skips_an_empty_tally(tmp_path):
+def test_an_empty_tally_is_still_written(tmp_path):
+    """Reversed by OPEN-79. Skipping an empty tally predates OPEN-53's
+    `run` block; since that exists a run where no role made a call still
+    has a true wall clock and a `suspended_seconds` -- which is exactly
+    the number that answers "why did this take so long" for a run that
+    died before it called anything.
+
+    Nothing is written only when there is no tally at all."""
     from rudra.context.usage import RunUsage
     from rudra.loop.engine import write_usage_log
 
     target = tmp_path / "usage.json"
     write_usage_log(target, RunUsage())
-    assert not target.exists()
+    assert "run" in json.loads(target.read_text(encoding="utf-8"))
+
+    missing = tmp_path / "none.json"
+    write_usage_log(missing, None)
+    assert not missing.exists()
 
 
 # --- the two clocks reach the log and the trace (OPEN-53) -------------------

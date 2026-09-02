@@ -204,6 +204,71 @@ def model_facts(cfg: Any) -> dict[str, dict[str, Any]]:
     return facts
 
 
+def env_facts(cfg: Any) -> dict[str, Any]:
+    """What machine and what settings produced this run (OPEN-78).
+
+    `meta.json` recorded the models and nothing else, so a log folder could
+    not answer "which mode was this, was there a terminal, which versions"
+    without a conversation -- or without reading a `config.toml` that lives
+    outside the folder and that the user may have edited since. That is not
+    hypothetical: the runs this was filed on were read against a config
+    that had changed between them, and the only thing that caught it was an
+    incidental `built model role=planner spec=openai:qwen3:32b` line that
+    `llm/factory.py` happens to log.
+
+    `interactive` is here because it decides more than it looks: it is
+    whether `ask_user` is registered at all and whether the plan gate
+    prompts or auto-approves (`main_agent`, `interactive`). A run that
+    behaved unlike the reader's expectation usually differed here first.
+
+    Recording the platform is not a `sys.platform` branch and does not
+    conflict with CLAUDE.md 1.8 -- that rule is about behaviour branching
+    on the host. A bug report saying which host it came from is the
+    opposite: it is what makes a portability claim checkable at all.
+
+    `model_facts`'s rule holds here too: **never `config.toml` itself**,
+    which may carry a literal `api_key` (OPEN-6). Every value below is a
+    setting, a version or a capability -- no secret has a path into it.
+    """
+    import platform
+    import sys
+
+    agent = getattr(cfg, "agent", None)
+    permissions = getattr(cfg, "permissions", None)
+    tools = getattr(cfg, "tools", None)
+
+    try:
+        from rudra.permissions import stdin_is_interactive
+
+        interactive = bool(stdin_is_interactive())
+    except Exception:  # noqa: BLE001 -- bookkeeping never ends a run
+        interactive = None
+
+    return {
+        "mode": getattr(permissions, "mode", None),
+        "interactive": interactive,
+        "shell": getattr(tools, "shell", None),
+        "shell_in_auto": getattr(tools, "shell_in_auto", None),
+        "verbose": getattr(agent, "verbose", None),
+        "debug_log": getattr(agent, "debug_log", None),
+        "max_fix_attempts": getattr(agent, "max_fix_attempts", None),
+        "max_questions": getattr(agent, "max_questions", None),
+        "python": platform.python_version(),
+        "platform": f"{platform.system()} {platform.release()}",
+        "deepagents": _package_version("deepagents"),
+        "executable": sys.executable,
+    }
+
+
+def _package_version(name: str) -> str | None:
+    try:
+        from importlib.metadata import version
+
+        return version(name)
+    except Exception:  # noqa: BLE001 -- an absent package is a fact, not an error
+        return None
+
+
 def _sources(paths: Any, session_id: str) -> list[tuple[Path, str]]:
     """(file on disk, name in the archive) for every instrument, in read order.
 
@@ -216,6 +281,12 @@ def _sources(paths: Any, session_id: str) -> list[tuple[Path, str]]:
     return [
         (logs / "usage.json", "usage.json"),
         (Path(paths.ledger_json), "ledger.json"),
+        # Durable, unlike everything else here, and copied anyway (OPEN-79):
+        # it is what the planner SETTLED, it is in every agent's prompt, and
+        # it goes with the project when the project is deleted. A reader
+        # holding only the archive otherwise cannot tell what the run
+        # believed about the work.
+        (Path(paths.facts_json), "facts.json"),
         (logs / f"debug-{session_id}.jsonl", f"debug-{session_id}.jsonl"),
         (Path(paths.transcripts) / f"{session_id}.jsonl", "transcript.jsonl"),
     ]
@@ -227,6 +298,7 @@ def archive_run(
     session_id: str,
     paths: Any = None,
     models: dict[str, Any] | None = None,
+    env: dict[str, Any] | None = None,
     home: Path | None = None,
     keep: int = KEEP_RUNS,
     max_bytes: int = MAX_PROJECT_BYTES,
@@ -290,6 +362,7 @@ def archive_run(
             "rudra_version": _version(),
             "archived_at": time.time(),
             "models": models or {},
+            "env": env or {},
             "files": copied,
         }
         (destination / META_NAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -316,6 +389,7 @@ __all__ = [
     "META_VERSION",
     "archive_home",
     "archive_run",
+    "env_facts",
     "model_facts",
     "project_slug",
     "prune_runs",

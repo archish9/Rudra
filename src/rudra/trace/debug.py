@@ -106,6 +106,12 @@ class _JsonLines(logging.Formatter):
             "level": record.levelname,
             "payload": record.getMessage(),
         }
+        # Every line in this file carries a wall clock (OPEN-77), including
+        # the ones that are not TraceEvents. `record.created` is the time
+        # logging already stamped, so an ordinary log line and a trace event
+        # are on the same clock rather than nearly on it.
+        if "ts" not in payload:
+            payload = {**payload, "ts": record.created}
         # The traceback, when there is one. memory/degrade.py logs with
         # exc_info=True and this dropped it, so the line a user attached to
         # a bug report -- as the troubleshooting docs ask -- carried the

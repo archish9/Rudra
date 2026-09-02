@@ -883,8 +883,14 @@ def write_usage_log(path: Path, usage: Any) -> None:
     Nothing here may raise. A run that finished its work must not be
     reported as failed because its own bookkeeping could not be written --
     the same rule _maybe_auto_branch follows for a branch it cannot make.
+
+    Written even when no role made a call (OPEN-79). The `not usage.roles()`
+    guard this used to carry predates OPEN-53's `run` block, and since that
+    block exists an empty-roles run still has a true wall clock and a
+    `suspended_seconds` -- which is exactly the number that settles "why did
+    this take so long" for a run that died before it called anything.
     """
-    if usage is None or not usage.roles():
+    if usage is None:
         return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

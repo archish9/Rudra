@@ -24,7 +24,7 @@ from rudra.loop.plan_view import (
     render_plan,
 )
 from rudra.state import ensure_layout
-from rudra.state.archive import model_facts
+from rudra.state.archive import env_facts, model_facts
 
 if TYPE_CHECKING:  # pragma: no cover - the import is lazy at runtime
     from rudra.permissions.grants import SessionGrants
@@ -164,6 +164,7 @@ class RudraAgent:
         transcript=None,
         archive_paths=None,
         archive_models=None,
+        archive_env=None,
         debug_handler=None,
     ):
         self.context = context
@@ -214,9 +215,28 @@ class RudraAgent:
         # built at construction because close() has no config. Never the
         # api_key -- see archive.model_facts.
         self._archive_models = archive_models or {}
+        # What machine and what settings produced this run (OPEN-78).
+        self._archive_env = archive_env or {}
         # A resume works the ledger already on disk and never plans (C7.2).
         self.resume = resume
         self.iterations = 0
+
+    def _write_usage_log(self) -> None:
+        """This run's tally, whatever way the run ended (OPEN-79).
+
+        Nothing here may raise -- `write_usage_log` follows that rule
+        itself, and the paths are read defensively because a hand-built
+        RudraAgent carries a `loop_context` that several tests set to
+        `object()`.
+        """
+        context = self._loop_context
+        usage = getattr(context, "usage", None)
+        paths = getattr(context, "paths", None)
+        if usage is None or paths is None:
+            return
+        from rudra.loop.engine import write_usage_log
+
+        write_usage_log(Path(paths.logs) / "usage.json", usage)
 
     async def close(self) -> None:
         if self._transcript is not None:
@@ -226,6 +246,15 @@ class RudraAgent:
         if self._db_conn is not None:
             await self._db_conn.close()
             self._db_conn = None
+        # Before the archive, because the archive copies it (OPEN-79).
+        # work() writes this as its last statement, so a run that declined
+        # the plan, died in a planner stage or crashed wrote none at all --
+        # and that is precisely the failure class with a bug report. Two
+        # call sites, one function, deliberately: work()'s is the normal
+        # end, where `summarise` reads the same object immediately after;
+        # this is the backstop for every end it cannot reach.
+        self._write_usage_log()
+
         # LAST, and the order is OPEN-69. This used to run right after the
         # transcript closed, reasoning that "what is copied must be complete"
         # -- but every step above only ever APPENDS to the debug log, so
@@ -240,12 +269,19 @@ class RudraAgent:
                 session_id=self.session_id,
                 paths=self._archive_paths,
                 models=self._archive_models,
+                env=self._archive_env,
             )
         # After the archive, and that ordering is OPEN-69's: archive_run
         # logs the line naming where it copied this run to, and detaching
         # first would keep that line out of the file it describes.
+        #
+        # The console recorder comes off first of the two: it reports a
+        # trailing line that never got its newline, and that report has to
+        # reach a handler that is still attached (OPEN-76).
+        from rudra.trace.console_log import remove_console_recorder
         from rudra.trace.debug import detach_debug_logging
 
+        remove_console_recorder(self.console)
         detach_debug_logging(self._debug_handler)
         self._debug_handler = None
 
@@ -258,7 +294,50 @@ class RudraAgent:
     def _status(self, message: str) -> None:
         self.console.print(f"[dim]→ {message}[/dim]")
 
+    def _notice(self, payload: str, name: str) -> None:
+        """One NOTICE, or nothing when this agent has no sink.
+
+        Reached the way loop/engine.py reaches its sink, because a
+        hand-built RudraAgent carries no subagent context at all -- and
+        several tests build one. Emitted through `TraceSink.notice`, never
+        by hand: it is the only path that redacts.
+        """
+        trace = getattr(getattr(self._loop_context, "subagents", None), "trace", None)
+        if trace is None:
+            return
+        trace.notice(payload, role="rudra", name=name)
+
     async def run(self) -> AgentResult:
+        """Plan, work, verify, fix, and report, and say so at both ends.
+
+        The record of the two ends is OPEN-77. Nothing marked either
+        before it, so a log that stops mid-stage was indistinguishable
+        from a cancel, a crash, a declined plan and a completed run -- and
+        the run this was filed on stopped for a reason no file recorded.
+
+        The end record is emitted for EVERY exit, including the two that
+        leave by raising: `RudraAgent.run` re-raises an unhandled
+        exception and a cancelled turn leaves as `CancelledError`, which
+        is a BaseException and so needs catching by name. Those are the
+        two ends that most need a record and the two a plain `else` would
+        miss.
+
+        It also carries `result.message`, which is otherwise printed by
+        cli.py in a panel AFTER `close()` has already detached the log --
+        so the run's own verdict would be the one line the console
+        recorder could not catch.
+        """
+        self._notice(f"run {self.session_id} started", "run")
+        try:
+            result = await self._run()
+        except BaseException as exc:
+            self._notice(f"run {self.session_id} ended: {type(exc).__name__}", "run")
+            raise
+        verdict = "ok" if result.success else "failed"
+        self._notice(f"run {self.session_id} ended: {verdict}: {result.message}", "run")
+        return result
+
+    async def _run(self) -> AgentResult:
         """Plan, work, verify, fix, and report. The whole run (C6.1)."""
         try:
             # Before the planner, so every file the run produces lands on the
@@ -880,6 +959,12 @@ async def create_main_agent(
             debug_handler = configure_debug_logging(log_path, enabled=True)
             if debug_handler is not None:
                 trace.add_recorder(debug_consumer())
+                # OPEN-76: and everything Rudra PRINTS, which no sink event
+                # covers. Installed only when there is a file to write to,
+                # so `--no-debug` costs nothing.
+                from rudra.trace.console_log import install_console_recorder
+
+                install_console_recorder(console)
             else:
                 console.print(f"[yellow]Could not open the run log at {log_path}[/yellow]")
 
@@ -1010,6 +1095,7 @@ async def create_main_agent(
             transcript=transcript,
             archive_paths=paths if cfg.agent.run_archive else None,
             archive_models=model_facts(cfg),
+            archive_env=env_facts(cfg),
             debug_handler=debug_handler,
         )
     except BaseException:
