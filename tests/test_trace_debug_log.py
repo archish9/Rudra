@@ -204,3 +204,80 @@ def test_pruning_a_missing_directory_is_not_an_error(tmp_path: Path):
     from rudra.trace.debug import prune_debug_logs
 
     assert prune_debug_logs(tmp_path / "nope") == []
+
+
+# --- OPEN-75: one run's log holds one run -----------------------------------
+#
+# CR-G5 fixed handlers accumulating on ONE file and left the harder case
+# standing: in the REPL every turn is a new run with a new
+# `debug-<id>.jsonl`, so the same-filename test below could never match
+# turn N's handler and it stayed attached. Measured on a real project, run
+# 510dc12d4bec's log held 58 lines where its own archived copy held 50 --
+# the eight extra were byte-identical to the whole of the NEXT run's file.
+
+
+def _records(path: Path) -> list[str]:
+    return [json.loads(line)["payload"] for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_a_second_run_does_not_write_into_the_first_runs_log(tmp_path: Path, detached):
+    first, second = tmp_path / "debug-aaa.jsonl", tmp_path / "debug-bbb.jsonl"
+    logger = logging.getLogger("rudra.example")
+
+    detached.append(configure_debug_logging(first, enabled=True))
+    logger.debug("run one")
+    detached.append(configure_debug_logging(second, enabled=True))
+    logger.debug("run two")
+
+    assert _records(first) == ["run one"]
+    assert _records(second) == ["run two"]
+
+
+def test_the_same_file_twice_still_replaces_rather_than_duplicates(tmp_path: Path, detached):
+    """CR-G5's case, kept: N handlers on one file wrote every record N
+    times and held N descriptors open."""
+    path = tmp_path / "debug-aaa.jsonl"
+    logger = logging.getLogger("rudra.example")
+
+    detached.append(configure_debug_logging(path, enabled=True))
+    detached.append(configure_debug_logging(path, enabled=True))
+    logger.debug("once")
+
+    assert _records(path) == ["once"]
+
+
+def test_an_embedders_own_handler_is_left_alone(tmp_path: Path, detached):
+    """Rudra owns the `rudra` tree (`propagate = False`) but not every
+    handler someone attached to it. Removing by marker, not by type."""
+    theirs = logging.FileHandler(tmp_path / "embedder.jsonl", encoding="utf-8")
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.addHandler(theirs)
+    detached.append(theirs)
+
+    detached.append(configure_debug_logging(tmp_path / "debug-aaa.jsonl", enabled=True))
+
+    assert theirs in logger.handlers
+
+
+def test_detaching_stops_the_run_log(tmp_path: Path, detached):
+    """The end of a turn releases the descriptor. Without this the leak
+    survives even a correct next run -- there might not be one."""
+    from rudra.trace.debug import detach_debug_logging
+
+    path = tmp_path / "debug-aaa.jsonl"
+    logger = logging.getLogger("rudra.example")
+    handler = configure_debug_logging(path, enabled=True)
+    logger.debug("during")
+
+    detach_debug_logging(handler)
+    logger.debug("after")
+
+    assert _records(path) == ["during"]
+
+
+def test_detaching_nothing_is_not_an_error(tmp_path: Path, detached):
+    """`[agent] debug_log = false` and an unopenable path both give None,
+    and close() must not care which."""
+    from rudra.trace.debug import detach_debug_logging
+
+    detach_debug_logging(None)

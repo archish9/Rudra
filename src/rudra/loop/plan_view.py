@@ -108,11 +108,21 @@ def ask_approval(console: Console, *, reader: Callable[[], str] | None = None) -
         console.print("[dim]No answer — cancelled.[/dim]")
         return _CANCEL
 
+    # Every exit prints a permanent one-line record, because the inline
+    # driver erases its rows on the way out and its own docstring says the
+    # CALLER prints the record (ui/prompt.py::run_inline). Only the "no
+    # answer" branch above used to print one, so an approve left the
+    # scrollback holding a question with no answer -- and a gate resolved
+    # by a stray keystroke (OPEN-72) looked like a gate nobody was shown.
     choice = outcome.values[0]
     if choice == "approve":
+        console.print("[green]Approved[/green] [dim]— running the plan.[/dim]")
         return PlanAnswer(PlanDecision.APPROVE)
     if choice == "cancel":
+        console.print("[dim]Cancelled — nothing was executed.[/dim]")
         return _CANCEL
+
+    console.print("[dim]Revising.[/dim]")
 
     # Revise. An empty answer is a slip and costs one re-prompt; a second
     # empty answer is someone who does not want to revise after all.

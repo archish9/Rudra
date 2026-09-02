@@ -565,3 +565,32 @@ async def test_close_archives_after_the_checkpointer_and_the_mcp_client(
     )
     for step in order:
         assert f'"{step}"' in archived, f"{step} ran after the copy, so the archive missed it"
+
+
+async def test_close_detaches_the_run_log_after_archiving(tmp_path: Path, home: Path) -> None:
+    """OPEN-75, and the ordering is OPEN-69's: archive_run logs where it
+    copied the run to, so the handler must outlive the archive and not the
+    turn."""
+    import logging
+
+    from rich.console import Console
+
+    from rudra.agent.main_agent import AgentContext, RudraAgent
+    from rudra.trace.debug import LOGGER_NAME, configure_debug_logging
+
+    project = _project_with_evidence(tmp_path / "app")
+    log = project / ".rudra" / "run" / "logs" / "debug-abc123def456.jsonl"
+    handler = configure_debug_logging(log, enabled=True)
+
+    agent = RudraAgent(
+        context=AgentContext(project_path=project, task="t", console=Console(quiet=True)),
+        session_id="abc123def456",
+        db_conn=None,
+        loop_context=object(),
+        planner_callback=None,
+        ledger=None,
+        debug_handler=handler,
+    )
+    await agent.close()
+
+    assert handler not in logging.getLogger(LOGGER_NAME).handlers

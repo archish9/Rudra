@@ -115,6 +115,15 @@ class _JsonLines(logging.Formatter):
         return json.dumps(payload)
 
 
+class _RunLogHandler(logging.FileHandler):
+    """The handler THIS module attached, marked so it can be found again.
+
+    Marked rather than matched by filename (OPEN-75) and rather than "every
+    FileHandler on the tree": one run's log is one run's, but a handler an
+    embedder attached to the `rudra` logger is not Rudra's to close.
+    """
+
+
 def configure_debug_logging(path: Path, *, enabled: bool) -> logging.Handler | None:
     """Attach a JSONL handler to the `rudra` tree, or do nothing.
 
@@ -127,7 +136,7 @@ def configure_debug_logging(path: Path, *, enabled: bool) -> logging.Handler | N
         return None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        handler = logging.FileHandler(path, encoding="utf-8")
+        handler = _RunLogHandler(path, encoding="utf-8")
     except OSError:
         return None
 
@@ -139,20 +148,53 @@ def configure_debug_logging(path: Path, *, enabled: bool) -> logging.Handler | N
     # previous handler -- at turn N the logger held N handlers on the same
     # file, wrote every record N times, and kept N descriptors open. That
     # file is the one the docs tell users to attach to a bug report
-    # (CR-G5). Matching by the resolved filename rather than by identity so
-    # a handler left by an earlier agent is also cleared.
-    resolved = str(Path(handler.baseFilename).resolve())
-    for existing in list(logger.handlers):
-        if isinstance(existing, logging.FileHandler) and (
-            str(Path(existing.baseFilename).resolve()) == resolved
-        ):
-            logger.removeHandler(existing)
-            existing.close()
+    # (CR-G5).
+    #
+    # By MARKER, not by filename (OPEN-75). The filename test could only
+    # ever see the case CR-G5 was written for -- two runs sharing a path.
+    # Every REPL turn is a new run with a new `debug-<id>.jsonl`, so turn
+    # N's handler never matched, stayed attached, and wrote turn N+1's
+    # records into turn N's file. Measured: run 510dc12d4bec's log held
+    # its own 50 lines plus, byte for byte, the whole of the next run's.
+    _detach_run_logs(logger)
     logger.addHandler(handler)
     # Rudra's own records stop here rather than climbing to the root
     # logger, whose handlers belong to whoever embedded Rudra.
     logger.propagate = False
     return handler
+
+
+def _detach_run_logs(logger: logging.Logger) -> None:
+    """Remove and close every run log this module attached to `logger`."""
+    for existing in list(logger.handlers):
+        if isinstance(existing, _RunLogHandler):
+            logger.removeHandler(existing)
+            existing.close()
+
+
+def detach_debug_logging(handler: logging.Handler | None) -> None:
+    """Release the run log at the end of the run that opened it.
+
+    `configure_debug_logging` clears the previous run's handler on the way
+    in, which needs a next run to happen. This is the other end, so a
+    single run in a long-lived process -- the REPL, or an embedder -- does
+    not leave a descriptor open on a file it has finished with.
+
+    Called AFTER `archive_run` (OPEN-69's ordering), so `archive.py`'s own
+    "archiving run ..." record still reaches the file it describes.
+
+    `None` is the normal argument when `[agent] debug_log = false` or the
+    path could not be opened, and it does nothing. Nothing here raises:
+    bookkeeping must not end a run.
+    """
+    if handler is None:
+        return
+    logger = logging.getLogger(LOGGER_NAME)
+    try:
+        logger.removeHandler(handler)
+        handler.close()
+    except (OSError, ValueError):  # pragma: no cover - a closed handler
+        return
 
 
 def debug_consumer() -> Any:
@@ -181,5 +223,6 @@ __all__ = [
     "configure_debug_logging",
     "debug_consumer",
     "debug_log_path",
+    "detach_debug_logging",
     "prune_debug_logs",
 ]

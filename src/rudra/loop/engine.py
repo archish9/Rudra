@@ -1003,6 +1003,56 @@ def summarise(ledger: Ledger, console: Console, usage: Any = None, cancelled: bo
     )
 
 
+PREVIOUS_LEDGER = "ledger.previous.json"
+"""Where a replaced ledger's unfinished work is kept (OPEN-74).
+
+Beside `ledger.json`, in the same volatile `run/` subtree: it is a copy of
+volatile state and has exactly its lifetime. ONE file, replaced each time
+-- the recovery this supports is "the run I just lost", never an archive.
+The archive is `state/archive.py`'s job and already keeps twenty.
+"""
+
+
+def preserve_previous_ledger(path: Path) -> int:
+    """Copy a ledger with unfinished work aside. Returns what was at risk.
+
+    `plan()` saves an empty ledger before its first model call, so the next
+    request typed into the REPL replaces the previous run's tasks BEFORE
+    the new plan exists. In the run this was filed on, fifteen pending
+    tasks became `{"request": "yes", "tasks": []}` five minutes later --
+    and both `cli.py`'s cancel message and `_provider_failure_message` had
+    already promised `rudra --continue` would pick them up. Both were true
+    when printed and false one line of input later.
+
+    Gated on `Ledger.resumable()`, which is PENDING-only (A1.93), for the
+    same reason `_provider_failure_message` is: a ledger of DONE and
+    BLOCKED tasks resumes to nothing, so copying it aside would be noise
+    rather than recovery.
+
+    The bytes are copied verbatim rather than re-serialised from a parsed
+    Ledger: what a user restores must be what the previous run wrote, not
+    this version's idea of it. Nothing here raises -- bookkeeping must not
+    end a run (write_usage_log's rule), and a ledger this cannot read is
+    one the new run is about to replace anyway.
+    """
+    path = Path(path)
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return 0
+    try:
+        pending = len(Ledger.load(path).resumable())
+    except Exception:  # noqa: BLE001 - any unreadable ledger is not recovery
+        return 0
+    if not pending:
+        return 0
+    try:
+        path.with_name(PREVIOUS_LEDGER).write_bytes(raw)
+    except OSError:
+        return 0
+    return pending
+
+
 async def plan(
     request: str,
     *,
@@ -1021,6 +1071,28 @@ async def plan(
     only so tests can drive planning without wiring an agent.
     """
     ledger = ledger if ledger is not None else Ledger()
+
+    # BEFORE the save below, which is what destroys the previous run's
+    # tasks (OPEN-74). Deleting resumable work is allowed -- one run, one
+    # ledger -- but doing it silently, and before a new plan exists to
+    # replace it, is not.
+    replaced = preserve_previous_ledger(context.paths.ledger_json)
+    if replaced:
+        plural = "" if replaced == 1 else "s"
+        context.console.print(
+            f"[yellow]{replaced} unfinished task{plural} from the previous run "
+            f"were replaced.[/yellow] "
+            f"[dim]A copy is at .rudra/run/{PREVIOUS_LEDGER} — "
+            f"restore it over ledger.json and use `rudra --continue`.[/dim]"
+        )
+        trace = getattr(getattr(context, "subagents", None), "trace", None)
+        if trace is not None:
+            trace.notice(
+                f"replaced a ledger holding {replaced} unfinished task{plural}",
+                role="planner",
+                name="ledger",
+            )
+
     # The one save that knows the request, so record it here (C7.2).
     # Every later save passes nothing and keeps it. Without this the field
     # existed and was always "", which a live run found and no unit test
@@ -1189,11 +1261,13 @@ async def run_loop(
 __all__ = [
     "LoopContext",
     "Outcome",
+    "PREVIOUS_LEDGER",
     "attempt_snapshot",
     "changed_since",
     "git_snapshot",
     "tree_snapshot",
     "plan",
+    "preserve_previous_ledger",
     "review_once",
     "run_loop",
     "run_task",

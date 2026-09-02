@@ -164,6 +164,7 @@ class RudraAgent:
         transcript=None,
         archive_paths=None,
         archive_models=None,
+        debug_handler=None,
     ):
         self.context = context
         # Kept for callers that pass one; a real run does not. Since
@@ -197,6 +198,11 @@ class RudraAgent:
         # and release it: an unflushed handle keeps the file locked on
         # Windows, and a record nobody closed is one somebody finds empty.
         self._transcript = transcript
+        # This run's debug-log handler, or None. Held so close() can detach
+        # it: the `rudra` logger tree is process-global, so a handler left
+        # attached writes the NEXT run's records into this run's file
+        # (OPEN-75).
+        self._debug_handler = debug_handler
         # Where this run's evidence was written, so close() can copy it out
         # of the project (OPEN-68). None means do not archive, and that is
         # the default deliberately: a RudraAgent built by hand -- every test
@@ -235,6 +241,13 @@ class RudraAgent:
                 paths=self._archive_paths,
                 models=self._archive_models,
             )
+        # After the archive, and that ordering is OPEN-69's: archive_run
+        # logs the line naming where it copied this run to, and detaching
+        # first would keep that line out of the file it describes.
+        from rudra.trace.debug import detach_debug_logging
+
+        detach_debug_logging(self._debug_handler)
+        self._debug_handler = None
 
     def _log_always(self, message: str, style: str = "") -> None:
         if style:
@@ -386,6 +399,32 @@ class RudraAgent:
         threading.Thread(target=ask, name="rudra-plan-approval", daemon=True).start()
         return await answered
 
+    def _record_plan_decision(self, decision: PlanDecision, source: str) -> None:
+        """Say, in the run's own record, what the gate decided (OPEN-73).
+
+        Everything else `_settle_plan` emits is `console.print`, so the
+        debug log -- "the COMPLETE record" (CLAUDE.md 3) -- the transcript
+        and usage.json all held nothing about the one branch that decides
+        whether a run does any work. Establishing that run 510dc12d4bec
+        had not been approved took reading `select count(*) from
+        embeddings` out of the memory palace, because `_record_plan_memory`
+        runs only after APPROVE. That is a proxy, not an instrument.
+
+        This is OPEN-44's rule one branch over: NOTICE is what Rudra says
+        about ITSELF. `source` is carried because the decision alone
+        cannot separate a user who cancelled from a pipe that closed from
+        a revision budget that ran out, and those want different answers.
+
+        Emitted through `TraceSink.notice`, never by hand -- it is the only
+        path that redacts (trace/sink.py). Reached the way
+        loop/engine.py:1155 reaches its sink, because a hand-built
+        RudraAgent carries no subagent context at all.
+        """
+        trace = getattr(getattr(self._loop_context, "subagents", None), "trace", None)
+        if trace is None:
+            return
+        trace.notice(f"plan {decision.value} ({source})", role="planner", name="plan")
+
     async def _settle_plan(self, ledger) -> PlanDecision:
         """Show the plan and find out whether to run it (C6.9).
 
@@ -399,11 +438,18 @@ class RudraAgent:
 
         if get_config().permissions.mode == "plan":
             self.console.print("\n[dim]Plan mode — nothing was executed.[/dim]")
+            self._record_plan_decision(PlanDecision.CANCEL, "plan-mode")
             return PlanDecision.CANCEL
+
+        # "prompt" or "auto" is a property of how this run was started, not
+        # of the answer: _approve is ask_approval only when a human could
+        # answer it (main_agent.py, `interactive`).
+        source = "auto" if self._approve is auto_approve else "prompt"
 
         for attempt in range(MAX_REVISIONS + 1):
             answer = await self._approve_off_loop()
             if answer.decision is not PlanDecision.REVISE:
+                self._record_plan_decision(answer.decision, source)
                 return answer.decision
             if attempt == MAX_REVISIONS:
                 break
@@ -420,6 +466,7 @@ class RudraAgent:
         self.console.print(
             f"\n[yellow]Revised {MAX_REVISIONS} times — change the request instead.[/yellow]"
         )
+        self._record_plan_decision(PlanDecision.CANCEL, "revision-limit")
         return PlanDecision.CANCEL
 
     def _plan_only_result(self, ledger, decision: PlanDecision) -> AgentResult:
@@ -819,6 +866,7 @@ async def create_main_agent(
         # A log that cannot be opened is reported as None and skipped, never
         # raised: bookkeeping must not end a run (loop/engine.py:501-515).
         want_log = cfg.agent.debug_log if debug is None else debug
+        debug_handler = None
         if want_log:
             from rudra.trace.debug import (
                 configure_debug_logging,
@@ -829,7 +877,8 @@ async def create_main_agent(
 
             prune_debug_logs(paths.logs)
             log_path = debug_log_path(paths, session_id)
-            if configure_debug_logging(log_path, enabled=True) is not None:
+            debug_handler = configure_debug_logging(log_path, enabled=True)
+            if debug_handler is not None:
                 trace.add_recorder(debug_consumer())
             else:
                 console.print(f"[yellow]Could not open the run log at {log_path}[/yellow]")
@@ -961,6 +1010,7 @@ async def create_main_agent(
             transcript=transcript,
             archive_paths=paths if cfg.agent.run_archive else None,
             archive_models=model_facts(cfg),
+            debug_handler=debug_handler,
         )
     except BaseException:
         await db_conn.close()
