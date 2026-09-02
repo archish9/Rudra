@@ -266,3 +266,76 @@ def test_skip_dirs_are_sourced_from_the_stack_registry() -> None:
     from rudra.stacks import ALL_SKIP_DIRS
 
     assert ALL_SKIP_DIRS <= (_ALWAYS_SKIP_DIRS | _ROOT_ANCHORED_SKIP_DIRS)
+
+
+# --- OPEN-81: the spelling the file tools answer in -------------------------
+
+
+def test_a_listing_is_rendered_in_the_spelling_the_tools_answer_in(tmp_path):
+    """`ls("/")` returns `/pytest.ini` and `glob` returns
+    `/src/config/settings.py` -- measured against the pinned 0.7.4 backend
+    with `virtual_mode=True`. `project_tree` emits the relative spelling,
+    and the PROJECT FILES block was quoting it beside those results, which
+    is one of the three spellings OPEN-81 was filed on.
+    """
+    from rudra.filesystem.tree import as_virtual_paths
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1\n")
+    (tmp_path / "pytest.ini").write_text("[pytest]\n")
+
+    lines = as_virtual_paths(project_tree(tmp_path)).splitlines()
+
+    assert lines == ["/pytest.ini", "/src/app.py"]
+
+
+def test_the_empty_project_sentence_is_not_turned_into_a_path(tmp_path):
+    """`(empty project)` is prose. A leading "/" would make it a filename
+    the model could try to read."""
+    from rudra.filesystem.tree import EMPTY_PROJECT, as_virtual_paths
+
+    assert as_virtual_paths(project_tree(tmp_path / "nope")) == EMPTY_PROJECT
+
+
+def test_the_truncation_footer_is_not_turned_into_a_path(tmp_path):
+    """The other sentence in a listing. `cli_repl.py` records what it cost
+    the last time it was treated as an entry (CR-G11); this is the same
+    line, one caller over."""
+    from rudra.filesystem.tree import as_virtual_paths
+
+    for i in range(6):
+        (tmp_path / f"mod_{i}.py").write_text("x = 1\n")
+
+    lines = as_virtual_paths(project_tree(tmp_path, max_entries=3)).splitlines()
+
+    assert lines[:3] == ["/mod_0.py", "/mod_1.py", "/mod_2.py"]
+    assert lines[3].startswith("… 3 more entries omitted")
+
+
+def test_the_completer_and_the_prompt_block_agree_on_what_a_path_is(tmp_path):
+    """One predicate, two callers. `cli_repl._project_files` carried its own
+    copy of the marker until 2026-09-02; a reworded footer would have broken
+    one of them silently, which is the shape CLAUDE.md's `is_build_output`
+    note says needs a test rather than a comment.
+
+    Pinned two ways: the predicate answers True for the footer `project_tree`
+    really writes, and no caller spells the marker itself.
+    """
+    import inspect
+
+    from rudra import cli_repl
+    from rudra.filesystem.tree import is_truncation_footer
+
+    for i in range(6):
+        (tmp_path / f"mod_{i}.py").write_text("x = 1\n")
+
+    footer = project_tree(tmp_path, max_entries=3).splitlines()[-1]
+
+    assert is_truncation_footer(footer)
+    assert not is_truncation_footer("mod_0.py")
+    code = [
+        line
+        for line in inspect.getsource(cli_repl._project_files).splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    assert "\u2026" not in "\n".join(code), "the completer spells the marker again"

@@ -21,7 +21,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from rudra.filesystem import project_tree
+from rudra.filesystem import is_truncation_footer, project_tree
 from rudra.state.paths import rudra_paths
 
 REPL_COMMANDS: dict[str, str] = {
@@ -106,12 +106,10 @@ def _project_files(project_path: Path) -> list[str]:
     # (filesystem/tree.py: "… N more entries omitted (cap: M)"), and it was
     # offered as a completion -- accepting it inserted that sentence into
     # the prompt, where expand_mentions left it and it went to the model
-    # verbatim (CR-G11).
-    return [
-        stripped
-        for line in listing.splitlines()
-        if (stripped := line.strip()) and not stripped.startswith("…")
-    ]
+    # verbatim (CR-G11). The predicate lives beside the code that writes
+    # the footer, so the PROJECT FILES block and this agree about which
+    # lines are paths (OPEN-81) rather than each carrying the marker.
+    return [line.strip() for line in listing.splitlines() if not is_truncation_footer(line)]
 
 
 def build_completer(project_path: Path) -> Any:

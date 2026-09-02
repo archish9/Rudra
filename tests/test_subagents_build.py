@@ -527,6 +527,20 @@ def _stocked_store():
     return store
 
 
+def _rendered_spec_prompt(name, context) -> str:
+    """The spec's prompt with the per-run anchor filled in (OPEN-81).
+
+    The path contract carries a `{project_path}` placeholder that
+    `_prompt_for` renders, so the raw constant stopped being a substring of
+    any writer's prompt. These tests are about what is APPENDED to the spec
+    prompt, so they compare against the rendered one rather than dropping
+    the assertion.
+    """
+    from rudra.subagents.registry import PROJECT_PATH_TOKEN
+
+    return REGISTRY[name].system_prompt.replace(PROJECT_PATH_TOKEN, str(context.project_path))
+
+
 @pytest.mark.parametrize("name", sorted(REGISTRY))
 def test_the_facts_block_is_appended_to_every_subagent_prompt(name, context):
     """The coder has never seen the project facts before Step 10a."""
@@ -535,7 +549,7 @@ def test_the_facts_block_is_appended_to_every_subagent_prompt(name, context):
     context.facts = _stocked_store()
     prompt = _prompt_for(REGISTRY[name], context)
 
-    assert REGISTRY[name].system_prompt in prompt
+    assert _rendered_spec_prompt(name, context) in prompt
     assert "## PROJECT FACTS" in prompt
     assert "Rust" in prompt
 
@@ -551,7 +565,7 @@ def test_a_prompt_is_unchanged_when_there_are_no_facts(context):
     context.facts = FactStore()
     prompt = _prompt_for(REGISTRY["coder"], context)
     assert "## PROJECT FACTS" not in prompt
-    assert REGISTRY["coder"].system_prompt in prompt
+    assert _rendered_spec_prompt("coder", context) in prompt
     # A spec that gets no other block still comes back untouched.
     assert _prompt_for(REGISTRY["reviewer"], context) == REGISTRY["reviewer"].system_prompt
 
@@ -948,3 +962,82 @@ def test_a_subagent_repeat_guard_still_builds_with_no_trace(name, context):
     guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
 
     assert guard.trace is None
+
+
+# --- OPEN-81: where the project is -----------------------------------------
+
+
+@pytest.mark.parametrize("name", ["coder", "tester"])
+def test_every_writers_prompt_names_the_project_root(name, context):
+    """OPEN-81. `_PATH_RULES` carried two prohibitions and no location, so
+    the model had nowhere to put an absolute path and produced one from its
+    training prior: 13 of run `689f0ea263be`'s 13 coder path errors began
+    `/home/user/Rudra/`, on a project at
+    `/Users/archish/Documents/ai-ml/test-rudra`.
+
+    Rendered here rather than baked into the spec for the reason the facts
+    block is -- the root is a per-run fact and a spec is built at import.
+    """
+    from rudra.subagents.build import _prompt_for
+
+    prompt = _prompt_for(REGISTRY[name], context)
+
+    assert str(context.project_path) in prompt
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_no_rendered_prompt_leaves_the_placeholder_unrendered(name, context):
+    """Asserted over the whole registry rather than one spec at a time, so
+    a later tool-set change cannot ship a prompt showing the model a
+    literal `{project_path}` -- which is a worse anchor than none."""
+    from rudra.subagents.build import _prompt_for
+    from rudra.subagents.registry import PROJECT_PATH_TOKEN
+
+    assert PROJECT_PATH_TOKEN not in _prompt_for(REGISTRY[name], context)
+
+
+@pytest.mark.parametrize("name", ["reviewer", "general-purpose"])
+def test_a_reader_without_the_path_contract_is_not_given_an_anchor(name, context):
+    """The parity shape `_rules_for` holds everywhere else: a block reaches
+    the specs whose rules ask for it, and no others. The reviewer reads a
+    diff it is handed."""
+    from rudra.subagents.build import _prompt_for
+    from rudra.subagents.registry import _PATH_RULES
+
+    if _PATH_RULES in REGISTRY[name].system_prompt:  # pragma: no cover - guard
+        pytest.skip("spec carries the contract")
+    assert str(context.project_path) not in _prompt_for(REGISTRY[name], context)
+
+
+def test_the_project_files_block_uses_the_spelling_ls_answers_in(context):
+    """OPEN-81's second half. The model was shown three spellings of one
+    path: relative in `## PROJECT FILES`, `/`-prefixed in every `ls` and
+    `glob` result, and "must be absolute" in the tool descriptions. The
+    block that Rudra controls now agrees with the tool output the model
+    cannot be stopped from reading.
+    """
+    from rudra.subagents.build import _prompt_for
+
+    (context.project_path / "src").mkdir()
+    (context.project_path / "src" / "app.py").write_text("x = 1\n")
+    prompt = _prompt_for(REGISTRY["coder"], context)
+    listing = prompt.split("## PROJECT FILES", 1)[1].split("```")[1]
+
+    assert "/src/app.py" in listing
+    for line in listing.strip().splitlines():
+        assert line.startswith("/"), line
+
+
+def test_the_listings_truncation_footer_is_not_given_a_leading_slash(context):
+    """`project_tree` appends "… N more entries omitted (cap: M)" when it
+    truncates, and it is a sentence rather than a path. `cli_repl.py:105`
+    records what happened the last time it was treated as one (CR-G11)."""
+    from rudra.subagents.build import TREE_MAX_ENTRIES, _prompt_for
+
+    for i in range(TREE_MAX_ENTRIES + 5):
+        (context.project_path / f"mod_{i:04d}.py").write_text("x = 1\n")
+
+    listing = _prompt_for(REGISTRY["coder"], context).split("## PROJECT FILES", 1)[1]
+    footer = next(line for line in listing.splitlines() if "omitted" in line)
+
+    assert footer.startswith("…")

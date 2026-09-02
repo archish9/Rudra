@@ -33,6 +33,11 @@ _WRITER_FS: tuple[str, ...] = (
 # it holds `execute` and could always `rm`.
 _TESTER_FS: tuple[str, ...] = (*_WRITER_FS, "execute")
 
+# Where the real project root is interpolated. A spec is built at import
+# and the root is a per-run fact, so the contract carries a placeholder and
+# build.py::_prompt_for renders it -- the same split the facts block uses.
+PROJECT_PATH_TOKEN = "{project_path}"
+
 # The path contract, shared by every subagent that can write.
 #
 # It lived only in _CODER_PROMPT until 2026-08-25, and the agent that walked
@@ -41,9 +46,62 @@ _TESTER_FS: tuple[str, ...] = (*_WRITER_FS, "execute")
 #
 # The shell half moved to _COMMAND_RULES on 2026-08-27 (OPEN-36). What is
 # left here is true for a writer whether or not it can run anything.
-_PATH_RULES = """## FILE PATH RULES
-- Use RELATIVE paths only: "src/main.rs", "package.json"
-- NEVER use absolute paths or paths starting with "/" or a drive letter
+#
+# It opened with "Use RELATIVE paths only / NEVER use absolute paths" until
+# 2026-09-02, and stated no location at all. OPEN-81 is what that cost:
+# every one of run `689f0ea263be`'s 13 coder path errors was a path
+# beginning `/home/user/Rudra/`, on a project at
+# `~/Documents/ai-ml/test-rudra`. The model had a question -- where am I --
+# that three separate texts pushed it to ask and nothing answered:
+#
+#   * Every file tool's own schema says `Absolute path ... Must be
+#     absolute, not relative.` (deepagents filesystem.py:1092, 1098, 1132,
+#     1140, 1155 -- ls, read_file, write_file, edit_file, delete). The
+#     model reads that five times a call and read "use relative" once.
+#   * `ls` and `glob` ANSWER in `/`-prefixed virtual paths
+#     (`/src/config/settings.py`), so the tool results contradicted the
+#     rule three lines below it -- and those calls are CORRECT, because
+#     `virtual_mode=True` makes them so.
+#   * The `## PROJECT FILES` block used a third spelling, relative.
+#
+# Given a conflict and no anchor, it fell back on its training prior. So
+# the prohibition is replaced by an explanation, which is the shape that
+# already worked one block down: `_COMMAND_RULES` names the invented roots
+# for `execute`, and the same run produced ZERO bad shell paths against 13
+# bad file paths. The half that had the sentence did not fail.
+#
+# All three spellings below really do resolve -- measured through the
+# patched `validate_path` with compat/deepagents_path.py installed, which
+# every run installs (main_agent.py:846). Step 2a strips the real root.
+_PATH_RULES = """## WHERE THIS PROJECT IS
+
+This project is {project_path} on this machine.
+
+The file tools -- read_file, write_file, edit_file, ls, glob and grep -- are
+rooted THERE. To them a leading "/" means that directory, not the machine's
+root. So all three of these name the same file, and all three work:
+
+    src/config/settings.py
+        relative -- preferred, and the shortest
+    /src/config/settings.py
+        virtual root -- the spelling `ls` and `glob` answer in
+    {project_path}/src/config/settings.py
+        spelled out in full
+
+Prefer the first. Use the second when you are copying a path out of an `ls`
+or `glob` result -- that is the spelling those tools answer in, and it is
+correct.
+
+There is NO OTHER root. You are not in a container and not in a checkout of
+someone else's repository. /home/user/..., /workspace/..., /testbed/...,
+/app/... and /root/... do not exist here. A path beginning with any of them
+names a file this project does not have, and no file tool will find it.
+
+Every file tool's own description tells you a path "must be absolute, not
+relative". That is upstream's wording for a different setup. The three
+spellings above are what hold here, and the first two are shorter.
+
+## FILE PATH RULES
 - **Directories are created implicitly.** Writing "tests/test_models.py"
   creates "tests/" on the way. There is no mkdir tool and you do not need
   one. NEVER write a placeholder file in order to bring a directory into
@@ -57,11 +115,17 @@ _PATH_RULES = """## FILE PATH RULES
 # (deepagents filesystem.py:1258-1265), which is the text the model reads
 # beside this one.
 #
-# It opens with "the file or directory at the given absolute path". Every
-# other granted tool's description is silent on the question; this one
-# asserts the opposite of _PATH_RULES, so leaving "RELATIVE paths only" to
-# cover it by implication is the OPEN-17 shape -- prompt against prompt,
-# with the tool's own description holding the closer seat.
+# It opens with "the file or directory at the given absolute path", which
+# asserted the opposite of the _PATH_RULES of the day, so leaving "RELATIVE
+# paths only" to cover it by implication was the OPEN-17 shape -- prompt
+# against prompt, with the tool's own description holding the closer seat.
+#
+# This comment used to add "every other granted tool's description is
+# silent on the question", and that was false: `ls`, `read_file`,
+# `write_file`, `edit_file` and `delete` ALL carry `Must be absolute, not
+# relative.` on their file_path field (filesystem.py:1092-1155). Nobody
+# had looked past the prose descriptions at the field schemas, and the
+# gap cost OPEN-81 -- _PATH_RULES now answers that text for all five.
 #
 # It then says "Prefer deleting a directory in one call over deleting each
 # file individually". Sound advice for a general agent and wrong for this
@@ -72,9 +136,10 @@ _PATH_RULES = """## FILE PATH RULES
 # but it overwrites ONE file, and this removes a subtree.
 _DELETE_RULES = """
 ## DELETING FILES
-- `delete` takes a RELATIVE path, exactly like every other file tool here.
-  Its own description says "absolute path"; that is wrong for this project
-  and the FILE PATH RULES above are what hold.
+- `delete` takes a path in the same spellings as every other file tool
+  here, and a relative one is preferred. Its own description says "the
+  given absolute path", meaning the MACHINE's root; that is wrong for this
+  project and WHERE THIS PROJECT IS above is what holds.
 - Deleting a directory is RECURSIVE -- it takes everything inside with it.
   Its description suggests preferring that to deleting files one by one.
   Do NOT. Delete the individual files your task names.

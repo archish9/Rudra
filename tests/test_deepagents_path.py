@@ -366,3 +366,47 @@ def test_the_normalizer_is_wired_to_the_same_flag_as_the_middleware():
 
     assert "strip_sandbox_prefixes=cfg.compat.sandbox_paths" in main_agent
     assert "strip_sandbox_prefixes=context.cfg.compat.sandbox_paths" in build
+
+
+# --- OPEN-81: the three spellings the writers' prompt promises --------------
+
+
+def test_all_three_spellings_the_path_contract_promises_resolve(normalizer, tmp_path):
+    """`_PATH_RULES` tells every writer that three spellings of one file
+    "all work", and a prompt making a factual claim about the runtime is
+    only true while something holds it there.
+
+    `read_file` is `validate_path(file_path)` then `backend.read(validated)`
+    (deepagents filesystem.py, `_create_read_file_tool`), so agreement here
+    is agreement at the tool. Step 2a is what makes the spelled-out root
+    resolve; without it the third row of that table is a lie the model
+    would act on 13 times a run.
+    """
+    validate = normalizer()
+    real = tmp_path.resolve()
+
+    assert validate("src/config/settings.py") == "/src/config/settings.py"
+    assert validate("/src/config/settings.py") == "/src/config/settings.py"
+    assert validate(f"{real}/src/config/settings.py") == "/src/config/settings.py"
+
+
+def test_the_roots_the_path_contract_denies_are_not_rescued(normalizer):
+    """The other half of the same claim: `_PATH_RULES` says /home/user,
+    /workspace, /testbed, /app and /root name nothing here.
+
+    They must come back UNCHANGED, so the error the model reads names the
+    path it actually wrote and it can correct itself -- which is OPEN-82's
+    rule, and the reason the anchor is worth stating at all. A silent
+    rewrite here would put the model back where run `689f0ea263be` was:
+    told a path it never typed does not exist.
+    """
+    validate = normalizer()
+
+    for invented in (
+        "/home/user/Rudra/requirements.txt",
+        "/workspace/src/app.py",
+        "/testbed/app/main.py",
+        "/app/models.py",
+        "/root/setup.py",
+    ):
+        assert validate(invented) == invented, invented

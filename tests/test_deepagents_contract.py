@@ -616,3 +616,37 @@ def test_custom_memory_middleware_replaces_the_default(monkeypatch, tmp_path):
         "by name; OPEN-70 reopens and the edit_file order is back in the prompt"
     )
     assert memory[0] is ours
+
+
+def test_upstream_still_tells_the_model_every_file_path_must_be_absolute():
+    """The trigger that retires the "must be absolute" paragraph of
+    `_PATH_RULES` (OPEN-81).
+
+    Every file tool's `file_path` field carries this description, so the
+    model reads it five times per call and reads Rudra's "use relative
+    paths" once. `_PATH_RULES` used to answer with a flat prohibition and
+    lost 13 times in one run; it now names this text and says which holds,
+    the way `_DELETE_RULES` does for DELETE_TOOL_DESCRIPTION.
+
+    If this fails, upstream has reworded it: re-read the new text and, if
+    it no longer demands absolute paths, drop that paragraph. The rest of
+    the block -- where the project is, and which roots do not exist -- is
+    independent of it.
+    """
+    from deepagents.middleware.filesystem import (
+        DeleteSchema,
+        EditFileSchema,
+        LsSchema,
+        ReadFileSchema,
+        WriteFileSchema,
+    )
+
+    for model, field in (
+        (LsSchema, "path"),
+        (ReadFileSchema, "file_path"),
+        (WriteFileSchema, "file_path"),
+        (EditFileSchema, "file_path"),
+        (DeleteSchema, "file_path"),
+    ):
+        description = model.model_fields[field].description or ""
+        assert "Must be absolute, not relative." in description, model.__name__

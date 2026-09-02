@@ -28,6 +28,14 @@ from rudra.stacks import ALL_SKIP_DIRS
 
 EMPTY_PROJECT = "(empty project)"
 
+# What `project_tree` appends instead of a path when it truncates. Two
+# callers have to tell it apart from a real entry -- the `@` completer, which
+# offered it as a completion and put the sentence in the user's prompt
+# (CR-G11), and the PROJECT FILES block, which must not hand it a leading
+# "/" and call it a file (OPEN-81). One predicate, so a reworded footer
+# cannot break one of them silently.
+_TRUNCATION_MARKER = "…"
+
 _GIT_TIMEOUT_SECONDS = 5
 
 # Applied on BOTH listing paths, so they hold even in a repo that tracks
@@ -108,6 +116,37 @@ def project_tree(
     if omitted:
         lines.append(f"… {omitted} more entries omitted (cap: {max_entries})")
     return "\n".join(lines)
+
+
+def is_truncation_footer(line: str) -> bool:
+    """Is this listing line the truncation footer rather than a path?
+
+    See `_TRUNCATION_MARKER`. A blank line is not a path either, and every
+    caller wants it out, so it answers True for one.
+    """
+    stripped = line.strip()
+    return not stripped or stripped.startswith(_TRUNCATION_MARKER)
+
+
+def as_virtual_paths(listing: str) -> str:
+    """The same listing in the spelling `ls` and `glob` answer in.
+
+    `project_tree` emits project-relative paths; every deepagents file tool
+    answers in virtual-absolute ones -- `ls("/")` returns `/pytest.ini`,
+    `glob` returns `/src/config/settings.py` -- because every backend is
+    built `virtual_mode=True`. Showing the model both spellings of the same
+    file is what OPEN-81 was filed on, so a prompt block quoting this
+    listing quotes it the way the tools will.
+
+    `EMPTY_PROJECT` and the truncation footer are sentences, not paths, and
+    are returned untouched.
+    """
+    if listing == EMPTY_PROJECT:
+        return listing
+    return "\n".join(
+        line if is_truncation_footer(line) else f"/{line.lstrip('/')}"
+        for line in listing.splitlines()
+    )
 
 
 def _is_always_skipped(rel_posix: str) -> bool:

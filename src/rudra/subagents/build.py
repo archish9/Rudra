@@ -32,6 +32,7 @@ from rudra.middleware import (
     ModelRetryMiddleware,
     RepeatGuardMiddleware,
 )
+from rudra.subagents.registry import PROJECT_PATH_TOKEN
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
 from rudra.tools.git_tools import create_git_tools
 from rudra.tools.memory_tools import create_memory_tools
@@ -128,7 +129,21 @@ def _prompt_for(spec: RudraSubagent, context: Any, task: str = "") -> str:
     (planner_agent.py:42), so a project whose facts said Rust had a coder
     that was never told.
     """
-    parts = [spec.system_prompt]
+    # OPEN-81. The path contract states where the project is, and the root
+    # is a per-run fact while a spec is built at import -- so it carries a
+    # placeholder and this renders it, for the same reason the facts block
+    # is built here rather than baked in.
+    #
+    # `str.replace` rather than `.format`: formatting the whole prompt
+    # would make every future brace in it -- a JSON example, a dict
+    # literal, an f-string in a code sample -- a KeyError in prompt
+    # assembly. Only the specs whose rules ask for the anchor read
+    # project_path, so a stand-in context without one still builds a
+    # reviewer.
+    prompt = spec.system_prompt
+    if PROJECT_PATH_TOKEN in prompt:
+        prompt = prompt.replace(PROJECT_PATH_TOKEN, str(context.project_path))
+    parts = [prompt]
     block = facts_block(getattr(context, "facts", None))
     if block:
         parts.append(block)
@@ -140,9 +155,16 @@ def _prompt_for(spec: RudraSubagent, context: Any, task: str = "") -> str:
     # the files they are being shown, so a stale listing is a correctness
     # bug rather than a performance trade (OPEN-39).
     if spec.wants_tree:
-        from rudra.filesystem import project_tree
+        from rudra.filesystem import as_virtual_paths, project_tree
 
-        listing = project_tree(context.project_path, max_entries=TREE_MAX_ENTRIES)
+        # Rendered in the spelling `ls` and `glob` ANSWER in, not the
+        # relative one project_tree emits (OPEN-81). The model was being
+        # shown three spellings of one path -- relative here, `/`-prefixed
+        # in every tool result, and "must be absolute" in the tool schemas
+        # -- and it resolved the conflict with a root of its own invention.
+        # This is the only one of the three Rudra controls, so it is the
+        # one that moves.
+        listing = as_virtual_paths(project_tree(context.project_path, max_entries=TREE_MAX_ENTRIES))
         parts.append(
             "## PROJECT FILES\n\n"
             "Every file in this project, current as of this call. You do not "

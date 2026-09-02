@@ -251,11 +251,16 @@ def test_only_a_spec_with_delete_gets_the_delete_contract():
 
 def test_the_delete_contract_overrides_upstreams_absolute_path_claim():
     """deepagents' DELETE_TOOL_DESCRIPTION (filesystem.py:1258-1265) opens
-    with "the given absolute path", which is the exact opposite of
-    `_PATH_RULES`. Every other granted tool's description is silent on the
-    question; this one asserts the wrong answer, so the contract has to
-    name it rather than assume "RELATIVE paths only" is read as covering a
-    tool that says otherwise.
+    with "the given absolute path", so the contract has to name it rather
+    than assume the block above is read as covering a tool that says
+    otherwise.
+
+    This docstring used to add that every other granted tool's description
+    was silent on the question. It is not -- all five file tools' field
+    schemas say `Must be absolute, not relative.` (filesystem.py:1092-1155)
+    -- and OPEN-81 is what that gap cost. `_PATH_RULES` answers them there;
+    this stays because `delete`'s PROSE says it too, and prose is what a
+    model reading the tool list meets first.
     """
     from rudra.subagents.registry import _DELETE_RULES
 
@@ -278,3 +283,69 @@ def test_the_delete_contract_states_that_a_directory_delete_is_recursive():
 
     lowered = _DELETE_RULES.lower()
     assert "recursive" in lowered or "everything inside" in lowered
+
+
+# --- OPEN-81: where the project is -----------------------------------------
+
+
+def test_the_path_contract_states_where_the_project_is():
+    """OPEN-81. Nothing in any writer's prompt named the project, in any
+    spelling, and run `689f0ea263be`'s coder answered the question itself:
+    13 of its 13 `read_file` errors were paths beginning
+    `/home/user/Rudra/`, a Linux container home and a project name it was
+    never given.
+
+    The anchor is a placeholder here because a spec is built at import and
+    the root is known per run; `build.py::_prompt_for` renders it, and
+    tests/test_subagents_build.py holds that half.
+    """
+    from rudra.subagents.registry import _PATH_RULES, PROJECT_PATH_TOKEN
+
+    assert PROJECT_PATH_TOKEN in _PATH_RULES
+
+
+def test_the_path_contract_names_the_roots_a_model_invents():
+    """`_COMMAND_RULES` already names them for `execute` -- "/app,
+    /workspace, /testbed, /root and /mnt/<id> do not exist here and never
+    will" -- and in run `689f0ea263be` the coder produced ZERO bad shell
+    paths and 13 bad file paths. The half that had the sentence did not
+    fail; this is that sentence for the file tools.
+
+    `/home/user` is included because it is the one the run actually
+    produced, and it is the one `_COMMAND_RULES` does not list.
+    """
+    from rudra.subagents.registry import _PATH_RULES
+
+    lowered = _PATH_RULES.lower()
+    for invented in ("/home/user", "/workspace", "/testbed", "/app", "/root"):
+        assert invented in lowered, invented
+
+
+def test_the_path_contract_answers_upstreams_must_be_absolute_claim():
+    """The `_DELETE_RULES` precedent (registry.py:60-63), applied to the
+    tool descriptions that actually caused this.
+
+    Every file tool deepagents builds carries `file_path: str = Field(
+    description="Absolute path ... Must be absolute, not relative.")` --
+    `ls`, `read_file`, `write_file`, `edit_file` and `delete`, at
+    filesystem.py:1092-1155. A prompt cannot outrank a prompt (OPEN-17),
+    so the contract names the other text and says which holds rather than
+    leaving "NEVER use absolute paths" to win an argument it lost 13 times.
+    """
+    from rudra.subagents.registry import _PATH_RULES
+
+    lowered = _PATH_RULES.lower()
+    assert "must be absolute" in lowered
+
+
+def test_the_path_contract_legitimises_the_spelling_ls_answers_in():
+    """The prompt used to contradict the tool output the model reads three
+    lines later: `ls` and `glob` return `/src/config/settings.py`, and
+    those calls WORK -- `virtual_mode=True` makes them correct. This run's
+    tester copied two straight out of a listing, in the spelling the
+    prompt forbade.
+    """
+    from rudra.subagents.registry import _PATH_RULES
+
+    assert "ls" in _PATH_RULES
+    assert "/src/" in _PATH_RULES
