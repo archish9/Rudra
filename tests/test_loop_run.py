@@ -341,3 +341,65 @@ async def test_work_added_by_the_stale_consult_is_actually_run(monkeypatch, cont
     await run_loop("build it", context=context, planner=planner)
 
     assert "fix the CLI tests" in ran
+
+
+# --- OPEN-83: a provider error to the planner ends the run, by decision -------
+
+
+class _DyingPlanner(FakePlanner):
+    """A planner whose Nth breakdown consult meets a dead provider."""
+
+    def __init__(self, script=None, *, die_on: str = "initial"):
+        super().__init__(script)
+        self.die_on = die_on
+
+    async def __call__(self, ledger, request, *, stage="breakdown", reason="initial", **kwargs):
+        if stage == "breakdown" and reason == self.die_on:
+            from rudra.llm.retry import ProviderUnavailable
+
+            class _Boom(Exception):
+                status_code = 500
+
+            raise ProviderUnavailable("the model provider", 1, _Boom(), progress="Files exist.")
+        return await super().__call__(ledger, request, stage=stage, reason=reason, **kwargs)
+
+
+async def test_a_provider_error_to_the_initial_planner_ends_the_run(monkeypatch, context):
+    """OPEN-83, Option A, chosen by the owner 2026-09-02.
+
+    The coder absorbs this exact error and refunds the attempt
+    (engine.py run_task); the planner does not, and that asymmetry is
+    decided rather than missing. Pinned so a future session cannot quietly
+    wrap the `await` and call it a cleanup -- the alternative is written up
+    in the OPEN-83 plan §5(b) and needs asking, not inferring.
+    """
+    from rudra.llm.retry import ProviderUnavailable
+
+    planner = _DyingPlanner([["a"]], die_on="initial")
+    monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.DONE))
+    monkeypatch.setattr(engine, "review_once", _noop)
+
+    with pytest.raises(ProviderUnavailable):
+        await run_loop("build it", context=context, planner=planner)
+
+
+async def test_a_provider_error_to_a_re_consult_ends_the_run(monkeypatch, context):
+    """The re-consult sites are unguarded too, which is the costly half.
+
+    Run `689f0ea263be` died here with 26 tasks queued. Option A accepts
+    that because the ledger is saved and `--continue` resumes it -- so the
+    assertion below is not only that it raises, but that the work survives.
+    """
+    from rudra.llm.retry import ProviderUnavailable
+
+    planner = _DyingPlanner([["a", "b"]], die_on="blocked")
+    monkeypatch.setattr(engine, "run_task", _outcomes(Outcome.BLOCKED))
+    monkeypatch.setattr(engine, "review_once", _noop)
+
+    with pytest.raises(ProviderUnavailable):
+        await run_loop("build it", context=context, planner=planner)
+
+    # The half that makes Option A survivable: `--continue` has something
+    # to pick up, and main_agent only offers it when resumable() is truthy.
+    saved = Ledger.load(context.paths.ledger_json)
+    assert saved.resumable(), "the run is only recoverable if the ledger kept the pending work"

@@ -196,9 +196,11 @@ def decide_action_requests(
 # whether the agent it was streaming had written anything yet. Claiming
 # either way would be a guess; the ledger is the thing that actually knows,
 # and `RudraAgent` adds the resume line from it.
-_MID_RUN_PROGRESS = (
-    "The run had already started, so any files written before this point are on disk."
-)
+# The clause `ProviderUnavailable` prints in place of "Nothing was written."
+# Only the files half, because the class now says the run had begun on its
+# own account (OPEN-83) -- saying it twice is how the sentence got long
+# enough that the count in front of it was the only part users read.
+_MID_RUN_PROGRESS = "Any files written before this point are on disk."
 
 
 async def _stream_with_retry(
@@ -216,6 +218,15 @@ async def _stream_with_retry(
     the caller's parse loop has already seen it and a retry would re-emit
     the run from the start -- so a mid-stream failure is surfaced instead.
     Rescuing that case needs resume (C7.2), not a retry.
+
+    **The user-visible consequence, because it was mistaken for a defect
+    once (OPEN-83).** On this path `ProviderUnavailable` carries
+    `attempts == 1` always -- the loop leaves on its first pass -- and the
+    message therefore prints no attempt count at all. A run that dies here
+    spent ZERO of its four budgeted tries, and that is the design rather
+    than a retry that failed. Anything that changes when the count is
+    printed belongs in `llm/retry.py`, which owns both spellings so they
+    cannot drift.
 
     That limit costs less than it sounds: every failure measured on
     2026-08-17 -- a 429 on the first planner call, a 502, a 500, an

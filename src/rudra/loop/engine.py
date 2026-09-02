@@ -1109,6 +1109,20 @@ async def plan(
     # shape, then declare the work. Each is a separate agent with its own
     # tools, so a stage cannot do another stage's job. Only `breakdown` is
     # ever re-entered, and only by work() below (S10b.3).
+    #
+    # Bare `await`, and that is a DECIDED disposition rather than a missing
+    # handler (OPEN-83, owner's call 2026-09-02). A provider error to the
+    # planner ends the run, where the identical error to the coder is
+    # absorbed and the attempt refunded (run_task above). The asymmetry was
+    # measured -- run `689f0ea263be` lost 26 queued tasks to one 500 -- and
+    # kept: the planner is not optional the way a tester is, a run whose
+    # breakdown cannot answer has no work to do, and `--continue` resumes
+    # from the ledger, which is saved before this line and after every task.
+    # So the cost is time, never output. Option B (count it into
+    # `context.run_errors` at the re-consult sites and carry on) is written
+    # up in full at docs/superpowers/plans/2026-09-02-open-83-planner-
+    # provider-error-is-fatal.md §5(b); do not implement it without asking
+    # again, and do not re-file the asymmetry as a defect.
     for stage in ("clarify", "architect", "breakdown"):
         await planner(ledger, request, stage=stage, reason="initial")
 
@@ -1145,6 +1159,11 @@ async def work(
     Consults only the `breakdown` stage, and only on a stall: the facts
     and the architecture were settled by plan(), and a user may since
     have approved them.
+
+    Every `await planner(...)` below is unguarded on purpose, including the
+    three re-consults that have a ledger to fall back on: a provider error
+    here ends the run and `--continue` picks the pending tasks up. See
+    plan() for why, and OPEN-83 for what the alternative would cost.
     """
     consulted_on_empty = False
     consulted_on_stale = False

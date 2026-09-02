@@ -231,3 +231,80 @@ async def test_a_mid_stream_NON_transient_failure_still_raises_itself(monkeypatc
         await _drain(agent)
 
     assert agent.calls == 1
+
+
+# --- OPEN-83: the count means "tries spent", and mid-stream never spends any --
+
+
+@pytest.mark.asyncio
+async def test_a_mid_stream_failure_does_not_report_an_attempt_count(monkeypatch) -> None:
+    """OPEN-83 §5(a). `after 1 attempt(s)` reads as "it barely tried".
+
+    The opposite is true: four tries were budgeted and zero were spent,
+    because `approval.py` retries only while nothing has been yielded. The
+    count is real -- it means tries SPENT -- but printing it next to a
+    failure that was never eligible for a retry tells the user Rudra gave
+    up early, and run `689f0ea263be` ended on exactly that sentence with
+    26 tasks queued.
+    """
+    monkeypatch.setattr("rudra.llm.retry.retry_delays", lambda **_: [0.0, 0.0, 0.0])
+    agent = _FlakyAgent(failures=99, error=_Status(500), after_chunks=1)
+
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        await _drain(agent)
+
+    text = str(excinfo.value)
+    assert "attempt(s)" not in text
+    assert "1 attempt" not in text
+
+
+@pytest.mark.asyncio
+async def test_a_mid_stream_failure_says_it_was_not_retried_and_why(monkeypatch) -> None:
+    """Saying nothing about the retry is how the old count got read as one.
+
+    The user needs both halves: it was not retried, and the reason is that
+    the run was already in flight -- which is also why `--continue` is the
+    answer rather than re-running from the top.
+    """
+    monkeypatch.setattr("rudra.llm.retry.retry_delays", lambda **_: [0.0, 0.0, 0.0])
+    agent = _FlakyAgent(failures=99, error=_Status(500), after_chunks=1)
+
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        await _drain(agent)
+
+    text = str(excinfo.value)
+    assert "does not retry" in text
+    assert "streaming" in text
+    assert "on disk" in text
+
+
+@pytest.mark.asyncio
+async def test_a_pre_stream_failure_still_reports_every_attempt(monkeypatch) -> None:
+    """The regression guard for the pair (plan §6.2).
+
+    Both paths share `ProviderUnavailable`, so the wording change above can
+    only be trusted while this one still names the tries it really spent.
+    Four delays configured, four tries, `after 4 attempt(s)`.
+    """
+    monkeypatch.setattr("rudra.llm.retry.retry_delays", lambda **_: [0.0, 0.0, 0.0])
+    agent = _FlakyAgent(failures=99, error=_Status(502))
+
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        await _drain(agent)
+
+    text = str(excinfo.value)
+    assert "after 4 attempt(s)" in text
+    assert agent.calls == 4
+    assert "Nothing was written" in text
+
+
+def test_the_attempt_count_survives_on_the_exception_either_way() -> None:
+    """The wording drops the count; the attribute must not.
+
+    `attempts` is what a caller inspects, and OPEN-83 changed only what a
+    human reads.
+    """
+    err = ProviderUnavailable("the model provider", 1, _Status(500), progress="Files exist.")
+
+    assert err.attempts == 1
+    assert err.progress == "Files exist."

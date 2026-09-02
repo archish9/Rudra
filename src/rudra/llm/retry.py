@@ -120,6 +120,18 @@ def retry_delays(attempts: int = 3, *, base: float = 1.0) -> list[float]:
 # case OPEN-41 added, where the run is further along and files may exist.
 _WROTE_NOTHING = "Nothing was written."
 
+# Why the mid-stream case shows no attempt count (OPEN-83). It is not that
+# the count is wrong -- it means tries SPENT, and mid-stream spends none --
+# it is that a number reading "1" beside a dead provider says "Rudra gave
+# up early" to everyone who has not read approval.py. Run `689f0ea263be`
+# ended on that sentence with 26 tasks queued and the user's question was
+# "whats that?", so the sentence now answers it.
+_NOT_RETRIED = (
+    "the failure struck after the run had begun streaming -- which Rudra "
+    "does not retry, since replaying a partly-consumed run would repeat "
+    "work already done"
+)
+
 
 class ProviderUnavailable(RuntimeError):
     """A transient provider failure that outlived its retries.
@@ -149,10 +161,21 @@ class ProviderUnavailable(RuntimeError):
         detail = f"{type(error).__name__}"
         if status is not None:
             detail += f" ({status})"
+        # The count is printed only where it is a fact about effort. On the
+        # mid-stream path `attempts` is always 1 -- the loop breaks out on
+        # its first pass once a chunk is out -- so the two facts, "what the
+        # provider did" and "how hard Rudra tried", must not share one
+        # number (OPEN-83 §5(a)).
+        if progress is None:
+            opening = f"Provider error from {provider} after {attempts} attempt(s): {detail}."
+            served = f"The model endpoint could not serve the request. {_WROTE_NOTHING}"
+        else:
+            opening = f"Provider error from {provider}: {detail}."
+            served = (
+                f"The model endpoint could not serve the request, and {_NOT_RETRIED}. {progress}"
+            )
         super().__init__(
-            f"Provider error from {provider} after {attempts} attempt(s): {detail}. "
-            f"The model endpoint could not serve the request. {progress or _WROTE_NOTHING} "
-            f"If this persists, check your quota and the endpoint's status."
+            f"{opening} {served} If this persists, check your quota and the endpoint's status."
         )
         self.provider = provider
         self.attempts = attempts
