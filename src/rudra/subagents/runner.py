@@ -52,7 +52,41 @@ keys on `(tool, target)`, so 204 different patterns are 204 firsts;
 invocation in that same acceptance ran to well under 20 calls, and the
 planner's busiest stage to about 30. It is a runaway bound, not a budget
 -- if real work ever approaches it, raise it rather than teaching people
-to expect halts."""
+to expect halts.
+
+It is HALF the runaway bound since OPEN-91; see MAX_INVOCATION_SECONDS,
+which covers the regime where this one is loose."""
+
+MAX_INVOCATION_SECONDS = 1200.0
+"""Wall-clock seconds one subagent invocation may spend (OPEN-91).
+
+**The unit was the defect, not the number.** MAX_TOTAL_CALLS above was
+calibrated against an observation -- 204 globs over 12 minutes, i.e. 3.5 s
+per call -- at which rate 80 calls is 4.7 minutes and a sensible bound.
+Run `fc543fb2b82f` measured 46.0 s per coder call, at which rate the SAME
+80 calls is 61 minutes. Its task t7 spent 2,704 s on 41 globs hunting an
+interpreter the file tools cannot reach, stopped at 55 calls on the
+model's own initiative, and this project's only guard against exactly that
+never fired.
+
+    A guard denominated in calls has a wall-clock cost that varies by more
+    than an order of magnitude with the provider. The thing the user
+    complains about is seconds.
+
+1200 is chosen against the same run: its healthy t1 coder was ONE call and
+201 s, and a hard task at 46 s/call and ~20 calls is ~15 minutes. So 20
+minutes clears observed real work and halves the observed runaways.
+
+**Both bounds are kept, and each covers the regime where the other is
+loose.** On a fast local model 20 minutes is 300+ calls, which is
+MAX_TOTAL_CALLS' case; on a 46 s/call provider 80 calls is an hour, which
+is this one's. `[agent] max_invocation_seconds` overrides it -- a user on
+a slow provider is the person best placed to raise it -- and 0 turns it
+off, the way `max_questions = 0` does.
+
+Checked as each chunk arrives, so a model call already in flight is not
+interrupted mid-request: the halt lands at the first chunk after the
+deadline, which is one model round trip of slack."""
 
 # Tool calls worth counting repeats for. `task` is included and now
 # genuinely reachable, which is what closes A1.20.
@@ -217,6 +251,24 @@ def _wants_token_stream(context: Any) -> bool:
     return bool(getattr(agent_cfg, "stream_tokens", False))
 
 
+def _invocation_limit(context: Any) -> float:
+    """Seconds this invocation may spend, or 0.0 for no bound (OPEN-91).
+
+    Read as defensively as `_wants_token_stream` above and for the same
+    reason: 9b-era callers build a SubagentContext with `cfg=None`, and a
+    runaway guard must not be the thing that makes those unbuildable. An
+    unreadable value falls back to the constant rather than to no bound --
+    the degraded mode of a guard is the guard, not its absence.
+    """
+    agent_cfg = getattr(getattr(context, "cfg", None), "agent", None)
+    raw = getattr(agent_cfg, "max_invocation_seconds", MAX_INVOCATION_SECONDS)
+    try:
+        limit = float(raw)
+    except (TypeError, ValueError):
+        return MAX_INVOCATION_SECONDS
+    return limit if limit > 0 else 0.0
+
+
 def _call_key(tool_call: dict, project_root: Path) -> tuple[str, ...]:
     """What makes two tool calls "the same call" for the repeat guard.
 
@@ -365,6 +417,34 @@ async def run_subagent(
     repeated: dict[tuple[str, ...], int] = {}
     halted: str | None = None
     last_text = ""
+    # 0.0 means no time bound; the call ceiling above still holds (OPEN-91).
+    limit = _invocation_limit(context)
+
+    def announce(reason: str, where: tuple[str, ...], index: int) -> None:
+        """Say that a guard fired.
+
+        A guard firing is a thing RUDRA did, so no chunk carries it and
+        `trace.feed` cannot see it (OPEN-44). One spelling, because all
+        four guards funnel here -- and TODO.md's lesson 5 is that a new
+        guard is a new silence unless it is wired to something.
+
+        The namespace and index are where it fired: a delegate's events
+        read `role: coder` with a namespace and are not the coder's own,
+        which is the distinction OPEN-37 turned on. The time bound is
+        checked before any message is parsed, so it passes the empty
+        namespace -- it is a fact about the invocation, not about a
+        position in a subgraph's message list.
+        """
+        if context.trace is None:
+            return
+        context.trace.notice(
+            reason,
+            role=state.role,
+            name="guard",
+            namespace=where,
+            index=index,
+            at=time.monotonic() - state.started,
+        )
 
     try:
         async for chunk in run_with_approvals(
@@ -378,6 +458,20 @@ async def run_subagent(
             role=name,
         ):
             if halted is not None:
+                break
+
+            # Before the chunk is parsed, so an invocation that is spending
+            # without producing tool calls is caught too. Each bound names
+            # itself: "80 tool calls" is a loop, "20 minutes" is a slow
+            # provider or a loop, and a reader of ledger.json has to be able
+            # to tell them apart (OPEN-91).
+            elapsed = time.monotonic() - invocation_started
+            if limit and elapsed >= limit:
+                halted = (
+                    f"{elapsed:.0f}s in one invocation, over the {limit:.0f}s limit "
+                    f"-- stopping after {total_calls} tool calls."
+                )
+                announce(halted, (), 0)
                 break
 
             namespace, event = (
@@ -432,23 +526,7 @@ async def run_subagent(
                         consecutive_failures = 0
 
                 if halted is not None:
-                    if context.trace is not None:
-                        # A guard firing is a thing RUDRA did, so no chunk
-                        # carries it and `trace.feed` above cannot see it
-                        # (OPEN-44). Emitted from the one place all three
-                        # guards funnel through, with the namespace and
-                        # position they fired at -- a delegate's events read
-                        # `role: coder` with a namespace and are not the
-                        # coder's own, which is the distinction OPEN-37
-                        # turned on.
-                        context.trace.notice(
-                            halted,
-                            role=state.role,
-                            name="guard",
-                            namespace=where,
-                            index=processed,
-                            at=time.monotonic() - state.started,
-                        )
+                    announce(halted, where, processed)
                     break
                 processed += 1
             seen[where] = processed
@@ -480,6 +558,8 @@ async def run_subagent(
 
 
 __all__ = [
+    "MAX_INVOCATION_SECONDS",
+    "MAX_TOTAL_CALLS",
     "SUBAGENT_KIND",
     "SubagentContext",
     "SubagentResult",

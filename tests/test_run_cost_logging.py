@@ -384,3 +384,31 @@ async def test_a_halted_invocation_names_the_guard_that_stopped_it(
     # The halt is a fact about the invocation, and so is what it spent
     # getting there. Both, or the log answers "it stopped" and not "why".
     assert record["tool_calls"] == 3
+
+
+async def test_a_time_halt_reaches_the_invocation_log_too(monkeypatch, invocations, tmp_path):
+    """OPEN-91. The seconds bound is the one a user's complaint is
+    denominated in, so `debug-<id>.jsonl` has to say it fired -- and say
+    which bound it was, since "80 tool calls" and "20 minutes" mean
+    different things."""
+    from tests.test_subagents_runner import FakeClock, ai, call, make_context, stream_of
+
+    monkeypatch.setattr(runner_module, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner_module, "time", FakeClock(step=500.0))
+    messages = [ai("looking", [call("glob", pattern=f"/usr/bin/python{n}*")]) for n in range(6)]
+    monkeypatch.setattr(
+        runner_module,
+        "run_with_approvals",
+        stream_of(*[{"messages": messages[: n + 1]} for n in range(len(messages))]),
+    )
+
+    result = await runner_module.run_subagent("coder", "go", context=make_context(tmp_path))
+
+    assert result.ok is False
+    (record,) = [entry for entry in invocations if entry.get("kind") == SUBAGENT_KIND]
+    assert record["ok"] is False
+    assert "limit" in record["halted"]
+    # What it spent getting there, for the reason the guard halt above
+    # carries it: "it stopped" is not "why".
+    assert record["tool_calls"] >= 1
+    assert record["tools"] == {"glob": record["tool_calls"]}

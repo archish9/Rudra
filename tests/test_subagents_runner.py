@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
@@ -24,20 +24,32 @@ class FakeTools:
 
 
 @dataclass
+class FakeAgent:
+    max_invocation_seconds: float = runner.MAX_INVOCATION_SECONDS
+
+
+@dataclass
 class FakeCfg:
     compat: FakeCompat
     tools: FakeTools
     models: dict
+    agent: FakeAgent = field(default_factory=FakeAgent)
 
 
-def make_context(tmp_path):
+def make_context(tmp_path, *, max_invocation_seconds=runner.MAX_INVOCATION_SECONDS, trace=None):
     return SubagentContext(
         project_path=tmp_path,
         backend=object(),
         gate=None,
         console=Console(quiet=True),
-        cfg=FakeCfg(compat=FakeCompat(), tools=FakeTools(), models={}),
+        cfg=FakeCfg(
+            compat=FakeCompat(),
+            tools=FakeTools(),
+            models={},
+            agent=FakeAgent(max_invocation_seconds=max_invocation_seconds),
+        ),
         session_id="s1",
+        trace=trace,
     )
 
 
@@ -534,3 +546,158 @@ def test_three_identical_writes_to_one_file_still_reach_the_halt(tmp_path):
         )
         repeated[key] = repeated.get(key, 0) + 1
     assert max(repeated.values()) >= runner.MAX_REPEATED_CALLS
+
+
+# --- OPEN-91: the runaway bound is denominated in the wrong unit ----------
+
+
+class FakeClock:
+    """A monotonic clock that advances a fixed step per reading.
+
+    `runner` reads the clock through its module-global `time`, so replacing
+    that name replaces the clock for this module only -- the real
+    `time.monotonic` is untouched everywhere else.
+    """
+
+    def __init__(self, step: float = 0.0):
+        self.step = step
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        self.now += self.step
+        return self.now
+
+
+class FakeTrace:
+    """Records what Rudra said about itself."""
+
+    def __init__(self):
+        self.notices: list[tuple[str, str]] = []
+
+    def notice(self, payload, *, role="", name="", **kwargs):
+        self.notices.append((name, payload))
+
+    def feed(self, chunk, state):
+        return []
+
+
+def _glob_stream(count: int):
+    """`count` chunks, one interpreter-hunting glob each -- t7's shape."""
+    messages = [ai("looking", [call("glob", pattern=f"/usr/bin/python{n}*")]) for n in range(count)]
+    return stream_of(*[{"messages": messages[: n + 1]} for n in range(count)])
+
+
+async def test_a_subagent_stops_after_the_wall_clock_bound(monkeypatch, tmp_path):
+    """OPEN-91. Run `fc543fb2b82f`'s t7 made 55 calls over 2,704 s and
+    MAX_TOTAL_CALLS = 80 never fired: at 46 s/call that ceiling is 61 minutes
+    of sanctioned runaway. The user complains in seconds, so a bound has to
+    be denominated in them."""
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(8))
+
+    result = await run_subagent("coder", "write it", context=make_context(tmp_path))
+
+    assert result.ok is False
+    assert "1200s limit" in (result.halted_reason or "")
+
+
+async def test_the_two_bounds_name_themselves_differently(monkeypatch, tmp_path):
+    """ "80 tool calls" is a loop; "20 minutes" is a slow provider or a loop.
+    A reader of `ledger.json` has to be able to tell them apart."""
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "time", FakeClock(step=0.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(runner.MAX_TOTAL_CALLS + 5))
+
+    result = await run_subagent("coder", "write it", context=make_context(tmp_path))
+
+    assert result.ok is False
+    assert "tool calls in one invocation" in (result.halted_reason or "")
+    assert "limit" not in (result.halted_reason or "")
+
+
+async def test_the_wall_clock_bound_is_configurable(monkeypatch, tmp_path):
+    """A user on a slow provider is the person best placed to raise it --
+    the same argument `[agent] max_fix_attempts` is configurable on."""
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(8))
+
+    result = await run_subagent(
+        "coder", "write it", context=make_context(tmp_path, max_invocation_seconds=100_000)
+    )
+
+    assert result.ok is True
+
+
+async def test_zero_turns_the_wall_clock_bound_off(monkeypatch, tmp_path):
+    """0 disables, the way `[agent] max_questions = 0` does. The call ceiling
+    still holds -- each bound covers the regime where the other is loose."""
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "time", FakeClock(step=5_000.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(4))
+
+    result = await run_subagent(
+        "coder", "write it", context=make_context(tmp_path, max_invocation_seconds=0)
+    )
+
+    assert result.ok is True
+
+
+async def test_a_context_with_no_agent_config_still_gets_the_bound(monkeypatch, tmp_path):
+    """9b-era callers build a SubagentContext with `cfg=None`, and a guard
+    must not be the thing that makes those unbuildable (`_wants_token_stream`
+    is read defensively for the same reason)."""
+    from rich.console import Console as _Console
+
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(8))
+
+    bare = SubagentContext(
+        project_path=tmp_path,
+        backend=object(),
+        gate=None,
+        console=_Console(quiet=True),
+        cfg=None,
+        session_id="s1",
+    )
+    result = await run_subagent("coder", "write it", context=bare)
+
+    assert result.ok is False
+    assert "limit" in (result.halted_reason or "")
+
+
+async def test_the_time_halt_says_it_fired(monkeypatch, tmp_path):
+    """TODO.md lesson 5: a new guard is a new silence unless it is wired to
+    something. All three guards funnel through `TraceSink.notice`."""
+    trace = FakeTrace()
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(8))
+
+    result = await run_subagent("coder", "write it", context=make_context(tmp_path, trace=trace))
+
+    assert result.ok is False
+    assert [name for name, _ in trace.notices] == ["guard"]
+    assert "limit" in trace.notices[0][1]
+
+
+async def test_an_ordinary_invocation_is_nowhere_near_the_time_bound(monkeypatch, tmp_path):
+    """The bound must not fire on real work. Run `fc543fb2b82f`'s healthy t1
+    coder was one call and 201 s; a hard task at 46 s/call and ~20 calls is
+    ~15 minutes."""
+    assert runner.MAX_INVOCATION_SECONDS >= 900
+
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "time", FakeClock(step=46.0))
+    messages = [ai("", [call("read_file", file_path=f"{n}.py")]) for n in range(20)]
+    monkeypatch.setattr(
+        runner,
+        "run_with_approvals",
+        stream_of(*[{"messages": messages[: n + 1]} for n in range(len(messages))]),
+    )
+
+    result = await run_subagent("coder", "write it", context=make_context(tmp_path))
+
+    assert result.ok is True

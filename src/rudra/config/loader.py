@@ -52,6 +52,7 @@ _AGENT_KEYS = frozenset(
         "verbose",
         "max_fix_attempts",
         "max_questions",
+        "max_invocation_seconds",
         "stream_tokens",
         "debug_log",
         "run_archive",
@@ -212,6 +213,18 @@ def validate(
         # the command line.
         raise ConfigError(
             f"max_questions in [agent] must be a whole number of 0 or more, got {questions!r}."
+        )
+
+    seconds = agent.get("max_invocation_seconds")
+    if seconds is not None and (
+        not isinstance(seconds, int) or isinstance(seconds, bool) or seconds < 0
+    ):
+        # 0 is legal, like max_questions and unlike max_fix_attempts: it is
+        # how a user on a very slow provider says "no time bound" without
+        # losing the call ceiling, which is a separate guard (OPEN-91).
+        raise ConfigError(
+            "max_invocation_seconds in [agent] must be a whole number of 0 or more, "
+            f"got {seconds!r}."
         )
 
     permissions = merged.get("permissions", {})
@@ -519,6 +532,7 @@ def build_config(
             verbose=bool(merged.get("agent", {}).get("verbose", False)),
             max_fix_attempts=int(merged.get("agent", {}).get("max_fix_attempts", 3)),
             max_questions=int(merged.get("agent", {}).get("max_questions", 5)),
+            max_invocation_seconds=int(merged.get("agent", {}).get("max_invocation_seconds", 1200)),
             stream_tokens=bool(merged.get("agent", {}).get("stream_tokens", False)),
             debug_log=bool(merged.get("agent", {}).get("debug_log", True)),
             run_archive=bool(merged.get("agent", {}).get("run_archive", True)),

@@ -1,25 +1,25 @@
 # CLAUDE.md — Rudra
 
-Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. **Three items are
-open as of 2026-09-03** (OPEN-90, OPEN-91, OPEN-92, all from run
-`fc543fb2b82f`), and it opens with the order to work them in and a document
-per item. Trust `grep -n PENDING TODO.md` over any heading, including this
-sentence.
+Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. **One item is
+open as of 2026-09-03** (OPEN-90, from run `fc543fb2b82f`; OPEN-91 and
+OPEN-92 were its board-mates and both closed the same day), and it opens with
+that item and a self-contained document for it. Trust
+`grep -n PENDING TODO.md` over any heading, including this sentence.
 
 **Three ledgers, and they are not interchangeable.**
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **What is open now, and nothing else.** Read it first. **Three open as of 2026-09-03** — it opens with a board giving the fix order and linking a self-contained plan document per item, then the run those items came from in seconds, then the ordering argument, then a summary per item. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed to 719 lines on 2026-09-03 when every closed item moved out (it was 2,140) |
-| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 89 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Two blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards, and the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-89. Its index table at the top is the map; read that before scrolling |
+| `TODO.md` | **What is open now, and nothing else.** Read it first. **One open as of 2026-09-03** — it opens with that item and a link to its self-contained plan document, then the run it came from in seconds, then the ordering argument the closed board was worked under, then a summary of the open item. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed to 545 lines on 2026-09-03 when every closed item moved out (it was 2,140) |
+| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 91 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Two blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards, and the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02), OPEN-87 … OPEN-89, and OPEN-91/OPEN-92. Its index table at the top is the map; read that before scrolling |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-03 that is OPEN-90, OPEN-91 and OPEN-92; none of the three is cited
-below, and none should be until it closes.
+2026-09-03 that is OPEN-90 alone; it is not cited below, and should not be
+until it closes.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
@@ -77,7 +77,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-03 that is three items, each with a self-contained plan document under `docs/superpowers/plans/`, and **the order is a dependency, not a preference** — the second item's fix destroys the first item's live reproduction. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-03 that is ONE item, OPEN-90, with a self-contained plan document under `docs/superpowers/plans/`. When there is more than one, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
@@ -281,7 +281,33 @@ src/rudra/
 │                           once it answers instead of running the tool,
 │                           because upstream's message is the model's own
 │                           argument echoed back and a model given that
-│                           re-sends it verbatim until the guard kills it
+│                           re-sends it verbatim until the guard kills it,
+│                           plus machine_paths.py (OPEN-91, always on):
+│                           every backend is `virtual_mode=True`, so a
+│                           model's `/usr/bin/python*` is
+│                           `<project>/usr/bin/python*` and can only ever
+│                           answer `No files found` — a SUCCESSFUL result
+│                           that reads as *look somewhere else*. Run
+│                           fc543fb2b82f's t7 did, 36 times over 2,704 s,
+│                           hunting an interpreter for a shell it does not
+│                           have. Two prompts already said so and both lost
+│                           (OPEN-17's rule, third time), so the fix is what
+│                           the TOOL says: the explanation is APPENDED to
+│                           the empty result — never prepended, because
+│                           `runner.py`'s failure counter and
+│                           `repeat_guard._is_error` both key on a leading
+│                           `Error`. It fires only where the tool found
+│                           NOTHING, so a project that really holds
+│                           `usr/bin/` is answered with its own files, and
+│                           it names the tool the agent actually has: no
+│                           shell means "the gate runs the tests when you
+│                           stop", `execute` means "that is the tool that
+│                           sees the machine". Registered on the SUBAGENT
+│                           and PLANNER stacks both, OUTSIDE the repeat
+│                           guard — 19 of those 36 globs were answered by
+│                           the guard's dedupe, so inside it the hint would
+│                           have missed exactly the calls the model was
+│                           most stuck on
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           interaction (record_fact · ask_user) · git_tools ·
 │                           testing_tools · memory_tools (remember ·
@@ -711,6 +737,7 @@ verbose = false                         # prose + untruncated payloads in the tr
 stream_tokens = false                   # stream that prose token by token; --stream for one run
 max_fix_attempts = 3                    # fix-loop retries per task (C6.5a)
 max_questions = 5                       # clarification budget for the run; 0 never asks
+max_invocation_seconds = 1200           # runaway bound in SECONDS, beside the call one (OPEN-91)
 run_archive = true                      # copy the run's evidence out of the project (OPEN-68)
 
 [tools]
@@ -990,6 +1017,8 @@ either.
 | Which task, how many tries, how long? | `ledger.json` | `seconds`, `attempts`, `halts`, `run_errors`, `files_touched` |
 | Did the gate pass, and on whose interpreter? | `verify.log` | the `command:` line of each stage — OPEN-80 was invisible without it |
 | Was anything denied? | `permissions.jsonl` | one line per gated decision, every mode |
+| Did a subagent get stopped for spending too long? | `ledger.json` · `debug-<id>.jsonl` | `halts` naming a `NNNs limit`, and a `"kind": "notice"`, `name: "guard"` line. **Which bound fired is the diagnosis**: "80 tool calls" is a loop, "over the 1200s limit" is a slow provider or a loop (OPEN-91). `meta.json` in the archive records the limit that was in force |
+| Did an agent go hunting the machine's filesystem? | `debug-<id>.jsonl` | `"kind": "notice"`, `name: "machine-path"` — one per tool result Rudra had to explain. Non-zero means OPEN-91's defect fired and was answered at call two instead of call forty |
 | Did edits have to be repaired? | `usage.json` | `roles.<role>.edits_reindented` — non-zero means OPEN-92's gutter defect fired and was caught. Paired with a `"kind": "notice"`, `name: "reindent"` line per repair in `debug-<id>.jsonl` |
 
 **`files_touched: []` on a `DONE` task is the single highest-signal line in

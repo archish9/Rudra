@@ -253,6 +253,10 @@ def env_facts(cfg: Any) -> dict[str, Any]:
         "debug_log": getattr(agent, "debug_log", None),
         "max_fix_attempts": getattr(agent, "max_fix_attempts", None),
         "max_questions": getattr(agent, "max_questions", None),
+        # A `halts` line saying "over the 1200s limit" is only readable
+        # against the limit that was in force, and it is configurable
+        # (OPEN-91).
+        "max_invocation_seconds": getattr(agent, "max_invocation_seconds", None),
         "python": platform.python_version(),
         "platform": f"{platform.system()} {platform.release()}",
         "deepagents": _package_version("deepagents"),

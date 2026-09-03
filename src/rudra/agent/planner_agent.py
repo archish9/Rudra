@@ -42,6 +42,7 @@ from rudra.middleware import (
     PLANNER_MEMORY_SOURCES,
     DelegationGuardMiddleware,
     FixWriteParamsMiddleware,
+    MachinePathMiddleware,
     ModelRetryMiddleware,
     RepeatGuardMiddleware,
     TaskAnchorMiddleware,
@@ -351,6 +352,18 @@ def build_planner_middleware(
         # does -- it builds a fresh agent PER STAGE, so its own three
         # stages already cross the boundary this fixes. A belief inherited
         # rather than made is confirmed against the file before it refuses.
+        # OPEN-91, and it is registered here for the reason ModelRetry and
+        # RepeatGuard are: the planner holds `glob`, `grep`, `ls` and
+        # `read_file` (PLANNER_FS_TOOLS below) and no `execute`, which is
+        # exactly the tool set that produced run fc543fb2b82f's 36-glob hunt
+        # in the coder. Outside the repeat guard, so a hunt whose repeats the
+        # guard is deduping still gets the explanation.
+        MachinePathMiddleware(
+            "planner",
+            project_path=project_path,
+            has_shell=False,
+            trace=trace,
+        ),
         RepeatGuardMiddleware(role="planner", usage=usage, trace=trace, project_path=project_path),
         # OPEN-37, and it is OPEN-26 one agent up. `create_deep_agent` below
         # passes no `subagents=`, so deepagents auto-adds its own

@@ -69,6 +69,13 @@ max_fix_attempts = 3
 # Set to 0 to never ask; unattended runs (--auto) never ask regardless.
 max_questions = 5
 
+# How long one subagent invocation may run before Rudra stops it. There are
+# two runaway bounds and this is the one denominated in the thing you notice:
+# a coder that spends 20 minutes on one task is stopped whatever it is doing.
+# The other counts tool calls and is not configurable. Raise this on a slow
+# provider; 0 turns it off and leaves the call ceiling in place.
+max_invocation_seconds = 1200
+
 # Write the complete record of every run to
 # .rudra/run/logs/debug-<id>.jsonl — every trace event whatever `verbose`
 # shows, with payloads uncapped, plus every log record and traceback. This

@@ -1041,3 +1041,40 @@ def test_the_listings_truncation_footer_is_not_given_a_leading_slash(context):
     footer = next(line for line in listing.splitlines() if "omitted" in line)
 
     assert footer.startswith("…")
+
+
+# --- OPEN-91: the machine-path hint reaches every subagent ---------------
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_carries_the_machine_path_hint(name, context):
+    # Run fc543fb2b82f's coder spent 2,704 s on 36 globs for an interpreter
+    # the file tools cannot reach, and two prompts already forbade it. The
+    # fix reaches the model through the TOOL RESULT, so it has to be
+    # registered wherever a spec holds a project-rooted read tool -- which
+    # is every one of them.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    assert any(type(m).__name__ == "MachinePathMiddleware" for m in middleware)
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_the_machine_path_hint_sits_outside_the_repeat_guard(name, context):
+    # 19 of t7's 41 hunting globs were answered by the repeat guard's dedupe
+    # rather than by the tool. Inside the guard this would have explained 22
+    # of them and stayed silent on the 19 the model was most stuck on.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    names = [type(m).__name__ for m in middleware]
+    assert names.index("MachinePathMiddleware") < names.index("RepeatGuardMiddleware")
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_the_hint_agrees_with_the_spec_about_who_has_a_shell(name, context):
+    # To `execute`, "/" IS the machine (OPEN-21), so telling the tester
+    # there is no way to run anything would be false -- and telling the
+    # coder to use `execute` would name a tool it does not have (OPEN-36).
+    # Both are read off the spec's own fs_tools, the tuple `_rules_for`
+    # reads, so the hint and the prompt cannot disagree.
+    spec = REGISTRY[name]
+    middleware = _middleware_for(spec, context, _model_for(spec, context.cfg))
+    hint = [m for m in middleware if type(m).__name__ == "MachinePathMiddleware"][0]
+    assert hint.has_shell is ("execute" in spec.fs_tools)

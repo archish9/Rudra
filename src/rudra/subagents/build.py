@@ -30,6 +30,7 @@ from rudra.middleware import (
     ExecuteGuardMiddleware,
     FixWriteParamsMiddleware,
     GutterIndentMiddleware,
+    MachinePathMiddleware,
     ModelRetryMiddleware,
     RepeatGuardMiddleware,
 )
@@ -275,6 +276,23 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             usage=getattr(context, "usage", None),
             trace=getattr(context, "trace", None),
             project_path=getattr(context, "project_path", None),
+        ),
+        # OUTSIDE the repeat guard, which is the whole of its placement
+        # argument (OPEN-91). Run fc543fb2b82f's t7 had 19 of its 41
+        # interpreter-hunting globs answered by the guard's dedupe rather
+        # than by the tool -- so a middleware sitting inside it would have
+        # explained 22 of them and stayed silent on the 19 the model was
+        # most stuck on. Out here it annotates both.
+        MachinePathMiddleware(
+            spec.role,
+            project_path=getattr(context, "project_path", None),
+            # A spec that holds `execute` is pointed at it instead: to
+            # `execute`, "/" IS the machine (OPEN-21), so telling the tester
+            # there is no way to run anything would be false. Read off the
+            # same tuple `_rules_for` reads, so the hint and the prompt
+            # cannot disagree about which tools this agent has.
+            has_shell="execute" in spec.fs_tools,
+            trace=getattr(context, "trace", None),
         ),
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped -- otherwise two

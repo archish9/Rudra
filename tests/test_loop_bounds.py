@@ -138,3 +138,49 @@ def test_max_fix_attempts_must_be_a_positive_whole_number(tmp_path):
 
     (rudra / "config.toml").write_text(f"{base}\n[agent]\nmax_fix_attempts = 5\n", encoding="utf-8")
     assert build_config(tmp_path).agent.max_fix_attempts == 5
+
+
+def test_max_invocation_seconds_must_be_a_whole_number_of_zero_or_more(tmp_path):
+    """OPEN-91's bound is configurable because the number that separates a
+    runaway from real work is a property of the PROVIDER's latency -- 80
+    calls is 4.7 minutes at 3.5 s/call and 61 minutes at 46 s/call.
+
+    0 is legal here and illegal for max_fix_attempts, deliberately: it is
+    how a user on a very slow provider says "no time bound" without losing
+    the call ceiling, which is a separate guard.
+    """
+    from rudra.config import ConfigError, build_config
+
+    rudra = tmp_path / ".rudra"
+    rudra.mkdir(parents=True)
+    base = (
+        '[model.default]\nprovider = "ollama"\n'
+        'base_url = "http://localhost:11434"\nmodel = "qwen3:32b"\n'
+    )
+
+    for bad in ("-1", "true", '"1200"', "12.5"):
+        (rudra / "config.toml").write_text(
+            f"{base}\n[agent]\nmax_invocation_seconds = {bad}\n", encoding="utf-8"
+        )
+        try:
+            build_config(tmp_path)
+        except ConfigError as exc:
+            assert "max_invocation_seconds" in str(exc)
+        else:  # pragma: no cover - the assertion below reports it
+            raise AssertionError(f"max_invocation_seconds = {bad} was accepted")
+
+    for good in (0, 3600):
+        (rudra / "config.toml").write_text(
+            f"{base}\n[agent]\nmax_invocation_seconds = {good}\n", encoding="utf-8"
+        )
+        assert build_config(tmp_path).agent.max_invocation_seconds == good
+
+
+def test_the_shipped_default_is_the_one_the_runner_uses(tmp_path):
+    """Two spellings of one bound is two answers to "why did it stop".
+    `subagents/runner.py` reads the config and falls back to its constant
+    when there is none, so the two must be the same number."""
+    from rudra.config.schema import DEFAULTS
+    from rudra.subagents.runner import MAX_INVOCATION_SECONDS
+
+    assert DEFAULTS["agent"]["max_invocation_seconds"] == MAX_INVOCATION_SECONDS

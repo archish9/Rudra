@@ -4,6 +4,7 @@ from rudra.middleware.delegation_guard import DelegationGuardMiddleware
 from rudra.middleware.execute_guard import ExecuteGuardMiddleware
 from rudra.middleware.fix_write_params import FixWriteParamsMiddleware
 from rudra.middleware.gutter_indent import GutterIndentMiddleware
+from rudra.middleware.machine_paths import MachinePathMiddleware
 from rudra.middleware.memory_prompt import (
     PLANNER_MEMORY_SOURCES,
     RUDRA_MEMORY_PROMPT,
@@ -20,6 +21,7 @@ __all__ = [
     "ExecuteGuardMiddleware",
     "FixWriteParamsMiddleware",
     "GutterIndentMiddleware",
+    "MachinePathMiddleware",
     "ModelRetryMiddleware",
     "RepeatGuardMiddleware",
     "TaskAnchorMiddleware",

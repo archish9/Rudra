@@ -108,6 +108,14 @@ class AgentConfig:
     # where 0 would block every task without the coder running once, a
     # run that asks nothing is a legitimate unattended run.
     max_questions: int = 5
+    # Wall-clock seconds one subagent invocation may spend before the
+    # runaway guard stops it (OPEN-91). 0 turns the bound off, the way 0
+    # does for max_questions above; the call ceiling
+    # (subagents/runner.py::MAX_TOTAL_CALLS) is unaffected either way.
+    # Configurable because the number that separates a runaway from real
+    # work is a property of the PROVIDER's latency, and the user on a slow
+    # one is the person best placed to raise it.
+    max_invocation_seconds: int = 1200
     # Stream the model's prose token by token into the trace (C9.1).
     # Off by default and deliberately so: it is unmeasured against D6's
     # 32B floor, and this flag is how it gets measured. It changes only
@@ -274,6 +282,7 @@ DEFAULTS: dict[str, Any] = {
         "verbose": False,
         "max_fix_attempts": 3,
         "max_questions": 5,
+        "max_invocation_seconds": 1200,
         "stream_tokens": False,
         "debug_log": True,
         "run_archive": True,
