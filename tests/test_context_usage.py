@@ -62,6 +62,12 @@ def test_recording_accumulates_per_role():
         # tokens, and a bare count of 3 cannot say 300 chars or 34,000.
         "writes_skipped": 0,
         "writes_skipped_chars": 0,
+        # Added by OPEN-92: edits whose `old_string` carried read_file's
+        # two-space gutter as indentation and was repaired against the
+        # file's own bytes. Zero here for the reason reads_deduped is --
+        # a key that appears only on runs that repaired one is a key every
+        # reader of usage.json has to guard.
+        "edits_reindented": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -359,6 +365,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "reads_deduped",
         "writes_skipped",
         "writes_skipped_chars",
+        "edits_reindented",
         "seconds",
     }
 

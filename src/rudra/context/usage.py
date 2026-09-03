@@ -103,6 +103,17 @@ class RoleUsage:
     # add error.
     writes_skipped: int = 0
     writes_skipped_chars: int = 0
+    # Edits whose `old_string` carried `read_file`'s two-space gutter as
+    # indentation, repaired against the file's own bytes before the tool ran
+    # (OPEN-92, GutterIndentMiddleware).
+    #
+    # Counted because the fix is invisible in every other number: a repaired
+    # edit looks exactly like an edit that was right the first time. Without
+    # it, "did this item pay for itself" is answerable only by a hand-written
+    # parser over a debug log -- which is the thing CLAUDE.md §8a exists to
+    # stop. Before the repair, seven of run fc543fb2b82f's seven coder edits
+    # failed and two invocations were killed by the repeat guard.
+    edits_reindented: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -269,6 +280,18 @@ class RunUsage:
         slot.writes_skipped += 1
         slot.writes_skipped_chars += int(chars)
 
+    def record_edit_reindented(self, role: str) -> None:
+        """One `edit_file` whose gutter-indented `old_string` was repaired.
+
+        Mirrors record_dedupe and record_write_skipped: something Rudra did
+        on the run's behalf that no other number can show. A repaired edit is
+        indistinguishable from a correct one in tokens, seconds and tool
+        results -- and the failure it replaces cost a full model round trip
+        each time, three of them before the repeat guard killed the
+        invocation (OPEN-92).
+        """
+        self._slot(role).edits_reindented += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -343,6 +366,7 @@ class RunUsage:
                 "reads_deduped": tally.reads_deduped,
                 "writes_skipped": tally.writes_skipped,
                 "writes_skipped_chars": tally.writes_skipped_chars,
+                "edits_reindented": tally.edits_reindented,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

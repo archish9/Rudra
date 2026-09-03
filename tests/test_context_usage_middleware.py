@@ -68,6 +68,10 @@ def test_sync_hook_records_the_reported_counts():
         # this middleware wraps model calls.
         "writes_skipped": 0,
         "writes_skipped_chars": 0,
+        # Added by OPEN-92, and zero here for the fifth instance of the same
+        # reason: a repaired edit is a TOOL call GutterIndentMiddleware
+        # rewrote, and this middleware wraps model calls.
+        "edits_reindented": 0,
     }
     assert result.result[0].content == "hi"
 

@@ -29,6 +29,7 @@ from rudra.middleware import (
     DelegationGuardMiddleware,
     ExecuteGuardMiddleware,
     FixWriteParamsMiddleware,
+    GutterIndentMiddleware,
     ModelRetryMiddleware,
     RepeatGuardMiddleware,
 )
@@ -262,6 +263,18 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             spec.role,
             trace=getattr(context, "trace", None),
             usage=getattr(context, "usage", None),
+        ),
+        # After the param fixer, so it reads the path the call ENDED UP with
+        # rather than the one the model mistyped, and before the repeat guard,
+        # so a repaired edit is keyed as the call it became -- otherwise the
+        # guard counts the model's three identical failures and this one's
+        # three identical successes as the same call and halts the invocation
+        # it just rescued (OPEN-92, OPEN-10).
+        GutterIndentMiddleware(
+            spec.role,
+            usage=getattr(context, "usage", None),
+            trace=getattr(context, "trace", None),
+            project_path=getattr(context, "project_path", None),
         ),
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped -- otherwise two

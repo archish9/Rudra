@@ -1,21 +1,25 @@
 # CLAUDE.md — Rudra
 
-Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. It is empty as
-of 2026-09-01, and it says what to watch and what to do when you file the
-next item.
+Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. **Three items are
+open as of 2026-09-03** (OPEN-90, OPEN-91, OPEN-92, all from run
+`fc543fb2b82f`), and it opens with the order to work them in and a document
+per item. Trust `grep -n PENDING TODO.md` over any heading, including this
+sentence.
 
 **Three ledgers, and they are not interchangeable.**
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **What is open now, and nothing else.** Read it first. **As of 2026-09-01 nothing is open** — it opens by saying so, then carries the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. When items exist again it opens with the order to work them in |
-| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 71 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since; the **2026-09-01** block is the largest and has its own header, carrying all eleven run records and both ordering boards with it |
+| `TODO.md` | **What is open now, and nothing else.** Read it first. **Three open as of 2026-09-03** — it opens with a board giving the fix order and linking a self-contained plan document per item, then the run those items came from in seconds, then the ordering argument, then a summary per item. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed to 719 lines on 2026-09-03 when every closed item moved out (it was 2,140) |
+| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 89 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Two blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards, and the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-89. Its index table at the top is the map; read that before scrolling |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
-When it names an `OPEN-N`, it means `TODO-closed.md` — every one of them is
-closed, so a citation in this file is a pointer to a record rather than to
-work outstanding.
+When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
+in *this* file is closed, so a citation here is a pointer to a record rather
+than to work outstanding. **`TODO.md` is where the open ones are**, and as of
+2026-09-03 that is OPEN-90, OPEN-91 and OPEN-92; none of the three is cited
+below, and none should be until it closes.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
@@ -73,7 +77,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in (or, as of 2026-09-01, with the fact that nothing is open and the three trends to watch). For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-03 that is three items, each with a self-contained plan document under `docs/superpowers/plans/`, and **the order is a dependency, not a preference** — the second item's fix destroys the first item's live reproduction. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
@@ -247,7 +251,37 @@ src/rudra/
 │                           an EARLIER invocation did, across a boundary
 │                           this middleware sees nothing of, so it is never
 │                           invalidated and refuses nothing until the file
-│                           on disk is read and holds exactly those bytes
+│                           on disk is read and holds exactly those bytes,
+│                           plus gutter_indent.py (OPEN-92, always on):
+│                           `read_file` renders `f"{marker:>{w}}  {line}"`
+│                           (backends/utils.py:243), so a model composing
+│                           `old_string` from what it was SHOWN carries the
+│                           two-space gutter in as indentation — every line
+│                           +2 against the file — and `edit_file`'s exact
+│                           `content.count` (utils.py:523) can never match.
+│                           Measured: 7 of run fc543fb2b82f's 7 coder edits,
+│                           0 bytes changed, 2 invocations killed by the
+│                           repeat guard. **It fails exactly when an agent
+│                           edits what it did not just write** — every
+│                           fix-loop retry, every task after the first,
+│                           every `--continue`; the tester's edits in that
+│                           same run SUCCEEDED because it was editing its
+│                           own `write_file` content. The repair does NOT
+│                           dedent the model's string — measured, that fixes
+│                           0 of the 7, because the file's block is indented
+│                           too. It anchors on stripped line content, and
+│                           the corrected `old_string` is the FILE's own
+│                           bytes, which match by construction. Every
+│                           uncertain case declines and passes the call
+│                           through untouched: already-matching, one line,
+│                           no unique window, a non-uniform delta. It only
+│                           ever turns a certain failure into a success,
+│                           never a failure into a different one. When it
+│                           declines but the text IS in the file more than
+│                           once it answers instead of running the tool,
+│                           because upstream's message is the model's own
+│                           argument echoed back and a model given that
+│                           re-sends it verbatim until the guard kills it
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           interaction (record_fact · ask_user) · git_tools ·
 │                           testing_tools · memory_tools (remember ·
@@ -497,7 +531,7 @@ only function that creates anything.
 | `run/repl_history` | volatile | `cli_repl.build_session` | prompt_toolkit | Per project, because a Rust project's prompts are not a Python project's. A read-only project loses history, never the REPL (Step 15b) |
 | `run/transcripts/<id>.jsonl` | volatile | `trace/transcript.py`, every run | humans, `rudra log` | One JSON object per `TraceEvent`, appended and flushed per event so a killed run still leaves a readable record. Payloads capped at 2000 chars, newest 20 runs kept. **Written by default**, which is safe only because redaction happens where the event is built (A1.95) — moving redaction into the renderer would silently refill this file with credentials (Step 15c, C9.5) |
 | `run/logs/debug-<id>.jsonl` | volatile | `trace/debug.py`, **every run** | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record and traceback. **The complete record** — registered with `TraceSink.add_recorder`, so unlike the transcript no trace level filters it and payloads are uncapped. One file per run, newest 20 kept by `prune_debug_logs`, which globs `debug-*` so it cannot eat `permissions.jsonl`. `[agent] debug_log = false` or `--no-debug` turns it off. Corrected 2026-08-24 (OPEN-7): was one appending `debug.jsonl` written only under `--debug`, and registered as an ordinary consumer, so `--no-verbose` cut it down to errors. An unopenable file disables the log rather than failing the run (Step 15a, C9.7). **Since OPEN-87/OPEN-89 (2026-09-03) it carries two kinds that are NOT `TraceEvent`s**, and the distinction is the point: a trace event says what the model or Rudra *did*, and these say what the doing COST. `{"kind": "model_call"}` — one per model call, with `role`, `seconds`, both token counts and `ok` (`context/middleware.py::log_model_call`). `{"kind": "subagent_done"}` — one per subagent invocation, with `seconds`, `tool_calls`, a `tools` histogram of the six busiest, and the guard that halted it (`subagents/runner.py::log_invocation`). They ride the `rudra.*` logger tree this file already captures, so neither needed a new sink; `_JsonLines.format` promotes `record.event` to the top level, which is what makes them greppable by `kind` rather than parseable out of a message string |
-| `run/logs/usage.json` | volatile | `write_usage_log` | humans | **Two blocks since OPEN-53: `roles` and `run`.** `roles` is per-role tokens, compactions, **retries** and **exhaustions** — `retries` since OPEN-45, because `ModelRetryMiddleware` sits outside `UsageMiddleware` so `calls` silently absorbs every re-issue; `exhaustions` since OPEN-46 reopened (2026-09-01), because `retries` counts only the attempts that were RE-ISSUED and the one that runs out of budget was counted nowhere at all — so every failure rate this ledger has ever computed, `p = retries / calls`, was a **lower bound with nothing saying by how much**. run14 lost task t8 to an exhaustion and its debug log held zero record of it. Read the rate as `(retries + exhaustions) / calls`. `run` is `wall_seconds`, `counted_seconds` and `suspended_seconds`, and is the **only true wall clock in the project** (see §5a). Corrected 2026-08-30 (OPEN-53): the roles used to be the top level, and they were nested rather than given a `run` sibling because anything iterating the file — this repo's own ledger scripts included — would have counted a sibling as a fifth role. A write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5). **Written mid-run since OPEN-88 (2026-09-03)**: at every coder dispatch (`loop/engine.py::flush_usage`, beside the ledger save) and once after planning, as well as at the two ends it already had. It used to be written at run end and nowhere else — both `work()`'s last statement and `close()` — so the file that answers *"why is this taking so long"* existed for every run **except the ones anybody complains about**, a run being complained about being by definition one that has not finished. Run `fc543fb2b82f` was two hours into a one-page task with no `usage.json` in its logs directory at all. Overwriting, so flushing often leaves one document rather than a pile |
+| `run/logs/usage.json` | volatile | `write_usage_log` | humans | **Two blocks since OPEN-53: `roles` and `run`.** `roles` is per-role tokens, compactions, **retries** and **exhaustions**, plus **`edits_reindented`** since OPEN-92 (a repaired `edit_file` is indistinguishable from one that was right the first time in tokens, seconds and tool results, so without this counter "did that fix pay for itself" has no answer but a hand-written parser) — `retries` since OPEN-45, because `ModelRetryMiddleware` sits outside `UsageMiddleware` so `calls` silently absorbs every re-issue; `exhaustions` since OPEN-46 reopened (2026-09-01), because `retries` counts only the attempts that were RE-ISSUED and the one that runs out of budget was counted nowhere at all — so every failure rate this ledger has ever computed, `p = retries / calls`, was a **lower bound with nothing saying by how much**. run14 lost task t8 to an exhaustion and its debug log held zero record of it. Read the rate as `(retries + exhaustions) / calls`. `run` is `wall_seconds`, `counted_seconds` and `suspended_seconds`, and is the **only true wall clock in the project** (see §5a). Corrected 2026-08-30 (OPEN-53): the roles used to be the top level, and they were nested rather than given a `run` sibling because anything iterating the file — this repo's own ledger scripts included — would have counted a sibling as a fifth role. A write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5). **Written mid-run since OPEN-88 (2026-09-03)**: at every coder dispatch (`loop/engine.py::flush_usage`, beside the ledger save) and once after planning, as well as at the two ends it already had. It used to be written at run end and nowhere else — both `work()`'s last statement and `close()` — so the file that answers *"why is this taking so long"* existed for every run **except the ones anybody complains about**, a run being complained about being by definition one that has not finished. Run `fc543fb2b82f` was two hours into a one-page task with no `usage.json` in its logs directory at all. Overwriting, so flushing often leaves one document rather than a pile |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
 | `memory/export/` | durable | `rudra memory export` | `rudra memory import` | The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
 | `memory/palace/` | volatile | `rudra.memory.store` | `rudra.memory.store` | ChromaDB, project-scoped per D14/S14.5. Opened only through `MemoryStore`; a failure degrades loudly and never fails a task (C8.6) |
@@ -956,6 +990,7 @@ either.
 | Which task, how many tries, how long? | `ledger.json` | `seconds`, `attempts`, `halts`, `run_errors`, `files_touched` |
 | Did the gate pass, and on whose interpreter? | `verify.log` | the `command:` line of each stage — OPEN-80 was invisible without it |
 | Was anything denied? | `permissions.jsonl` | one line per gated decision, every mode |
+| Did edits have to be repaired? | `usage.json` | `roles.<role>.edits_reindented` — non-zero means OPEN-92's gutter defect fired and was caught. Paired with a `"kind": "notice"`, `name: "reindent"` line per repair in `debug-<id>.jsonl` |
 
 **`files_touched: []` on a `DONE` task is the single highest-signal line in
 that folder.** It means a coder invocation was dispatched, paid for, and wrote
