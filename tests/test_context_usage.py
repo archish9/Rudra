@@ -68,6 +68,7 @@ def test_recording_accumulates_per_role():
         # a key that appears only on runs that repaired one is a key every
         # reader of usage.json has to guard.
         "edits_reindented": 0,
+        "plans_refused": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -366,6 +367,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "writes_skipped",
         "writes_skipped_chars",
         "edits_reindented",
+        "plans_refused",
         "seconds",
     }
 

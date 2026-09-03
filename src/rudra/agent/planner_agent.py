@@ -184,7 +184,15 @@ from a real run that produced no code: the coder handed the first of them
 had no file to write and spent the run searching for directories that do
 not exist. If a task does not change a file, it is not a task.
 
-One task may touch several files. Work that needs tests gets its own task.
+One task may touch several files. But if two tasks would write to the SAME
+file, they are ONE task. A coder is given one task and writes every file
+that task needs, so the first of them writes the whole file and the rest
+are dispatched at a finished file and change nothing. When the layout says
+this project is a single file, that file is ONE task -- not one task per
+section, per stylesheet or per script. add_tasks will refuse a list that
+splits one file up, and say so.
+
+Work that needs tests gets its own task.
 
 Call add_tasks() ONCE with every task you can foresee, then STOP. Do not
 add a task whose description is "verify" or "check": the gate does that on
@@ -431,6 +439,8 @@ def _tools_for_stage(
     console: Console,
     cfg: Any,
     interactive: bool,
+    trace: Any = None,
+    usage: Any = None,
 ) -> list:
     """The tools one stage may call, and no others (S10b.1).
 
@@ -451,7 +461,11 @@ def _tools_for_stage(
     if stage == "breakdown":
         # No record_fact and no ask_user: by now the facts are settled,
         # and re-opening them mid-plan is what C6.8 exists to prevent.
-        return create_ledger_tools(ledger, paths.ledger_json)
+        # `facts` reaches the ledger tools for one question only: does
+        # anything the earlier stages settled say the deliverable is a
+        # single file (OPEN-90)? add_tasks reads the VALUES, never the key
+        # names -- the store is deliberately open.
+        return create_ledger_tools(ledger, paths.ledger_json, facts=facts, trace=trace, usage=usage)
 
     interaction = create_interaction_tools(
         console,
@@ -546,6 +560,8 @@ def create_planner_agent(
         console=console,
         cfg=cfg,
         interactive=interactive,
+        trace=trace,
+        usage=usage,
     )
 
     middleware = build_planner_middleware(

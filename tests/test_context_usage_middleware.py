@@ -72,6 +72,7 @@ def test_sync_hook_records_the_reported_counts():
         # reason: a repaired edit is a TOOL call GutterIndentMiddleware
         # rewrote, and this middleware wraps model calls.
         "edits_reindented": 0,
+        "plans_refused": 0,
     }
     assert result.result[0].content == "hi"
 

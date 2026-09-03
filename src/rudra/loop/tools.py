@@ -13,11 +13,20 @@ rather than a request in a prompt.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from typing import Any
 
 from langchain_core.tools import tool
 
+from rudra.loop.decomposition import (
+    forbidden_shape_refusal,
+    over_decomposition_refusal,
+    single_file_evidence,
+)
 from rudra.loop.ledger import Ledger, Task, TaskStatus
+
+logger = logging.getLogger(__name__)
 
 # Statuses a task can no longer be dropped out of: the gate has already
 # ruled, and letting the model retract that would rewrite history.
@@ -70,14 +79,73 @@ def _duplicate_refusal(text: str, clash: Task) -> str:
     )
 
 
-def create_ledger_tools(ledger: Ledger, path: Path) -> list:
+def _announce_refusal(trace: Any, usage: Any, offenders: int) -> None:
+    """Say that Rudra refused a plan the model wrote (TODO.md lesson 5).
+
+    A new guard is a new silence unless it is wired to something. The
+    model is told by the tool result; the USER and the maintainer reading
+    `.rudra/run/logs/` are told here -- a NOTICE in the debug log at every
+    trace level, and a counter in usage.json.
+
+    Swallows its own failure both times: a run that did its work must not
+    be reported failed because a log line could not be written (§8a).
+    """
+    try:
+        if usage is not None:
+            usage.record_plan_refused("planner")
+    except Exception:  # noqa: BLE001 - bookkeeping may never end a run
+        logger.debug("refused plan not counted", exc_info=True)
+    try:
+        if trace is not None:
+            trace.notice(
+                f"refused a plan that split one file into {offenders} tasks; "
+                f"the planner has been asked to combine them",
+                role="planner",
+                name="plan-shape",
+            )
+    except Exception:  # noqa: BLE001 - same rule
+        logger.debug("refused plan not announced", exc_info=True)
+
+
+def create_ledger_tools(
+    ledger: Ledger,
+    path: Path,
+    facts: Any = None,
+    *,
+    trace: Any = None,
+    usage: Any = None,
+) -> list:
     """Tools bound to one run's ledger. Every mutation persists immediately.
 
     Args:
         ledger: The live Ledger the engine also reads. The same object, not
             a copy -- the agent and the loop must not diverge.
         path: Where to persist after each change.
+        facts: The run's FactStore, or None. Read for one thing only: does
+            anything the planner has settled say the deliverable is a
+            single file (OPEN-90)? Duck-typed on `.items()` so this module
+            keeps importing nothing from `rudra.facts`, and optional so
+            every existing caller and test is unaffected -- without it the
+            over-decomposition guard simply never fires.
+        trace: The run's TraceSink, or None. A guard that acts on the
+            user's behalf and reports nothing is the defect OPEN-35 ->
+            OPEN-44 -> OPEN-45 hit three times.
+        usage: The run's RunUsage, or None. Carries `plans_refused`.
     """
+
+    def _fact_pairs() -> list[tuple[str, str]]:
+        """(key, value) for every fact, or nothing if the store is unusable.
+
+        Bookkeeping may never end a run (CLAUDE.md §8a): a guard that
+        cannot read the facts declines to fire rather than raising into a
+        tool call the model is waiting on.
+        """
+        if facts is None:
+            return []
+        try:
+            return [(key, fact.value) for key, fact in facts.items()]
+        except Exception:  # noqa: BLE001 -- a guard never ends a run (§8a)
+            return []
 
     @tool
     def add_tasks(descriptions: list[str]) -> str:
@@ -100,6 +168,27 @@ def create_ledger_tools(ledger: Ledger, path: Path) -> list:
         if not wanted:
             return "REJECTED: give at least one non-empty task description."
 
+        # OPEN-90, and it is all-or-nothing where the duplicate check below
+        # is per-task: the defect is the SHAPE of the list -- several tasks
+        # each owning a region of one file -- so there is no good half to
+        # keep. Refused at most ONCE per run; the second list is accepted
+        # whatever it says, because a run with no plan is worse than a run
+        # with a wasteful one.
+        if not ledger.decomposition_refused:
+            refusal = over_decomposition_refusal(
+                wanted,
+                evidence=single_file_evidence(_fact_pairs()),
+                existing=[
+                    task.description
+                    for task in ledger.tasks
+                    if task.status is not TaskStatus.DROPPED
+                ],
+            )
+            if refusal is not None:
+                ledger.decomposition_refused = True
+                _announce_refusal(trace, usage, sum(1 for text in wanted if text))
+                return refusal
+
         # Every status, not only DONE. A duplicate of a PENDING task is
         # worked twice; a duplicate of a BLOCKED one is the case that ends
         # a run at MAX_BLOCKED_CONSULTS. DROPPED is the arguable exception
@@ -112,6 +201,14 @@ def create_ledger_tools(ledger: Ledger, path: Path) -> list:
             clash = seen.get(key)
             if clash is not None:
                 refused.append(_duplicate_refusal(text, clash))
+                continue
+            # The two shapes _BREAKDOWN_BODY already names as BAD and this
+            # model emitted anyway (OPEN-90 §3.1). Per-task, like the
+            # duplicate refusal: the rest of the batch is real work and
+            # rejecting it wholesale would lose it.
+            shape = forbidden_shape_refusal(text)
+            if shape is not None:
+                refused.append(shape)
                 continue
             task = ledger.add(text)
             # Recorded before the next iteration, so two copies in ONE call

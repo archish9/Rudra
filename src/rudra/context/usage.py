@@ -114,6 +114,17 @@ class RoleUsage:
     # stop. Before the repair, seven of run fc543fb2b82f's seven coder edits
     # failed and two invocations were killed by the repeat guard.
     edits_reindented: int = 0
+    # Task lists refused by add_tasks for cutting one file into several
+    # tasks (OPEN-90, loop/decomposition.py). At most one per run.
+    #
+    # Counted for edits_reindented's reason: what the guard prevents is a
+    # coder invocation that never happens, and an invocation that never
+    # happens leaves no mark on calls, seconds or tokens -- so without this
+    # number "did the guard fire on this run?" is answerable only by
+    # grepping a debug log, which is what §8a exists to stop. Read it beside
+    # ledger.json: a run with `plans_refused: 1` and no `files_touched: []`
+    # task is this item working.
+    plans_refused: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -292,6 +303,16 @@ class RunUsage:
         """
         self._slot(role).edits_reindented += 1
 
+    def record_plan_refused(self, role: str) -> None:
+        """One add_tasks list refused for decomposing below the file level.
+
+        Bounded at one per run by `Ledger.decomposition_refused`, so a
+        value above 1 means a second run's planner shares this store --
+        which nothing does today, and would be worth knowing if it ever
+        did (OPEN-90).
+        """
+        self._slot(role).plans_refused += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -367,6 +388,7 @@ class RunUsage:
                 "writes_skipped": tally.writes_skipped,
                 "writes_skipped_chars": tally.writes_skipped_chars,
                 "edits_reindented": tally.edits_reindented,
+                "plans_refused": tally.plans_refused,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

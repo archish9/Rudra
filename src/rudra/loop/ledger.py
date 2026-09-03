@@ -92,6 +92,18 @@ class Ledger:
     # When it was last written, ISO-8601. Shown in the resume summary so a
     # user can tell a ledger from this morning from one from last week.
     saved_at: str = ""
+    # Has the over-decomposition guard already refused a list this run
+    # (OPEN-90)? Deliberately NOT persisted -- `save` builds its payload
+    # field by field, so this stays out of ledger.json -- because it is a
+    # property of one run's conversation with the planner, not of the plan.
+    #
+    # It lives here rather than in create_ledger_tools' closure because
+    # `breakdown` is re-entered on a block or an empty ledger and each
+    # re-consult builds a fresh agent, so a closure flag would reset and
+    # the guard could refuse for ever. A guard that refuses for ever turns
+    # a bad plan into a run with no plan at all, which is worse than the
+    # plan it refused.
+    decomposition_refused: bool = False
 
     def add(self, description: str) -> Task:
         """Append a task and return it.
