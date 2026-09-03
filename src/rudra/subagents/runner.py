@@ -13,6 +13,7 @@ killing a run and discarding completed work.
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 import uuid
 from dataclasses import dataclass
@@ -56,6 +57,76 @@ to expect halts."""
 # Tool calls worth counting repeats for. `task` is included and now
 # genuinely reachable, which is what closes A1.20.
 _WATCHED_TOOLS = frozenset({"write_file", "edit_file", "read_file", "task"})
+
+_LOG = logging.getLogger("rudra.subagents.runner")
+"""Where one line per subagent invocation goes (OPEN-89).
+
+Under the `rudra` tree, so `trace/debug.py` writes it into
+`debug-<id>.jsonl` with no new plumbing -- the same route
+`context/middleware.py` takes for a model call, and for the same reason:
+the file a user attaches to a bug report should answer "where did the
+time go" without a parser.
+"""
+
+SUBAGENT_KIND = "subagent_done"
+"""The `kind` an invocation summary carries. One string, named here,
+because it is what a maintainer greps for."""
+
+TOP_TOOLS = 6
+"""How many tool names the summary lists, busiest first.
+
+A cap and not the whole tally: the point is the SHAPE of an invocation --
+run `fc543fb2b82f`'s runaway coder reads `glob: 41, read_file: 11` at a
+glance -- and a long tail of ones adds bytes without adding that.
+"""
+
+
+def log_invocation(
+    name: str,
+    *,
+    seconds: float,
+    total_calls: int,
+    tools: dict[str, int],
+    ok: bool,
+    halted: str | None = None,
+    error: str | None = None,
+) -> None:
+    """Write what one subagent invocation cost and what it spent it on.
+
+    OPEN-89: `total_calls` was maintained here for the A1.92 runaway bound
+    and discarded at every `return`, and `SubagentResult` carries no
+    measurement at all -- so the per-invocation table that makes a slow run
+    legible existed in no file. Reconstructing it meant scanning the debug
+    log for `kind: "user"` lines addressed to a subagent and counting
+    `tool_call` lines up to the next one.
+
+    The tool histogram is the half that carries the diagnosis rather than
+    the symptom. Run `fc543fb2b82f`'s task t7 spent 2,704 s on 55 calls;
+    "55 calls" says it was busy, and `glob: 41` says it was hunting the
+    filesystem for an interpreter it cannot use (OPEN-91).
+
+    Never raises -- write_usage_log's rule (loop/engine.py).
+    """
+    try:
+        ranked = sorted(tools.items(), key=lambda item: (-item[1], item[0]))
+        _LOG.debug(
+            "subagent finished",
+            extra={
+                "event": {
+                    "kind": SUBAGENT_KIND,
+                    "role": name,
+                    "seconds": round(float(seconds), 2),
+                    "tool_calls": total_calls,
+                    "tools": dict(ranked[:TOP_TOOLS]),
+                    "ok": ok,
+                    "halted": halted or "",
+                    "error": error or "",
+                }
+            },
+        )
+    except Exception:  # noqa: BLE001 - accounting must not end a run
+        return
+
 
 # The error markers moved to rudra.trace.stream in Step 15a. Three copies
 # of this list existed and all three had drifted -- see that module's
@@ -256,12 +327,24 @@ async def run_subagent(
 
     spec = REGISTRY[name]
 
+    # Started before build_agent, not after: a spec that fails to assemble
+    # still cost the user the wait, and an invocation missing from the log
+    # is the shape OPEN-89 was filed on.
+    invocation_started = time.monotonic()
     try:
         # The prompt IS the task: passing it through is what makes the
         # subagent's memory recall about the work rather than about its own
         # name (CR-C3).
         agent = build_agent(spec, context, prompt)
     except Exception as exc:  # noqa: BLE001 - reported, not raised
+        log_invocation(
+            name,
+            seconds=time.monotonic() - invocation_started,
+            total_calls=0,
+            tools={},
+            ok=False,
+            error=str(exc),
+        )
         return SubagentResult(name=name, text="", ok=False, error=str(exc))
 
     thread = thread_id or f"{context.session_id}-{name}-{uuid.uuid4().hex[:8]}"
@@ -275,6 +358,10 @@ async def run_subagent(
     state = StreamState(role=name)
     consecutive_failures = 0
     total_calls = 0
+    # Counted alongside total_calls rather than derived from it: the count
+    # says an invocation was busy and the histogram says what it was busy
+    # WITH, which is the half that names the defect (OPEN-89).
+    tools_used: dict[str, int] = {}
     repeated: dict[tuple[str, ...], int] = {}
     halted: str | None = None
     last_text = ""
@@ -319,6 +406,8 @@ async def run_subagent(
                         # filter: A1.92's runaway was 204 successful globs,
                         # and glob is not watched and never failed.
                         total_calls += 1
+                        called = tool_call.get("name") or "?"
+                        tools_used[called] = tools_used.get(called, 0) + 1
                         if total_calls >= MAX_TOTAL_CALLS:
                             halted = (
                                 f"{total_calls} tool calls in one invocation -- stopping. "
@@ -364,11 +453,36 @@ async def run_subagent(
                 processed += 1
             seen[where] = processed
     except Exception as exc:  # noqa: BLE001 - reported, not raised
+        log_invocation(
+            name,
+            seconds=time.monotonic() - invocation_started,
+            total_calls=total_calls,
+            tools=tools_used,
+            ok=False,
+            error=str(exc),
+        )
         return SubagentResult(name=name, text=last_text, ok=False, error=str(exc))
 
+    # Every exit is logged, including the ordinary one. A record that only
+    # covers the failures cannot answer "was this invocation unusual?",
+    # which is the question a slow run actually asks.
+    log_invocation(
+        name,
+        seconds=time.monotonic() - invocation_started,
+        total_calls=total_calls,
+        tools=tools_used,
+        ok=halted is None,
+        halted=halted,
+    )
     if halted is not None:
         return SubagentResult(name=name, text=last_text, ok=False, halted_reason=halted)
     return SubagentResult(name=name, text=last_text, ok=True)
 
 
-__all__ = ["SubagentContext", "SubagentResult", "run_subagent"]
+__all__ = [
+    "SUBAGENT_KIND",
+    "SubagentContext",
+    "SubagentResult",
+    "log_invocation",
+    "run_subagent",
+]

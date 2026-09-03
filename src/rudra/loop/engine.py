@@ -469,6 +469,12 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         task.attempts += 1
         task.status = TaskStatus.IN_PROGRESS
         ledger.save(context.paths.ledger_json)
+        # Beside the ledger save, not instead of it (OPEN-88). These are the
+        # two facts about a run in progress -- what is being worked, and what
+        # it has cost so far -- and they are worth equally little if one of
+        # them is two hours stale. Per ATTEMPT and not per task, because run
+        # `fc543fb2b82f`'s worst task was a single 2,704 s attempt.
+        flush_usage(context)
 
         before = attempt_snapshot(context)
         result = await run_subagent(
@@ -899,6 +905,32 @@ def write_usage_log(path: Path, usage: Any) -> None:
         return
 
 
+def flush_usage(context: Any) -> None:
+    """Write the tally out mid-run, wherever the ledger is being saved.
+
+    OPEN-88: `usage.json` reached disk in exactly two places, `work()`'s
+    last statement and `RudraAgent.close()`, and both are ENDS. So the file
+    that carries `seconds`, `calls`, `retries` and the true wall clock
+    existed for every run except the ones anybody complains about -- because
+    a run somebody is complaining about is one that has not finished. Run
+    `fc543fb2b82f` was two hours into a single-page task with no
+    `usage.json` in its logs directory at all.
+
+    Cheap enough to do often: `write_usage_log` overwrites with one
+    `write_text` of a few hundred bytes and swallows `OSError` itself. Read
+    defensively for the reason `_write_usage_log` is -- several tests build
+    a LoopContext with no usage and no paths.
+    """
+    usage = getattr(context, "usage", None)
+    paths = getattr(context, "paths", None)
+    if usage is None or paths is None:
+        return
+    logs = getattr(paths, "logs", None)
+    if logs is None:
+        return
+    write_usage_log(Path(logs) / "usage.json", usage)
+
+
 def notice_if_suspended(trace: Any, usage: Any) -> None:
     """Say once, at run end, that the machine slept through part of it.
 
@@ -1104,6 +1136,10 @@ async def plan(
     # existed and was always "", which a live run found and no unit test
     # could -- they called save(request=...) directly.
     ledger.save(context.paths.ledger_json, request=request)
+    # The planner is not free -- run `fc543fb2b82f` spent 450 s across 18
+    # calls here before the first task was dispatched, and a run examined
+    # during planning had no tally at all (OPEN-88).
+    flush_usage(context)
 
     # Three stages, in order (C6.7, S10b.1): settle the facts, decide the
     # shape, then declare the work. Each is a separate agent with its own
@@ -1289,6 +1325,7 @@ __all__ = [
     "PREVIOUS_LEDGER",
     "attempt_snapshot",
     "changed_since",
+    "flush_usage",
     "git_snapshot",
     "tree_snapshot",
     "plan",

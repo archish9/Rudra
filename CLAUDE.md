@@ -79,6 +79,11 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
 5. **Planning sessions produce self-contained implementation plans** that a fresh session can execute without this conversation's context. Write them under `docs/superpowers/plans/`, which is where the existing ones live — `plans/` was named here for a directory that has never existed (CR-DOC6).
 6. When done with a work item, update `TODO.md` in the same commit as the code.
+7. **Every diagnostic number a run produces must be written to
+   `.rudra/run/logs/`.** Rudra's only support channel is a user emailing that
+   folder, so a number held in memory, printed to a console panel, or written
+   only at run end cannot be used to answer anybody. Read **§8a** before adding
+   code that measures, guards, retries or halts anything.
 
 ---
 
@@ -491,8 +496,8 @@ only function that creates anything.
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
 | `run/repl_history` | volatile | `cli_repl.build_session` | prompt_toolkit | Per project, because a Rust project's prompts are not a Python project's. A read-only project loses history, never the REPL (Step 15b) |
 | `run/transcripts/<id>.jsonl` | volatile | `trace/transcript.py`, every run | humans, `rudra log` | One JSON object per `TraceEvent`, appended and flushed per event so a killed run still leaves a readable record. Payloads capped at 2000 chars, newest 20 runs kept. **Written by default**, which is safe only because redaction happens where the event is built (A1.95) — moving redaction into the renderer would silently refill this file with credentials (Step 15c, C9.5) |
-| `run/logs/debug-<id>.jsonl` | volatile | `trace/debug.py`, **every run** | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record and traceback. **The complete record** — registered with `TraceSink.add_recorder`, so unlike the transcript no trace level filters it and payloads are uncapped. One file per run, newest 20 kept by `prune_debug_logs`, which globs `debug-*` so it cannot eat `permissions.jsonl`. `[agent] debug_log = false` or `--no-debug` turns it off. Corrected 2026-08-24 (OPEN-7): was one appending `debug.jsonl` written only under `--debug`, and registered as an ordinary consumer, so `--no-verbose` cut it down to errors. An unopenable file disables the log rather than failing the run (Step 15a, C9.7) |
-| `run/logs/usage.json` | volatile | `write_usage_log` | humans | **Two blocks since OPEN-53: `roles` and `run`.** `roles` is per-role tokens, compactions, **retries** and **exhaustions** — `retries` since OPEN-45, because `ModelRetryMiddleware` sits outside `UsageMiddleware` so `calls` silently absorbs every re-issue; `exhaustions` since OPEN-46 reopened (2026-09-01), because `retries` counts only the attempts that were RE-ISSUED and the one that runs out of budget was counted nowhere at all — so every failure rate this ledger has ever computed, `p = retries / calls`, was a **lower bound with nothing saying by how much**. run14 lost task t8 to an exhaustion and its debug log held zero record of it. Read the rate as `(retries + exhaustions) / calls`. `run` is `wall_seconds`, `counted_seconds` and `suspended_seconds`, and is the **only true wall clock in the project** (see §5a). Corrected 2026-08-30 (OPEN-53): the roles used to be the top level, and they were nested rather than given a `run` sibling because anything iterating the file — this repo's own ledger scripts included — would have counted a sibling as a fifth role. Written at run end, never mid-run, and a write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5) |
+| `run/logs/debug-<id>.jsonl` | volatile | `trace/debug.py`, **every run** | humans, bug reports | One JSON object per line: every `TraceEvent` plus every `rudra.*` log record and traceback. **The complete record** — registered with `TraceSink.add_recorder`, so unlike the transcript no trace level filters it and payloads are uncapped. One file per run, newest 20 kept by `prune_debug_logs`, which globs `debug-*` so it cannot eat `permissions.jsonl`. `[agent] debug_log = false` or `--no-debug` turns it off. Corrected 2026-08-24 (OPEN-7): was one appending `debug.jsonl` written only under `--debug`, and registered as an ordinary consumer, so `--no-verbose` cut it down to errors. An unopenable file disables the log rather than failing the run (Step 15a, C9.7). **Since OPEN-87/OPEN-89 (2026-09-03) it carries two kinds that are NOT `TraceEvent`s**, and the distinction is the point: a trace event says what the model or Rudra *did*, and these say what the doing COST. `{"kind": "model_call"}` — one per model call, with `role`, `seconds`, both token counts and `ok` (`context/middleware.py::log_model_call`). `{"kind": "subagent_done"}` — one per subagent invocation, with `seconds`, `tool_calls`, a `tools` histogram of the six busiest, and the guard that halted it (`subagents/runner.py::log_invocation`). They ride the `rudra.*` logger tree this file already captures, so neither needed a new sink; `_JsonLines.format` promotes `record.event` to the top level, which is what makes them greppable by `kind` rather than parseable out of a message string |
+| `run/logs/usage.json` | volatile | `write_usage_log` | humans | **Two blocks since OPEN-53: `roles` and `run`.** `roles` is per-role tokens, compactions, **retries** and **exhaustions** — `retries` since OPEN-45, because `ModelRetryMiddleware` sits outside `UsageMiddleware` so `calls` silently absorbs every re-issue; `exhaustions` since OPEN-46 reopened (2026-09-01), because `retries` counts only the attempts that were RE-ISSUED and the one that runs out of budget was counted nowhere at all — so every failure rate this ledger has ever computed, `p = retries / calls`, was a **lower bound with nothing saying by how much**. run14 lost task t8 to an exhaustion and its debug log held zero record of it. Read the rate as `(retries + exhaustions) / calls`. `run` is `wall_seconds`, `counted_seconds` and `suspended_seconds`, and is the **only true wall clock in the project** (see §5a). Corrected 2026-08-30 (OPEN-53): the roles used to be the top level, and they were nested rather than given a `run` sibling because anything iterating the file — this repo's own ledger scripts included — would have counted a sibling as a fifth role. A write failure is swallowed — a finished run must not be reported failed over bookkeeping (C7.5). **Written mid-run since OPEN-88 (2026-09-03)**: at every coder dispatch (`loop/engine.py::flush_usage`, beside the ledger save) and once after planning, as well as at the two ends it already had. It used to be written at run end and nowhere else — both `work()`'s last statement and `close()` — so the file that answers *"why is this taking so long"* existed for every run **except the ones anybody complains about**, a run being complained about being by definition one that has not finished. Run `fc543fb2b82f` was two hours into a one-page task with no `usage.json` in its logs directory at all. Overwriting, so flushing often leaves one document rather than a pile |
 | `run/artifacts/` | volatile | deepagents eviction + summarization | the agent, via the `/artifacts/` route | Kept out of the project by `artifacts_root` (A1.45) |
 | `memory/export/` | durable | `rudra memory export` | `rudra memory import` | The palace is binary and churns, so the markdown export is the portable copy. `exporter.export_palace` is **not** used — it resolves collection and backend from the user's global config (**A1.87**) |
 | `memory/palace/` | volatile | `rudra.memory.store` | `rudra.memory.store` | ChromaDB, project-scoped per D14/S14.5. Opened only through `MemoryStore`; a failure degrades loudly and never fails a task (C8.6) |
@@ -851,6 +856,111 @@ each command before it runs. An explicit `allow = ["execute:pytest*"]` also
 counts as opting in for that command — naming it *is* the consent. Turning
 `shell_in_auto` on restores the original exposure; the audit log is then the
 only control, and real containment would need OS-level isolation.
+
+---
+
+## 8a. Debuggability Is a Product Requirement, Not a Convenience
+
+**The support story is the whole story.** Rudra ships as an open-source
+project on GitHub. `CONTRIBUTING.md` accepts no pull requests, there is no CI,
+and there is no telemetry — so when a user says *"it is slow"* or *"it wrote
+the same file four times"*, the **entire** diagnostic channel is: *send me
+`.rudra/run/logs/`*, and the maintainer reads it on a different machine,
+against a project they do not have, weeks later, with no ability to re-run
+anything. `state/archive.py` exists (OPEN-68) precisely so that folder outlives
+the project it describes.
+
+**So the rule, and it is a design constraint on new code, not a nicety:**
+
+> **If a number would answer a user's complaint, the run must WRITE that
+> number. A number that exists only in memory, or only in a console panel, or
+> only at run end, does not exist.**
+
+This is `§5a`'s "an instrument whose output is deleted is not an instrument"
+one step earlier: an instrument whose output is never **written** is not one
+either.
+
+### The four failure shapes, each of which has already cost a session
+
+1. **The number is computed and then dropped.** `run_subagent` maintained
+   `total_calls` for `MAX_TOTAL_CALLS` and discarded it at every `return`
+   (OPEN-89); `UsageMiddleware` measured every model call's duration and
+   folded it into a per-role total (OPEN-87). Both numbers were *known* at the
+   exact moment they mattered and neither reached disk.
+2. **The number is written only at the end.** `usage.json` was written from
+   `close()` and from `work()`'s last statement (OPEN-88). A run that is
+   taking too long has not ended, so the file that explains it does not exist
+   yet. **Any record whose subject is a run in progress must be written while
+   the run is in progress.**
+3. **The number must be derived rather than read.** Before OPEN-87, answering
+   *"where did the 2 hours go?"* meant differencing `ts` across 441 adjacent
+   lines of JSONL and knowing which adjacencies were model calls. That was
+   done, with a throwaway parser, by a session with the source tree open. A
+   user filing an issue will not write a parser, and neither will the
+   maintainer at triage time. **A log the maintainer has to write code against
+   is a log that does not get read.**
+4. **The record is one field and the field gets overwritten.** OPEN-44 lost
+   six guard halts into `note`, and OPEN-46 lost every build failure into the
+   same field, because `note` is rewritten by every branch that finishes a
+   task. `halts` and `run_errors` are separate fields for that reason.
+   **Diagnostic state is append-only or it is not state.**
+
+### What this means when you write new code
+
+- **A guard that stops something must log what the something spent.** "It
+  halted" is a symptom; "it halted after 55 tool calls, 41 of them `glob`" is
+  the diagnosis. That histogram is why `log_invocation` carries `tools` and
+  not merely a count.
+- **A failure costs time too.** `_record_failure` logs `ok: false` with the
+  exception type, because a provider 500 costs the user the full wait and buys
+  nothing, and a per-role total cannot tell it apart from a fast success that
+  reported no tokens.
+- **Route it through the `rudra.*` logger tree.** `trace/debug.py` captures
+  that whole tree into `debug-<id>.jsonl` and `_JsonLines.format` promotes a
+  record's `extra={"event": {...}}` to the top level of the JSON object. So a
+  new diagnostic record needs **no new sink, no new file and no new config
+  key** — one `logger.debug(..., extra={"event": {"kind": ...}})` and it is in
+  the file users are told to attach. Give it a `kind` and name that string as
+  a module constant: it is what a maintainer will be told to grep for, and a
+  second spelling of it is a second answer to *"why is my filter empty"*.
+- **A record is not a `TraceEvent` unless it describes something that was
+  DONE.** `TraceKind` is the vocabulary for the model's and Rudra's *actions*
+  (`§3`, `trace/events.py`). `model_call` and `subagent_done` are measurements
+  *of* those actions and deliberately sit beside that vocabulary rather than
+  inside it. Do not widen `TraceKind` to hold timings.
+- **Bookkeeping may never end a run.** Every writer here swallows its own
+  failure — `write_usage_log`'s rule (`loop/engine.py`), which
+  `TraceSink.emit`, `transcript.py`, `debug.py`, `archive.py` and both
+  functions added by OPEN-87/OPEN-89 all follow. A run that did its work must
+  not be reported failed because a log line could not be written.
+- **Never put a secret in a diagnostic.** Redaction happens where the event is
+  built, not where it is rendered (`§3`, A1.95), and `archive.py` records the
+  models a run used and never `config.toml`, which may hold an `api_key`. A
+  new record inherits that obligation: it is going to be pasted into a public
+  GitHub issue.
+
+### The reader's checklist, for the folder a user sends you
+
+`.rudra/run/logs/` — or
+`$XDG_STATE_HOME/rudra/runs/<project>/<run>/` when the project is gone:
+
+| Question | File | How |
+|---|---|---|
+| How long, really? | `usage.json` | `run.wall_seconds`, and `suspended_seconds` before you believe any other clock (OPEN-53) |
+| Which role burned it? | `usage.json` | `roles.<role>.seconds / calls`. If that is ~100% of `counted_seconds`, the run is model-latency bound and the only lever is **fewer calls** |
+| Is the provider healthy? | `usage.json` | `(retries + exhaustions) / calls`. Both, never `retries` alone (OPEN-46) |
+| Which call was slow? | `debug-<id>.jsonl` | `"kind": "model_call"` |
+| Which invocation was the runaway, and doing what? | `debug-<id>.jsonl` | `"kind": "subagent_done"` — sort by `seconds`, then read `tools` |
+| What was it actually thinking? | `debug-<id>.jsonl` | `"kind": "tool_call"` / `"ai_text"`, uncapped payloads |
+| What did Rudra stop, and why? | `debug-<id>.jsonl` | `"kind": "notice"` — `guard`, `retry`, `suspended` |
+| Which task, how many tries, how long? | `ledger.json` | `seconds`, `attempts`, `halts`, `run_errors`, `files_touched` |
+| Did the gate pass, and on whose interpreter? | `verify.log` | the `command:` line of each stage — OPEN-80 was invisible without it |
+| Was anything denied? | `permissions.jsonl` | one line per gated decision, every mode |
+
+**`files_touched: []` on a `DONE` task is the single highest-signal line in
+that folder.** It means a coder invocation was dispatched, paid for, and wrote
+nothing — six of them in run `fc543fb2b82f`, 4,600 seconds, 63% of the clock.
+Read the plan next, not the loop (OPEN-90).
 
 ## 9. Repo Hygiene Facts
 
