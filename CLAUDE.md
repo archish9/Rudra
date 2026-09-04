@@ -1,27 +1,35 @@
 # CLAUDE.md — Rudra
 
-Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. **Nothing is
-open as of 2026-09-03**: the six items of run `fc543fb2b82f` — OPEN-87, 88,
-89, 90, 91, 92 — all closed that day. What `TODO.md` opens with instead is
-the one thing that IS outstanding and is not an item: **the three cost fixes
-have been verified offline and never seen on a live run**, and it says which
-three lines of `.rudra/run/logs/` settle that. Trust
+Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. **Six are open
+as of 2026-09-04**: OPEN-93 … OPEN-98, all filed from one run,
+`2cde3406f7d6`, which finished 0 tasks of 2 in 2,132 s while the deliverable
+sat correct on disk. Each has a self-contained document under
+`docs/superpowers/plans/2026-09-04-open-9*.md`, and `TODO.md` opens with them
+in the order to fix them — an order that is a **dependency** inside the
+OPEN-94 → OPEN-95 → OPEN-96 cluster, not a preference. Trust
 `grep -n PENDING TODO.md` over any heading, including this sentence.
+
+Corrected 2026-09-04: this paragraph said *"Nothing is open as of
+2026-09-03"* and named the outstanding live-run verification of OPEN-90/91/92
+as the only loose end. That verification is still outstanding; it is no
+longer the only one.
 
 **Three ledgers, and they are not interchangeable.**
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **What is open now, and nothing else.** Read it first. **Nothing open as of 2026-09-03** — it opens with the six items that closed that day in one line each, then the live-run verification still outstanding across three of them, then the run they came from in seconds, then the ordering argument that board was worked under. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed to 545 lines on 2026-09-03 when every closed item moved out (it was 2,140) |
-| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 92 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Two blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards, and the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02), OPEN-87 … OPEN-92. Its index table at the top is the map; read that before scrolling |
+| `TODO.md` | **What is open now, and nothing else.** Read it first. **Six open as of 2026-09-04** — it opens with OPEN-93 … OPEN-98 in fix order, one line and one document link each, then the run they came from in seconds, then the ordering argument (which is a dependency inside the OPEN-94/95/96 cluster), then a note on which of the six were diagnosable from `.rudra/run/logs/` alone. Then four things being watched that are deliberately **not** items, the fourth being the live-run verification still outstanding across OPEN-90/91/92. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed to 495 lines on 2026-09-04 when the closed 2026-09-03 board moved out |
+| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 92 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Three blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; and **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument. Its index table at the top is the map; read that before scrolling |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-03 there are none — so every citation below, OPEN-90 included, points
-at a record.
+2026-09-04 those are OPEN-93 … OPEN-98, **none of which is cited anywhere
+below** — so every citation in this file, OPEN-90 included, still points at a
+record. When one of the six lands, its own document's §11 says which
+paragraphs here it corrects.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
