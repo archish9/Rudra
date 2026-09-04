@@ -1106,3 +1106,34 @@ def test_the_content_path_middleware_sits_outside_the_repeat_guard(context):
         )
     ]
     assert names.index("ContentPathMiddleware") < names.index("RepeatGuardMiddleware")
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_param_fixer_can_report_a_refused_prose_write(name, context):
+    # OPEN-97, and it is OPEN-45's lesson for the fourth time: registered is
+    # not wired. The refusal keeps bytes OFF the disk, so it leaves no mark
+    # on calls, tokens, seconds or tool results -- a param fixer that cannot
+    # reach the accounting fires silently, and "did this pay for itself" is
+    # then answerable only by a hand-written parser over a debug log.
+    import dataclasses
+
+    sink, usage = object(), object()
+    wired = dataclasses.replace(context, trace=sink, usage=usage)
+    middleware = _middleware_for(REGISTRY[name], wired, _model_for(REGISTRY[name], wired.cfg))
+    fixer = next(m for m in middleware if type(m).__name__ == "FixWriteParamsMiddleware")
+
+    assert fixer.trace is sink
+    assert fixer.usage is usage
+    assert fixer.role == REGISTRY[name].role
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_a_subagent_param_fixer_still_builds_with_no_run_around_it(name, context):
+    # The context fixture carries neither, as every 9b-era stand-in does,
+    # and the refusal must go on refusing without them -- counting is the
+    # optional half, and the bytes are the damage.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    fixer = next(m for m in middleware if type(m).__name__ == "FixWriteParamsMiddleware")
+
+    assert fixer.usage is None
+    assert fixer.trace is None

@@ -74,6 +74,10 @@ def test_sync_hook_records_the_reported_counts():
         "edits_reindented": 0,
         "plans_refused": 0,
         "content_paths_flagged": 0,
+        # Added by OPEN-97, and zero here for the sixth instance of the same
+        # reason: a refused prose write is a TOOL call FixWriteParams-
+        # Middleware answered, and this middleware wraps model calls.
+        "writes_rejected_as_prose": 0,
     }
     assert result.result[0].content == "hi"
 

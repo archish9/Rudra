@@ -464,7 +464,48 @@ src/rudra/
 │                           stops rewriting HTML that was never broken.
 │                           SUBAGENT stack only — the planner holds neither
 │                           write tool, and an entry for a tool an agent does
-│                           not have is OPEN-15
+│                           not have is OPEN-15.
+│                           `fix_write_params.py` now REFUSES two calls
+│                           beside the repairs, both on the SHAPE of the
+│                           content and never on the path. The second is
+│                           OPEN-97: the coder wrote its closing summary
+│                           INTO the deliverable — 329 bytes of English
+│                           over 24,800 bytes of finished HTML — and
+│                           `write_file` answered `Updated file`. Seven
+│                           mechanisms let it through, every one behaving
+│                           as specified: `_is_directory_placeholder`
+│                           declines any path with a suffix, the repeat
+│                           guard's write rule refuses only bytes ALREADY
+│                           on disk, `_FINISH_RULES` forbids writing a file
+│                           to announce completion and this was an UPDATE
+│                           to a file the model owned, the gate does not
+│                           parse `.html`, the empty-diff guard asks that
+│                           something was written and never what, and the
+│                           user had auto-accept on (OPEN-30), so no human
+│                           saw a preview. `_is_prose_not_content` is held
+│                           to `_is_directory_placeholder`'s bar — *it must
+│                           not be able to fire on something a person would
+│                           write by hand* — with FOUR conditions over a
+│                           CLOSED suffix table that declines what it does
+│                           not know: short, at most three lines, carrying
+│                           NONE of its own type's syntax, and prose-shaped.
+│                           The third is load-bearing — there is no valid
+│                           HTML with no `<` in it, at any size — and a
+│                           template marker (`{{`, `{%`, `<%`) declines,
+│                           because a Jinja partial legitimately carries no
+│                           markup. `.md`, `.txt` and `.rst` are absent
+│                           from the table and must stay absent. **REFUSED,
+│                           not annotated**, which inverts OPEN-93's
+│                           preference one middleware over and for the
+│                           stated reason: a note arrives after the bytes
+│                           are on disk, and the bytes are the damage — a
+│                           false refusal costs one round trip, a false
+│                           accept costs the file. Leads with `REJECTED:`
+│                           and never `Error:`, matching its sibling, so
+│                           `runner.py`'s counter cannot halt an invocation
+│                           on it (OPEN-94). An empty write is deliberately
+│                           NOT this rule: truncation to zero is a
+│                           different intention
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           interaction (record_fact · ask_user) · git_tools ·
 │                           testing_tools · memory_tools (remember ·
@@ -978,7 +1019,7 @@ user is what OPEN-6 was filed against.
 
 - `install_path_normalizer` (`compat/deepagents_path.py`) monkeypatches `validate_path` in **three** modules — `deepagents.backends.utils`, `deepagents.middleware.filesystem`, and `deepagents.middleware._fs_interrupt` — because each does `from ... import validate_path` and resolves the name in its own globals, so patching one is not enough. Corrected 2026-08-21 (CR-D8): this said two, and the module docstring claimed a grep had confirmed there were only two. `_fs_interrupt` is reached only when `permissions=` is passed, which Rudra never does (U.7), so patching it changes nothing today — it is patched so that U.7 does not reopen onto a half-applied file. `pyproject.toml:30` pins `deepagents==0.7.4` **exactly**, for this reason.
 - `OverwriteFilesystemBackend` **no longer exists** — nothing imports or constructs it, and `tests/test_agent_wiring.py::test_main_agent_constructs_filesystem_backend_with_virtual_mode` fails if `main_agent.py` ever does again (it checks the AST, so a prose mention in a comment is fine — A4.9). It was deleted with the 0.7.4 upgrade, whose `write()` overwrites by default (`backends/filesystem.py:489`); 0.4.12's refusal to overwrite was what sent small local models into a `write → error → edit no-op → write` loop. Its markdown-fence stripping lives on in `middleware/fix_write_params.py`. Corrected 2026-08-21 (CR-F4) — this bullet described the deleted module as live. Corrected again 2026-09-02 (OPEN-84) — it proved the deletion by enumerating `ls src/rudra/compat/`, and that listing was two files stale: `virtual_paths.py` landed 2026-08-21 (CR-B4) and `own_interpreter.py` 2026-09-02 (OPEN-80), both of which §3's tree already describes at length. An enumeration used as proof has to be complete, and nothing tied this one to the directory — so §3's tree owns the listing, and the proof is now a test that runs rather than a shell command no reader re-runs.
-- The 6 middlewares are all patches for qwen3:14b failure modes documented in their own docstrings. Minimum target model is now **32B** → 4 of the 6 were deleted in Step 2, and the 2 survivors are **opt-in behind `[compat]`, default off, as of Step 6** (C1.8). Disposition table: `TODO-old.md` §0.1. `FixWriteParamsMiddleware` is split rather than gated wholesale: fence-stripping and `filename`/`path` → `file_path` aliasing are **always on** (required since U.3 — 0.7.4's `write()` no longer strips), while sandbox-prefix stripping sits behind `[compat] sandbox_paths` because `/src/` and `/tmp/` are sandbox prefixes *and* ordinary absolute directories.
+- The 6 middlewares are all patches for qwen3:14b failure modes documented in their own docstrings. Minimum target model is now **32B** → 4 of the 6 were deleted in Step 2, and the 2 survivors are **opt-in behind `[compat]`, default off, as of Step 6** (C1.8). Disposition table: `TODO-old.md` §0.1. `FixWriteParamsMiddleware` is split rather than gated wholesale: fence-stripping and `filename`/`path` → `file_path` aliasing are **always on** (required since U.3 — 0.7.4's `write()` no longer strips), while sandbox-prefix stripping sits behind `[compat] sandbox_paths` because `/src/` and `/tmp/` are sandbox prefixes *and* ordinary absolute directories. Its two **refusals** — the directory placeholder (OPEN-22) and the prose write (OPEN-97) — are always on and are not repairs: this middleware refuses a call or fixes its parameters, and never rewrites a body into something plausible.
 - **Configuration precedence lives in exactly one function**, `config/loader.py::deep_merge`, and every value records the layer that set it. This shape was chosen because A5.1 and A5.2 were both "which source won?" defects that a per-field `x or y or default` chain structurally cannot answer. Do not reintroduce per-field resolution.
 - **Role inheritance runs after the cross-layer merge**, not inside a layer. Inside a layer, a project-level `[model.planner]` would fail to inherit a user-level `[model.default]`.
 - Retired planning material lives in `docs/archive/`, which is **gitignored** — if you cannot find these files, that is why, not because they were deleted (Step 16, `S16.6`). `road-map.md` argues against trajectory fine-tuning and for planning-data fine-tuning; `improvements.txt` and `context_management_implementation_plan.md` are prior planning docs, partially implemented.
@@ -1178,6 +1219,7 @@ either.
 | Did an agent go hunting the machine's filesystem? | `debug-<id>.jsonl` | `"kind": "notice"`, `name: "machine-path"` — one per tool result Rudra had to explain. Non-zero means OPEN-91's defect fired and was answered at call two instead of call forty. **Trustworthy as a count since OPEN-96**, which stopped it firing on the project's own absolute path and on `//x` typos — 3 of 4 firings in run `2cde3406f7d6` were false, so the number meant nothing before that. Read the payload anyway, not only the count: it quotes the spelling, so a false positive is visible by eye without a parser |
 | Did edits have to be repaired? | `usage.json` | `roles.<role>.edits_reindented` — non-zero means OPEN-92's gutter defect fired and was caught. Paired with a `"kind": "notice"`, `name: "reindent"` line per repair in `debug-<id>.jsonl` |
 | Did an agent write a virtual path into real source? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.content_paths_flagged`, and a `"kind": "notice"`, `name: "content-path"` line per hit. Non-zero means OPEN-93's defect fired and was explained at the write instead of costing the run. **Read it beside `verify.log`**: a `test` stage failing on a `/`-prefixed path with `content_paths_flagged: 0` means the literal came from somewhere this middleware does not watch — a fact value or a task description, which is where the reported run's copy came from |
+| Did an agent write its summary into a file? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.writes_rejected_as_prose`, and a `"kind": "notice"`, `name: "prose-write"` line per refusal. Non-zero means OPEN-97's defect fired and the bytes never reached disk. **A false positive here is a REFUSED REAL WRITE** — the notice names the path, so check the first one by eye before trusting the count |
 | Was the plan itself the problem? | `usage.json` · `ledger.json` | `roles.planner.plans_refused` is 1 when OPEN-90's guard made the planner re-plan, with a `"kind": "notice"`, `name: "plan-shape"` line saying so. Read it against `files_touched: []`: a run with `plans_refused: 1` and no empty-`files_touched` `DONE` task is that guard working; empty `files_touched` with `plans_refused: 0` is the defect firing in a shape the guard did not see |
 
 **`files_touched: []` on a `DONE` task is the single highest-signal line in

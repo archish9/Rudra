@@ -136,6 +136,17 @@ class RoleUsage:
     # `2cde3406f7d6` the literal `/src/iphone15.html` cost the entire run --
     # 2,132 s, 0 of 2 tasks -- and left no mark on calls, seconds or tokens.
     content_paths_flagged: int = 0
+    # Writes refused because their content was the model's closing summary
+    # rather than the file (OPEN-97, FixWriteParamsMiddleware).
+    #
+    # Counted for edits_reindented's and content_paths_flagged's reason, and
+    # read the opposite way round: those two say a repair happened, this one
+    # says bytes never reached disk. A false positive here is a REFUSED REAL
+    # WRITE, so the paired `prose-write` notice names the path -- check the
+    # first one by hand before trusting the count. In run `2cde3406f7d6` the
+    # unrefused write replaced 24,800 bytes of finished HTML with 329 bytes
+    # of English and cost ~394 s, 18% of the run.
+    writes_rejected_as_prose: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -335,6 +346,17 @@ class RunUsage:
         """
         self._slot(role).content_paths_flagged += 1
 
+    def record_write_rejected_as_prose(self, role: str) -> None:
+        """One write refused for carrying a summary instead of a file.
+
+        Mirrors record_content_path_flagged with the outcome inverted: that
+        one annotates a write that happened, this one counts one that did
+        not. Read it beside the run's deliverable -- 0 means the model never
+        tried it, and anything above 0 means it did and was stopped before
+        the bytes landed (OPEN-97).
+        """
+        self._slot(role).writes_rejected_as_prose += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -412,6 +434,7 @@ class RunUsage:
                 "edits_reindented": tally.edits_reindented,
                 "plans_refused": tally.plans_refused,
                 "content_paths_flagged": tally.content_paths_flagged,
+                "writes_rejected_as_prose": tally.writes_rejected_as_prose,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

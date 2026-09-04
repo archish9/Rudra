@@ -386,3 +386,23 @@ def test_a_non_writer_gets_the_block_too_and_it_costs_nothing(name):
 
     rules = _rules_for(REGISTRY[name].fs_tools)
     assert "PATHS INSIDE THE FILES YOU WRITE" in rules
+
+
+def test_the_finish_rules_cover_overwriting_a_file_you_produced():
+    """OPEN-97 Option C. `_FINISH_RULES`' existing sentence reads as a
+    prohibition on CREATING a `DONE`-shaped file, and run `2cde3406f7d6`'s
+    coder was not creating one -- it was updating a file it owned, with a
+    summary of what it contained, over 24,800 bytes of finished HTML.
+
+    Prose is the belt, never the fix: `FixWriteParamsMiddleware` refuses the
+    call, and this text was already in the prompt during that run
+    (OPEN-97 §5 Option C, TODO.md lesson one)."""
+    from rudra.subagents.registry import _FINISH_RULES
+
+    # Line-wrapped in the source, so normalise before matching.
+    flat = " ".join(_FINISH_RULES.split())
+    assert "never write your summary into a file you produced" in flat
+    assert "a file you wrote yourself" in flat
+    # Still a category and never a filename -- the pin above still holds.
+    for enumerated in ("DONE", ".txt", ".md"):
+        assert enumerated not in _FINISH_RULES, enumerated

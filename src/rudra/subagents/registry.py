@@ -259,6 +259,10 @@ the name looks.
 nothing. It stays in the user's project as though they had asked for it,
 and you are still not finished. The only files you write are the ones the
 task asked for.
+
+That includes a file you wrote yourself: **never write your summary into a
+file you produced.** Writing over it does not describe it, it destroys it --
+the finished work is gone and nothing can bring it back.
 """
 
 

@@ -74,6 +74,11 @@ def test_recording_accumulates_per_role():
         # result. Zero here for the same reason -- read beside plans_refused,
         # 0 means the _PATH_RULES block kept the model off the bad spelling.
         "content_paths_flagged": 0,
+        # Added by OPEN-97: writes refused for carrying the model's closing
+        # summary instead of the file. Always present for the same reason --
+        # a key that appears only on runs that refused one is a key every
+        # reader of usage.json has to guard.
+        "writes_rejected_as_prose": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -374,6 +379,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "edits_reindented",
         "plans_refused",
         "content_paths_flagged",
+        "writes_rejected_as_prose",
         "seconds",
     }
 

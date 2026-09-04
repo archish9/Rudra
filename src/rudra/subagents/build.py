@@ -246,7 +246,18 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
         raise ValueError(msg)
 
     middleware: list[Any] = [
-        FixWriteParamsMiddleware(strip_sandbox_prefixes=context.cfg.compat.sandbox_paths),
+        # `role`, `usage` and `trace` are what make its OPEN-97 refusal
+        # audible: a write refused for carrying the model's closing summary
+        # leaves no mark on calls, seconds, tokens or tool results, so
+        # without them the guard fires silently. getattr for
+        # GutterIndentMiddleware's reason below -- the context is duck-typed
+        # and callers outside a full run build stand-ins.
+        FixWriteParamsMiddleware(
+            strip_sandbox_prefixes=context.cfg.compat.sandbox_paths,
+            role=spec.role,
+            usage=getattr(context, "usage", None),
+            trace=getattr(context, "trace", None),
+        ),
         # OPEN-41. Outermost of the MODEL-call wrappers, which is the only
         # thing its position decides -- it implements the model-call hooks
         # only and never sees a tool argument, so it has no claim on the

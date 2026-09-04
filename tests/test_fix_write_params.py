@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from rudra.middleware.fix_write_params import (
     FixWriteParamsMiddleware,
     _is_directory_placeholder,
+    _is_prose_not_content,
     _repair_split_dot_segment,
     _strip_fences,
 )
@@ -232,3 +233,201 @@ def test_content_that_is_not_a_string_is_not_a_placeholder():
 
 def test_a_trailing_slash_still_reads_as_a_directory_attempt():
     assert _is_directory_placeholder("tests/", "# placeholder")
+
+
+# ---------------------------------------------------------------------------
+# OPEN-97: the closing summary written INTO the deliverable.
+#
+# Run `2cde3406f7d6` at=936.0: the coder replaced 24,800 bytes of finished
+# HTML with 329 bytes of English beginning "Done. Created ...". `write_file`
+# answered "Updated file /src/iphone15.html" and seven mechanisms let it
+# through -- `_is_directory_placeholder` among them, because it declines any
+# path carrying a suffix. The next agent spent 180 s and seventeen `execute`
+# calls proving with `xxd` that an .html file contained English.
+#
+# The must-NOT-refuse half of this table is the important half: this rule's
+# failure mode is refusing real work.
+
+PROSE = (
+    "Done. Created /src/iphone15.html with all required elements: responsive "
+    "CSS with mobile-first design and breakpoints, Apple design language "
+    "styling (SF Pro fonts, Apple color palette), JavaScript-based "
+    "tabs/accordion/form functionality, and user content placeholders for "
+    "iPhone 15 marketing page. Single self-contained HTML file."
+)
+
+
+def test_the_measured_prose_write_is_not_content():
+    assert _is_prose_not_content("src/iphone15.html", PROSE) is True
+
+
+def test_markup_containing_its_own_syntax_is_content():
+    """Property 3 is the load-bearing one: no valid HTML has no "<"."""
+    assert _is_prose_not_content("src/x.html", "<p>Done. Created the page.</p>") is False
+
+
+def test_unknown_file_types_decline():
+    """A closed suffix table. Prose in a .md or .txt is the point of them."""
+    assert _is_prose_not_content("README.md", PROSE) is False
+    assert _is_prose_not_content("notes.txt", PROSE) is False
+    assert _is_prose_not_content("LICENSE", PROSE) is False
+
+
+def test_template_markers_decline():
+    """A Jinja/Handlebars fragment legitimately carries no markup of its own."""
+    for body in ("{{ body }}", "{% block x %}", "<%= x %>", "${name}", "$(name)"):
+        assert _is_prose_not_content("t.html", body) is False, body
+
+
+def test_an_empty_write_is_a_different_intention():
+    """Truncation to zero is out of scope and possibly legitimate."""
+    assert _is_prose_not_content("t.html", "") is False
+    assert _is_prose_not_content("t.html", "   \n  ") is False
+
+
+def test_real_source_carrying_its_own_syntax_is_content():
+    assert _is_prose_not_content("s.py", "x = 1") is False
+    assert _is_prose_not_content("s.py", "# TODO: write this later.") is False
+    assert _is_prose_not_content("s.css", "body { color: red; }") is False
+    assert _is_prose_not_content("s.json", '{"a": 1}') is False
+    assert _is_prose_not_content("s.js", "const a = 1;") is False
+
+
+def test_long_content_declines_whatever_it_says():
+    """1,000 bytes is the cutoff. A summary is short; a file is not."""
+    assert _is_prose_not_content("a.html", "<" + "x" * 2000) is False
+    assert _is_prose_not_content("a.html", "Done. " + "word " * 400 + ".") is False
+
+
+def test_a_short_prose_line_that_is_not_prose_shaped_declines():
+    """Four conditions, ALL required -- the fourth is sentence shape."""
+    # No terminal punctuation.
+    assert _is_prose_not_content("a.html", "Done creating the page for iphone fifteen now") is False
+    # Not capitalised.
+    assert (
+        _is_prose_not_content("a.html", "done. created the page with all required parts.") is False
+    )
+    # Too few words to be a sentence about anything.
+    assert _is_prose_not_content("a.html", "All done here.") is False
+
+
+def test_content_that_is_not_a_string_is_not_prose():
+    assert _is_prose_not_content("a.html", ["Done."]) is False
+
+
+def test_up_to_three_lines_of_prose_still_reads_as_a_summary():
+    body = (
+        "Done. Created the page as requested.\nIt has every element listed.\nNothing else remains."
+    )
+    assert _is_prose_not_content("a.html", body) is True
+    assert _is_prose_not_content("a.html", body + "\nAnd a fourth line here.") is False
+
+
+def test_the_prose_write_is_refused_before_the_backend_sees_it(tmp_path):
+    """§8.2: the bytes on disk must be untouched, not merely a string returned."""
+    target = tmp_path / "iphone15.html"
+    target.write_text("<html><body>real work</body></html>", encoding="utf-8")
+
+    reached = []
+
+    def handler(_req):
+        target.write_text(PROSE, encoding="utf-8")
+        reached.append(True)
+        return "Updated file"
+
+    request = SimpleNamespace(
+        tool_call={
+            "name": "write_file",
+            "args": {"file_path": "/src/iphone15.html", "content": PROSE},
+            "id": "c1",
+        }
+    )
+    result = FixWriteParamsMiddleware().wrap_tool_call(request, handler)
+
+    assert reached == []
+    assert target.read_text(encoding="utf-8") == "<html><body>real work</body></html>"
+    assert result.status == "error"
+    assert result.content.startswith("REJECTED:")
+    # It must name the channel the model actually wanted, or it retries.
+    assert "REPLY" in result.content
+
+
+def test_the_prose_refusal_does_not_lead_with_a_failure_marker():
+    """§10's first rule, and OPEN-94's bug. `Error:` here would be counted by
+    `subagents/runner.py` and three in a row kill the invocation."""
+    from rudra.middleware.fix_write_params import _PROSE_NOT_CONTENT
+    from rudra.trace.stream import _FIRST_LINE_MARKERS, looks_like_error
+
+    text = _PROSE_NOT_CONTENT.format(path="src/x.html", suffix=".html")
+    assert text.startswith("REJECTED:")
+    assert not looks_like_error(text)
+    assert "REJECTED:" not in _FIRST_LINE_MARKERS
+
+
+def test_a_real_html_write_still_reaches_the_backend():
+    result, sentinel = _handled(
+        "write_file",
+        {"file_path": "src/index.html", "content": "<!doctype html><h1>Hi</h1>"},
+    )
+    assert result is sentinel
+
+
+def test_the_two_content_rules_do_not_shadow_each_other():
+    """§8.5. Independent rules: each fires on its own shape and neither on
+    the other's."""
+    assert _is_directory_placeholder("tests", "# placeholder") is True
+    assert _is_prose_not_content("tests", "# placeholder") is False
+    assert _is_prose_not_content("src/iphone15.html", PROSE) is True
+    assert _is_directory_placeholder("src/iphone15.html", PROSE) is False
+
+
+def test_a_refused_prose_write_is_counted_and_announced():
+    """CLAUDE.md §8a: what the guard prevents leaves no mark on tokens,
+    seconds or tool results, so it needs its own number."""
+    counted: list[str] = []
+    notices: list[dict] = []
+    usage = SimpleNamespace(record_write_rejected_as_prose=counted.append)
+    trace = SimpleNamespace(
+        notice=lambda message, role=None, name=None: notices.append(
+            {"message": message, "role": role, "name": name}
+        )
+    )
+    middleware = FixWriteParamsMiddleware(role="coder", usage=usage, trace=trace)
+    request = SimpleNamespace(
+        tool_call={
+            "name": "write_file",
+            "args": {"file_path": "/src/iphone15.html", "content": PROSE},
+            "id": "c1",
+        }
+    )
+    middleware.wrap_tool_call(request, lambda _req: "unreachable")
+
+    assert counted == ["coder"]
+    assert len(notices) == 1
+    assert notices[0]["name"] == "prose-write"
+    assert notices[0]["role"] == "coder"
+    # The path must be in the payload: a false positive is a REFUSED REAL
+    # WRITE and has to be visible by eye without a parser.
+    assert "/src/iphone15.html" in notices[0]["message"]
+
+
+def test_bookkeeping_failure_never_reaches_the_caller():
+    """A run that did its work must not fail because a counter raised."""
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no")
+
+    middleware = FixWriteParamsMiddleware(
+        role="coder",
+        usage=SimpleNamespace(record_write_rejected_as_prose=boom),
+        trace=SimpleNamespace(notice=boom),
+    )
+    request = SimpleNamespace(
+        tool_call={
+            "name": "write_file",
+            "args": {"file_path": "/src/x.html", "content": PROSE},
+            "id": "c1",
+        }
+    )
+    result = middleware.wrap_tool_call(request, lambda _req: "unreachable")
+    assert result.content.startswith("REJECTED:")
