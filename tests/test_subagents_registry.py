@@ -349,3 +349,40 @@ def test_the_path_contract_legitimises_the_spelling_ls_answers_in():
 
     assert "ls" in _PATH_RULES
     assert "/src/" in _PATH_RULES
+
+
+def test_the_path_contract_scopes_the_virtual_spelling_to_tool_arguments():
+    """OPEN-93. `_PATH_RULES` called `/src/x` "correct" without qualification,
+    and it is -- as a TOOL ARGUMENT. Run `2cde3406f7d6`'s tester read that,
+    wrote `HTML_PATH = "/src/iphone15.html"` into a test file, and the gate
+    ran it with the project's own python3, to which `/src` is the machine's
+    root. 8 of 8 tests failed forever against 480 lines of correct HTML.
+    """
+    from rudra.subagents.registry import _PATH_RULES
+
+    assert "PATHS INSIDE THE FILES YOU WRITE" in _PATH_RULES
+    assert "TOOL ARGUMENTS" in _PATH_RULES
+    assert '"src/index.html"' in _PATH_RULES
+    assert '"/src/index.html"' in _PATH_RULES
+
+
+@pytest.mark.parametrize("name", ["coder", "tester"])
+def test_every_writer_is_told_about_paths_inside_written_files(name):
+    """It lives in `_PATH_RULES` and not `_COMMAND_RULES` on purpose: the
+    coder has no `execute` (OPEN-36) and still writes conftest.py, Makefiles
+    and shell scripts, every one of which a real process later runs."""
+    from rudra.subagents.registry import _rules_for
+
+    rules = _rules_for(REGISTRY[name].fs_tools)
+    assert "PATHS INSIDE THE FILES YOU WRITE" in rules
+
+
+@pytest.mark.parametrize("name", ["reviewer", "general-purpose"])
+def test_a_non_writer_gets_the_block_too_and_it_costs_nothing(name):
+    """The block rides `_PATH_RULES`, which every spec gets. Pinned so the
+    parity is a decision on record rather than an accident: a reader who
+    wants it scoped to writers has to change this test to do it."""
+    from rudra.subagents.registry import _rules_for
+
+    rules = _rules_for(REGISTRY[name].fs_tools)
+    assert "PATHS INSIDE THE FILES YOU WRITE" in rules

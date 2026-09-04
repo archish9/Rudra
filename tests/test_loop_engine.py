@@ -1191,3 +1191,121 @@ async def test_two_unserved_dispatches_never_share_a_thread(monkeypatch, context
 
     assert len(seen) == 3
     assert len(set(seen)) == 3, f"thread ids repeated: {seen}"
+
+
+# --------------------------------------------------------------------------
+# OPEN-93 Option D: the blocker says when the TEST's path is what is wrong
+# --------------------------------------------------------------------------
+
+
+def _test_stage_blocker(tail: str, findings=()):
+    return VerifyReport.from_stages(
+        [
+            StageResult(
+                name="test",
+                outcome=FAILED,
+                blocking=True,
+                findings=tuple(findings),
+                output_tail=tail,
+                detail="8 run, 8 failed, 0 skipped",
+            )
+        ]
+    )
+
+
+def test_the_blocker_names_the_tests_own_path_when_the_file_is_really_there(tmp_path):
+    """Run `2cde3406f7d6` verbatim. The HTML was correct and complete on disk;
+    the test looked for it at the machine's root. Attempt 3 read that blocker,
+    saw nothing saying so, and rewrote 480 lines of already-correct HTML."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "iphone15.html").write_text("<!DOCTYPE html>")
+    (tmp_path / "tests").mkdir()
+    tail = (
+        "E   AssertionError: HTML file not found at /src/iphone15.html\n"
+        "E   FileNotFoundError: [Errno 2] No such file or directory: "
+        "'/src/iphone15.html'\n"
+    )
+    report = _test_stage_blocker(
+        tail, [Finding(file="tests/test_iphone15.py", line=14, message="AssertionError")]
+    )
+    text = engine._blocker_text(report, project_path=tmp_path)
+
+    assert text.startswith("test failed:")
+    assert "/src/iphone15.html" in text
+    assert "src/iphone15.html" in text
+    assert "tests/test_iphone15.py" in text
+
+
+def test_the_blocker_is_unchanged_when_the_path_does_not_resolve(tmp_path):
+    """The note claims the file IS there under the relative spelling. When it
+    is not, the failure is an ordinary missing file and saying otherwise
+    would send the coder after a test that is right."""
+    (tmp_path / "src").mkdir()
+    tail = "E   FileNotFoundError: '/src/iphone15.html'\n"
+    report = _test_stage_blocker(tail)
+    assert engine._blocker_text(report, project_path=tmp_path) == engine._blocker_text(report)
+
+
+def test_the_blocker_is_unchanged_for_a_real_machine_path(tmp_path):
+    """`/usr/bin/env` names no directory this project has, so nothing is
+    claimed about it -- `find_project_absolute_literals`' own rule."""
+    (tmp_path / "src").mkdir()
+    tail = "E   FileNotFoundError: '/usr/bin/env'\n"
+    report = _test_stage_blocker(tail)
+    assert engine._blocker_text(report, project_path=tmp_path) == engine._blocker_text(report)
+
+
+def test_only_the_test_stage_gets_the_note(tmp_path):
+    """A lint or typecheck failure quoting a path is not this defect."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "iphone15.html").write_text("x")
+    report = VerifyReport.from_stages(
+        [
+            StageResult(
+                name="lint",
+                outcome=FAILED,
+                blocking=True,
+                output_tail="bad path '/src/iphone15.html'",
+            )
+        ]
+    )
+    assert engine._blocker_text(report, project_path=tmp_path) == engine._blocker_text(report)
+
+
+def test_the_note_is_appended_after_the_gates_own_words(tmp_path):
+    """`_blocker_text` quotes the gate verbatim and a paraphrase is a worse
+    input. The note is an addition, never a replacement."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "iphone15.html").write_text("x")
+    tail = "E   FileNotFoundError: '/src/iphone15.html'"
+    report = _test_stage_blocker(tail)
+    text = engine._blocker_text(report, project_path=tmp_path)
+    assert text.index(tail) < text.index("Note:")
+
+
+def test_no_project_path_leaves_the_blocker_alone(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "iphone15.html").write_text("x")
+    report = _test_stage_blocker("E   FileNotFoundError: '/src/iphone15.html'")
+    assert "Note:" not in engine._blocker_text(report)
+
+
+def test_the_blocker_note_fires_on_an_unquoted_pytest_message(tmp_path):
+    """Run `2cde3406f7d6`'s tail quotes the path on the FileNotFoundError line
+    and not on the AssertionError line. Both are the same defect, so the note
+    reads prose rather than a language's string grammar."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "iphone15.html").write_text("x")
+    report = _test_stage_blocker(
+        "",
+        [
+            Finding(
+                file="tests/test_iphone15.py",
+                line=14,
+                message="AssertionError: HTML file not found at /src/iphone15.html",
+            )
+        ],
+    )
+    text = engine._blocker_text(report, project_path=tmp_path)
+    assert "Note:" in text
+    assert "/src/iphone15.html" in text

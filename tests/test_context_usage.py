@@ -69,6 +69,11 @@ def test_recording_accumulates_per_role():
         # reader of usage.json has to guard.
         "edits_reindented": 0,
         "plans_refused": 0,
+        # Added by OPEN-93: writes that put a project-absolute path into
+        # source a real interpreter later runs, explained in the tool's own
+        # result. Zero here for the same reason -- read beside plans_refused,
+        # 0 means the _PATH_RULES block kept the model off the bad spelling.
+        "content_paths_flagged": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -368,6 +373,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "writes_skipped_chars",
         "edits_reindented",
         "plans_refused",
+        "content_paths_flagged",
         "seconds",
     }
 

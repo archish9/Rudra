@@ -1,5 +1,6 @@
 """Custom middleware for Rudra."""
 
+from rudra.middleware.content_paths import ContentPathMiddleware
 from rudra.middleware.delegation_guard import DelegationGuardMiddleware
 from rudra.middleware.execute_guard import ExecuteGuardMiddleware
 from rudra.middleware.fix_write_params import FixWriteParamsMiddleware
@@ -20,6 +21,7 @@ __all__ = [
     "DelegationGuardMiddleware",
     "ExecuteGuardMiddleware",
     "FixWriteParamsMiddleware",
+    "ContentPathMiddleware",
     "GutterIndentMiddleware",
     "MachinePathMiddleware",
     "ModelRetryMiddleware",

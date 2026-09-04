@@ -29,6 +29,10 @@ from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.loop.regressions import INHERITED, PASSED, failure_keys, verdict_for
 from rudra.memory.degrade import last_failure
 from rudra.memory.entry import MemoryEntry
+from rudra.middleware.content_paths import (
+    find_project_absolute_mentions,
+    project_top_level,
+)
 from rudra.subagents import SubagentContext, run_subagent
 from rudra.verify import verify_project
 from rudra.verify.stubs import is_build_output, project_files
@@ -247,8 +251,75 @@ def _tester_prompt(task: Task) -> str:
     )
 
 
-def _blocker_text(report: Any) -> str:
-    """The gate's complaint, verbatim -- a paraphrase is a worse input."""
+# OPEN-93 Option D. Appended to the gate's own words when the test suite
+# failed on a path that is the VIRTUAL spelling of a file this project really
+# has. `_blocker_text` is otherwise verbatim on purpose -- a paraphrase is a
+# worse input -- so this is an addition and never a replacement.
+_TEST_PATH_NOTE = (
+    '\n\nNote: this failure quotes "{spelling}", and this project really does '
+    'hold that file at "{relative}". A leading "/" is correct as an argument '
+    "to Rudra's file tools, which are rooted at the project -- but the test was "
+    'run by a real interpreter, to which "{spelling}" is the MACHINE\'s root. '
+    "{where}The code under test may be entirely correct; the path written into "
+    "the test is not."
+)
+
+
+def _test_path_note(report: Any, project_path: Any) -> str:
+    """The sentence that says a failing TEST, not the code, holds a bad path.
+
+    Run `2cde3406f7d6` spent 1,348 s and three attempts here. The coder read
+    the blocker, saw `tests/test_iphone15.py:14: AssertionError`, and rewrote
+    480 lines of already-correct HTML -- twice -- because nothing in the
+    blocker said the test's own string literal was the defect, and its task
+    scoped it to the HTML file anyway (OPEN-93 4.3 is the ownership half,
+    which this does not fix).
+
+    Narrow deliberately, and every clause is a decline:
+
+    * the TEST stage only -- a lint or typecheck failure quoting a path is a
+      different problem;
+    * a mention whose first segment names a real top-level entry of this
+      project, so `/usr/bin/env` and `/api/v1/users` are left alone
+      (`find_project_absolute_mentions` -- the prose scanner, not the source
+      one: the run's own pytest tail quotes the path on one line and not on
+      the next, and only one of those two is a string literal);
+    * and the file must ACTUALLY be there under the relative spelling. That
+      last one is what makes the claim true rather than plausible: without
+      it this would tell a coder its test was wrong about a file that really
+      was missing.
+    """
+    blocker = report.blocker
+    if project_path is None or blocker is None or blocker.name != "test":
+        return ""
+    root = Path(project_path)
+    top_level = project_top_level(root)
+    if not top_level:
+        return ""
+    haystack = "\n".join(
+        [*(finding.message or "" for finding in blocker.findings), blocker.output_tail or ""]
+    )
+    for spelling in find_project_absolute_mentions(haystack, top_level):
+        relative = spelling.replace("\\", "/").lstrip("/")
+        try:
+            if not (root / relative).exists():
+                continue
+        except OSError:  # pragma: no cover - unreadable path is a decline
+            continue
+        located = [finding.file for finding in blocker.findings if finding.file]
+        where = f'The failing test is in "{located[0]}". ' if located else ""
+        return _TEST_PATH_NOTE.format(spelling=spelling, relative=relative, where=where)
+    return ""
+
+
+def _blocker_text(report: Any, project_path: Any = None) -> str:
+    """The gate's complaint, verbatim -- a paraphrase is a worse input.
+
+    `project_path` is optional so every existing caller and test keeps its
+    meaning: without it this is exactly the function it has always been, and
+    with it the gate can also say when the TEST's path is what is wrong
+    (OPEN-93).
+    """
     blocker = report.blocker
     if blocker is None:  # pragma: no cover - only called on a failure
         return ""
@@ -258,7 +329,7 @@ def _blocker_text(report: Any) -> str:
     )
     if not blocker.findings and blocker.output_tail:
         lines.append(blocker.output_tail)
-    return "\n".join(lines)
+    return "\n".join(lines) + _test_path_note(report, project_path)
 
 
 def _confirms_nothing_to_do(report: Any, verdict: str) -> bool:
@@ -287,7 +358,7 @@ def _already_satisfied_note(report: Any) -> str:
     )
 
 
-def _wrote_nothing_note(blocker_text: str, report: Any = None) -> str:
+def _wrote_nothing_note(blocker_text: str, report: Any = None, project_path: Any = None) -> str:
     """Why an attempt changed no file, and WHICH of the cases it is.
 
     **This exact string has been the visible symptom of three unrelated
@@ -309,7 +380,8 @@ def _wrote_nothing_note(blocker_text: str, report: Any = None) -> str:
     if blocker_text:
         return f"the coder wrote nothing on a retry. It had been asked to fix:\n\n{blocker_text}"
     if report is not None and report.blocker is not None:
-        return f"the coder wrote nothing, and the gate is failing:\n\n{_blocker_text(report)}"
+        gate = _blocker_text(report, project_path)
+        return f"the coder wrote nothing, and the gate is failing:\n\n{gate}"
     return "the coder wrote nothing"
 
 
@@ -564,7 +636,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                 record_task_in_memory(context.paths, task)
                 record_task_memory(context, task)
                 return outcome
-            task.note = _wrote_nothing_note(blocker_text, report)
+            task.note = _wrote_nothing_note(blocker_text, report, context.project_path)
             ledger.save(context.paths.ledger_json)
             continue
 
@@ -603,7 +675,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             report = await _verify(task, context)
 
         if report.escalate:
-            task.note = _blocker_text(report)
+            task.note = _blocker_text(report, context.project_path)
             return _stop(Outcome.STOP_RUN)
 
         # Every gate run updates what the NEXT task inherits, including a
@@ -625,7 +697,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             return outcome
 
         signature = failure_signature(report)
-        blocker_text = _blocker_text(report)
+        blocker_text = _blocker_text(report, context.project_path)
         if signature is not None and signature == task.last_signature:
             task.status = TaskStatus.BLOCKED
             # The blocker, not just the shape of the failure. `task.note` is

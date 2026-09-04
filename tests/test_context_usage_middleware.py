@@ -73,6 +73,7 @@ def test_sync_hook_records_the_reported_counts():
         # rewrote, and this middleware wraps model calls.
         "edits_reindented": 0,
         "plans_refused": 0,
+        "content_paths_flagged": 0,
     }
     assert result.result[0].content == "hi"
 

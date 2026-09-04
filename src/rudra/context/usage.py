@@ -125,6 +125,17 @@ class RoleUsage:
     # ledger.json: a run with `plans_refused: 1` and no `files_touched: []`
     # task is this item working.
     plans_refused: int = 0
+    # Writes carrying a project-absolute path into source a real interpreter
+    # later runs, explained in the tool's own result (OPEN-93,
+    # ContentPathMiddleware).
+    #
+    # Counted for edits_reindented's and plans_refused's reason, and read
+    # against them: 0 means the `_PATH_RULES` block kept the model off the
+    # bad spelling, >=1 means the prompt missed and the middleware caught it.
+    # Either is a pass; only this number says which half did the work. In run
+    # `2cde3406f7d6` the literal `/src/iphone15.html` cost the entire run --
+    # 2,132 s, 0 of 2 tasks -- and left no mark on calls, seconds or tokens.
+    content_paths_flagged: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -313,6 +324,17 @@ class RunUsage:
         """
         self._slot(role).plans_refused += 1
 
+    def record_content_path_flagged(self, role: str) -> None:
+        """One write whose content named this project with a leading "/".
+
+        Mirrors record_edit_reindented: something Rudra explained on the
+        run's behalf that no other number can show. The failure it heads off
+        is silent at write time and total at run time -- the gate reports a
+        test failure, and nothing in that report says the test's path is what
+        is wrong (OPEN-93).
+        """
+        self._slot(role).content_paths_flagged += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -389,6 +411,7 @@ class RunUsage:
                 "writes_skipped_chars": tally.writes_skipped_chars,
                 "edits_reindented": tally.edits_reindented,
                 "plans_refused": tally.plans_refused,
+                "content_paths_flagged": tally.content_paths_flagged,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

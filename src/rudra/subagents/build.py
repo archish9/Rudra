@@ -26,6 +26,7 @@ from rudra.context.budget import evict_kwargs, execute_kwargs
 from rudra.facts import facts_block
 from rudra.llm import build_model
 from rudra.middleware import (
+    ContentPathMiddleware,
     DelegationGuardMiddleware,
     ExecuteGuardMiddleware,
     FixWriteParamsMiddleware,
@@ -292,6 +293,26 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             # same tuple `_rules_for` reads, so the hint and the prompt
             # cannot disagree about which tools this agent has.
             has_shell="execute" in spec.fs_tools,
+            trace=getattr(context, "trace", None),
+        ),
+        # OUTSIDE the repeat guard, for MachinePathMiddleware's reason one
+        # tool over (OPEN-93): the guard refuses a write whose bytes are
+        # already on disk, and a model re-sending a file it wrote with the
+        # bad literal still in it is exactly the call this most needs to
+        # answer. Inside the guard that call would be short-circuited and
+        # the explanation never delivered.
+        #
+        # The SUBAGENT stack only, unlike MachinePathMiddleware. It fires on
+        # `write_file` and `edit_file`, and the planner holds neither -- so
+        # registering it there would be an entry for a phantom tool, which is
+        # OPEN-15's rule. It is on every SPEC here, writers and readers both,
+        # because the check keys on the tool call rather than on `fs_tools`:
+        # a reader never reaches it and pays nothing, and a spec that gains a
+        # write tool later is covered without anybody remembering this line.
+        ContentPathMiddleware(
+            spec.role,
+            project_path=getattr(context, "project_path", None),
+            usage=getattr(context, "usage", None),
             trace=getattr(context, "trace", None),
         ),
         # After the param fixer, so a repaired path is judged as the call it

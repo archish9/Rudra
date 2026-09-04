@@ -1078,3 +1078,31 @@ def test_the_hint_agrees_with_the_spec_about_who_has_a_shell(name, context):
     middleware = _middleware_for(spec, context, _model_for(spec, context.cfg))
     hint = [m for m in middleware if type(m).__name__ == "MachinePathMiddleware"][0]
     assert hint.has_shell is ("execute" in spec.fs_tools)
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_carries_the_content_path_middleware(name, context):
+    """OPEN-93. On the stack for every spec, not only the writers: the check
+    keys on the tool CALL, so a spec with no write tool never reaches it and
+    costs nothing, and a spec that gains one later is covered without anybody
+    remembering to come back here."""
+    names = [
+        type(m).__name__
+        for m in _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    ]
+    assert "ContentPathMiddleware" in names
+
+
+def test_the_content_path_middleware_sits_outside_the_repeat_guard(context):
+    """The guard refuses a write whose bytes are already on disk, and a model
+    re-sending a file with the bad literal still in it is exactly the call
+    this most needs to answer. Inside the guard that call is short-circuited
+    and the explanation is never delivered -- MachinePathMiddleware's
+    placement argument (OPEN-91) one tool over."""
+    names = [
+        type(m).__name__
+        for m in _middleware_for(
+            REGISTRY["coder"], context, _model_for(REGISTRY["coder"], context.cfg)
+        )
+    ]
+    assert names.index("ContentPathMiddleware") < names.index("RepeatGuardMiddleware")

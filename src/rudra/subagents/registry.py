@@ -73,6 +73,23 @@ PROJECT_PATH_TOKEN = "{project_path}"
 # All three spellings below really do resolve -- measured through the
 # patched `validate_path` with compat/deepagents_path.py installed, which
 # every run installs (main_agent.py:846). Step 2a strips the real root.
+#
+# PATHS INSIDE THE FILES YOU WRITE is OPEN-93, and it is the qualification
+# the "and it is correct" sentence above was missing: correct as a TOOL
+# ARGUMENT, and nowhere else. Run `2cde3406f7d6`'s tester copied the virtual
+# spelling into `HTML_PATH = "/src/iphone15.html"` in a test file; the gate
+# ran it with the project's own python3, to which `/src` is the machine's
+# root, and 8 of 8 tests failed forever against 480 lines of correct HTML.
+#
+# This is a GAP being filled and not an instruction being argued with --
+# `_FINISH_RULES`' own test for the difference, and what makes it unlike
+# OPEN-17 and OPEN-36 where prompt lost to prompt. NOTHING in any Rudra
+# prompt said anything, in any direction, about paths inside written
+# content; there is no incumbent for it to lose to. It ships in
+# _PATH_RULES rather than _COMMAND_RULES so the CODER gets it too: the
+# coder has no `execute` (OPEN-36) and writes conftest.py, Makefiles and
+# shell scripts. And a prompt is still not enforcement, which is why
+# middleware/content_paths.py answers the write itself.
 _PATH_RULES = """## WHERE THIS PROJECT IS
 
 This project is {project_path} on this machine.
@@ -107,6 +124,24 @@ spellings above are what hold here, and the first two are shorter.
   one. NEVER write a placeholder file in order to bring a directory into
   being -- that gives you a FILE with that name, and every later write
   into it fails.
+
+## PATHS INSIDE THE FILES YOU WRITE
+The three spellings above are for the TOOL ARGUMENTS you pass. A path you
+write INTO a file is a different thing: nothing here resolves it. It is
+resolved later, by whatever runs that file -- python, node, make, a shell --
+and to every one of them a leading "/" is the MACHINE's root, not this
+project.
+
+So a path inside file content must be RELATIVE to this project's root, or
+built at run time from the file's own location. Never write a leading "/"
+into a file and mean this project by it.
+
+    Right:  HTML_PATH = "src/index.html"
+    Right:  HTML_PATH = Path(__file__).resolve().parent.parent / "src/index.html"
+    Wrong:  HTML_PATH = "/src/index.html"      <- the machine's /src. Not here.
+
+This is the same fact as WHERE COMMANDS RUN, one step later: a file you
+write is a command you have not run yet.
 """
 
 # The delete contract, granted with the tool in OPEN-49.
