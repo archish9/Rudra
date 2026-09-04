@@ -71,7 +71,16 @@ def test_the_third_identical_failure_is_refused_without_running():
 
 def test_the_refusal_repeats_the_original_error_and_says_what_to_do():
     """A refusal that only says "no" costs a round trip and buys nothing.
-    This one has to carry the model out of the loop."""
+    This one has to carry the model out of the loop.
+
+    Two assertions retired 2026-09-04 (OPEN-95): this used to pin `"same
+    arguments"` and `"ls"`, which were the item's two defects written down
+    as requirements -- the arguments were not the same, and answering an
+    `ls` refusal with "use ls" is advice that cannot be taken. The section
+    at the end of this file owns the replacement wording. What survives
+    here is the half that was always right: the original error reaches the
+    model, and the message says what to do next.
+    """
     guard = RepeatGuardMiddleware()
     backend = _Backend(NOT_FOUND)
 
@@ -80,8 +89,7 @@ def test_the_refusal_repeats_the_original_error_and_says_what_to_do():
     result = guard.wrap_tool_call(_request("read_file", file_path="/. rudra/AGENTS.md"), backend)
 
     assert "not found" in _text(result), "the original error must survive into the refusal"
-    assert "ls" in _text(result)
-    assert "same arguments" in _text(result)
+    assert "carry on without it" in _text(result)
 
 
 def test_a_different_argument_is_a_different_call():
@@ -634,8 +642,11 @@ def test_the_failure_refusal_is_not_an_error_to_the_trace():
     is a free `Error:` line: run 2cde3406f7d6's coder reached three in
     11.67 s and died having written nothing.
 
-    The refusal's TEXT is unchanged -- the model must still read "that did
-    not work". Only the classification moved, onto the message.
+    OPEN-94 left the refusal's TEXT byte-identical so that OPEN-95 could
+    own it, and OPEN-95 has since rewritten everything after the first
+    word. The first word stays: the model must still read "that did not
+    work", and it is free to, precisely because the classification no
+    longer comes from it.
     """
     from rudra.trace.stream import message_is_error
 
@@ -646,7 +657,7 @@ def test_the_failure_refusal_is_not_an_error_to_the_trace():
         guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
     result = guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
 
-    assert _text(result).startswith("Error:"), "the model-facing text is deliberately unchanged"
+    assert _text(result).startswith("Error:"), "the leading word is deliberately kept (OPEN-95)"
     assert message_is_error(result) is False
 
 
@@ -1772,5 +1783,144 @@ def test_a_read_window_is_still_part_of_the_key(tmp_path):
 
     guard.wrap_tool_call(_request("read_file", file_path="/app.py", offset=0), backend)
     guard.wrap_tool_call(_request("read_file", file_path="app.py", offset=100), backend)
+
+    assert backend.calls == 2
+
+
+# --- OPEN-95: the failure refusal must be TRUE and FOLLOWABLE --------------
+#
+# Run 2cde3406f7d6's coder called `ls '/src'`, then `ls '<project>/src'`,
+# then `ls 'src'` -- a spelling it had never used -- and was told it had
+# called this "with these exact arguments", shown an error quoting '/src',
+# and instructed to "change the arguments, use ls to find the correct path,
+# or continue without this file". It re-sent the identical call and the
+# invocation halted.
+#
+# The identity is right and stays (OPEN-52, the section above). What was
+# missing is the EXPLANATION of that identity, and its absence was filled
+# with three defects: a false claim about the arguments, an error quoted
+# against a different spelling from the one asked about, and two impossible
+# instructions ahead of the one viable branch.
+
+
+def test_the_failure_refusal_makes_no_claim_about_the_arguments(tmp_path):
+    """The false half. The key is resolved, the arguments are not, so any
+    sentence about argument equality is a statement the model can see is
+    untrue -- it had just typed something different."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(NOT_FOUND)
+
+    guard.wrap_tool_call(_request("ls", path="/src"), backend)
+    guard.wrap_tool_call(_request("ls", path=str(tmp_path / "src")), backend)
+    result = guard.wrap_tool_call(_request("ls", path="src"), backend)
+
+    text = _text(result)
+    assert "exact arguments" not in text
+    assert "same arguments" not in text
+
+
+def test_the_failure_refusal_names_the_resolved_target(tmp_path):
+    """What the trace notice has always said and the model was never told.
+    `_announce` renders the resolved target; the message rendered the raw
+    argument of whichever spelling failed last, so the two disagreed."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(NOT_FOUND)
+
+    guard.wrap_tool_call(_request("ls", path="/src"), backend)
+    guard.wrap_tool_call(_request("ls", path=str(tmp_path / "src")), backend)
+    result = guard.wrap_tool_call(_request("ls", path="src"), backend)
+
+    assert "'src'" in _text(result)
+
+
+def test_the_failure_refusal_says_the_spellings_are_one_call(tmp_path):
+    """The fact the model needed and was never given. Without it "change
+    the arguments" describes an action that does not exist -- every
+    spelling of that path resolves to one key."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(NOT_FOUND)
+
+    for _ in range(2):
+        guard.wrap_tool_call(_request("ls", path="/src"), backend)
+    result = guard.wrap_tool_call(_request("ls", path="src"), backend)
+
+    text = _text(result)
+    assert "one call" in text
+    assert "'/src'" in text
+    assert f"'{tmp_path}/src'" in text, "the third spelling, spelled out in full"
+
+
+def test_two_spellings_of_one_failing_read_get_the_same_refusal(tmp_path):
+    """It is one call, so it is one answer. A difference here means the
+    message is being built from the raw argument again."""
+
+    def refusal_for(spelling: str) -> str:
+        guard = RepeatGuardMiddleware(project_path=tmp_path)
+        backend = _Backend(NOT_FOUND)
+        for _ in range(2):
+            guard.wrap_tool_call(_request("ls", path="/src"), backend)
+        return _text(guard.wrap_tool_call(_request("ls", path=spelling), backend))
+
+    assert refusal_for("src") == refusal_for("/src") == refusal_for(str(tmp_path / "src"))
+
+
+def test_the_failure_refusal_names_a_move_that_can_be_made(tmp_path):
+    """The unfollowable half. "use ls to find the correct path" was
+    answering an `ls` refusal with `ls`; the coder's actual task was to
+    CREATE that path, which needs no listing at all -- `_PATH_RULES` says
+    directories are made on the way."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(NOT_FOUND)
+
+    for _ in range(2):
+        guard.wrap_tool_call(_request("ls", path="/src"), backend)
+    result = guard.wrap_tool_call(_request("ls", path="/src"), backend)
+
+    text = _text(result)
+    assert "carry on without it" in text
+    assert "write it" in text
+
+
+def test_without_a_project_path_the_refusal_claims_no_equivalence():
+    """The degraded mode is the honest one. With no root nothing is
+    resolved and the spelling IS the key, so the equivalence sentence
+    would be the new false claim (`test_without_a_project_path_the_
+    spelling_is_still_the_key` is the behaviour it would misdescribe)."""
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(NOT_FOUND)
+
+    for _ in range(2):
+        guard.wrap_tool_call(_request("ls", path="/src"), backend)
+    result = guard.wrap_tool_call(_request("ls", path="/src"), backend)
+
+    text = _text(result)
+    assert "one call" not in text
+    assert "exact arguments" not in text
+
+
+def test_a_grep_with_no_path_claims_no_equivalence(tmp_path):
+    """A pattern is never resolved (`test_a_grep_PATTERN_is_never_resolved`),
+    so respelling one genuinely IS a different search. Claiming otherwise
+    would be this item's own defect pointed the other way."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(NOT_FOUND)
+
+    for _ in range(2):
+        guard.wrap_tool_call(_request("grep", pattern="/app.py"), backend)
+    result = guard.wrap_tool_call(_request("grep", pattern="/app.py"), backend)
+
+    assert "one call" not in _text(result)
+
+
+def test_the_identity_behaviour_is_unchanged_by_the_new_wording(tmp_path):
+    """The regression guard on Option B, rejected in the item's §5: a
+    genuinely new spelling gets no free attempt. Three spellings, one key,
+    two calls through."""
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    backend = _Backend(NOT_FOUND)
+
+    guard.wrap_tool_call(_request("ls", path="/src"), backend)
+    guard.wrap_tool_call(_request("ls", path="./src"), backend)
+    guard.wrap_tool_call(_request("ls", path="src"), backend)
 
     assert backend.calls == 2

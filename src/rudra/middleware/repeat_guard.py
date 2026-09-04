@@ -459,13 +459,34 @@ class RepeatGuardMiddleware(AgentMiddleware):
         that shipped with OPEN-10.
         """
         raw = args.get("file_path") or args.get("path")
-        if raw and self.project_path is not None:
+        if raw:
             # `or str(raw)` covers a resolver that declines to place the
             # path -- a backend route like `/artifacts/`. The guard counts,
             # it never rewrites the call, so an unresolvable spelling keys
             # on itself rather than on nothing (`runner.py:203-206`).
-            return virtual_to_relative(str(raw), Path(self.project_path)) or str(raw)
-        return str(raw or args.get("pattern") or "")
+            return self._resolved(args) or str(raw)
+        return str(args.get("pattern") or "")
+
+    def _resolved(self, args: dict[str, Any]) -> str | None:
+        """This call's path as a project-relative spelling, or None.
+
+        `_target`'s first half, lifted out because OPEN-95 needs the
+        question it answers rather than the answer: *did* the resolution
+        happen? `_target` cannot say -- it falls back to the raw spelling,
+        so a `/artifacts/` route and a resolved `src` are the same shape
+        coming out of it. `_refusal` must know, because the sentence it
+        adds ("these spellings are one call") is TRUE exactly when this
+        returned something and false otherwise -- with no project path
+        nothing is resolved and the spelling is the key.
+
+        One function rather than two copies of the same three lines:
+        `verify/stubs.py::is_build_output` is what happens when a rule
+        this small is written out twice (OPEN-63, OPEN-64).
+        """
+        raw = args.get("file_path") or args.get("path")
+        if not raw or self.project_path is None:
+            return None
+        return virtual_to_relative(str(raw), Path(self.project_path))
 
     def _key_args(self, args: dict[str, Any]) -> dict[str, Any]:
         """`args` with its path argument resolved, for the read rules' key.
@@ -509,7 +530,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
         for believed in [k for k in self._written if _same_file(k, target)]:
             del self._written[believed]
 
-    def _refusal(self, signature: str, name: str) -> str:
+    def _refusal(self, signature: str, name: str, args: dict[str, Any]) -> str:
         """The answer to a read that has already failed identically twice.
 
         Leads with "Error:", unlike its two siblings, because that is what
@@ -518,15 +539,63 @@ class RepeatGuardMiddleware(AgentMiddleware):
         refusal and `trace/stream.py::message_is_error` answers from the
         mark, so no counter reads this prose. Do not restyle it to dodge a
         text check that no longer runs.
+
+        **It names the RESOLVED target, and says nothing about the
+        arguments (OPEN-95).** The signature is keyed on the file, not on
+        the spelling (OPEN-52), so "these exact arguments" was a claim the
+        model could see was untrue: run 2cde3406f7d6's coder was told it
+        had already called `ls 'src'` twice when it had typed '/src' and
+        the full host path, and was shown an error quoting '/src' as the
+        answer to a question about 'src'. It then re-sent the identical
+        call and the invocation halted -- the documented consequence of
+        handing a model back its own argument with a contradiction
+        attached (`gutter_indent.py`'s docstring records the same shape).
+
+        The identity is right; what was missing is the EXPLANATION of the
+        identity, which is `_spelling_note`. With it the old advice --
+        "change the arguments" -- stops being an instruction that
+        describes no possible action, so it goes: there is no spelling
+        that is not this call. "use ls to find the correct path" goes for
+        the plainer reason that `ls` is one of the four tools that can be
+        refused here, so it could answer an `ls` refusal with `ls`. What
+        is left is the branch that was third of three and was the only
+        one that ever applied.
         """
         seen = self._failures[signature]
         return (
-            f"Error: {name} has already failed {seen} times with these exact "
-            f"arguments, and was not run again. The error each time was: "
-            f"{self._last_error.get(signature, 'unknown')}\n"
-            f"Calling it again with the same arguments will not work. Change "
-            f"the arguments, use ls to find the correct path, or continue "
-            f"without this file."
+            f"Error: `{name}` on '{self._target(args)}' has already failed "
+            f"{seen} times in this turn, and was not run again. The error "
+            f"was: {self._last_error.get(signature, 'unknown')}\n"
+            f"{self._spelling_note(args)}Re-sending it will not change that "
+            f"answer. Look somewhere else, or carry on without it -- and if "
+            f"your task is to CREATE that file, write it: parent directories "
+            f"are made on the way."
+        )
+
+    def _spelling_note(self, args: dict[str, Any]) -> str:
+        """Why re-spelling the path is not the way out, or "" (OPEN-95).
+
+        Emitted only when the resolution actually happened, because that
+        is exactly when the claim is true. Three cases decline, and each
+        would otherwise be this item's own defect pointed the other way:
+        no project path, where nothing is resolved and the spelling IS the
+        key (`_target`'s last paragraph); a `grep` carrying only a
+        `pattern`, which is never resolved because two spellings of a
+        pattern are two different searches; and a path the resolver
+        declined to place, such as a `/artifacts/` route, which keys on
+        itself.
+
+        It spells all three out rather than asserting the rule, because
+        the model is looking at one of them and has to recognise it.
+        `_PATH_RULES` lists the same three in the same order.
+        """
+        relative = self._resolved(args)
+        if not relative:
+            return ""
+        return (
+            f"'{relative}', '/{relative}' and '{self.project_path}/{relative}' "
+            f"are one call here -- this guard keys on the file, not on how it "
+            f"was typed -- so re-spelling the path reaches the same place. "
         )
 
     def _repeat_refusal(self, name: str, args: dict[str, Any]) -> str:
@@ -608,7 +677,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
                 f"refused: `{name}` on '{self._target(args)}' failed "
                 f"{self._failures[signature]} times identically -- not run again"
             )
-            return self._refusal(signature, name)
+            return self._refusal(signature, name, args)
         if self._answered.get(signature, 0) >= self.max_identical_reads:
             self._count_dedupe()
             self._announce(
