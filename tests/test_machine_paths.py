@@ -23,8 +23,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import ToolMessage
 
+from rudra.compat.virtual_paths import looks_windows_absolute
 from rudra.middleware.machine_paths import (
     MACHINE_HINT_NOTICE,
     MachinePathMiddleware,
@@ -315,3 +317,127 @@ def test_the_resolved_path_is_the_one_the_backend_would_have_used(tmp_path):
     )
 
     assert str(Path(tmp_path) / "usr" / "bin" / "python*") in result
+
+
+# --------------------------------------------------------------------------
+# OPEN-96 -- the classification is on the RESOLVED path, not the spelling
+# --------------------------------------------------------------------------
+
+# The reported run's project root. Kept literal because it IS the
+# reproduction: `_PATH_RULES` teaches `{project_path}/src/...` as a correct
+# spelling, and every macOS project is under `/Users`.
+_OPEN96_ROOT = Path("/Users/archish/Documents/ai-ml/test-rudra")
+
+
+@pytest.mark.parametrize(
+    ("spelling", "expected"),
+    [
+        # OPEN-91's real cases -- these MUST keep firing.
+        ("/usr/bin/python3", "/usr"),
+        ("/opt/homebrew/bin/python3", "/opt"),
+        ("/Users", "/Users"),
+        (r"C:\Windows\py.exe", "C:\\"),
+        # OPEN-96's misfires -- these must decline.
+        (str(_OPEN96_ROOT / "src"), None),
+        ("//.mcp.json", None),
+        # Already correct before this item.
+        ("/src", None),
+        ("src", None),
+    ],
+)
+def test_machine_root_classifies_the_resolved_path(spelling, expected):
+    """A path is the machine's when the place it LANDS is a machine directory.
+
+    Every backend is `virtual_mode=True`, so `/Users/<me>/proj/src` lands at
+    `<project>/src` and is this project's own file however it was spelled --
+    and `_PATH_RULES` (`registry.py`) teaches that spelling as correct.
+    """
+    assert machine_root(spelling, _OPEN96_ROOT) == expected
+
+
+def test_the_projects_own_absolute_path_gets_no_hint(tmp_path):
+    """Misfire A. `{project_path}/src` is the third spelling `_PATH_RULES`
+    endorses; before OPEN-96 the middleware told the model it had reached
+    outside the project for using it."""
+    middleware = MachinePathMiddleware("coder", project_path=tmp_path)
+
+    result = middleware.wrap_tool_call(
+        _request("ls", path=str(tmp_path / "src")),
+        _Handler("Error: Path not found"),
+    )
+
+    assert result == "Error: Path not found"
+
+
+def test_a_doubled_slash_is_not_a_network_share(tmp_path):
+    """Misfire B. `PureWindowsPath("//.mcp.json").drive` is truthy -- pathlib
+    reads a doubled leading slash as a UNC `\\\\server\\share` -- so the most
+    common one-character path typo was reported as the machine's filesystem
+    for a file the project has."""
+    middleware = MachinePathMiddleware("coder", project_path=tmp_path)
+
+    result = middleware.wrap_tool_call(
+        _request("read_file", file_path="//.mcp.json"),
+        _Handler("Error: File not found"),
+    )
+
+    assert result == "Error: File not found"
+
+
+def test_a_unc_spelling_is_classified_by_where_it_lands(tmp_path):
+    """The deliberate narrowing of §4.2: a real DRIVE anchor is always the
+    machine, a UNC one is not asserted to be. `//x` and `\\\\server\\share\\x`
+    are the same shape to pathlib, so the anchor cannot decide and the
+    resolved path does -- the backend strips `\\\\server\\usr\\`, which is why
+    `\\\\server\\usr\\bin\\python3` lands at `bin/python3` and still fires."""
+    assert machine_root(r"\\server\share\python.exe", tmp_path) is None
+    assert machine_root(r"\\server\usr\bin\python3", tmp_path) == "/bin"
+
+
+def test_without_a_project_root_the_spelling_still_answers():
+    """`machine_root` is public and its one-argument form is what every test
+    above this section calls. It keeps the pre-OPEN-96 reading, because with
+    no root there is nowhere for the path to land."""
+    assert machine_root("/usr/bin/python3") == "/usr"
+    assert machine_root(str(_OPEN96_ROOT / "src")) == "/Users"
+
+
+def test_the_hint_does_not_explain_a_substitution_that_did_not_happen(tmp_path):
+    """Option B. `_HINT` reads "X was looked for at Y", which is informative
+    only when X and Y differ. A model that spelled the resolved path in full
+    was told "X was looked for at X, which does not exist"."""
+    middleware = MachinePathMiddleware("coder", project_path=tmp_path)
+    spelling = str(tmp_path / "usr" / "bin" / "python3")
+
+    result = middleware.wrap_tool_call(
+        _request("read_file", file_path=spelling), _Handler("Error: File not found")
+    )
+
+    assert "only inside this project" in result
+    assert "was looked for at" not in result
+    assert f'"{spelling}" is not in this project' in result
+
+
+def test_a_differing_spelling_still_gets_the_substitution_sentence(tmp_path):
+    """The other half of the branch: when the two DO differ, saying where the
+    tool actually looked is the whole point."""
+    middleware = MachinePathMiddleware("coder", project_path=tmp_path)
+
+    result = middleware.wrap_tool_call(
+        _request("glob", pattern="/usr/bin/python*"), _Handler("No files found")
+    )
+
+    assert "was looked for at" in result
+    assert str(Path(tmp_path) / "usr" / "bin" / "python*") in result
+
+
+def test_looks_windows_absolute_is_untouched():
+    """It is shared with `virtual_to_relative` and the backend's routing, so
+    changing it would change path resolution project-wide (§4.4). The UNC
+    reading is correct for a real UNC path; OPEN-96 is fixed inside
+    `machine_root` instead."""
+    assert looks_windows_absolute(r"C:\x\y.py") is True
+    assert looks_windows_absolute(r"\\server\share\y.py") is True
+    assert looks_windows_absolute("//.mcp.json") is True
+    assert looks_windows_absolute("/src/app.py") is False
+    assert looks_windows_absolute(r"\src\app.py") is False

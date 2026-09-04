@@ -47,7 +47,11 @@ from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
 
-from rudra.compat.virtual_paths import looks_windows_absolute, virtual_to_host
+from rudra.compat.virtual_paths import (
+    looks_windows_absolute,
+    virtual_to_host,
+    virtual_to_relative,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,10 +108,16 @@ MACHINE_DIRS = frozenset(
 
 _HINT = (
     "\n\nNote: {tool} searches only inside this project, which is at {root}. "
-    'A leading "/" means THAT directory, so "{spelling}" was looked for at '
-    '"{resolved}", which does not exist. The machine\'s own "{anchor}" is not '
-    "reachable from any file tool here, on any OS."
+    'A leading "/" means THAT directory, so {located}. The machine\'s own '
+    '"{anchor}" is not reachable from any file tool here, on any OS.'
 )
+
+# The middle clause, and it has two readings because the model may already
+# have written the resolved path. "X was looked for at X, which does not
+# exist" explains a substitution that did not happen, and reads as nonsense
+# in exactly the case a real machine path is spelled out in full (OPEN-96).
+_LOCATED_SUBSTITUTED = '"{spelling}" was looked for at "{resolved}", which does not exist'
+_LOCATED_SAME = '"{spelling}" is not in this project'
 
 # The half that answers the question the model actually had. `_CODER_PROMPT`
 # says a version of this; the difference is that here it is the ANSWER to
@@ -135,20 +145,31 @@ _HAS_SHELL = (
 _EMPTY = "No files found"
 
 
-def machine_root(value: str) -> str | None:
-    """The machine directory this spelling names, or None.
+def _drive_anchor(value: str) -> str | None:
+    """The `C:\\` of a drive-absolute spelling, or None.
 
-    Answered by SHAPE and never by host OS, the rule
-    `compat/virtual_paths.py` is built on: a mac user's model and a Windows
-    user's model make the same mistakes, because both are guessing from
-    training data rather than from the machine they are running on.
+    A real DRIVE anchor is always the machine whatever follows it, because the
+    backend strips it: `C:\\Windows\\py.exe` is `<project>/Windows/py.exe`, and
+    `Windows` is not in `MACHINE_DIRS`, so resolution alone would miss it.
 
-    A Windows drive-absolute or UNC path is always one of these -- the
-    backend strips the anchor, so `C:\\Windows\\py.exe` is
-    `<project>/Windows/py.exe` and the drive is gone whatever followed it.
+    UNC is deliberately NOT read this way. `PureWindowsPath("//x").drive` is
+    truthy for a POSIX doubled slash -- the commonest one-character path typo
+    -- and `//src/app.py` is indistinguishable by shape from a genuine
+    `\\\\server\\share` (OPEN-96 misfire B). Those fall through to the resolved
+    reading below, which still answers `\\\\server\\usr\\bin\\python3` with `/usr`.
     """
-    if not value:
-        return None
+    drive = PureWindowsPath(value).drive
+    if len(drive) == 2 and drive[1] == ":":
+        return PureWindowsPath(value).anchor
+    return None
+
+
+def _machine_root_from_spelling(value: str) -> str | None:
+    """The pre-OPEN-96 reading: the raw spelling's own first segment.
+
+    Reached only when there is no project root to resolve against, where
+    there is nowhere for the path to land and the spelling is all there is.
+    """
     if looks_windows_absolute(value):
         return PureWindowsPath(value).anchor
     # A backslash-separated spelling with no drive (`\\usr\\bin`) is read as
@@ -160,6 +181,44 @@ def machine_root(value: str) -> str | None:
     if len(parts) < 2:
         return None
     return f"/{parts[1]}" if parts[1] in MACHINE_DIRS else None
+
+
+def machine_root(value: str, project_root: Path | None = None) -> str | None:
+    """The machine directory this spelling names, or None.
+
+    Answered by SHAPE and never by host OS, the rule
+    `compat/virtual_paths.py` is built on: a mac user's model and a Windows
+    user's model make the same mistakes, because both are guessing from
+    training data rather than from the machine they are running on.
+
+    **The shape asked about is the RESOLVED path, not the raw spelling
+    (OPEN-96).** Every backend is `virtual_mode=True`, so
+    `/Users/<me>/proj/src` lands at `<project>/src` and is this project's own
+    file -- and `_PATH_RULES` (`subagents/registry.py`) teaches that full
+    spelling as one of three correct ways to write it. Reading the first
+    segment instead made the hint fire on every macOS project under `/Users`,
+    every Linux one under `/home`, and any `//x` typo: 3 of the 4 firings in
+    run `2cde3406f7d6` were false. `virtual_to_relative` is the project's
+    single authority on which real file a path names (CR-B4), and it was
+    already imported two functions away without being consulted.
+
+    Without a `project_root` there is nowhere for the path to land, so the
+    spelling is all there is and the older reading stands.
+    """
+    if not value:
+        return None
+    anchor = _drive_anchor(value)
+    if anchor is not None:
+        return anchor
+    if project_root is None:
+        return _machine_root_from_spelling(value)
+    relative = virtual_to_relative(value, project_root)
+    if not relative or relative == ".":
+        return None
+    parts = PurePosixPath(relative).parts
+    if not parts:
+        return None
+    return f"/{parts[0]}" if parts[0] in MACHINE_DIRS else None
 
 
 class MachinePathMiddleware(AgentMiddleware):
@@ -184,12 +243,17 @@ class MachinePathMiddleware(AgentMiddleware):
         self.trace = trace
 
     def _spelling(self, name: str, args: dict) -> tuple[str, str] | None:
-        """The path argument that names the machine, with its root, or None."""
+        """The path argument that names the machine, with its root, or None.
+
+        The project root goes through, because the question is where the path
+        LANDS and only the root can answer that (OPEN-96).
+        """
+        root = None if self.project_path is None else Path(self.project_path)
         for key in _PATH_ARGS.get(name, ()):
             value = args.get(key)
             if not isinstance(value, str):
                 continue
-            anchor = machine_root(value)
+            anchor = machine_root(value, root)
             if anchor is not None:
                 return value, anchor
         return None
@@ -230,13 +294,15 @@ class MachinePathMiddleware(AgentMiddleware):
         resolved = virtual_to_host(spelling, root)
         if resolved is None:
             return None
-        text = _HINT.format(
-            tool=name,
-            root=root,
-            spelling=spelling,
-            resolved=resolved,
-            anchor=anchor,
-        )
+        # A model that spelled the resolved path in full gets the shorter
+        # clause: "X was looked for at X" describes a substitution that did
+        # not happen, and that is the likeliest shape here now that a
+        # spelled-out project path no longer reaches this at all (OPEN-96).
+        if str(resolved) == spelling:
+            located = _LOCATED_SAME.format(spelling=spelling)
+        else:
+            located = _LOCATED_SUBSTITUTED.format(spelling=spelling, resolved=resolved)
+        text = _HINT.format(tool=name, root=root, located=located, anchor=anchor)
         return text + (_HAS_SHELL if self.has_shell else _NO_SHELL)
 
     def _annotate(self, request, result: Any) -> Any:

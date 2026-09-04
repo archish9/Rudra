@@ -1,15 +1,16 @@
 # CLAUDE.md — Rudra
 
-Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. **Three are open
-as of 2026-09-04**: OPEN-96 … OPEN-98. All six of that board were filed from
+Context loaded into every fresh Claude Code session. Read `TODO.md` next — it is the live ledger of what is open. **Two are open
+as of 2026-09-04**: OPEN-97 and OPEN-98. All six of that board were filed from
 one run, `2cde3406f7d6`, which finished 0 tasks of 2 in 2,132 s while the
-deliverable sat correct on disk; OPEN-93, OPEN-94 and OPEN-95 closed the same
-day. Each has a self-contained document under
+deliverable sat correct on disk; OPEN-93 … OPEN-96 closed the same day. Each
+has a self-contained document under
 `docs/superpowers/plans/2026-09-04-open-9*.md`, and `TODO.md` opens with them
 in the order to fix them. The **dependency** inside the
-OPEN-94 → OPEN-95 → OPEN-96 cluster is discharged — the two that had to go
-first have gone — so nothing constrains the remaining three. Trust
-`grep -n PENDING TODO.md` over any heading, including this sentence.
+OPEN-94 → OPEN-95 → OPEN-96 cluster is spent — all three have landed, in that
+order — so nothing constrains the remaining two, which were never constrained
+anyway. Trust `grep -n PENDING TODO.md` over any heading, including this
+sentence.
 
 Corrected 2026-09-04: this paragraph said *"Nothing is open as of
 2026-09-03"* and named the outstanding live-run verification of OPEN-90/91/92
@@ -20,18 +21,18 @@ longer the only one.
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **What is open now, and nothing else.** Read it first. **Three open as of 2026-09-04** — it opens with OPEN-96 … OPEN-98 in fix order, one line and one document link each, then the run they came from in seconds, then the ordering argument (whose OPEN-94/95/96 dependency is now discharged), then a note on which of the original six were diagnosable from `.rudra/run/logs/` alone. Then four things being watched that are deliberately **not** items, the fourth being the live-run verification still outstanding across OPEN-90/91/92. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed to 495 lines on 2026-09-04 when the closed 2026-09-03 board moved out |
-| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 95 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Three blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; and **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument. Its index table at the top is the map; read that before scrolling |
+| `TODO.md` | **What is open now, and nothing else.** Read it first. **Two open as of 2026-09-04** — it opens with OPEN-97 and OPEN-98 in fix order, one line and one document link each, then the run they came from in seconds, then the ordering argument (whose OPEN-94/95/96 dependency is now spent, all three having landed), then a note on which of the original six were diagnosable from `.rudra/run/logs/` alone. Then four things being watched that are deliberately **not** items, the fourth being the live-run verification still outstanding across OPEN-90/91/92. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed to 495 lines on 2026-09-04 when the closed 2026-09-03 board moved out |
+| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 96 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Three blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; and **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument. Its index table at the top is the map; read that before scrolling |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-04 those are OPEN-96 … OPEN-98, **none of which is cited anywhere
-below** — so every citation in this file, OPEN-95 included, still points at a
-record. When one of the remaining three lands, its own document's §11 says
-which paragraphs here it corrects.
+2026-09-04 those are OPEN-97 and OPEN-98, **neither of which is cited
+anywhere below** — so every citation in this file, OPEN-96 included, still
+points at a record. When one of the remaining two lands, its own document's
+§11 says which paragraphs here it corrects.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
@@ -394,7 +395,35 @@ src/rudra/
 │                           guard — 19 of those 36 globs were answered by
 │                           the guard's dedupe, so inside it the hint would
 │                           have missed exactly the calls the model was
-│                           most stuck on,
+│                           most stuck on. **Since OPEN-96 the question is
+│                           asked of the RESOLVED path, never of the raw
+│                           spelling.** `machine_root` read the first
+│                           segment of what the model typed, so it fired on
+│                           `{project_path}/src` — the third spelling
+│                           `_PATH_RULES` teaches as CORRECT — and told the
+│                           model its own project was outside the project:
+│                           every macOS project is under `/Users`, every
+│                           Linux one under `/home`, so the false positive
+│                           was the default case. 3 of run 2cde3406f7d6's 4
+│                           firings were false. It now asks
+│                           `virtual_to_relative` — CR-B4's single authority
+│                           on which real file a path names, and already
+│                           imported two functions away — and fires only
+│                           when the place the path LANDS is a machine
+│                           directory. Two escapes, each for a reason the
+│                           resolved reading cannot cover: a real `C:\`
+│                           anchor is always the machine whatever follows
+│                           it, because the backend strips it and `Windows`
+│                           is in no MACHINE_DIRS; and with no project root
+│                           there is nowhere to land, so the old spelling
+│                           reading stands. UNC is deliberately NOT an
+│                           escape — `PureWindowsPath("//x").drive` is
+│                           truthy, so a doubled-slash typo and
+│                           `\\server\share\x` are one shape and the anchor
+│                           cannot separate them; the resolved path can.
+│                           `looks_windows_absolute` is untouched and
+│                           pinned, because `virtual_to_relative` and the
+│                           backend's routing both read it,
 │                           plus content_paths.py (OPEN-93, always on): the
 │                           THIRD consumer of a path, and the one no prompt
 │                           documented. `_PATH_RULES` teaches that `/src/x`
@@ -1146,7 +1175,7 @@ either.
 | Did the gate pass, and on whose interpreter? | `verify.log` | the `command:` line of each stage — OPEN-80 was invisible without it |
 | Was anything denied? | `permissions.jsonl` | one line per gated decision, every mode |
 | Did a subagent get stopped for spending too long? | `ledger.json` · `debug-<id>.jsonl` | `halts` naming a `NNNs limit`, and a `"kind": "notice"`, `name: "guard"` line. **Which bound fired is the diagnosis**: "80 tool calls" is a loop, "over the 1200s limit" is a slow provider or a loop (OPEN-91). `meta.json` in the archive records the limit that was in force |
-| Did an agent go hunting the machine's filesystem? | `debug-<id>.jsonl` | `"kind": "notice"`, `name: "machine-path"` — one per tool result Rudra had to explain. Non-zero means OPEN-91's defect fired and was answered at call two instead of call forty |
+| Did an agent go hunting the machine's filesystem? | `debug-<id>.jsonl` | `"kind": "notice"`, `name: "machine-path"` — one per tool result Rudra had to explain. Non-zero means OPEN-91's defect fired and was answered at call two instead of call forty. **Trustworthy as a count since OPEN-96**, which stopped it firing on the project's own absolute path and on `//x` typos — 3 of 4 firings in run `2cde3406f7d6` were false, so the number meant nothing before that. Read the payload anyway, not only the count: it quotes the spelling, so a false positive is visible by eye without a parser |
 | Did edits have to be repaired? | `usage.json` | `roles.<role>.edits_reindented` — non-zero means OPEN-92's gutter defect fired and was caught. Paired with a `"kind": "notice"`, `name: "reindent"` line per repair in `debug-<id>.jsonl` |
 | Did an agent write a virtual path into real source? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.content_paths_flagged`, and a `"kind": "notice"`, `name: "content-path"` line per hit. Non-zero means OPEN-93's defect fired and was explained at the write instead of costing the run. **Read it beside `verify.log`**: a `test` stage failing on a `/`-prefixed path with `content_paths_flagged: 0` means the literal came from somewhere this middleware does not watch — a fact value or a task description, which is where the reported run's copy came from |
 | Was the plan itself the problem? | `usage.json` · `ledger.json` | `roles.planner.plans_refused` is 1 when OPEN-90's guard made the planner re-plan, with a `"kind": "notice"`, `name: "plan-shape"` line saying so. Read it against `files_touched: []`: a run with `plans_refused: 1` and no empty-`files_touched` `DONE` task is that guard working; empty `files_touched` with `plans_refused: 0` is the defect firing in a shape the guard did not see |
