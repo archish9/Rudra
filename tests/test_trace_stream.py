@@ -15,7 +15,14 @@ from __future__ import annotations
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from rudra.trace import TraceKind
-from rudra.trace.stream import StreamState, consume, looks_like_error, message_is_error
+from rudra.trace.stream import (
+    REFUSAL_KEY,
+    StreamState,
+    consume,
+    is_rudra_refusal,
+    looks_like_error,
+    message_is_error,
+)
 
 
 def _chunk(namespace, messages):
@@ -171,3 +178,50 @@ def test_an_empty_content_field_beside_tool_calls_adds_no_line():
     state = StreamState(role="coder")
     message = AIMessage(content="", tool_calls=[{"name": "write_file", "args": {}, "id": "1"}])
     assert [event.kind for event in consume(_chunk((), [message]), state)] == [TraceKind.TOOL_CALL]
+
+
+def test_a_marked_refusal_is_not_a_tool_failure_whatever_its_text():
+    """OPEN-94: a refusal is Rudra speaking, not a tool answering.
+
+    `RepeatGuardMiddleware` short-circuits a call rather than running it,
+    so no tool failed -- but its failure refusal leads with "Error:"
+    because that is what the MODEL must read, and the text check counted
+    it. Two of the three failures that halted coder invocation 1 of run
+    2cde3406f7d6 at 11.67 s were this string. The classification moves off
+    the prose and onto the message, so the model-facing text is untouched.
+    """
+    refusal = ToolMessage(
+        content=(
+            "Error: ls has already failed 2 times with these exact arguments, "
+            "and was not run again."
+        ),
+        tool_call_id="1",
+        name="ls",
+        additional_kwargs={REFUSAL_KEY: True},
+    )
+
+    assert is_rudra_refusal(refusal) is True
+    assert message_is_error(refusal) is False
+
+
+def test_an_ordinary_tool_message_is_not_a_refusal():
+    """The marker is opt-in: nothing Rudra did not invent carries it."""
+    assert (
+        is_rudra_refusal(ToolMessage(content="Error: boom", tool_call_id="1", name="ls")) is False
+    )
+    assert is_rudra_refusal(ToolMessage(content="fine", tool_call_id="1", name="ls")) is False
+
+
+def test_a_marked_message_that_really_failed_is_still_a_failure():
+    """The marker says "Rudra invented this", not "ignore this". A status
+    of "error" comes from langgraph and outranks it -- nothing Rudra
+    invents carries one, so the two cannot legitimately co-occur, and if
+    they ever do the structural signal wins over the marker."""
+    failed = ToolMessage(
+        content="anything",
+        tool_call_id="1",
+        name="ls",
+        status="error",
+        additional_kwargs={REFUSAL_KEY: True},
+    )
+    assert message_is_error(failed) is True

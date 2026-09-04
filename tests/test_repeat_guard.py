@@ -620,13 +620,22 @@ def test_the_dedupe_refusal_is_not_an_error_to_the_trace():
     assert message_is_error(result) is False
 
 
-def test_the_failure_refusal_is_an_error_to_the_trace():
-    """The decided half of OPEN-57, and the one behaviour change in it.
+def test_the_failure_refusal_is_not_an_error_to_the_trace():
+    """OPEN-94 reverses OPEN-57's decided half, and this is that decision.
 
-    A third identical failing read is now the third consecutive tool
-    failure `runner.py:302-304` halts on. That is what would have happened
-    before OPEN-10's guard existed: the guard has been masking halts by
-    returning something the counter could not see.
+    OPEN-57 argued that a refused-because-it-failed-before call IS a
+    failure, so the counter should see it. Two things are true and that
+    reasoning kept only the first: for the MODEL the call did not succeed,
+    and for `runner.py`'s counter NO TOOL RAN. That counter exists to spot
+    an agent flailing against a broken environment -- a short-circuit is
+    the opposite signal, and counting it makes the counter fire faster the
+    better the guard works. `_failures` never expires within a turn, so
+    once a signature has two real failures every later call resolving to it
+    is a free `Error:` line: run 2cde3406f7d6's coder reached three in
+    11.67 s and died having written nothing.
+
+    The refusal's TEXT is unchanged -- the model must still read "that did
+    not work". Only the classification moved, onto the message.
     """
     from rudra.trace.stream import message_is_error
 
@@ -637,6 +646,61 @@ def test_the_failure_refusal_is_an_error_to_the_trace():
         guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
     result = guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
 
+    assert _text(result).startswith("Error:"), "the model-facing text is deliberately unchanged"
+    assert message_is_error(result) is False
+
+
+def test_every_refusal_this_guard_can_emit_is_marked_and_uncounted():
+    """The property, not three examples of it (OPEN-94 §8.2).
+
+    Every refusal is produced through one seam -- `_as_message` -- so a
+    fourth rule added later is covered by construction. This drives all
+    three that exist through the middleware rather than calling the private
+    builders, so a rule that stopped going through that seam fails here.
+    """
+    from rudra.trace.stream import is_rudra_refusal, message_is_error
+
+    refusals = []
+
+    failing = RepeatGuardMiddleware()
+    backend = _Backend(NOT_FOUND)
+    for _ in range(3):
+        result = failing.wrap_tool_call(_request("read_file", file_path="/x"), backend)
+    refusals.append(result)
+
+    reading = RepeatGuardMiddleware()
+    backend = _Backend(CONTENTS)
+    for _ in range(2):
+        result = reading.wrap_tool_call(_request("read_file", file_path="/models.py"), backend)
+    refusals.append(result)
+
+    writing = RepeatGuardMiddleware()
+    backend = _Backend(WROTE)
+    for _ in range(2):
+        result = writing.wrap_tool_call(
+            _request("write_file", file_path="/app.py", content=BODY), backend
+        )
+    refusals.append(result)
+
+    assert len(refusals) == 3
+    for refusal in refusals:
+        assert is_rudra_refusal(refusal) is True, _text(refusal)
+        assert message_is_error(refusal) is False, _text(refusal)
+
+
+def test_a_result_that_really_came_back_from_a_tool_is_never_marked():
+    """The marker means "Rudra invented this". A real failure must keep
+    counting or the runaway bound stops working (OPEN-94 §4.3)."""
+    from langchain_core.messages import ToolMessage
+
+    from rudra.trace.stream import is_rudra_refusal, message_is_error
+
+    guard = RepeatGuardMiddleware()
+    backend = _Backend(ToolMessage(content="BLOCKED: denied", tool_call_id="1", name="read_file"))
+
+    result = guard.wrap_tool_call(_request("read_file", file_path="/x"), backend)
+
+    assert is_rudra_refusal(result) is False
     assert message_is_error(result) is True
 
 

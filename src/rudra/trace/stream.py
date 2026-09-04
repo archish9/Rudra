@@ -41,6 +41,27 @@ match.
 `[Errno` is listed beside `Errno` because an OSError renders as
 `[Errno 2] No such file`, and the bracket is part of the first token."""
 
+REFUSAL_KEY = "rudra_refusal"
+"""The `additional_kwargs` flag saying RUDRA invented this ToolMessage.
+
+OPEN-94. `RepeatGuardMiddleware` answers a call instead of running it, and
+its failure refusal LEADS WITH "Error:" because that is what the model must
+read -- so the text check below counted a short-circuit as a tool failure,
+and `subagents/runner.py` halted an invocation on three of them. Two of the
+three that killed run 2cde3406f7d6's first coder at 11.67 s were this
+string; no tool ran for either.
+
+The classification could not move into the prose -- `repeat_guard.py`'s
+docstring forbids prefixing the text to make it classifiable, and the model
+must still read "that did not work". So it moved off the prose entirely:
+one field on the message, one check here, and the subagent counter, the
+planner counter and the renderer agree for free.
+
+Set through `RepeatGuardMiddleware._as_message`, the single seam every
+refusal is built at. Nothing that came back from a real handler carries it,
+which is what keeps a gate's "BLOCKED:" counting."""
+
+
 ERROR_MARKERS = _FIRST_LINE_MARKERS
 """The union of THREE copies that had drifted apart, counted 2026-08-20:
 
@@ -77,6 +98,19 @@ def looks_like_error(content: str) -> bool:
     return first_line.startswith(_FIRST_LINE_MARKERS)
 
 
+def is_rudra_refusal(message: Any) -> bool:
+    """Did Rudra write this message instead of a tool answering?
+
+    The structural half of OPEN-94, and the reason a consumer never has to
+    string-match a refusal: `runner.py` string-matching one would be a
+    fifth copy of a marker list that has already drifted three ways.
+    """
+    kwargs = getattr(message, "additional_kwargs", None)
+    if not isinstance(kwargs, dict):
+        return False
+    return bool(kwargs.get(REFUSAL_KEY))
+
+
 def message_is_error(message: Any) -> bool:
     """Did this ToolMessage fail?
 
@@ -94,6 +128,13 @@ def message_is_error(message: Any) -> bool:
     """
     if getattr(message, "status", None) == "error":
         return True
+    if is_rudra_refusal(message):
+        # OPEN-94: a short-circuit is not a failure. Checked AFTER
+        # `status`, which is langgraph's own word about a tool that
+        # actually ran -- nothing Rudra invents carries one, so the two
+        # cannot legitimately co-occur and the structural signal wins if
+        # they ever do.
+        return False
     return looks_like_error(str(getattr(message, "content", "") or ""))
 
 
@@ -183,4 +224,12 @@ def consume(chunk: Any, state: StreamState) -> list[TraceEvent]:
     return produced
 
 
-__all__ = ["ERROR_MARKERS", "StreamState", "consume", "looks_like_error", "message_is_error"]
+__all__ = [
+    "ERROR_MARKERS",
+    "REFUSAL_KEY",
+    "StreamState",
+    "consume",
+    "is_rudra_refusal",
+    "looks_like_error",
+    "message_is_error",
+]

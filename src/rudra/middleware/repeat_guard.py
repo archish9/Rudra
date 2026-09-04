@@ -39,12 +39,18 @@ OUTSIDE Rudra editing a project file mid-turn, which the loop already assumes
 away -- `loop/engine.py::attempt_snapshot` compares a before and an after on
 the same assumption.
 
-**The refusal must never read as a tool failure.** `trace/stream.py` counts a
-result whose first line begins "Error"/"Traceback"/"Errno"/"[Errno"/"BLOCKED:"
-as one, and `subagents/runner.py` halts a subagent after three consecutive
-failures -- so an "Error:"-prefixed dedupe message would convert this saving
-into three dead invocations, which is OPEN-16's shape. The failure refusal
-leads with "Error:" because it IS one; this one leads with "Already read:".
+**No refusal reads as a tool failure, and since OPEN-94 that is structural
+rather than a spelling convention.** `trace/stream.py` counts a result whose
+first line begins "Error"/"Traceback"/"Errno"/"[Errno"/"BLOCKED:" as one, and
+`subagents/runner.py` halts a subagent after three consecutive failures -- so
+an "Error:"-prefixed message would convert this saving into three dead
+invocations, which is OPEN-16's shape. Two refusals dodged that by leading
+with "Already read:"/"Already written:"; the third leads with "Error:"
+because that is what the MODEL must read, and it was counted. Every refusal
+now carries `REFUSAL_KEY` in `additional_kwargs` (`_as_message`, the one seam
+they are all built at) and `message_is_error` answers from that field before
+it looks at any text. The prose is untouched in all three -- prefixing it to
+make it classifiable is what the paragraph below forbids.
 
 **A refusal answers the call it refused, and says so as Rudra (OPEN-57).**
 Both refusals used to be returned as a bare `str`. langgraph puts a
@@ -158,13 +164,29 @@ LLM deciding termination -- comparing two digests and then reading a file is
 Python deciding, exactly as `_blocked_write` already was one invocation
 lower down.
 
-One consequence is deliberate and was decided rather than inherited: the
-failure refusal is a ToolMessage whose content leads with "Error:", so
-`subagents/runner.py:302` now counts it, and a third identical failing read
-is the third consecutive failure that halts the invocation. That is what
-would have happened before this guard existed -- returning something the
-counter could not see was masking those halts. The dedupe refusal is not an
-error and RESETS that counter, which is the same rule read the other way.
+One consequence was decided here and REVERSED by OPEN-94, and the reversal
+is worth reading because the original argument is a good one. It ran: the
+failure refusal leads with "Error:", `subagents/runner.py` counts it, and a
+third identical failing read becomes the third consecutive failure that
+halts the invocation -- which is what would have happened before this guard
+existed, so returning something the counter could not see was masking those
+halts.
+
+What it missed is that both things are true at once. For the MODEL the call
+did not succeed. For the COUNTER no tool ran, and that counter exists to
+spot an agent flailing against a broken ENVIRONMENT -- real calls really
+failing. A short-circuit is the opposite signal: the guard is working,
+cheaply, and the agent is still exploring. Counting them together makes the
+counter fire faster the better the guard works, and it is unbounded --
+`_failures` never expires within a turn, so once a signature has two real
+failures every later call resolving to it is a free "Error:" line. Run
+2cde3406f7d6's first coder reached three in 11.67 s and died having written
+nothing; two of the three were this middleware's own text.
+
+So a refusal is NO EVENT at both counters: it neither increments them nor
+clears them. Both halves are needed -- clearing would let the guard weaken
+the runaway bound in the other direction, with two real failures either side
+of a free short-circuit never meeting.
 """
 
 from __future__ import annotations
@@ -178,6 +200,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from rudra.compat.virtual_paths import virtual_to_host, virtual_to_relative
+from rudra.trace.stream import REFUSAL_KEY
 
 # Deterministic reads. A repeat of one of these after a failure cannot
 # succeed, which is what makes short-circuiting safe. `execute` is
@@ -487,6 +510,15 @@ class RepeatGuardMiddleware(AgentMiddleware):
             del self._written[believed]
 
     def _refusal(self, signature: str, name: str) -> str:
+        """The answer to a read that has already failed identically twice.
+
+        Leads with "Error:", unlike its two siblings, because that is what
+        the model must read: this call did not work and will not. Since
+        OPEN-94 that word costs nothing -- `_as_message` marks every
+        refusal and `trace/stream.py::message_is_error` answers from the
+        mark, so no counter reads this prose. Do not restyle it to dodge a
+        text check that no longer runs.
+        """
         seen = self._failures[signature]
         return (
             f"Error: {name} has already failed {seen} times with these exact "
@@ -520,7 +552,10 @@ class RepeatGuardMiddleware(AgentMiddleware):
         Leads with "Already written", never "Error" -- the module docstring
         says why, and OPEN-16 is what happens when it does not: three
         refusals in a row would read as three tool failures and
-        `subagents/runner.py` would halt the invocation.
+        `subagents/runner.py` would halt the invocation. Since OPEN-94 the
+        classification is carried by `REFUSAL_KEY` rather than by the
+        opening word, so this is now belt and braces rather than the only
+        thing holding it.
 
         It says what the model should do next for the reason the read
         refusal does. "You already did that" leaves the model to work out
@@ -649,12 +684,23 @@ class RepeatGuardMiddleware(AgentMiddleware):
 
         Only what this middleware invents is wrapped. A result that came
         back from the handler is already a message and is returned
-        untouched: re-wrapping one would drop its status and its id.
+        untouched: re-wrapping one would drop its status and its id -- and
+        since OPEN-94 it would also put `REFUSAL_KEY` on a real tool
+        failure, which is the one thing that must keep counting.
+
+        `REFUSAL_KEY` is set on EVERY refusal, not only the failure one
+        (OPEN-94). This is the single seam all three rules are built at, so
+        a fourth rule is exempted by construction rather than by remembering
+        to. The two that already lead with "Already read"/"Already written"
+        were never counted as failures; marking them changes them from
+        *clearing* the consecutive-failure counter to being no event at
+        all, which is what they are.
         """
         return ToolMessage(
             content=refusal,
             name=str(request.tool_call.get("name") or ""),
             tool_call_id=str(request.tool_call.get("id") or ""),
+            additional_kwargs={REFUSAL_KEY: True},
         )
 
     def _count_dedupe(self) -> None:

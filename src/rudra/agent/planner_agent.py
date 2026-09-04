@@ -50,7 +50,7 @@ from rudra.middleware import (
 )
 from rudra.permissions import run_with_approvals
 from rudra.tools.interaction_tools import create_interaction_tools
-from rudra.trace.stream import StreamState, message_is_error
+from rudra.trace.stream import StreamState, is_rudra_refusal, message_is_error
 
 _COMMON_HEADER = """You are a senior software architect and planning agent for Rudra.
 
@@ -727,7 +727,15 @@ async def _stream_planner_turn(
                 # whole message rather than the content since OPEN-16:
                 # `status` says whether a tool failed without guessing from
                 # text that may simply quote a failure.
-                if message_is_error(msg):
+                if is_rudra_refusal(msg):
+                    # NO EVENT (OPEN-94), the same rule as
+                    # subagents/runner.py. The repeat guard is live on this
+                    # stack too -- run 2cde3406f7d6 recorded
+                    # roles.planner.reads_deduped: 2 -- so the defect was
+                    # here as well, and a refusal must neither count as a
+                    # failure nor clear a real streak.
+                    pass
+                elif message_is_error(msg):
                     consecutive_failures += 1
                     if consecutive_failures >= 3:
                         console.print(

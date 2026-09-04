@@ -10,6 +10,7 @@ from rich.console import Console
 
 from rudra.subagents import runner
 from rudra.subagents.runner import SubagentContext, SubagentResult, run_subagent
+from rudra.trace.stream import REFUSAL_KEY
 
 
 @dataclass
@@ -700,4 +701,106 @@ async def test_an_ordinary_invocation_is_nowhere_near_the_time_bound(monkeypatch
 
     result = await run_subagent("coder", "write it", context=make_context(tmp_path))
 
+    assert result.ok is True
+
+
+def refusal(text="Error: ls has already failed 2 times", call_id="r"):
+    """What `RepeatGuardMiddleware` returns instead of running a tool.
+
+    Built here rather than driven through the middleware because this file
+    tests the COUNTER, and the marker is the contract between the two.
+    `tests/test_repeat_guard.py` holds the other end of it.
+    """
+    return ToolMessage(
+        content=text,
+        tool_call_id=call_id,
+        name="ls",
+        additional_kwargs={REFUSAL_KEY: True},
+    )
+
+
+async def test_refusals_alone_never_halt_the_invocation(monkeypatch, patched):
+    """OPEN-94: no tool ran, so nothing failed.
+
+    Run 2cde3406f7d6's coder died at 11.67 s having written nothing, on
+    three failures two of which were this message. The guard short-circuits
+    to save round trips and every saving was charged toward the halt.
+    """
+    messages = [ai("try"), *[refusal(call_id=str(n)) for n in range(5)]]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+    result = await run_subagent("coder", "write it", context=patched)
+    assert result.halted_reason is None
+
+
+async def test_a_refusal_does_not_clear_a_real_failure_streak(monkeypatch, patched):
+    """The other half, and it is needed. A refusal is NO EVENT -- if it
+    reset the counter instead, the guard would weaken the runaway bound in
+    the opposite direction: two real failures either side of a free
+    short-circuit would never meet."""
+    messages = [
+        ai("try"),
+        ToolMessage(content="Error: nope", tool_call_id="1"),
+        refusal(call_id="2"),
+        ToolMessage(content="Error: nope", tool_call_id="3"),
+        ToolMessage(content="Error: nope", tool_call_id="4"),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+    result = await run_subagent("coder", "write it", context=patched)
+    assert result.ok is False
+    assert "consecutive" in result.halted_reason
+
+
+async def test_a_real_success_still_clears_the_streak(monkeypatch, patched):
+    """The no-event branch must not swallow the reset it sits beside."""
+    messages = [
+        ai("try"),
+        ToolMessage(content="Error: nope", tool_call_id="1"),
+        ToolMessage(content="fine", tool_call_id="2"),
+        ToolMessage(content="Error: nope", tool_call_id="3"),
+        ToolMessage(content="Error: nope", tool_call_id="4"),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+    result = await run_subagent("coder", "write it", context=patched)
+    assert result.halted_reason is None
+
+
+async def test_a_gate_denial_is_still_a_failure(monkeypatch, patched):
+    """OPEN-94 §4.3: a gate saying no is exactly the environment signal
+    this counter is for. Only Rudra's own short-circuits are exempt."""
+    denials = [
+        ToolMessage(content="BLOCKED: permission denied", tool_call_id=str(n)) for n in range(3)
+    ]
+    monkeypatch.setattr(
+        runner, "run_with_approvals", stream_of({"messages": [ai("try"), *denials]})
+    )
+    result = await run_subagent("coder", "write it", context=patched)
+    assert result.ok is False
+    assert "consecutive" in result.halted_reason
+
+
+async def test_the_seven_call_sequence_that_killed_run_2cde3406f7d6(monkeypatch, patched):
+    """OPEN-94's reproduction, offline: no model, no network, no filesystem.
+
+    Coder invocation 1, in order, from
+    `~/.local/state/rudra/runs/test-rudra-d80a39ab/2cde3406f7d6/`. Three
+    `ls` calls really failed, one really succeeded, and three were answered
+    by the repeat guard without running. Before the fix the last two of
+    those refusals were the second and third "consecutive tool failures"
+    and the invocation died at 11.67 s having written nothing.
+    """
+    messages = [
+        ai("looking around"),
+        ToolMessage(content="Error: Path '/src': path_not_found", tool_call_id="1"),  # real
+        ToolMessage(content="['/.DS_Store', '/.mcp.json', '/.rudra/']", tool_call_id="2"),  # real
+        ToolMessage(content="Error: Path '/Users': path_not_found", tool_call_id="3"),  # real
+        refusal("Already read: `ls` on '.' was answered earlier in this turn", call_id="4"),
+        ToolMessage(content="Error: Path '/src': path_not_found", tool_call_id="5"),  # real
+        refusal(call_id="6"),
+        refusal(call_id="7"),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+
+    result = await run_subagent("coder", "write the page", context=patched)
+
+    assert result.halted_reason is None
     assert result.ok is True

@@ -15,6 +15,7 @@ from rich.console import Console
 from rudra.agent.planner_agent import _stream_planner_turn
 from rudra.trace import TraceKind, TraceLevel
 from rudra.trace.sink import TraceSink
+from rudra.trace.stream import REFUSAL_KEY
 
 
 async def _run(monkeypatch, chunks, sink):
@@ -115,3 +116,45 @@ async def test_tool_errors_are_rendered_as_errors(monkeypatch):
     await _run(monkeypatch, chunks, sink)
 
     assert [event.kind for event in seen] == [TraceKind.TOOL_ERROR]
+
+
+async def test_a_repeat_guard_refusal_does_not_halt_the_planner(monkeypatch):
+    """OPEN-94 §4.2. The guard is live on the planner stack too --
+    `usage.json` records `roles.planner.reads_deduped: 2` -- so the same
+    defect existed here, and `message_is_error` being the one shared
+    opinion is what fixes both at once. The no-event branch is per-counter
+    and this is the planner's copy of it."""
+    refusals = [
+        ToolMessage(
+            content="Error: ls has already failed 2 times with these exact arguments",
+            tool_call_id=str(n),
+            name="ls",
+            additional_kwargs={REFUSAL_KEY: True},
+        )
+        for n in range(5)
+    ]
+    chunks = [((), {"messages": refusals[: n + 1]}) for n in range(5)]
+
+    ok = await _run(monkeypatch, chunks, TraceSink(level=TraceLevel.NORMAL))
+
+    assert ok is True
+
+
+async def test_a_planner_refusal_does_not_clear_a_real_failure_streak(monkeypatch):
+    """Both halves here too: neither counts nor clears."""
+    messages = [
+        ToolMessage(content="Error: boom", tool_call_id="1", name="write_file"),
+        ToolMessage(
+            content="Error: ls has already failed 2 times",
+            tool_call_id="2",
+            name="ls",
+            additional_kwargs={REFUSAL_KEY: True},
+        ),
+        ToolMessage(content="Error: boom", tool_call_id="3", name="write_file"),
+        ToolMessage(content="Error: boom", tool_call_id="4", name="write_file"),
+    ]
+    chunks = [((), {"messages": messages[: n + 1]}) for n in range(4)]
+
+    ok = await _run(monkeypatch, chunks, TraceSink(level=TraceLevel.NORMAL))
+
+    assert ok is False

@@ -27,6 +27,7 @@ from rudra.permissions.approval import run_with_approvals
 from rudra.subagents.build import build_agent
 from rudra.subagents.registry import REGISTRY
 from rudra.trace.stream import StreamState
+from rudra.trace.stream import is_rudra_refusal as _is_rudra_refusal
 from rudra.trace.stream import message_is_error as _message_is_error
 
 # Carried from _stream_coder (main_agent.py:241-243), which Step 9c
@@ -518,7 +519,17 @@ async def run_subagent(
                             )
                             break
                 elif kind == "ToolMessage":
-                    if _message_is_error(message):
+                    if _is_rudra_refusal(message):
+                        # NO EVENT (OPEN-94). Rudra short-circuited this
+                        # call, so no tool ran: it is neither a failure --
+                        # this counter is for an agent flailing against a
+                        # broken environment -- nor a success that clears
+                        # a real streak. Counting it made the counter fire
+                        # faster the better the guard worked, and the
+                        # refusals are the CHEAPEST calls in a run: run
+                        # 2cde3406f7d6's coder reached three in 11.67 s.
+                        pass
+                    elif _message_is_error(message):
                         consecutive_failures += 1
                         if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                             halted = f"{consecutive_failures} consecutive tool failures -- stopping"

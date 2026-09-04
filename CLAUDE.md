@@ -296,7 +296,28 @@ src/rudra/
 │                           an EARLIER invocation did, across a boundary
 │                           this middleware sees nothing of, so it is never
 │                           invalidated and refuses nothing until the file
-│                           on disk is read and holds exactly those bytes,
+│                           on disk is read and holds exactly those bytes.
+│                           **No refusal is a tool failure, and since
+│                           OPEN-94 that is a FIELD rather than a spelling
+│                           convention.** Two of the three led with
+│                           "Already read:"/"Already written:" to dodge
+│                           `trace/stream.py`'s first-line check; the third
+│                           leads with "Error:" because that is what the
+│                           MODEL must read, and `subagents/runner.py`
+│                           counted it — run 2cde3406f7d6's first coder
+│                           died on 3 consecutive failures at 11.67 s
+│                           having written nothing, two of them this
+│                           middleware's own text. `_as_message` is the one
+│                           seam all three are built at and it sets
+│                           `REFUSAL_KEY`; `message_is_error` answers from
+│                           that before any text, so the subagent counter,
+│                           the planner counter and the renderer agree for
+│                           free. At both counters a refusal is **no
+│                           event** — it neither increments nor CLEARS,
+│                           because clearing would let a free
+│                           short-circuit separate two real failures that
+│                           should have met. The model-facing prose is
+│                           byte-identical; only the classification moved,
 │                           plus gutter_indent.py (OPEN-92, always on):
 │                           `read_file` renders `f"{marker:>{w}}  {line}"`
 │                           (backends/utils.py:243), so a model composing
