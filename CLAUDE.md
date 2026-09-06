@@ -1,21 +1,27 @@
 # CLAUDE.md — Rudra
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **Nothing is open as of 2026-09-06.** All
-six of the 2026-09-04 board — OPEN-93 … OPEN-98 — closed, filed from one run,
-`2cde3406f7d6`, which finished 0 tasks of 2 in 2,132 s while the deliverable
-sat correct on disk. Each has a self-contained document under
-`docs/superpowers/plans/2026-09-04-open-9*.md`, now carrying a closing section
+is the live ledger of what is open. **One is open as of 2026-09-06**: OPEN-99,
+found by *running* Rudra rather than by reading it. The whole 2026-09-04 board
+— OPEN-93 … OPEN-98 — is closed; each has a self-contained document under
+`docs/superpowers/plans/2026-09-04-open-9*.md` carrying a closing section
 saying what shipped and where it deviated from the plan. Trust
 `grep -n PENDING TODO.md` over any heading, including this sentence.
 
-**What is outstanding is a verification, not an item.** The live-run check of
-OPEN-90/91/92 is still unperformed and OPEN-93 … OPEN-98 join it: all are
-verified offline against the archived run's own bytes, and what a live run
-would add is proof the MODEL acts on them. `TODO.md`'s *Four things to watch*
-holds it. Three follow-ups those items named and did not take are recorded
-there too — OPEN-97's Options B and D, and OPEN-98's Option B — as candidates
-for filing, not as open work.
+**The verification run those six called for happened (`5775ba1f9855`,
+2026-09-06) and `TODO.md` opens with what it proved.** Read that table before
+believing any of the six is verified: it exercised **two** of nine fixes
+(OPEN-96 and OPEN-98's record), and the other seven produced zeros **because
+no occasion arose** — the model behaved. A run where nothing goes wrong cannot
+verify a guard, which is watch item 2 in its most expensive form.
+
+**Still outstanding, and now with evidence about why it is hard:** seven of
+the nine shipped fixes have never been seen acting on a model. OPEN-92 is the
+sharpest — run `5775ba1f9855` made **zero `edit_file` calls**, so the gutter
+repair had nothing to repair, and OPEN-99 is the reason (no collectable test →
+no failing gate → no fix loop). Three follow-ups the closed items named and
+did not take are recorded in `TODO.md` too — OPEN-97's Options B and D, and
+OPEN-98's Option B — as candidates for filing, not as open work.
 
 Corrected 2026-09-06: this paragraph said *"Two are open as of 2026-09-04:
 OPEN-97 and OPEN-98"*. Both landed 2026-09-04 and 2026-09-06; the live-run
@@ -94,7 +100,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-06 nothing is open; what it opens with is the census, then the live-run verification outstanding across OPEN-90/91/92 and now OPEN-93 … OPEN-98 as well. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-06 one item is open (OPEN-99); what it opens with is that item, then run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
