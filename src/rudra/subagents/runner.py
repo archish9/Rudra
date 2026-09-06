@@ -16,6 +16,7 @@ import hashlib
 import logging
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -232,6 +233,15 @@ class SubagentResult:
     ok=False with halted_reason means the subagent misbehaved; with error
     means it never ran. Step 9c needs to tell those apart for the same
     reason 9a's report splits `escalate` from a plain failure.
+
+    `tools` is the invocation's tool histogram, and **None is not `{}`**
+    (OPEN-98). None means nothing measured it -- a result built by hand, or
+    a stand-in in the tests; `{}` means the invocation ran and called
+    nothing. A consumer asking "did this agent do its job" must read the
+    difference, or it fires on the harness rather than on a run, which is
+    TODO.md's second watched habit. `run_subagent` always supplies it, even
+    on the failure paths, because "what had it done when it died" is the
+    question those paths are read for.
     """
 
     name: str
@@ -239,6 +249,7 @@ class SubagentResult:
     ok: bool
     halted_reason: str | None = None
     error: str | None = None
+    tools: Mapping[str, int] | None = None
 
 
 def _wants_token_stream(context: Any) -> bool:
@@ -398,7 +409,7 @@ async def run_subagent(
             ok=False,
             error=str(exc),
         )
-        return SubagentResult(name=name, text="", ok=False, error=str(exc))
+        return SubagentResult(name=name, text="", ok=False, error=str(exc), tools={})
 
     thread = thread_id or f"{context.session_id}-{name}-{uuid.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread}}
@@ -550,7 +561,9 @@ async def run_subagent(
             ok=False,
             error=str(exc),
         )
-        return SubagentResult(name=name, text=last_text, ok=False, error=str(exc))
+        return SubagentResult(
+            name=name, text=last_text, ok=False, error=str(exc), tools=dict(tools_used)
+        )
 
     # Every exit is logged, including the ordinary one. A record that only
     # covers the failures cannot answer "was this invocation unusual?",
@@ -564,8 +577,14 @@ async def run_subagent(
         halted=halted,
     )
     if halted is not None:
-        return SubagentResult(name=name, text=last_text, ok=False, halted_reason=halted)
-    return SubagentResult(name=name, text=last_text, ok=True)
+        return SubagentResult(
+            name=name,
+            text=last_text,
+            ok=False,
+            halted_reason=halted,
+            tools=dict(tools_used),
+        )
+    return SubagentResult(name=name, text=last_text, ok=True, tools=dict(tools_used))
 
 
 __all__ = [

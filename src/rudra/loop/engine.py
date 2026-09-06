@@ -464,6 +464,51 @@ def _record_run_error(task: Task, role: str, error: str) -> str:
     return sentence
 
 
+# The tool whose absence means a tester did not do its job. Named here
+# rather than inferred from the spec's `rudra_tools` tuple, because that
+# tuple's ORDER is not a contract and "the first one" would silently follow
+# an edit to it.
+TESTER_TOOL = "run_tests"
+
+
+def _called_nothing(result: Any, tool: str) -> bool:
+    """Did this invocation demonstrably not call `tool`?
+
+    False whenever the answer is unknown. `SubagentResult.tools` is None
+    for a result nothing measured -- one built by hand, or a stand-in --
+    and reading that as "called nothing" would fire this record on the test
+    harness rather than on a run. `{}` is the other answer: it ran and
+    called nothing (OPEN-98, and TODO.md's second watched habit).
+    """
+    tools = getattr(result, "tools", None)
+    return tools is not None and tool not in tools
+
+
+def _record_incomplete(task: Task, role: str, what: str) -> str:
+    """Keep an invocation that ran, ended cleanly, and did not do its job.
+
+    The THIRD member of `run_errors`' family, and the field is right for it
+    for `_record_run_error`'s reason: `note` is rewritten by every branch
+    that finishes a task, so anything landing there vanishes exactly when
+    the task later succeeds.
+
+    A separate sentence rather than `_record_run_error`'s, because that one
+    asserts the invocation never started and here it did -- run
+    `2cde3406f7d6`'s tester spent 180.4 s and 22 tool calls before it
+    stopped, and a record claiming it "could not run" would send a reader
+    hunting a provider outage that never happened (OPEN-98).
+
+    It states what was OBSERVED and never what follows from it. The measured
+    tester shelled out to `python3 -m pytest --co` and so did touch pytest;
+    what it never did was call the tool that reports a verdict. "Ended
+    without running the suite" would be a claim about the world, and this is
+    a claim about the log.
+    """
+    sentence = f"the {role} ended without {what}"
+    task.run_errors = (*task.run_errors, sentence)
+    return sentence
+
+
 def _record_halt(task: Task, result: Any, context: LoopContext) -> None:
     """Keep a subagent guard halt, and say it happened (OPEN-44).
 
@@ -671,6 +716,29 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                 # counting it toward MAX_CONSECUTIVE_RUN_ERRORS would end
                 # runs over optional work.
                 _record_run_error(task, "tester", tester_result.error)
+            elif tester_result.ok and _called_nothing(tester_result, TESTER_TOOL):
+                # OPEN-98. The same silence one CONDITION over, and this is
+                # the case the run was actually lost to: the tester wrote
+                # its test file, said "Wait, I made an error. The file path
+                # should be relative to the project root, not absolute. Let
+                # me check the project structure." -- and the turn ended,
+                # because that message carried no tool call. langgraph's
+                # ReAct loop stops on an AIMessage with no tool calls, which
+                # `_FINISH_RULES` deliberately teaches as the completion
+                # signal (OPEN-42), and nothing distinguishes "I am done"
+                # from "I have noticed a mistake and am about to fix it".
+                #
+                # `subagent_done` recorded `ok: true`, no halt, no error, so
+                # `_record_halt` returned early and the branch above did not
+                # apply: steps 3 and 4 of the tester's own workflow -- run
+                # the suite, report what failed -- never happened, and the
+                # invocation appeared in NO field of the ledger.
+                #
+                # A record and not a repair: it does not fix the stop
+                # condition, it makes the next occurrence one grep away
+                # instead of a reconstruction from 678 lines of JSONL
+                # (CLAUDE.md 8a failure shape 4).
+                _record_incomplete(task, "tester", f"calling {TESTER_TOOL}")
             task.files_touched = changed_since(context, before)
             report = await _verify(task, context)
 

@@ -1309,3 +1309,125 @@ def test_the_blocker_note_fires_on_an_unquoted_pytest_message(tmp_path):
     text = engine._blocker_text(report, project_path=tmp_path)
     assert "Note:" in text
     assert "/src/iphone15.html" in text
+
+
+# --- OPEN-98 option C: a tester that finished cleanly and tested nothing ----
+# Run `2cde3406f7d6`'s tester wrote its test file, said "Wait, I made an error.
+# The file path should be relative to the project root, not absolute. Let me
+# check the project structure." -- and the turn ended, because that message
+# carried no tool call. `subagent_done` recorded `ok: true`, no halt, no
+# error. Its histogram was {"execute": 17, "ls": 2, "read_file": 2,
+# "write_file": 1}: ZERO `run_tests`, the tool that is its whole job.
+#
+# `_record_halt` returns early unless a guard fired, and the error branch
+# above needs `result.error`. Neither applied, so the invocation appears in
+# NO field of the ledger. That is CLAUDE.md 8a failure shape 4 -- the record
+# that is never written -- and it is why this item had to be reconstructed
+# from 678 lines of JSONL.
+
+
+async def test_a_tester_that_never_called_run_tests_is_recorded(monkeypatch, context):
+    reports = [no_test_judgement_report(), passing_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+
+    async def tester_stops_mid_thought(name, prompt, *, context, thread_id=None):
+        if name == "tester":
+            # The measured histogram, verbatim from the archive.
+            return SubagentResult(
+                name=name,
+                text="Wait, I made an error. Let me check the project structure.",
+                ok=True,
+                tools={"execute": 17, "ls": 2, "read_file": 2, "write_file": 1},
+            )
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", tester_stops_mid_thought)
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE, "an untested task is not a failed one"
+    assert task.run_errors == ("the tester ended without calling run_tests",)
+
+
+async def test_a_tester_that_called_run_tests_records_nothing(monkeypatch, context):
+    reports = [no_test_judgement_report(), passing_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+
+    async def tester_did_its_job(name, prompt, *, context, thread_id=None):
+        if name == "tester":
+            return SubagentResult(
+                name=name,
+                text="8 tests, all passing.",
+                ok=True,
+                tools={"write_file": 1, "run_tests": 1},
+            )
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", tester_did_its_job)
+    _, task, _ = await run_one(context)
+
+    assert task.run_errors == ()
+
+
+async def test_a_result_carrying_no_histogram_records_nothing(monkeypatch, context):
+    """ "Did not happen" and "was not tried" are different answers.
+
+    `tools=None` is a result that measured nothing -- every stand-in in this
+    suite, and any result built by hand. Reading it as "called no run_tests"
+    would make this record fire on the test harness rather than on a run,
+    which is TODO.md's second watched habit exactly.
+    """
+    reports = [no_test_judgement_report(), passing_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+    _, task, _ = await run_one(context)
+    assert task.run_errors == ()
+
+
+async def test_a_halted_tester_is_not_also_reported_as_untested(monkeypatch, context):
+    """A halt already says the invocation was stopped, and `halts` carries
+    it. Saying it twice in two vocabularies makes a reader count one event
+    as two."""
+    reports = [no_test_judgement_report(), passing_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+
+    async def tester_halted(name, prompt, *, context, thread_id=None):
+        if name == "tester":
+            return SubagentResult(
+                name=name,
+                text="",
+                ok=False,
+                halted_reason="80 tool calls in one invocation -- stopping.",
+                tools={"glob": 80},
+            )
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", tester_halted)
+    _, task, _ = await run_one(context)
+
+    assert task.run_errors == ()
+    assert task.halts == ("80 tool calls in one invocation -- stopping.",)
+
+
+async def test_the_untested_record_is_appended_beside_a_provider_failure(monkeypatch, context):
+    """OPEN-46's rule: `run_errors` is append-only. Two different events on
+    one task must both survive, in order."""
+    from rudra.loop.engine import _record_run_error
+
+    reports = [no_test_judgement_report(), passing_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+
+    async def tester_stops_mid_thought(name, prompt, *, context, thread_id=None):
+        if name == "tester":
+            return SubagentResult(name=name, text="Let me check.", ok=True, tools={"ls": 2})
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", tester_stops_mid_thought)
+
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    _record_run_error(task, "coder", "Error code: 500 - internal")
+    await run_task(task, ledger, context=context)
+
+    assert task.run_errors == (
+        "the coder could not run: Error code: 500 - internal",
+        "the tester ended without calling run_tests",
+    )
