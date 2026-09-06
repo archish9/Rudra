@@ -804,3 +804,305 @@ async def test_the_seven_call_sequence_that_killed_run_2cde3406f7d6(monkeypatch,
 
     assert result.halted_reason is None
     assert result.ok is True
+
+
+# --- OPEN-98: a turn that ends on "let me check" ---------------------------
+# Run `2cde3406f7d6`'s tester wrote its test file and then said "Wait, I made
+# an error. The file path should be relative to the project root, not
+# absolute. Let me check the project structure." -- the exact defect that
+# went on to fail the run, stated 1.3 s after committing it. The turn ended,
+# because langgraph's ReAct loop stops on an AIMessage with no tool calls and
+# nothing distinguishes "I am done" from "I am about to fix this".
+#
+# The must-NOT-fire half of this table is the important half: a false
+# negative costs what happens today, a false positive costs a round trip AND
+# risks a finished agent inventing more work.
+
+MEASURED_CONTINUATION = (
+    "Wait, I made an error. The file path should be relative to the project "
+    "root, not absolute. Let me check the project structure."
+)
+
+
+def test_the_measured_continuation_is_detected():
+    assert runner.announces_continuation(MEASURED_CONTINUATION) is True
+
+
+def test_real_completion_messages_do_not_fire():
+    """Both are verbatim from the same run's coder, at=941.5 and at=143.6."""
+    assert (
+        runner.announces_continuation(
+            "The task is complete. I've created `/src/iphone15.html` - a single "
+            "self-contained HTML file with responsive CSS, Apple design language, "
+            "JavaScript tabs/accordion/form, and content placeholders."
+        )
+        is False
+    )
+    assert (
+        runner.announces_continuation(
+            "Created the test file with 8 tests covering structure, responsive CSS, "
+            "Apple styling, JS behaviour and content placeholders. All 8 fail: the "
+            "HTML file contains prose, not markup."
+        )
+        is False
+    )
+
+
+def test_an_empty_message_does_not_fire():
+    assert runner.announces_continuation("") is False
+    assert runner.announces_continuation("   \n ") is False
+
+
+def test_let_me_know_is_a_sign_off_and_not_a_hand_off():
+    """The case the plan flags as the one to get right. "Let me know" opens
+    exactly like "Let me check" and means the opposite."""
+    assert (
+        runner.announces_continuation("I wrote the file. Let me know if you want anything changed.")
+        is False
+    )
+
+
+def test_only_the_last_sentence_decides():
+    """A report that mentions a next step in passing is still a report."""
+    assert (
+        runner.announces_continuation(
+            "Let me explain what I did: I wrote src/app.py and ran the suite. All 12 tests pass."
+        )
+        is False
+    )
+
+
+def test_a_long_final_sentence_is_a_summary_not_a_hand_off():
+    long_tail = "Let me " + "and ".join(["describe the change "] * 20) + "."
+    assert runner.announces_continuation(long_tail) is False
+
+
+def test_the_common_hand_off_shapes_fire():
+    for text in (
+        "I'll check the project structure now.",
+        "I will read the file first.",
+        "I need to fix the path.",
+        "Now let me verify the output.",
+        "Let's run the tests.",
+        "I'm going to correct that import.",
+    ):
+        assert runner.announces_continuation(text) is True, text
+
+
+def test_a_report_that_starts_with_a_lead_in_does_not_fire():
+    """ "Now" and "So" open plenty of finished sentences."""
+    for text in (
+        "Now the file has all eight sections and the tests pass.",
+        "So the suite is green: 12 passed, 0 failed.",
+    ):
+        assert runner.announces_continuation(text) is False, text
+
+
+def thread(*turns):
+    """A stub whose message list GROWS, the way a checkpointed thread's does.
+
+    `stream_of` replays one script however often it is called, which cannot
+    show the difference between one turn and two -- and a stub that yields a
+    FRESH list on the second turn is wrong in the other direction: the
+    namespace positions in `seen` are kept across turns deliberately
+    (A1.20), so a replaced list reads as "already processed" and the second
+    turn's tool calls vanish. langgraph streams the whole state each chunk,
+    so each turn appends.
+    """
+    history: list = []
+    scripts = list(turns)
+    prompts: list[str] = []
+
+    async def fake_stream(agent, inputs, config, gate, console, **kwargs):
+        prompts.append(inputs["messages"][0]["content"])
+        history.extend(scripts.pop(0) if scripts else [])
+        yield {"messages": list(history)}
+
+    fake_stream.prompts = prompts
+    return fake_stream
+
+
+async def test_a_continuation_gets_one_more_turn(monkeypatch, patched):
+    stream = thread(
+        [ai(MEASURED_CONTINUATION)],
+        [
+            ai("", [call("read_file", file_path="src/app.py")]),
+            ToolMessage(content="ok", tool_call_id="1"),
+            ai("Fixed the path; the test now reads src/iphone15.html."),
+        ],
+    )
+    monkeypatch.setattr(runner, "run_with_approvals", stream)
+    result = await run_subagent("tester", "test it", context=patched)
+
+    assert len(stream.prompts) == 2, "exactly one extra turn"
+    assert stream.prompts[0] == "test it"
+    assert stream.prompts[1] == runner.CONTINUATION_NUDGE
+    assert result.ok is True
+    assert result.text == "Fixed the path; the test now reads src/iphone15.html."
+
+
+async def test_the_nudge_is_sent_at_most_once(monkeypatch, patched):
+    """The bound is the whole safety argument. A second continuation-shaped
+    reply ends the turn."""
+    turns = 0
+
+    history: list = []
+
+    async def capture(agent, inputs, config, gate, console, **kwargs):
+        nonlocal turns
+        turns += 1
+        history.append(ai(f"Let me check the project structure, take {turns}."))
+        yield {"messages": list(history)}
+
+    monkeypatch.setattr(runner, "run_with_approvals", capture)
+    result = await run_subagent("tester", "test it", context=patched)
+
+    assert turns == 2
+    assert result.ok is True
+
+
+async def test_a_report_shaped_reply_is_never_nudged(monkeypatch, patched):
+    turns = 0
+
+    async def capture(agent, inputs, config, gate, console, **kwargs):
+        nonlocal turns
+        turns += 1
+        yield {"messages": [ai("Wrote src/app.py with the CRUD endpoints.")]}
+
+    monkeypatch.setattr(runner, "run_with_approvals", capture)
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert turns == 1, "the ordinary path costs no extra call"
+    assert result.text == "Wrote src/app.py with the CRUD endpoints."
+
+
+async def test_a_halted_invocation_is_never_nudged(monkeypatch, patched):
+    """A guard fired, so the invocation is over. Handing it another turn
+    would undo the guard."""
+    turns = 0
+
+    async def capture(agent, inputs, config, gate, console, **kwargs):
+        nonlocal turns
+        turns += 1
+        yield {
+            "messages": [
+                ai("", [call("ls", path="/src")]),
+                ToolMessage(content="Error: nope", tool_call_id="1"),
+                ai("", [call("ls", path="/src2")]),
+                ToolMessage(content="Error: nope", tool_call_id="2"),
+                ai("", [call("ls", path="/src3")]),
+                ToolMessage(content="Error: nope", tool_call_id="3"),
+                ai("Let me check the project structure."),
+            ]
+        }
+
+    monkeypatch.setattr(runner, "run_with_approvals", capture)
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert turns == 1
+    assert result.ok is False
+    assert "consecutive tool failures" in (result.halted_reason or "")
+
+
+async def test_the_nudge_shares_the_invocation_budget(monkeypatch, patched):
+    """One invocation, not two. The tool counter carries across the nudge,
+    or an agent could double its call ceiling by stopping mid-thought."""
+
+    stream = thread(
+        [
+            ai("", [call("ls", path="/a")]),
+            ToolMessage(content="ok", tool_call_id="1"),
+            ai("Let me check the project structure."),
+        ],
+        [
+            ai("", [call("ls", path="/b")]),
+            ToolMessage(content="ok", tool_call_id="2"),
+            ai("Both directories are empty."),
+        ],
+    )
+    monkeypatch.setattr(runner, "run_with_approvals", stream)
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert result.tools == {"ls": 2}, "both turns' calls counted once each"
+
+
+async def test_the_nudge_and_its_outcome_reach_the_log(monkeypatch, patched):
+    """CLAUDE.md 8a. `nudge_outcome` is what says whether the heuristic is
+    any good: mostly `confirmed_done` means it is firing on finished agents
+    and must be narrowed."""
+    records: list[dict] = []
+    monkeypatch.setattr(
+        runner,
+        "log_invocation",
+        lambda name, **kw: records.append({"name": name, **kw}),
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "run_with_approvals",
+        thread(
+            [ai(MEASURED_CONTINUATION)],
+            [
+                ai("", [call("run_tests")]),
+                ToolMessage(content="8 passed", tool_call_id="1"),
+                ai("8 tests, all passing."),
+            ],
+        ),
+    )
+    await run_subagent("tester", "test it", context=patched)
+
+    assert len(records) == 1, "one invocation, one record"
+    assert records[0]["nudged"] is True
+    assert records[0]["nudge_outcome"] == "continued"
+
+
+async def test_a_nudge_the_agent_answers_with_words_is_recorded_as_done(monkeypatch, patched):
+    records: list[dict] = []
+    monkeypatch.setattr(
+        runner,
+        "log_invocation",
+        lambda name, **kw: records.append({"name": name, **kw}),
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "run_with_approvals",
+        thread(
+            [ai(MEASURED_CONTINUATION)],
+            [ai("Sorry -- I was finished. The suite is green.")],
+        ),
+    )
+    result = await run_subagent("tester", "test it", context=patched)
+
+    assert records[0]["nudge_outcome"] == "confirmed_done"
+    assert result.text == "Sorry -- I was finished. The suite is green."
+
+
+async def test_an_un_nudged_invocation_says_so(monkeypatch, patched):
+    records: list[dict] = []
+    monkeypatch.setattr(
+        runner,
+        "log_invocation",
+        lambda name, **kw: records.append({"name": name, **kw}),
+    )
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": [ai("Done.")]}))
+
+    await run_subagent("coder", "write it", context=patched)
+
+    assert records[0]["nudged"] is False
+    assert records[0]["nudge_outcome"] is None
+
+
+def test_the_nudge_makes_stopping_the_easy_answer():
+    """Scope 4: a false positive must cost one round trip and nothing more,
+    so the wording has to offer "I was finished" as a first-class reply and
+    bound the exchange out loud."""
+    text = runner.CONTINUATION_NUDGE
+
+    assert "If you are finished" in text
+    assert "last turn" in text
+    # And it must not lead with a failure marker: `runner.py`'s own counter
+    # and `repeat_guard` both key on one (OPEN-94).
+    from rudra.trace.stream import looks_like_error
+
+    assert not looks_like_error(text)

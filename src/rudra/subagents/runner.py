@@ -126,6 +126,8 @@ def log_invocation(
     ok: bool,
     halted: str | None = None,
     error: str | None = None,
+    nudged: bool = False,
+    nudge_outcome: str | None = None,
 ) -> None:
     """Write what one subagent invocation cost and what it spent it on.
 
@@ -140,6 +142,14 @@ def log_invocation(
     the symptom. Run `fc543fb2b82f`'s task t7 spent 2,704 s on 55 calls;
     "55 calls" says it was busy, and `glob: 41` says it was hunting the
     filesystem for an interpreter it cannot use (OPEN-91).
+
+    `nudged` and `nudge_outcome` are OPEN-98's number, and `nudge_outcome`
+    is the half that says whether the heuristic is any good: mostly
+    `continued` means it is earning its keep, mostly `confirmed_done` means
+    it is firing on agents that really had finished and the opener list
+    wants narrowing. Both are always written, `""` when there was no nudge,
+    for `halted`'s reason -- a key that appears only on the runs where
+    something happened is a key every reader has to guard for.
 
     Never raises -- write_usage_log's rule (loop/engine.py).
     """
@@ -157,11 +167,140 @@ def log_invocation(
                     "ok": ok,
                     "halted": halted or "",
                     "error": error or "",
+                    "nudged": nudged,
+                    "nudge_outcome": nudge_outcome or "",
                 }
             },
         )
     except Exception:  # noqa: BLE001 - accounting must not end a run
         return
+
+
+# --- the continuation heuristic (OPEN-98) ---------------------------------
+#
+# langgraph's ReAct loop ends on an AIMessage with no tool calls, and
+# `_FINISH_RULES` teaches that deliberately (OPEN-42: run7's coder, given no
+# stop verb, invented `task_complete` and wrote `/DONE` eleven times). But
+# the signal carries no intent. A model emitting text-only means one of two
+# things, and the second is the more ordinary:
+#
+#   "Created the file with tabs and a form."        -> finished.  Correct.
+#   "Wait, I made an error. ... Let me check the    -> thinking.  Wrong.
+#    project structure."
+#
+# The second is verbatim from run 2cde3406f7d6 at=180.333, and it states the
+# defect that went on to fail that run, 1.3 s after committing it. Its turn
+# ended, `subagent_done` said `ok: true`, and the tester's own steps 3 and 4
+# -- run the suite, report what failed -- never happened.
+#
+# A prompt cannot fix this. The model was not disobeying; it followed
+# `_FINISH_RULES` mechanically (text, no tool) while intending the opposite.
+# TODO.md's first lesson, and here it is not even prompt losing to prompt.
+
+# Discourse markers that open a sentence without changing what it is. A
+# hand-off keeps being a hand-off after "Now"; a report keeps being a report.
+# Stripped before the openers below are tried, so the list stays short.
+_LEAD_INS = ("now ", "then ", "so ", "ok, ", "okay, ", "alright, ", "first, ", "next, ")
+
+# First person, future tense, no report. Every one of these announces an
+# action that has NOT happened yet.
+_CONTINUATION_OPENERS = (
+    "let me ",
+    "let's ",
+    "let us ",
+    "i'll ",
+    "i will ",
+    "i need to ",
+    "i should ",
+    "i'm going to ",
+    "i am going to ",
+)
+
+# "Let me know if you want anything changed" opens exactly like "Let me check
+# the project structure" and means the opposite -- it is a sign-off. The only
+# carve-out, and it is a verb list rather than a phrase list because the tail
+# varies ("let me know if", "let me know when", "let me know what").
+_SIGN_OFF_VERBS = ("know",)
+
+# Words that are a hand-off on their own, matched as the whole first word so
+# "waiting for the build" and "holding at 8 tests" are not swept in.
+_CONTINUATION_WORDS = ("wait",)
+
+# Two-word openers that carry no first-person pronoun.
+_CONTINUATION_PHRASES = ("hold on", "one moment")
+
+# Above this, the final sentence is a summary rather than a hand-off. A
+# hand-off is short by nature -- the measured one is 38 characters.
+_MAX_HANDOFF_CHARS = 160
+
+CONTINUATION_NUDGE = (
+    "You stopped without calling a tool, but your last message announced "
+    "something you were about to do rather than reporting what you did.\n\n"
+    "If you are finished: reply with one or two lines saying what you did. "
+    "That ends your turn, and it is the only thing the caller sees.\n\n"
+    "If you meant to keep going: do it now -- call the tool. This is your "
+    "last turn either way."
+)
+"""One extra turn, and it says so.
+
+Bounded out loud on purpose (OPEN-98 scope 4): a false positive costs one
+round trip, and the wording has to make stopping the easy answer so it does
+not also cost a finished agent inventing more work. It leads with neither
+`Error:` nor any other first-line marker, because `_message_is_error` and
+`repeat_guard` both key on one (OPEN-94).
+"""
+
+
+def _final_sentence(text: str) -> str:
+    """The last sentence of `text`, lower-cased and flattened.
+
+    Only the last one decides. A report that mentions a next step in passing
+    -- "Let me explain what I did: ... All 12 tests pass." -- is a report,
+    and judging the whole message would call it a hand-off.
+    """
+    body = " ".join(text.split())
+    if not body:
+        return ""
+    return body.rstrip(".!? ").split(". ")[-1].strip().lower()
+
+
+def announces_continuation(text: str) -> bool:
+    """Does this final message describe a NEXT action rather than a result?
+
+    Narrow on purpose. A false negative costs exactly what happens today; a
+    false positive costs a round trip and risks a finished agent inventing
+    work, so every uncertain shape answers False.
+
+    Measured shape (OPEN-98, run `2cde3406f7d6` at=180.333):
+    "Wait, I made an error. The file path should be relative to the project
+    root, not absolute. Let me check the project structure."
+
+    "actually," is deliberately NOT an opener, though it is the most
+    obviously continuation-shaped word left out: "Actually the file was
+    already correct" is a report, and this rule's failure mode is calling a
+    report a hand-off.
+    """
+    last = _final_sentence(text)
+    if not last or len(last) > _MAX_HANDOFF_CHARS:
+        return False
+
+    words = last.split()
+    if words[0].strip(",:;-") in _CONTINUATION_WORDS:
+        return True
+    if last.startswith(_CONTINUATION_PHRASES):
+        return True
+
+    for lead in _LEAD_INS:
+        if last.startswith(lead):
+            last = last[len(lead) :].lstrip()
+            break
+
+    for opener in _CONTINUATION_OPENERS:
+        if not last.startswith(opener):
+            continue
+        rest = last[len(opener) :].split()
+        return bool(rest) and rest[0].strip(",:;-") not in _SIGN_OFF_VERBS
+    return False
 
 
 # The error markers moved to rudra.trace.stream in Step 15a. Three copies
@@ -458,10 +597,24 @@ async def run_subagent(
             at=time.monotonic() - state.started,
         )
 
-    try:
+    nudged = False
+    nudge_outcome: str | None = None
+
+    async def drain(payload: dict) -> None:
+        """Stream one turn of this invocation, updating every counter.
+
+        Called at most twice (OPEN-98), and everything it touches is
+        invocation-scoped rather than turn-scoped: `seen` keeps its
+        namespace positions so the nudge's messages are counted once,
+        `total_calls` and `limit` keep running so a nudge cannot buy an
+        agent a second call ceiling, and `halted` short-circuits the second
+        call entirely.
+        """
+        nonlocal halted, last_text, total_calls, consecutive_failures
+
         async for chunk in run_with_approvals(
             agent,
-            {"messages": [{"role": "user", "content": prompt}]},
+            payload,
             config,
             context.gate,
             context.console,
@@ -552,6 +705,23 @@ async def run_subagent(
                     break
                 processed += 1
             seen[where] = processed
+
+    try:
+        await drain({"messages": [{"role": "user", "content": prompt}]})
+        # ONE more turn, and only when the last thing said was a plan
+        # rather than a report (OPEN-98). After the guards, so a halted
+        # invocation is never handed another turn -- that would undo the
+        # guard -- and bounded by construction: there is one call site,
+        # and the nudge itself says it is the last turn either way.
+        if halted is None and announces_continuation(last_text):
+            nudged = True
+            calls_before = total_calls
+            await drain({"messages": [{"role": "user", "content": CONTINUATION_NUDGE}]})
+            # What the number is FOR: mostly `continued` means the
+            # heuristic is earning its keep, mostly `confirmed_done`
+            # means it is firing on finished agents and the opener list
+            # must be narrowed (CLAUDE.md 8a).
+            nudge_outcome = "continued" if total_calls > calls_before else "confirmed_done"
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         log_invocation(
             name,
@@ -560,6 +730,8 @@ async def run_subagent(
             tools=tools_used,
             ok=False,
             error=str(exc),
+            nudged=nudged,
+            nudge_outcome=nudge_outcome,
         )
         return SubagentResult(
             name=name, text=last_text, ok=False, error=str(exc), tools=dict(tools_used)
@@ -575,6 +747,8 @@ async def run_subagent(
         tools=tools_used,
         ok=halted is None,
         halted=halted,
+        nudged=nudged,
+        nudge_outcome=nudge_outcome,
     )
     if halted is not None:
         return SubagentResult(
@@ -589,10 +763,12 @@ async def run_subagent(
 
 __all__ = [
     "MAX_INVOCATION_SECONDS",
+    "CONTINUATION_NUDGE",
     "MAX_TOTAL_CALLS",
     "SUBAGENT_KIND",
     "SubagentContext",
     "SubagentResult",
+    "announces_continuation",
     "log_invocation",
     "run_subagent",
 ]
