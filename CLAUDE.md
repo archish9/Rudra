@@ -135,7 +135,34 @@ src/rudra/
 │                           run_gated and run_tests; starts no subprocess
 ├── subagents/              The four subagents (Step 9b): coder · tester ·
 │                           reviewer · general-purpose. spec/registry/build/
-│                           runner. build.py is the ONLY assembly path, so
+│                           runner. `run_subagent` gives an invocation ONE
+│                           extra turn when its final message announced a
+│                           next action rather than a result (OPEN-98):
+│                           langgraph ends the loop on an AIMessage with no
+│                           tool calls, `_FINISH_RULES` teaches exactly
+│                           that, and the signal carries no INTENT — "I am
+│                           done" and "I have noticed a mistake and am about
+│                           to fix it" are the same message. Run
+│                           2cde3406f7d6's tester said *"Wait, I made an
+│                           error. The file path should be relative to the
+│                           project root, not absolute. Let me check the
+│                           project structure"* — OPEN-93, diagnosed by the
+│                           agent that made it, 1.3 s after committing it —
+│                           and the turn ended. No prompt is added and none
+│                           could be: the model was not disobeying.
+│                           `announces_continuation` judges the FINAL
+│                           SENTENCE only, requires it short enough to be a
+│                           hand-off, and matches first-person future-tense
+│                           openers after stripping discourse lead-ins;
+│                           "let me know" is a sign-off, and "actually," is
+│                           deliberately not an opener. The nudge is ONE,
+│                           from one call site, AFTER the guards — a halted
+│                           invocation is never handed another turn — and it
+│                           shares the invocation's budget, so `seen`,
+│                           `total_calls` and the time limit all carry
+│                           across. `subagent_done` gains `nudged` and
+│                           `nudge_outcome`, and the second is the number
+│                           that judges the heuristic. build.py is the ONLY assembly path, so
 │                           every subagent carries the gate — deepagents
 │                           inherits interrupt_on but NOT middleware.
 │                           The reviewer cannot write because the tools are
@@ -748,7 +775,7 @@ only function that creates anything.
 | `AGENTS.md` | durable | `_ensure_agents_md` creates it; `record_task_in_memory` and `summarise_architecture` update it | planner via `memory=` | **A living document since C7.3** (closes A1.9): one Session Log entry per completed task, with `files_touched` from git, and one model call per run folding them into Architecture Notes. **The log is capped at 20 entries** — this file is paid for on every planner call, so an uncapped one is a tax that grows without bound (S12.4) |
 | `facts.json` | durable | `record_fact` / `ask_user` (agent) | every agent's prompt | Open key/value: `{key: {value, why, source}}`. Keys are enumerated nowhere in code. Replaced `project.json`, which is **ignored, not migrated** (S10a.8) — the old file is left on disk, unreferenced |
 | `.gitignore` | durable | `ensure_layout` | git | Written by Rudra, scopes **only** `.rudra/` |
-| `run/ledger.json` | volatile | `add_tasks`/`drop_task` (agent) + `engine.py` (status) | `run_loop`, `summarise` | Tasks are **work**, not filenames. Written atomically after every status change; never resumed. A task's `halts` records every subagent guard that fired on it, and is separate from `note` because `note` is read by a MODEL later — `consult_planner` interpolates it and `record_block_memory` files it in the palace (CR-C4) — and because every branch that finishes a task rewrites `note`, which is how six guard halts vanished from run7 (OPEN-44). **`run_errors` is the same field for the opposite event** (OPEN-46, 2026-09-01): a halt is an invocation Rudra STOPPED, and this is one that never STARTED — a build failure, or a retry budget that ran out. It exists because that landed in `note` alone and so vanished exactly when the task later succeeded, which is OPEN-44's failure one field over. Both dispatch sites write it, and the TESTER's was the worse silence: its result reached only `_record_halt`, which returns early unless a guard fired, so a tester that never ran was recorded in **no field at all** |
+| `run/ledger.json` | volatile | `add_tasks`/`drop_task` (agent) + `engine.py` (status) | `run_loop`, `summarise` | Tasks are **work**, not filenames. Written atomically after every status change; never resumed. A task's `halts` records every subagent guard that fired on it, and is separate from `note` because `note` is read by a MODEL later — `consult_planner` interpolates it and `record_block_memory` files it in the palace (CR-C4) — and because every branch that finishes a task rewrites `note`, which is how six guard halts vanished from run7 (OPEN-44). **`run_errors` is the same field for the opposite event** (OPEN-46, 2026-09-01): a halt is an invocation Rudra STOPPED, and this is one that never STARTED — a build failure, or a retry budget that ran out. It exists because that landed in `note` alone and so vanished exactly when the task later succeeded, which is OPEN-44's failure one field over. Both dispatch sites write it, and the TESTER's was the worse silence: its result reached only `_record_halt`, which returns early unless a guard fired, so a tester that never ran was recorded in **no field at all**. **A THIRD member since OPEN-98**: an invocation that started, ended cleanly, and did not do its job — run 2cde3406f7d6's tester spent 180.4 s and 22 tool calls and called `run_tests` zero times, and `ok: true` with no halt and no error meant it landed in no field either. Its sentence is its own, because `_record_run_error`'s asserts the invocation never ran; and it states what was OBSERVED (`ended without calling run_tests`) rather than what follows from it — that tester DID shell out to `python3 -m pytest --co`. `SubagentResult.tools` is what answers it, and **None is not `{}`**: None means nothing measured it, `{}` means it ran and called nothing |
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
@@ -1219,6 +1246,7 @@ either.
 | Did an agent go hunting the machine's filesystem? | `debug-<id>.jsonl` | `"kind": "notice"`, `name: "machine-path"` — one per tool result Rudra had to explain. Non-zero means OPEN-91's defect fired and was answered at call two instead of call forty. **Trustworthy as a count since OPEN-96**, which stopped it firing on the project's own absolute path and on `//x` typos — 3 of 4 firings in run `2cde3406f7d6` were false, so the number meant nothing before that. Read the payload anyway, not only the count: it quotes the spelling, so a false positive is visible by eye without a parser |
 | Did edits have to be repaired? | `usage.json` | `roles.<role>.edits_reindented` — non-zero means OPEN-92's gutter defect fired and was caught. Paired with a `"kind": "notice"`, `name: "reindent"` line per repair in `debug-<id>.jsonl` |
 | Did an agent write a virtual path into real source? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.content_paths_flagged`, and a `"kind": "notice"`, `name: "content-path"` line per hit. Non-zero means OPEN-93's defect fired and was explained at the write instead of costing the run. **Read it beside `verify.log`**: a `test` stage failing on a `/`-prefixed path with `content_paths_flagged: 0` means the literal came from somewhere this middleware does not watch — a fact value or a task description, which is where the reported run's copy came from |
+| Did an agent stop mid-thought? | `debug-<id>.jsonl` · `ledger.json` | `"kind": "subagent_done"` → `nudged` and `nudge_outcome`. Mostly `continued` = OPEN-98's heuristic is earning its keep; mostly `confirmed_done` = it is firing on agents that had finished, so narrow the opener list; firing on nearly every invocation = it is wrong, revert it. Beside it, `run_errors` carrying `the tester ended without calling run_tests` is the un-nudged case reaching the ledger — **absent on a healthy run** |
 | Did an agent write its summary into a file? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.writes_rejected_as_prose`, and a `"kind": "notice"`, `name: "prose-write"` line per refusal. Non-zero means OPEN-97's defect fired and the bytes never reached disk. **A false positive here is a REFUSED REAL WRITE** — the notice names the path, so check the first one by eye before trusting the count |
 | Was the plan itself the problem? | `usage.json` · `ledger.json` | `roles.planner.plans_refused` is 1 when OPEN-90's guard made the planner re-plan, with a `"kind": "notice"`, `name: "plan-shape"` line saying so. Read it against `files_touched: []`: a run with `plans_refused: 1` and no empty-`files_touched` `DONE` task is that guard working; empty `files_touched` with `plans_refused: 0` is the defect firing in a shape the guard did not see |
 
