@@ -160,6 +160,18 @@ class RoleUsage:
     # unrefused write cost the tester's whole 404.4 s invocation and left the
     # run DONE with a `passed` gate and zero runnable tests.
     test_writes_rejected: int = 0
+    # Planner stages stopped by one of `_stream_planner_turn`'s bounds
+    # (OPEN-100). Only the planner has stages, so a non-zero value under any
+    # other role is itself a defect.
+    #
+    # Counted for plans_refused's reason: a halt ENDS spending, and what did
+    # not get spent leaves no mark on calls, seconds or tokens -- the run
+    # simply looks smaller. Read it beside the `planner-guard` NOTICE in
+    # `debug-<id>.jsonl`, which carries WHICH bound fired: "40 tool calls" is
+    # a loop and "over the 1200s limit" is a slow provider or a loop. In run
+    # `d8f742805b9b` no bound existed at all and the stage was ended by a
+    # human pressing Ctrl-C after 1092 s and zero files.
+    planner_halts: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -380,6 +392,17 @@ class RunUsage:
         """
         self._slot(role).test_writes_rejected += 1
 
+    def record_planner_halt(self, role: str) -> None:
+        """One planner stage stopped by a bound rather than by finishing.
+
+        Mirrors record_plan_refused, with the subject one layer up: that one
+        counts a task list Rudra refused, this one a whole stage Rudra ended.
+        `_stream_planner_turn`'s return value is discarded by its only caller,
+        so before this a halted stage was indistinguishable from a completed
+        one in every record the run produces (OPEN-100).
+        """
+        self._slot(role).planner_halts += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -459,6 +482,7 @@ class RunUsage:
                 "content_paths_flagged": tally.content_paths_flagged,
                 "writes_rejected_as_prose": tally.writes_rejected_as_prose,
                 "test_writes_rejected": tally.test_writes_rejected,
+                "planner_halts": tally.planner_halts,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

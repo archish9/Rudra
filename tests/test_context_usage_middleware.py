@@ -82,6 +82,7 @@ def test_sync_hook_records_the_reported_counts():
         # test write is a TOOL call TestExtensionMiddleware answered, and
         # this middleware wraps model calls.
         "test_writes_rejected": 0,
+        "planner_halts": 0,
     }
     assert result.result[0].content == "hi"
 

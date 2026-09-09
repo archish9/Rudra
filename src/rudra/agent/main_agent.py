@@ -1076,6 +1076,10 @@ async def create_main_agent(
                 console=console,
                 session_id=session_id,
                 trace=trace,
+                # The same store build_planner already passes to the stage's
+                # middleware -- one run, one usage.json. `_stream_planner_turn`
+                # writes `planner_halts` into it when a bound fires (OPEN-100).
+                usage=usage,
             )
 
         return RudraAgent(

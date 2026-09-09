@@ -24,12 +24,15 @@ corpus, being single agents doing one job.
 
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 from typing import Any, Literal
 
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from rich.console import Console
+from rich.markup import escape
 
 from rudra.config import get_config
 from rudra.context.budget import evict_limit, recall_limit
@@ -51,6 +54,8 @@ from rudra.middleware import (
 from rudra.permissions import run_with_approvals
 from rudra.tools.interaction_tools import create_interaction_tools
 from rudra.trace.stream import StreamState, is_rudra_refusal, message_is_error
+
+logger = logging.getLogger(__name__)
 
 _COMMON_HEADER = """You are a senior software architect and planning agent for Rudra.
 
@@ -636,6 +641,107 @@ def create_planner_agent(
     )
 
 
+PLANNER_HALT_NOTICE = "planner-guard"
+"""The `name` on the NOTICE a halted planner stage emits.
+
+Deliberately NOT `"guard"`, which `subagents/runner.py` already owns: a
+subagent halt and a planner-stage halt are different events with different
+remedies, and a maintainer filtering `debug-<id>.jsonl` must be able to ask
+for one without the other. One spelling, as a module constant, because a
+second is a second answer to "why is my filter empty" (`CLAUDE.md` §8a).
+"""
+
+MAX_PLANNING_CALLS = 4
+"""How many times ONE planning tool may be called in a single stage.
+
+Catches re-planning in a loop: a breakdown stage that calls `add_tasks` four
+times is rewriting its own plan rather than declaring work. Narrow on
+purpose, and kept beside the total below rather than replaced by it -- four
+`add_tasks` calls is a defect at call four, long before forty of anything.
+"""
+
+MAX_PLANNER_TOOL_CALLS = 40
+"""Tool calls ONE planner stage may make, of any kind (OPEN-100).
+
+`subagents/runner.py::MAX_TOTAL_CALLS` is the precedent and its reasoning
+carries over unchanged: the other guards catch *failing* and catch
+*repeating*, and neither catches spending. Run `d8f742805b9b`'s architect
+stage made 18+ calls of which the old guard could count **zero** -- it
+watched `add_tasks` and `read_ledger`, and the stage called neither.
+
+40 rather than 80, chosen against observed work and not guessed: that run's
+clarify stage made ~15 calls doing its job, and `MAX_TOTAL_CALLS`'s own
+docstring records the planner's busiest stage at about 30. It is a runaway
+bound, not a budget -- if real planning work ever approaches it, raise it
+rather than teaching people to expect halts.
+
+**Every name counts, `write_file` included.** The line this replaces read
+`if name in ("write_file",): planning_tool_calls.clear()`, so the one tool
+name that can never be legitimate on a stack whose `PLANNER_FS_TOOLS`
+excludes it was the one name that disarmed the guard.
+"""
+
+
+def _stage_time_limit() -> float:
+    """Seconds one planner stage may spend, or 0.0 for no bound (OPEN-100).
+
+    Reads `[agent] max_invocation_seconds` -- the SAME key
+    `subagents/runner.py::_invocation_limit` reads, deliberately, so a user
+    who lowers the bound lowers it everywhere rather than discovering that
+    the agent which runs first is the one it never covered.
+
+    A bound in seconds and not only in calls, for OPEN-91's measured reason:
+    run `d8f742805b9b` averaged 28.7 s per planner call and spent 140.6 s,
+    151.9 s and 138.4 s on three of them, at which rate a 40-call ceiling is
+    nineteen minutes. Read as defensively as its sibling: an unreadable value
+    falls back to the constant, because the degraded mode of a guard is the
+    guard and not its absence.
+    """
+    from rudra.subagents.runner import MAX_INVOCATION_SECONDS
+
+    try:
+        agent_cfg = getattr(get_config(), "agent", None)
+    except Exception:  # noqa: BLE001 - a guard must not need a readable config
+        return MAX_INVOCATION_SECONDS
+    raw = getattr(agent_cfg, "max_invocation_seconds", MAX_INVOCATION_SECONDS)
+    try:
+        limit = float(raw)
+    except (TypeError, ValueError):
+        return MAX_INVOCATION_SECONDS
+    return limit if limit > 0 else 0.0
+
+
+def _announce_halt(reason: str, *, console: Console, trace: Any, usage: Any) -> None:
+    """Say, once, that Rudra stopped a planner stage (`TODO.md` lesson 5).
+
+    THE one seam all three bounds are announced at, for the reason
+    `subagents/runner.py` funnels its own three through one `announce`: a
+    guard added later must not be able to arrive without its diagnostic, and
+    three call sites is three chances to forget one.
+
+    `_stream_planner_turn`'s return value is discarded by its only caller
+    (`consult_planner`), so before this a halted stage and a completed stage
+    were indistinguishable to everything downstream -- nothing in
+    `usage.json`, nothing in the ledger, no NOTICE. That is `CLAUDE.md` §8a
+    failure shape 1 exactly: the number was known at the moment it mattered
+    and never reached disk.
+
+    Both records swallow their own failure. A run that did its work must not
+    be reported failed because a log line could not be written.
+    """
+    console.print(f"[bold yellow]!! {escape(reason)}[/bold yellow]")
+    try:
+        if usage is not None:
+            usage.record_planner_halt("planner")
+    except Exception:  # noqa: BLE001 - bookkeeping may never end a run
+        logger.debug("planner halt not counted", exc_info=True)
+    try:
+        if trace is not None:
+            trace.notice(reason, role="planner", name=PLANNER_HALT_NOTICE)
+    except Exception:  # noqa: BLE001 - same rule
+        logger.debug("planner halt not announced", exc_info=True)
+
+
 async def _stream_planner_turn(
     agent: Any,
     message: str,
@@ -644,8 +750,23 @@ async def _stream_planner_turn(
     gate: Any,
     console: Console,
     trace: Any = None,
+    usage: Any = None,
 ) -> bool:
     """Stream one planner turn. Returns False if a guard halted it.
+
+    Four bounds, and OPEN-100 added the two that matter most: a ceiling on
+    tool calls of ANY name, and one on seconds. The two that were already
+    here -- one planning tool called `MAX_PLANNING_CALLS` times, and three
+    consecutive tool failures -- are correct for the shapes they target and
+    could see nothing of run `d8f742805b9b`, which spent 42% of its model
+    time generating HTML documents for a `write_file` tool the planner does
+    not have and was ended by a human pressing Ctrl-C. Every halt goes
+    through `_announce_halt`, because the return value below is discarded by
+    `consult_planner` and a silent guard is `CLAUDE.md` §8a failure shape 1.
+
+    `usage` is optional and is not the same object as `trace`: bookkeeping
+    may never end a run, so both are read defensively and neither is
+    required for a bound to fire.
 
     Lifted from RudraAgent._stream_planner in Step 9c: the class's loop
     is deleted and this is its only remaining caller. The guard logic is
@@ -666,8 +787,15 @@ async def _stream_planner_turn(
     state = StreamState(role="planner")
     consecutive_failures = 0
     planning_tool_calls: dict[str, int] = {}
-    MAX_PLANNING_CALLS = 4
+    total_calls = 0
+    started = time.monotonic()
+    time_limit = _stage_time_limit()
     _halt = False
+
+    def halt(reason: str) -> None:
+        nonlocal _halt
+        _announce_halt(reason, console=console, trace=trace, usage=usage)
+        _halt = True
 
     # run_with_approvals yields exactly what astream yields, so the parse
     # loop below is unchanged. It reads interrupts from get_state after
@@ -685,6 +813,22 @@ async def _stream_planner_turn(
         role="planner",
     ):
         if _halt:
+            break
+
+        # Before the chunk is parsed, so a stage that is spending without
+        # producing tool calls is caught too -- which is this item's own
+        # shape: three of run `d8f742805b9b`'s model calls emitted 4932,
+        # 5540 and 4636 output tokens of HTML across 430.9 s, and only one
+        # of the three reached a tool at all. Each bound names itself, for
+        # OPEN-91's reason: "40 tool calls" is a loop and "over the 1200s
+        # limit" is a slow provider or a loop, and a reader of
+        # `debug-<id>.jsonl` has to be able to tell them apart.
+        elapsed = time.monotonic() - started
+        if time_limit and elapsed >= time_limit:
+            halt(
+                f"{elapsed:.0f}s in one planner stage, over the {time_limit:.0f}s "
+                f"limit -- stopping after {total_calls} tool calls."
+            )
             break
 
         namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
@@ -706,16 +850,26 @@ async def _stream_planner_turn(
             if msg_type == "AIMessage":
                 for tc in getattr(msg, "tool_calls", []):
                     name = tc.get("name", "")
-                    if name in ("write_file",):
-                        planning_tool_calls.clear()
-                    elif name in ("add_tasks", "read_ledger"):
+                    # EVERY name, and `write_file` above all (OPEN-100). This
+                    # branch used to read `if name in ("write_file",):
+                    # planning_tool_calls.clear()`, so the one call the
+                    # planner can never legitimately make was the one that
+                    # disarmed the guard -- and the two names it did count
+                    # were both absent from the stage that ran away.
+                    total_calls += 1
+                    if total_calls >= MAX_PLANNER_TOOL_CALLS:
+                        halt(
+                            f"{total_calls} tool calls in one planner stage, over "
+                            f"the {MAX_PLANNER_TOOL_CALLS} limit -- stopping."
+                        )
+                        break
+                    if name in ("add_tasks", "read_ledger"):
                         planning_tool_calls[name] = planning_tool_calls.get(name, 0) + 1
                         if planning_tool_calls[name] >= MAX_PLANNING_CALLS:
-                            console.print(
-                                f"[bold yellow]!! Planner loop guard: '{name}' called "
-                                f"{planning_tool_calls[name]}x — stopping.[/bold yellow]"
+                            halt(
+                                f"planner loop guard: '{name}' called "
+                                f"{planning_tool_calls[name]}x -- stopping."
                             )
-                            _halt = True
                             break
                 if _halt:
                     break
@@ -738,10 +892,7 @@ async def _stream_planner_turn(
                 elif message_is_error(msg):
                     consecutive_failures += 1
                     if consecutive_failures >= 3:
-                        console.print(
-                            "[bold yellow]!! 3 consecutive planner failures — stopping.[/bold yellow]"
-                        )
-                        _halt = True
+                        halt("3 consecutive planner failures -- stopping.")
                 else:
                     consecutive_failures = 0
 
@@ -780,6 +931,7 @@ async def consult_planner(
     console: Console,
     session_id: str,
     trace: Any = None,
+    usage: Any = None,
 ) -> None:
     """Ask one planning stage to do its job. It mutates state via tools.
 
@@ -889,6 +1041,12 @@ async def consult_planner(
         # of the one task it names.
         message = f"The task ledger as it stands:\n\n{render_ledger(ledger)}\n\n{message}"
 
+    # The return value is deliberately still discarded, and OPEN-100 is why
+    # that is now acceptable: a halted stage announces itself through
+    # `_announce_halt` -- console line, `planner-guard` NOTICE and
+    # `roles.planner.planner_halts` -- so the caller no longer learns nothing.
+    # Acting on it here would be a second decision about a stopped run, which
+    # belongs to the loop and not to a consult.
     await _stream_planner_turn(
         agent,
         message,
@@ -896,4 +1054,5 @@ async def consult_planner(
         gate=gate,
         console=console,
         trace=trace,
+        usage=usage,
     )
