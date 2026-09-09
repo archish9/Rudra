@@ -171,7 +171,12 @@ def test_planner_puts_the_permission_gate_first(monkeypatch, tmp_path):
             gate=gate,
         )
         assert captured["middleware"][0] is gate.middleware
-        assert captured["interrupt_on"] is gate.interrupt_on
+        # Narrowed to what the planner holds, which is nothing mutating
+        # (OPEN-101). It used to be `is gate.interrupt_on` -- the whole
+        # map, so a `write_file` the planner cannot call raised a panel,
+        # and the user answered it with `!`. The rule, not the emptiness,
+        # is pinned in tests/test_planner_interrupts.py.
+        assert captured["interrupt_on"] == {}
     finally:
         reset_config()
 

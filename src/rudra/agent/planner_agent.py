@@ -53,6 +53,7 @@ from rudra.middleware import (
     build_memory_middleware,
 )
 from rudra.permissions import run_with_approvals
+from rudra.permissions.interrupts import narrow_interrupt_on
 from rudra.tools.interaction_tools import create_interaction_tools
 from rudra.trace.stream import StreamState, is_rudra_refusal, message_is_error
 
@@ -644,7 +645,23 @@ def create_planner_agent(
         # memory would load into state and never reach the prompt.
         memory=list(PLANNER_MEMORY_SOURCES),
         middleware=middleware,
-        interrupt_on=gate.interrupt_on if gate is not None else None,
+        # Narrowed to what THIS stage holds (OPEN-101). The gate's map has an
+        # entry per MUTATING_TOOLS name and the planner holds none of them,
+        # but HumanInTheLoopMiddleware matches the tool-call NAME before the
+        # tool node rejects it as unregistered -- so run d8f742805b9b raised
+        # a `write_file` approval panel on a stack with no write tool, and
+        # the user answered it with `!`, setting SessionGrants.approve_all
+        # for the session. Read off `custom_tools` rather than
+        # PLANNER_FS_TOOLS alone, for _tools_for_stage's own reason: the tool
+        # list is per stage, and a second spelling of it would drift.
+        interrupt_on=(
+            narrow_interrupt_on(
+                gate.interrupt_on,
+                set(PLANNER_FS_TOOLS) | {getattr(tool, "name", "") for tool in custom_tools},
+            )
+            if gate is not None
+            else None
+        ),
         # OPEN-17: the planner indexes NO skills, and that is the fix.
         #
         # The corpus is written for one agent that clarifies, designs and

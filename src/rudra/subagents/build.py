@@ -36,6 +36,7 @@ from rudra.middleware import (
     RepeatGuardMiddleware,
     TestExtensionMiddleware,
 )
+from rudra.permissions.interrupts import narrow_interrupt_on
 from rudra.subagents.registry import PROJECT_PATH_TOKEN
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
 from rudra.tools.git_tools import create_git_tools
@@ -470,11 +471,16 @@ def _interrupt_on_for(spec: RudraSubagent, context: Any, tools: list) -> dict | 
     Read from the built tool list rather than from `spec.rudra_tools`, so an
     MCP-holding spec keeps its `call_mcp_tool` entry and one that resolved
     no servers does not.
+
+    The filtering itself moved to `permissions/narrow_interrupt_on` when
+    OPEN-101 found the planner's `create_deep_agent` call site had never
+    been given it -- one implementation, two call sites. What stays here is
+    the question only a spec can answer: which tools this subagent holds.
     """
     if context.gate is None:
         return None
     granted = set(spec.fs_tools) | {tool.name for tool in tools}
-    return {name: cfg for name, cfg in context.gate.interrupt_on.items() if name in granted}
+    return narrow_interrupt_on(context.gate.interrupt_on, granted)
 
 
 _SUPPRESSION_PROMPT = (

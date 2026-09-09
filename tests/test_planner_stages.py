@@ -115,7 +115,12 @@ def test_every_stage_carries_the_permission_gate(monkeypatch, tmp_path: Path, st
         reset_config()
 
     assert captured["middleware"][0] is gate.middleware
-    assert captured["interrupt_on"] is gate.interrupt_on
+    # The gate's DENY middleware is what every stage must carry; the
+    # approval map is narrowed to the tools the stage holds, and no stage
+    # holds a mutating one (OPEN-101). tests/test_planner_interrupts.py
+    # pins the rule that produced this, and is the file to read before
+    # changing it.
+    assert captured["interrupt_on"] == {}
 
 
 def test_a_fact_recorded_in_clarify_reaches_the_architect(monkeypatch, tmp_path: Path):
