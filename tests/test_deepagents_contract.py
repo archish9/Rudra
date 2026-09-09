@@ -650,3 +650,56 @@ def test_upstream_still_tells_the_model_every_file_path_must_be_absolute():
     ):
         description = model.model_fields[field].description or ""
         assert "Must be absolute, not relative." in description, model.__name__
+
+
+def test_a_tool_call_wrapper_sees_a_call_to_an_unregistered_tool():
+    """OPEN-100 option C stands entirely on this upstream property.
+
+    `PlannerWriteMiddleware` answers a planner `write_file` with the route --
+    but the planner does not HAVE `write_file`, so the middleware only ever
+    fires if langgraph hands an unregistered name to the wrapper instead of
+    rejecting it first. It does, deliberately: `tool_node.py:1031-1033` reads
+
+        # Validation is deferred to _execute_tool_sync to allow interceptors
+        # to short-circuit requests for unregistered tools
+
+    and `request.tool` is None in that case.
+
+    **If this test fails, `PlannerWriteMiddleware` has silently stopped
+    firing** -- the run's symptom would be upstream's tool-list echo coming
+    back, with `roles.planner.planner_writes_refused` at 0 while the planner
+    keeps generating documents. That is invisible from inside Rudra, which is
+    why the pin is here rather than in that middleware's own tests.
+    """
+    from langchain_core.messages import AIMessage, ToolMessage
+    from langchain_core.tools import tool
+    from langgraph.graph import MessagesState, StateGraph
+    from langgraph.prebuilt.tool_node import ToolNode
+
+    @tool
+    def ls(path: str) -> str:
+        """List a directory."""
+        return "ok"
+
+    seen: list[tuple[str, bool]] = []
+
+    def wrapper(request, handler):
+        seen.append((request.tool_call["name"], request.tool is None))
+        return ToolMessage(
+            content="REJECTED: intercepted",
+            tool_call_id=request.tool_call["id"],
+            name=request.tool_call["name"],
+            status="error",
+        )
+
+    graph = StateGraph(MessagesState)
+    graph.add_node("tools", ToolNode([ls], wrap_tool_call=wrapper))
+    graph.set_entry_point("tools")
+    graph.set_finish_point("tools")
+
+    call = {"name": "write_file", "args": {"file_path": "/index.html"}, "id": "1"}
+    out = graph.compile().invoke({"messages": [AIMessage(content="", tool_calls=[call])]})
+
+    assert seen == [("write_file", True)]
+    assert out["messages"][-1].content == "REJECTED: intercepted"
+    assert "is not a valid tool" not in out["messages"][-1].content

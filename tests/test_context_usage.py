@@ -83,6 +83,7 @@ def test_recording_accumulates_per_role():
         # collect. Always present for the same reason as the line above.
         "test_writes_rejected": 0,
         "planner_halts": 0,
+        "planner_writes_refused": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -386,6 +387,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "writes_rejected_as_prose",
         "test_writes_rejected",
         "planner_halts",
+        "planner_writes_refused",
         "seconds",
     }
 

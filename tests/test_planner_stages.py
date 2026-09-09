@@ -232,6 +232,10 @@ def test_planner_middleware_without_a_backend_is_unchanged():
     middleware = build_planner_middleware("a task")
     assert [type(m).__name__ for m in middleware] == [
         "FixWriteParamsMiddleware",
+        # OPEN-100 option C. After the param fixer for the same reason the
+        # repeat guard is: the refusal names the file the model meant, which
+        # is the one `filename`/`path` -> `file_path` aliasing produced.
+        "PlannerWriteMiddleware",
         "ModelRetryMiddleware",
         "MachinePathMiddleware",
         "RepeatGuardMiddleware",

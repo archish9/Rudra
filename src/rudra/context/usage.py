@@ -172,6 +172,18 @@ class RoleUsage:
     # `d8f742805b9b` no bound existed at all and the stage was ended by a
     # human pressing Ctrl-C after 1092 s and zero files.
     planner_halts: int = 0
+    # Planner `write_file`/`edit_file`/`delete` calls answered with the route
+    # rather than with upstream's tool-list echo (OPEN-100,
+    # PlannerWriteMiddleware). Planner-only, like planner_halts.
+    #
+    # Read it beside planner_halts and against the model's output tokens: the
+    # attempt itself is cheap and what it FOLLOWS is not -- in run
+    # `d8f742805b9b` each of the two refused calls came after a model call
+    # emitting a complete HTML document, 140.6 s and 151.9 s. A run where this
+    # is 1 and no further HTML is generated is the refusal working; a run
+    # where it climbs is the refusal being read and ignored, and is worth
+    # knowing before the next prompt attempt is argued for.
+    planner_writes_refused: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -403,6 +415,17 @@ class RunUsage:
         """
         self._slot(role).planner_halts += 1
 
+    def record_planner_write_refused(self, role: str) -> None:
+        """One planner write answered with the route instead of the echo.
+
+        Mirrors record_write_rejected_as_prose one agent up: both count bytes
+        that never reached disk. The difference is that here they never could
+        have -- the tool is not registered on this stack at all -- so what the
+        counter measures is how often the model looked for a route it did not
+        have (OPEN-100).
+        """
+        self._slot(role).planner_writes_refused += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -483,6 +506,7 @@ class RunUsage:
                 "writes_rejected_as_prose": tally.writes_rejected_as_prose,
                 "test_writes_rejected": tally.test_writes_rejected,
                 "planner_halts": tally.planner_halts,
+                "planner_writes_refused": tally.planner_writes_refused,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

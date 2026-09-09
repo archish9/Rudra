@@ -47,6 +47,7 @@ from rudra.middleware import (
     FixWriteParamsMiddleware,
     MachinePathMiddleware,
     ModelRetryMiddleware,
+    PlannerWriteMiddleware,
     RepeatGuardMiddleware,
     TaskAnchorMiddleware,
     build_memory_middleware,
@@ -296,8 +297,17 @@ def build_planner_middleware(
     usage: Any = None,
     trace: Any = None,
     project_path: Any = None,
+    stage_tools: tuple[str, ...] = (),
 ) -> list:
     """The planner's middleware stack, with both D4 workarounds gated.
+
+    `stage_tools` names what this stage can do INSTEAD of writing, and is the
+    only argument here that differs between the three stages. It reaches
+    PlannerWriteMiddleware, whose refusal must name a tool the stage actually
+    holds -- `_tools_for_stage` gives breakdown no `record_fact`, so a fixed
+    sentence naming one would advertise an absent tool (OPEN-15). Empty is
+    safe: the refusal then declines to name any tool rather than naming a
+    wrong one.
 
     FixWriteParamsMiddleware is first so it cleans tool args before anything
     else sees them. The planner previously got fence-stripping from
@@ -335,6 +345,21 @@ def build_planner_middleware(
     """
     middleware: list = [
         FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths),
+        # OPEN-100 option C. `PLANNER_FS_TOOLS` grants no write tool, which
+        # is correct and is not the defect -- the defect was that upstream
+        # answered the attempt with a tool-list echo, and run d8f742805b9b's
+        # planner spent 430.9 s (42% of its model time) generating complete
+        # HTML documents for it anyway. A refusal that carries the route is
+        # what stops that; option A's bounds only stop it running for ever.
+        #
+        # After FixWriteParamsMiddleware so the path argument has already
+        # been aliased -- `filename`/`path` -> `file_path` -- and the refusal
+        # names the file the model meant.
+        PlannerWriteMiddleware(
+            stage_tools=stage_tools,
+            usage=usage,
+            trace=trace,
+        ),
         # OPEN-41, and the planner is where it was measured: all three of
         # 2026-08-27's dead runs died in a planner stage, on a provider 500
         # that `_stream_with_retry` had already stopped guarding because the
@@ -578,6 +603,11 @@ def create_planner_agent(
         usage=usage,
         trace=trace,
         project_path=project_path,
+        # What this stage may do instead of writing, read off the tools it
+        # was actually built with rather than restated -- two lists that name
+        # a stage's tools would eventually disagree, which is the whole of
+        # _tools_for_stage's own argument.
+        stage_tools=tuple(getattr(tool, "name", "") for tool in custom_tools),
     )
     if gate is not None:
         # First in the list: a denied call must be stopped before any other

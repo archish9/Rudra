@@ -1194,3 +1194,19 @@ def test_the_test_extension_guard_still_builds_with_no_run_around_it(context):
 
     assert guard.usage is None
     assert guard.trace is None
+
+
+# --- OPEN-100 option C: the planner's write refusal is the PLANNER's -------
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_no_subagent_carries_the_planner_write_refusal(name, context):
+    """OPEN-100's refusal answers `write_file` with "the coder writes the
+    file". On the coder's own stack that sentence is false and the refusal
+    would eat the run's only deliverable -- OPEN-15 inverted. The planner is
+    the only stack that holds it, and `tests/test_planner_write_refusal.py`
+    pins the other half."""
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    names = [type(m).__name__ for m in middleware]
+
+    assert "PlannerWriteMiddleware" not in names
