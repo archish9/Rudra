@@ -1,17 +1,18 @@
 # CLAUDE.md — Rudra
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **Nothing is open as of 2026-09-09.**
-OPEN-99 … OPEN-102 and the whole 2026-09-04 board — OPEN-93 … OPEN-98 —
-closed the same day; each has a self-contained document under
+is the live ledger of what is open. **Three are open as of 2026-09-09:
+OPEN-103, OPEN-104 and OPEN-105**, all filed by the live run `f845b496a2aa`
+that day. OPEN-99 … OPEN-102 and the whole 2026-09-04 board — OPEN-93 …
+OPEN-98 — closed the same day; each has a self-contained document under
 `docs/superpowers/plans/`, carrying a closing section saying what shipped and
 where it deviated from the plan. Trust `grep -n PENDING TODO.md` over any
 heading, including this sentence.
 
-**That says the BOARD is empty, not that Rudra is verified.** Read the next
-three paragraphs before believing otherwise: every one of those items closed
-**offline**, and the seven fixes of 2026-09-03/04 that no model has ever
-exercised are still unexercised.
+**The board was empty for about an hour**, which is how long it took to run a
+model against the code. That is the pattern, four rounds running, and it is
+the most useful thing this file can tell a fresh session: **offline closure
+empties the board and tells you nothing about the model.**
 
 **The verification run the 2026-09-04 board called for happened
 (`5775ba1f9855`, 2026-09-06), and its tables are now on the 2026-09-06 board
@@ -34,6 +35,19 @@ with `!`, granting `approve_all` for the session.
 **Read that as the standing answer to "is offline verification enough".** Both
 live runs found defects nobody had predicted, in places no closed item
 covered, and the seven fixes still waiting on a model are still waiting.
+
+**Then a third run, `f845b496a2aa`, the same day, with a prompt built to make
+the model fail — and it found three more.** 11 tasks planned, **0 done**, 1
+blocked, 2737.3 s. The coder called a tool named `bash` fifteen times, was
+answered each time with langgraph's bare tool list, and **3 of its 4
+invocations died on the consecutive-failure guard** (OPEN-103 — OPEN-100's
+finding one agent down, and the coder correctly has no `execute`). It wrote a
+`COMPLETION` file into the project to announce it had finished, which is
+OPEN-42 live again four runs later (OPEN-104). And the run18 checklist reported
+`NO ARCHIVE` for a run that was archived perfectly (OPEN-105). **Two of
+OPEN-100's bounds fired live for the first time**, which is the good news, and
+OPEN-92 is *still* unverified — one `edit_file` call in the whole run, because
+the coder kept dying first.
 
 **Still outstanding, and it is the highest-value thing available:** seven of
 the nine 2026-09-03/04 fixes have never been seen acting on a model. OPEN-92
@@ -71,7 +85,7 @@ written from memory of the log, not from a re-read of it.
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **What is open now, and nothing else.** Read it first. **Nothing open as of 2026-09-09** — it opens with the census, then what closing OPEN-99 did and did not buy, then the nine unfiled follow-ups the closed items named, then the 2026-09-09b board, every row of it struck through. Then four things being watched that are deliberately **not** items, the fourth being the live-run verification still outstanding across OPEN-90/91/92. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed on 2026-09-09 when the 2026-09-06 board moved out, and again as OPEN-100 … OPEN-102 closed; the run records and ordering arguments went with them |
+| `TODO.md` | **What is open now, and nothing else.** Read it first. **OPEN-103 … OPEN-105 open as of 2026-09-09** — it opens with the census, then what closing OPEN-99 did and did not buy, then the nine unfiled follow-ups the closed items named, then the 2026-09-09c board carrying run `f845b496a2aa` and its exercised / not-exercised tables, then the 2026-09-09b board with every row struck through. Then four things being watched that are deliberately **not** items, the fourth being the live-run verification still outstanding across OPEN-90/91/92. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed on 2026-09-09 when the 2026-09-06 board moved out, and again as OPEN-100 … OPEN-102 closed; the run records and ordering arguments went with them |
 | `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 102 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Four blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument; and **the 2026-09-06 board**, moved here 2026-09-09, which carries run `5775ba1f9855`'s numbers and its **exercised / not-exercised tables** — the record of what a verification run can and cannot prove. **OPEN-100, OPEN-101 and OPEN-102 sit at the end**, each moved there the day it was filed; OPEN-100's closing carries the per-stage call and seconds table measured across every archived run — the evidence that its own plan's recommended number was wrong. Its index table at the top is the map; read that before scrolling |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
@@ -79,9 +93,10 @@ When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-09 there are none — so every `OPEN-N` in this file, without exception,
-points at a record. When the next item lands, its own document's closing
-section says which paragraphs here it corrects.
+2026-09-09 those are OPEN-103, OPEN-104 and OPEN-105 — cited in this file only
+in the run paragraph above; every other `OPEN-N` here points at a record. When
+the next item lands, its own document's closing section says which paragraphs
+here it corrects.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
@@ -139,7 +154,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-09 nothing is open; what it opens with is the census, then what closing OPEN-99 did and did not buy, then the nine unfiled follow-ups, then the 2026-09-09b board, closed out. **An empty board is not an idle session** — watch item 4 is the standing work, and it needs a live run, not a code change. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-09 OPEN-103, OPEN-104 and OPEN-105 are open, on the 2026-09-09c board; OPEN-103 is the run-killer and everything else in that run is downstream of it. What the file opens with is the census, then what closing OPEN-99 did and did not buy, then the nine unfiled follow-ups, then the two 2026-09-09 boards. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
