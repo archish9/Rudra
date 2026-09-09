@@ -1,13 +1,17 @@
 # CLAUDE.md — Rudra
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **Two are open as of 2026-09-09:
-OPEN-101 and OPEN-102**, both filed by the live run `d8f742805b9b` that day.
-OPEN-99, OPEN-100 and the whole 2026-09-04 board — OPEN-93 … OPEN-98 — closed
-the same day; each has a self-contained document under
+is the live ledger of what is open. **Nothing is open as of 2026-09-09.**
+OPEN-99 … OPEN-102 and the whole 2026-09-04 board — OPEN-93 … OPEN-98 —
+closed the same day; each has a self-contained document under
 `docs/superpowers/plans/`, carrying a closing section saying what shipped and
 where it deviated from the plan. Trust `grep -n PENDING TODO.md` over any
 heading, including this sentence.
+
+**That says the BOARD is empty, not that Rudra is verified.** Read the next
+three paragraphs before believing otherwise: every one of those items closed
+**offline**, and the seven fixes of 2026-09-03/04 that no model has ever
+exercised are still unexercised.
 
 **The verification run the 2026-09-04 board called for happened
 (`5775ba1f9855`, 2026-09-06), and its tables are now on the 2026-09-06 board
@@ -23,7 +27,9 @@ Result: **zero files, zero tasks, 1092 s, ended by the user pressing Ctrl-C.**
 It found three defects — OPEN-100, OPEN-101, OPEN-102 — **and none of them was
 in the nine fixes it was meant to exercise.** The planner spent 42% of the
 run's model time generating a document for a `write_file` tool it correctly
-does not have, inside a stage with no call cap and no time cap at all.
+does not have, inside a stage with no call cap and no time cap at all — and
+raised an approval panel for that same absent tool, which the user answered
+with `!`, granting `approve_all` for the session.
 
 **Read that as the standing answer to "is offline verification enough".** Both
 live runs found defects nobody had predicted, in places no closed item
@@ -35,17 +41,20 @@ is the sharpest — run `5775ba1f9855` made **zero `edit_file` calls**, so the
 gutter repair had nothing to repair, and OPEN-99 was the reason (no
 collectable test → no failing gate → no fix loop). **That blocker is gone**;
 what the next run still needs is a prompt forcing a multi-file plan and a
-failing first attempt. Six follow-ups the closed items named and did not take
+failing first attempt. Nine follow-ups the closed items named and did not take
 are recorded in `TODO.md` — OPEN-97's Options B and D, OPEN-98's Option B,
-OPEN-99's Option D, and OPEN-100's Options A and B — as candidates for filing,
-not as open work.
+OPEN-100's Options A and B, OPEN-101's three, and OPEN-68's missing
+`verify.log` copy, with OPEN-99's Option D as a tenth — as candidates for
+filing, not as open work. *Corrected 2026-09-09: this said six, and `TODO.md`'s
+own heading said eight over a table of nine.*
 
-Corrected 2026-09-09, twice in one day: this paragraph said *"One is open as
-of 2026-09-06: OPEN-99"*, then *"Nothing is open"*. The live-run verification
-it inherited from the 2026-09-06 correction, which inherited it from the
-2026-09-04 one, **is still outstanding after a fourth correction** — but it is
-no longer the only loose end, and the reason is the finding: for four rounds
-every item was closable offline, and the first two runs that actually
+Corrected 2026-09-09, four times in one day: this paragraph said *"One is open
+as of 2026-09-06: OPEN-99"*, then *"Nothing is open"*, then *"One is open:
+OPEN-102"*, and now *"Nothing is open"* again. The live-run verification it
+inherited from the 2026-09-06 correction, which inherited it from the
+2026-09-04 one, **is still outstanding after every one of them** — and the
+board being empty again is precisely when that is easiest to forget. For four
+rounds every item was closable offline, and the first two runs that actually
 exercised a model produced four new items between them. **Offline closure is
 not evidence about a model; it is evidence about the code.**
 
@@ -62,18 +71,17 @@ written from memory of the log, not from a re-read of it.
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **What is open now, and nothing else.** Read it first. **OPEN-101 and OPEN-102 open as of 2026-09-09** — it opens with the census, then what closing OPEN-99 did and did not buy, then the six unfiled follow-ups the closed items named, then the 2026-09-09b board carrying run `d8f742805b9b`'s two survivors. Then four things being watched that are deliberately **not** items, the fourth being the live-run verification still outstanding across OPEN-90/91/92. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed to 490 lines on 2026-09-09 when the 2026-09-06 board moved out; the run records and ordering arguments went with it |
-| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 100 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Four blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument; and **the 2026-09-06 board**, moved here 2026-09-09, which carries run `5775ba1f9855`'s numbers and its **exercised / not-exercised tables** — the record of what a verification run can and cannot prove. **OPEN-100 sits at the end**, moved there the day it was filed, and its closing carries the per-stage call and seconds table measured across every archived run — the evidence that its own plan's recommended number was wrong. Its index table at the top is the map; read that before scrolling |
+| `TODO.md` | **What is open now, and nothing else.** Read it first. **Nothing open as of 2026-09-09** — it opens with the census, then what closing OPEN-99 did and did not buy, then the nine unfiled follow-ups the closed items named, then the 2026-09-09b board, every row of it struck through. Then four things being watched that are deliberately **not** items, the fourth being the live-run verification still outstanding across OPEN-90/91/92. Below that is the operational half a fresh session needs whatever it works on: the test baseline, how to configure a throwaway project, what the provider is doing, where a run's evidence lands, and four lessons that keep being re-learned. Trimmed on 2026-09-09 when the 2026-09-06 board moved out, and again as OPEN-100 … OPEN-102 closed; the run records and ordering arguments went with them |
+| `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 102 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Four blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument; and **the 2026-09-06 board**, moved here 2026-09-09, which carries run `5775ba1f9855`'s numbers and its **exercised / not-exercised tables** — the record of what a verification run can and cannot prove. **OPEN-100, OPEN-101 and OPEN-102 sit at the end**, each moved there the day it was filed; OPEN-100's closing carries the per-stage call and seconds table measured across every archived run — the evidence that its own plan's recommended number was wrong. Its index table at the top is the map; read that before scrolling |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-09 those are OPEN-101 and OPEN-102, which this file cites only as the
-neighbours of OPEN-100 — every other citation here, OPEN-100 included, points
-at a record. When the next item lands, its own document's §11 or §12
-says which paragraphs here it corrects.
+2026-09-09 there are none — so every `OPEN-N` in this file, without exception,
+points at a record. When the next item lands, its own document's closing
+section says which paragraphs here it corrects.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
@@ -131,7 +139,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-09 OPEN-101 and OPEN-102 are open; what it opens with is the census, then what closing OPEN-99 did and did not buy, then the six unfiled follow-ups, then the 2026-09-09b board. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in. As of 2026-09-09 nothing is open; what it opens with is the census, then what closing OPEN-99 did and did not buy, then the nine unfiled follow-ups, then the 2026-09-09b board, closed out. **An empty board is not an idle session** — watch item 4 is the standing work, and it needs a live run, not a code change. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
@@ -598,8 +606,8 @@ src/rudra/
 │                           restated: `_tools_for_stage` gives breakdown no
 │                           `record_fact`, so a fixed sentence naming one
 │                           would advertise an absent tool — OPEN-15, and
-│                           the defect OPEN-101 is filed on one surface
-│                           over. A stage holding neither declines to name
+│                           the defect OPEN-101 was filed on one surface
+│                           over and closed the same day. A stage holding neither declines to name
 │                           a tool rather than naming a wrong one.
 │                           `execute` is deliberately NOT covered: the
 │                           planner lacks it too, but "the coder writes the
@@ -673,6 +681,27 @@ src/rudra/
 │                           MUTATING: it writes under .rudra/ only, and
 │                           outside that set the gate would deny it on every
 │                           call (A1.75).
+│                           **Two schemas were costing a round trip each until
+│                           OPEN-102**, and the shape is `fix_write_params.py`'s
+│                           one package over: a message carrying COMPLETE
+│                           information, rejected on how it was spelled.
+│                           `AskOption` now reads a bare string as the label — it
+│                           always could have, `description` defaults to `""` — so
+│                           run d8f742805b9b's `options: ['Product landing page',
+│                           …]` no longer earns 24 lines of pydantic error, one per
+│                           option, into every later call of that stage. Exactly ONE
+│                           shape is widened: a dict with no `label` and a non-string
+│                           scalar still raise, and three tests pin that. `record_fact`
+│                           defaults `source` to `"inferred"`, the label that claims
+│                           least — never `"asked"`, which A1.72 forbids an unattended
+│                           run and A1.73 makes the one thing a later stage trusts as
+│                           settled. **`why` stays required and must**: a fact without
+│                           a reason is what that field exists to prevent. The store's
+│                           own validation is untouched — shape coercion, never value
+│                           coercion (facts/store.py:88). The rule it leaves behind is
+│                           **a schema is a prompt**: every required field is an
+│                           instruction the model must satisfy first try, so ask it
+│                           only for what it alone knows.
 │                           The last two are thin wrappers over git/ and
 │                           testing/, whose APIs the orchestrator calls directly
 ├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
@@ -753,6 +782,23 @@ deny floor and `permissions.deny` have already returned by the time it is
 consulted. `git-dir`, `catastrophic-command` and every user deny rule still
 refuse after `!`; every call is still audited, with `source:
 "session-grant-all"`.
+
+**An agent's approval map is the gate's map NARROWED to the tools that agent
+holds (OPEN-101, `permissions/interrupts.py::narrow_interrupt_on`).**
+`build_interrupt_on` emits one entry per `MUTATING_TOOLS` name and knows
+nothing about any agent, which is correct — it describes what the GATE
+covers. But deepagents' `HumanInTheLoopMiddleware` matches on the tool-call
+**name** in the assistant message, and that happens BEFORE the tool node
+discovers the name is unregistered — so an agent raises a full panel for a
+call it cannot make, takes the answer, and writes the grant to the audit log.
+Run `d8f742805b9b`'s planner did exactly that for `write_file`, and the `!`
+the user answered with then authorised a `task` call ten minutes later. **One
+implementation, two call sites** — `subagents/build.py::_interrupt_on_for`
+(which owns OPEN-15's reasoning and the question only a spec can answer) and
+`agent/planner_agent.py`, narrowing per stage against the tools that stage was
+built with. A third `create_deep_agent` call site fails
+`tests/test_planner_interrupts.py` the day it appears, which is the pin: the
+fix existed for a year on one stack and nothing made the other use it.
 
 Setting `engine.mode = "auto"` would have been the obvious implementation
 and is wrong: the auto branch denies `execute` unless `shell_in_auto` and
@@ -954,7 +1000,7 @@ Table below is verified against **installed 0.7.4**. The 0.4.12 → 0.7.4 delta 
 | `subagents: list[SubAgent]` | `SubAgentMiddleware` + the `task` tool | ✅ Step 9b: four specs in `subagents/registry.py`. **Rudra ships its own `general-purpose` to suppress the ungated one deepagents auto-adds** (`graph.py:751`). Passed at `agent/main_agent.py:687` — **the main agent only**. Corrected 2026-08-21 (CR-DOC5) — this read "nothing passes `subagents=` yet", which stopped being true when 9c shipped. Qualified 2026-08-27 (OPEN-37): the planner passes `subagents=None`, so it gets deepagents' ungated auto-added one holding the *planner's* tools, ledger writers included. It is reached by withholding `task` (`DelegationGuardMiddleware` in `build_planner_middleware`), not by passing a spec — suppressing the auto-add would leave `task` reachable |
 | `memory: list[str]` | `MemoryMiddleware`, AGENTS.md into system prompt | ⚠️ planner only |
 | `permissions: list[FilesystemPermission]` | `allow` / `deny` / `interrupt` path rules | ❌ **cannot be used** — raises on any execute-capable backend (U.7) |
-| `interrupt_on: dict` | `HumanInTheLoopMiddleware` — approval gates | ✅ Step 7: one entry per mutating tool, `when` calling Rudra's `PermissionEngine` |
+| `interrupt_on: dict` | `HumanInTheLoopMiddleware` — approval gates | ✅ Step 7: one entry per mutating tool, `when` calling Rudra's `PermissionEngine`. **Narrowed per agent before it is passed** (`narrow_interrupt_on`, OPEN-15/OPEN-101): upstream matches the tool-call name before the tool node rejects it, so an unnarrowed map prompts for calls the agent cannot make |
 | `backend` | `FilesystemBackend` / `LocalShellBackend` / `CompositeBackend` | ✅ Step 7: `CompositeBackend(default=LocalShellBackend)` |
 | (automatic) | `create_summarization_middleware` — offloads history to `/conversation_history/{thread_id}.md` | ✅ inherited, not designed |
 | (automatic) | `TodoListMiddleware`, `PatchToolCallsMiddleware` | ✅ inherited |
