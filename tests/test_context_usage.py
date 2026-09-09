@@ -79,6 +79,9 @@ def test_recording_accumulates_per_role():
         # a key that appears only on runs that refused one is a key every
         # reader of usage.json has to guard.
         "writes_rejected_as_prose": 0,
+        # Added by OPEN-99: test files refused for a name the runner cannot
+        # collect. Always present for the same reason as the line above.
+        "test_writes_rejected": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -380,6 +383,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "plans_refused",
         "content_paths_flagged",
         "writes_rejected_as_prose",
+        "test_writes_rejected",
         "seconds",
     }
 

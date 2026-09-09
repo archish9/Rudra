@@ -163,3 +163,76 @@ def test_test_files_inside_a_skipped_directory_do_not_count(monkeypatch, tmp_pat
     )
 
     assert result.outcome == NOT_APPLICABLE
+
+
+# --------------------------------------------------------------------------
+# OPEN-99 Option C -- the stage must say what is actually wrong
+# --------------------------------------------------------------------------
+
+
+def test_a_misnamed_test_is_named_in_the_detail(monkeypatch, tmp_path):
+    """Run 5775ba1f9855 reported "this project declares no test command" at a
+    project that had just had a test written into it. Read there, that
+    sentence describes the project rather than the mismatch, and it is why a
+    run with zero runnable tests read as a normal greenfield pass."""
+    _write(tmp_path, "tests/test_iphone15_responsive.html", "import html.parser\n")
+
+    result = stage_for(monkeypatch, TestResult(available=False), tmp_path)
+
+    assert result.outcome == NOT_APPLICABLE
+    assert "tests/test_iphone15_responsive.html" in result.detail
+    assert "collects only .py" in result.detail
+
+
+def test_a_real_fixture_is_not_named(monkeypatch, tmp_path):
+    """`has_test_name` is the basename reading alone, so a suite's legitimate
+    non-Python files are not quoted as if they were the problem."""
+    _write(tmp_path, "tests/fixture.html", "<!DOCTYPE html>\n")
+    _write(tmp_path, "tests/data.json", '{"a": 1}\n')
+
+    result = stage_for(monkeypatch, TestResult(available=False), tmp_path)
+
+    assert result.detail == "this project declares no test command"
+
+
+def test_nothing_is_claimed_when_the_project_has_python_in_it(monkeypatch, tmp_path):
+    """CLAUDE.md 8a: state what was OBSERVED. With a `.py` file on disk the
+    missing test command has some other cause, and naming these files would
+    assert a connection this never checked."""
+    _write(tmp_path, "tests/test_page.html", "import html.parser\n")
+    _write(tmp_path, "conftest.py", "")
+
+    result = stage_for(monkeypatch, TestResult(available=False), tmp_path)
+
+    assert result.detail == "this project declares no test command"
+
+
+def test_an_empty_project_keeps_the_original_sentence(monkeypatch, tmp_path):
+    """The correct sentence for a project with no code in a detectable
+    language, which is the common case and must not gain noise."""
+    result = stage_for(monkeypatch, TestResult(available=False), tmp_path)
+    assert result.detail == "this project declares no test command"
+
+
+def test_many_misnamed_files_are_capped_and_counted(monkeypatch, tmp_path):
+    """Name one concrete file the maintainer can look at; do not inventory
+    the project."""
+    for i in range(5):
+        _write(tmp_path, f"tests/test_page{i}.html", "x = 1\n")
+
+    detail = stage_for(monkeypatch, TestResult(available=False), tmp_path).detail
+
+    assert "(+2 more)" in detail
+    assert detail.count("test_page") == 3
+
+
+def test_the_detail_makes_no_claim_about_what_the_file_contains(monkeypatch, tmp_path):
+    """It reports what is ON DISK. By the time the gate runs the bytes have
+    landed, and whether they are Python is the middleware's question -- so
+    the sentence says the project HOLDS the file, never that it IS a test."""
+    _write(tmp_path, "tests/test_page.html", "<!DOCTYPE html>\n")
+
+    detail = stage_for(monkeypatch, TestResult(available=False), tmp_path).detail
+
+    assert "holds tests/test_page.html" in detail
+    assert "is a test" not in detail

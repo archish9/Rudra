@@ -18,9 +18,10 @@ import re
 import shutil
 import traceback
 from collections.abc import Sequence
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
+from rudra.middleware.test_extension import has_test_name
 from rudra.permissions.env import scrubbed_env
 from rudra.shell.runner import run_gated
 from rudra.stacks.detect import (
@@ -43,7 +44,7 @@ from rudra.verify.result import (
     Finding,
     StageResult,
 )
-from rudra.verify.stubs import scan_stubs
+from rudra.verify.stubs import project_files, scan_stubs
 
 # Every missing_tool message ends here, so the error and its fix are one
 # hop apart. Composed once rather than at each resolution site.
@@ -593,6 +594,64 @@ def typecheck_stage(
     )
 
 
+_NO_TEST_COMMAND = "this project declares no test command"
+
+# At most this many misnamed candidates are quoted. The point is to name one
+# concrete file the maintainer can look at, not to inventory the project.
+_MAX_NAMED = 3
+
+
+def uncollectable_test_names(project_path: Path) -> tuple[str, ...]:
+    """Files named like a test that a Python collector will not pick up.
+
+    Empty when the project holds ANY `.py` file, because then the missing
+    test command has some other cause and naming these files would assert a
+    connection that was not observed. OPEN-99 is specifically the case where
+    the only Python-shaped thing on disk is misnamed.
+
+    Asks `has_test_name` -- the basename reading alone, imported rather than
+    re-spelled -- so an ordinary `tests/fixture.html` is not named while
+    `tests/test_page.html` is. It reports what is ON DISK and makes no claim
+    about what a file CONTAINS: the content check belongs to the middleware
+    that can still refuse the write, and by the time the gate runs the bytes
+    have landed.
+    """
+    found: list[str] = []
+    for relative in project_files(project_path):
+        if PurePath(relative).suffix.lower() == ".py":
+            return ()
+        if has_test_name(relative):
+            found.append(relative)
+    return tuple(found)
+
+
+def _no_test_command_detail(project_path: Path) -> str:
+    """Why the test stage did not run, naming the mismatch when there is one.
+
+    "this project declares no test command" is the correct sentence for a
+    project with no code in a detectable language, and actively misleading
+    for one that has just had a test written into it under a name nothing
+    collects -- it describes the project rather than the mismatch, which is
+    how run `5775ba1f9855` reported `passed` with zero runnable tests.
+
+    States what was OBSERVED and not what follows from it (`CLAUDE.md` §8a,
+    the deviation OPEN-98 already had to make once): it names the files
+    found, and never asserts that they ARE tests.
+    """
+    try:
+        found = uncollectable_test_names(project_path)
+    except OSError:  # a walk that cannot read the tree must not fail the gate
+        return _NO_TEST_COMMAND
+    if not found:
+        return _NO_TEST_COMMAND
+    named = ", ".join(found[:_MAX_NAMED])
+    more = f" (+{len(found) - _MAX_NAMED} more)" if len(found) > _MAX_NAMED else ""
+    return (
+        f"{_NO_TEST_COMMAND}: no .py file was found, but this project holds "
+        f"{named}{more} -- the runner collects only .py files"
+    )
+
+
 def test_stage(
     project_path: Path,
     *,
@@ -619,7 +678,7 @@ def test_stage(
             outcome=NOT_APPLICABLE,
             blocking=True,
             stack=result.stack,
-            detail="this project declares no test command",
+            detail=_no_test_command_detail(Path(project_path)),
         )
     if result.denied:
         return StageResult(

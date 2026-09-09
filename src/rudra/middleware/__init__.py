@@ -14,6 +14,7 @@ from rudra.middleware.memory_prompt import (
 from rudra.middleware.model_retry import ModelRetryMiddleware
 from rudra.middleware.repeat_guard import RepeatGuardMiddleware
 from rudra.middleware.task_anchor import TaskAnchorMiddleware
+from rudra.middleware.test_extension import TestExtensionMiddleware
 
 __all__ = [
     "PLANNER_MEMORY_SOURCES",
@@ -27,5 +28,6 @@ __all__ = [
     "ModelRetryMiddleware",
     "RepeatGuardMiddleware",
     "TaskAnchorMiddleware",
+    "TestExtensionMiddleware",
     "build_memory_middleware",
 ]

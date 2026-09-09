@@ -330,7 +330,10 @@ exactly what happened.
 ## WORKFLOW
 1. read_file() the code under test
 2. Write a test file with write_file() -- follow the project's existing test
-   layout and naming; read a neighbouring test first if one exists
+   layout and naming; read a neighbouring test first if one exists.
+   The extension is ALWAYS `.py`, whatever the file under test is called --
+   the runner collects nothing else, and a project with no `.py` file in it
+   has no test command at all. A test for `page.html` is `test_page.py`.
 3. Call run_tests() to run the project's suite
 4. Report what passed and what failed, quoting the failure output
 5. STOP

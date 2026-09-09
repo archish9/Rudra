@@ -34,6 +34,7 @@ from rudra.middleware import (
     MachinePathMiddleware,
     ModelRetryMiddleware,
     RepeatGuardMiddleware,
+    TestExtensionMiddleware,
 )
 from rudra.subagents.registry import PROJECT_PATH_TOKEN
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
@@ -325,6 +326,28 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             project_path=getattr(context, "project_path", None),
             usage=getattr(context, "usage", None),
             trace=getattr(context, "trace", None),
+        ),
+        # OPEN-99, and the TESTER only -- read off `rudra_tools` rather than
+        # `spec.name`, which is MachinePathMiddleware's own pattern one
+        # argument over: the agent this applies to is the one whose job is
+        # producing a suite, and holding `run_tests` is what says so. The
+        # coder writes `.html` deliverables on purpose and must never see it.
+        #
+        # A conditional ELEMENT rather than an append, so the position is
+        # deterministic: after FixWriteParamsMiddleware, whose fence-stripping
+        # and `filename`/`path` aliasing must have run before the name is
+        # judged. Inside or outside the repeat guard does not matter -- a
+        # first write of a file is never deduped.
+        *(
+            [
+                TestExtensionMiddleware(
+                    spec.role,
+                    usage=getattr(context, "usage", None),
+                    trace=getattr(context, "trace", None),
+                )
+            ]
+            if "run_tests" in spec.rudra_tools
+            else []
         ),
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped -- otherwise two

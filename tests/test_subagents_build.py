@@ -1137,3 +1137,60 @@ def test_a_subagent_param_fixer_still_builds_with_no_run_around_it(name, context
 
     assert fixer.usage is None
     assert fixer.trace is None
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_the_test_extension_guard_is_on_the_tester_and_nowhere_else(name, context):
+    """OPEN-99, section 8.5. Gated on `"run_tests" in spec.rudra_tools` rather
+    than on the spec's name, so the guard and the prompt cannot disagree about
+    who it applies to. **Without the negative half the coder could not write
+    `index.html`** -- it writes `.html` deliverables on purpose, which is what
+    the user asked for."""
+    spec = REGISTRY[name]
+    names = [
+        type(m).__name__ for m in _middleware_for(spec, context, _model_for(spec, context.cfg))
+    ]
+
+    assert ("TestExtensionMiddleware" in names) == ("run_tests" in spec.rudra_tools)
+
+
+def test_the_test_extension_guard_sits_after_the_param_fixer(context):
+    """The fixer strips fences and aliases `filename`/`path` to `file_path`
+    (U.14, always on), so a name judged before it runs is not the name the
+    call will be made under."""
+    names = [
+        type(m).__name__
+        for m in _middleware_for(
+            REGISTRY["tester"], context, _model_for(REGISTRY["tester"], context.cfg)
+        )
+    ]
+    assert names.index("FixWriteParamsMiddleware") < names.index("TestExtensionMiddleware")
+
+
+def test_the_tester_test_extension_guard_reaches_the_accounting(context):
+    """OPEN-45's lesson again: registered is not wired. What this guard
+    prevents leaves no mark on calls, tokens or seconds, so a guard that
+    cannot reach `usage` and `trace` fires silently."""
+    import dataclasses
+
+    sink, usage = object(), object()
+    wired = dataclasses.replace(context, trace=sink, usage=usage)
+    middleware = _middleware_for(
+        REGISTRY["tester"], wired, _model_for(REGISTRY["tester"], wired.cfg)
+    )
+    guard = next(m for m in middleware if type(m).__name__ == "TestExtensionMiddleware")
+
+    assert guard.trace is sink
+    assert guard.usage is usage
+    assert guard.role == REGISTRY["tester"].role
+
+
+def test_the_test_extension_guard_still_builds_with_no_run_around_it(context):
+    """Section 8.6. Counting is the optional half; the bytes are the damage."""
+    middleware = _middleware_for(
+        REGISTRY["tester"], context, _model_for(REGISTRY["tester"], context.cfg)
+    )
+    guard = next(m for m in middleware if type(m).__name__ == "TestExtensionMiddleware")
+
+    assert guard.usage is None
+    assert guard.trace is None

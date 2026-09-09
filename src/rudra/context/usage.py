@@ -147,6 +147,19 @@ class RoleUsage:
     # unrefused write replaced 24,800 bytes of finished HTML with 329 bytes
     # of English and cost ~394 s, 18% of the run.
     writes_rejected_as_prose: int = 0
+    # One write refused for putting Python under a name the test runner will
+    # never collect (OPEN-99, TestExtensionMiddleware). Only the tester's
+    # stack carries that guard, so a non-zero value under any other role is
+    # itself a defect.
+    #
+    # Read it the same way as writes_rejected_as_prose: 0 means the tester
+    # named its file correctly, and above 0 means it did not and was stopped
+    # before the bytes landed. A false positive here is a REFUSED REAL WRITE,
+    # so the paired `test-extension` notice names the path -- check the first
+    # one by hand before trusting the count. In run `5775ba1f9855` the
+    # unrefused write cost the tester's whole 404.4 s invocation and left the
+    # run DONE with a `passed` gate and zero runnable tests.
+    test_writes_rejected: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -357,6 +370,16 @@ class RunUsage:
         """
         self._slot(role).writes_rejected_as_prose += 1
 
+    def record_test_write_rejected(self, role: str) -> None:
+        """One test file refused for a name the runner cannot collect.
+
+        What this prevents leaves no other mark: a test that would have been
+        written, never collected, and reported `passed` by a gate that found
+        no stack at all. `calls`, `seconds` and the token counts are all
+        identical either way, which is why the counter exists (OPEN-99).
+        """
+        self._slot(role).test_writes_rejected += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -435,6 +458,7 @@ class RunUsage:
                 "plans_refused": tally.plans_refused,
                 "content_paths_flagged": tally.content_paths_flagged,
                 "writes_rejected_as_prose": tally.writes_rejected_as_prose,
+                "test_writes_rejected": tally.test_writes_rejected,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()
