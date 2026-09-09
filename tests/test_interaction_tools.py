@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
 from rich.console import Console
 
 from rudra.facts import FactStore
-from rudra.tools.interaction_tools import create_interaction_tools
+from rudra.tools.interaction_tools import AskOption, AskQuestion, create_interaction_tools
 
 
 def _tools(tmp_path: Path, store=None, **kwargs):
@@ -412,3 +414,110 @@ def test_an_inferred_fact_is_not_promoted_by_restating_it(tmp_path: Path):
     )
 
     assert store.get("language").source == "inferred"
+
+
+# --- OPEN-102: a complete answer rejected on its shape ---
+
+
+def test_ask_option_accepts_a_bare_string():
+    """Run d8f742805b9b's planner sent `options: ['Product landing page', ...]`
+    and got 24 lines of pydantic error across four questions. `description`
+    already defaults to "", so a bare string is exactly a valid AskOption:
+    the information was complete and only the spelling was wrong.
+    """
+    option = AskOption.model_validate("SQLite")
+    assert option.label == "SQLite"
+    assert option.description == ""
+
+    question = AskQuestion(key="storage", question="Which store?", options=["SQLite", "Postgres"])
+    assert [choice.label for choice in question.options] == ["SQLite", "Postgres"]
+    assert all(choice.description == "" for choice in question.options)
+
+
+def test_ask_option_still_rejects_a_non_string_scalar():
+    """The pin against over-widening: ONE unambiguous case, not `Any`."""
+    with pytest.raises(ValidationError):
+        AskOption.model_validate(3)
+    with pytest.raises(ValidationError):
+        AskOption.model_validate({"description": "no label"})
+    with pytest.raises(ValidationError):
+        AskQuestion(key="k", question="q?", options=[["SQLite"]])
+
+
+def test_the_reported_call_now_validates(tmp_path: Path):
+    """Run d8f742805b9b, debug line 8, verbatim -- and through the tool,
+    because validating the model is not the path the run took."""
+    question = AskQuestion(
+        key="purpose",
+        question="What is the purpose of this HTML file for iPhone 15?",
+        options=[
+            "Product landing page",
+            "Device specification sheet",
+            "Marketing/ads page",
+            "Developer documentation",
+            "Personal project",
+            "Other",
+        ],
+        multi_select=False,
+    )
+    assert len(question.options) == 6
+    assert question.options[0].label == "Product landing page"
+
+    store, tools = _tools(tmp_path, reader=lambda: "1")
+    out = tools["ask_user"].invoke(
+        {
+            "questions": [
+                {
+                    "key": "purpose",
+                    "question": "What is the purpose?",
+                    "options": ["Product landing page", "Device specification sheet"],
+                }
+            ]
+        }
+    )
+    assert "REJECTED" not in out
+    assert store.get("purpose").value == "Product landing page"
+
+
+def test_record_fact_defaults_source_to_inferred(tmp_path: Path):
+    """The reported run omitted `source` once and `why` once, and paid a
+    call for each. `inferred` claims the least of the three labels."""
+    store, tools = _tools(tmp_path)
+    out = tools["record_fact"].invoke(
+        {"key": "layout_approach", "value": "single_html_file", "why": "the user asked for one"}
+    )
+    assert "REJECTED" not in out
+    assert store.get("layout_approach").source == "inferred"
+
+
+def test_record_fact_still_requires_why(tmp_path: Path):
+    """The pin that stops a future session relaxing the wrong field: a fact
+    without a reason is exactly what `why` exists to prevent."""
+    store, tools = _tools(tmp_path)
+    with pytest.raises(ValidationError):
+        tools["record_fact"].invoke({"key": "ready", "value": "yes", "source": "inferred"})
+    assert store.items() == []
+
+
+def test_record_fact_still_rejects_an_unknown_source(tmp_path: Path):
+    """Shape coercion must not become value coercion (facts/store.py:88)."""
+    store, tools = _tools(tmp_path)
+    out = tools["record_fact"].invoke(
+        {"key": "language", "value": "Rust", "why": "stated", "source": "guessed"}
+    )
+    assert out.startswith("REJECTED:")
+    assert store.items() == []
+
+
+def test_an_unattended_run_still_rejects_source_asked(tmp_path: Path):
+    """A1.72 re-pinned, because the signature changed underneath it. A
+    default of `inferred` sits correctly under that rule; `asked` would
+    violate it, and an explicit `asked` is still downgraded."""
+    store, tools = _tools(tmp_path, interactive=False)
+    tools["record_fact"].invoke({"key": "language", "value": "Rust", "why": "the request says so"})
+    assert store.get("language").source == "inferred"
+
+    tools["record_fact"].invoke(
+        {"key": "cli", "value": "clap", "why": "rust needs one", "source": "asked"}
+    )
+    assert store.get("cli").source == "inferred", "nobody was asked"

@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from langchain_core.tools import BaseTool, tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from rich.console import Console
 from rich.markup import escape
 from rich.prompt import Prompt
@@ -38,10 +39,28 @@ class _InputClosed(Exception):
 
 
 class AskOption(BaseModel):
-    """One selectable answer."""
+    """One selectable answer.
+
+    A bare string is accepted and read as the label. `description` already
+    defaults to "", so a string carries everything an AskOption needs: a
+    model that sends one has said the right thing in the wrong shape, and
+    rejecting it costs a round trip for no information. Run d8f742805b9b's
+    planner sent plain strings and got 24 lines of pydantic error across
+    four questions, then re-sent the same answers as dicts (OPEN-102).
+
+    This is middleware/fix_write_params.py's argument one package over:
+    repair what is unambiguous, refuse what is not. Exactly ONE shape is
+    widened -- a dict with no `label` and a non-string scalar still fail,
+    because a string can only mean a label and nothing else can.
+    """
 
     label: str = Field(description='The answer, e.g. "SQLite".')
     description: str = Field(default="", description="One short line of explanation.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_a_bare_string(cls, data: Any) -> Any:
+        return {"label": data} if isinstance(data, str) else data
 
 
 class AskQuestion(BaseModel):
@@ -89,7 +108,7 @@ def create_interaction_tools(
     remaining = {"questions": max(0, int(max_questions))}
 
     @tool
-    def record_fact(key: str, value: str, why: str, source: str) -> str:
+    def record_fact(key: str, value: str, why: str, source: str = "inferred") -> str:
         """Record one thing you have established about this project.
 
         Record everything you rely on, whether the user told you or you
@@ -105,7 +124,9 @@ def create_interaction_tools(
             why: Why you believe it, e.g. "the user asked for a Rust CLI".
             source: "asked" if the user told you, "inferred" if you worked
                 it out from the request, "detected" if you read it off the
-                project.
+                project. Defaults to "inferred", which claims the least --
+                send "asked" when the user actually said it, because that
+                is the label a later stage trusts as settled.
 
         Returns:
             Confirmation, or REJECTED and what would be acceptable.
