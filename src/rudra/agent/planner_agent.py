@@ -699,11 +699,27 @@ carries over unchanged: the other guards catch *failing* and catch
 stage made 18+ calls of which the old guard could count **zero** -- it
 watched `add_tasks` and `read_ledger`, and the stage called neither.
 
-40 rather than 80, chosen against observed work and not guessed: that run's
-clarify stage made ~15 calls doing its job, and `MAX_TOTAL_CALLS`'s own
-docstring records the planner's busiest stage at about 30. It is a runaway
-bound, not a budget -- if real planning work ever approaches it, raise it
-rather than teaching people to expect halts.
+40 rather than 80, chosen against observed work and not guessed. Measured
+per stage across every archived run, counting `tool_call` records between
+the planner `user` records (stages 1-2 only, since a breakdown stage's tail
+is contaminated by the subagent calls that share the debug log):
+
+    5775ba1f9855   16, 17          e8aba9aac469    9
+    2cde3406f7d6   22, 12          53c00fbdd0cd    9, 10
+    d8f742805b9b   14, 20   <- the reported run
+
+**Read that table before believing this bound fixed the reported run: it did
+not.** A healthy stage runs to 9-22 calls and the runaway one reached 20, so
+*the call counts do not separate them* -- 40 is a runaway ceiling and nothing
+more, which is exactly what `MAX_TOTAL_CALLS` is and all the planner had none
+of. At the moment the user pressed Ctrl-C that stage stood at 20 of 40 and
+was still going; 20 is therefore a lower bound on what it would have spent,
+not the length of the stage. What actually addresses this run's pathology is
+`PlannerWriteMiddleware` (option C), which stops the generating rather than
+the spending.
+
+It is a runaway bound, not a budget -- if real planning work ever approaches
+it, raise it rather than teaching people to expect halts.
 
 **Every name counts, `write_file` included.** The line this replaces read
 `if name in ("write_file",): planning_tool_calls.clear()`, so the one tool
@@ -726,6 +742,23 @@ def _stage_time_limit() -> float:
     nineteen minutes. Read as defensively as its sibling: an unreadable value
     falls back to the constant, because the degraded mode of a guard is the
     guard and not its absence.
+
+    **The default is not calibrated to a planner stage and this is known.**
+    Per-stage model seconds across the archive:
+
+        healthy    67.2  78.8  82.9  92.7  96.8  132.6  138.7  151.4  249.7  313.8
+        reported   476.0 (clarify)   556.0 (architect)
+
+    So 1200 did not fire on the reported run either -- the user pressed
+    Ctrl-C at 1092 s of a run whose architect stage stood at 556 s of a
+    per-stage 1200 s allowance, three stages deep. **A bound the user beats
+    is not yet a bound**, which is `CLAUDE.md` §5a's rule about numbers
+    compared against a human's experience. Tightening it is deliberately NOT
+    done here: the healthy maximum is 313.8 s on one provider, so any number
+    that catches 476 s is within 1.5x of legitimate work, and picking it from
+    a single run is what `TODO.md`'s lesson about tuning to one data point
+    warns against. It needs healthy-run evidence on a second provider first,
+    and is recorded as this item's follow-up.
     """
     from rudra.subagents.runner import MAX_INVOCATION_SECONDS
 
