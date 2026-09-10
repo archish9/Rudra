@@ -194,10 +194,14 @@ timeout     = 60         # seconds per MCP call
 # Documentation/15-memory.md.
 backend = "chroma"       # chroma | sqlite | milvus | qdrant | pgvector
 
-# [telemetry]
+[telemetry]
 # Send this project's runs to YOUR Langfuse project, so a run can be handed
 # over as a link instead of a folder. Off until keys are set: with no key
 # pair Rudra builds no client and makes no call.
+#
+# The header above is live and the keys below are not, deliberately: an empty
+# table changes nothing, and it is what makes the feature visible to somebody
+# scanning this file. Uncomment the two keys to switch tracing on.
 #
 # Prompts, tool arguments and model output are redacted on the way out by the
 # same rule the local logs follow — credential-shaped values never leave the

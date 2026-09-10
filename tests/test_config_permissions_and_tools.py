@@ -152,6 +152,28 @@ def test_the_init_template_round_trips_through_the_loader(tmp_path):
     assert cfg.tools.shell is True
 
 
+def test_the_template_shows_the_telemetry_section_without_switching_it_on(tmp_path):
+    """OPEN-112: the owner scaffolded a config and could not find where the
+    Langfuse keys go, because the whole block was commented out including its
+    header.
+
+    A live header with no keys is an empty table: it changes nothing and it
+    is the only thing that makes the feature visible to somebody reading the
+    file. The keys must STAY commented — a scaffold that turns tracing on is
+    a scaffold that makes a network call nobody asked for.
+    """
+    from rudra.config.template import CONFIG_TEMPLATE
+
+    assert "\n[telemetry]\n" in CONFIG_TEMPLATE
+    for key in ("public_key", "secret_key_env", "host"):
+        assert f"# {key}" in CONFIG_TEMPLATE, f"{key} must stay commented in the scaffold"
+
+    cfg = build_config(write_config(tmp_path, CONFIG_TEMPLATE))
+    assert cfg.telemetry.public_key is None
+    assert cfg.telemetry.secret_key is None
+    assert cfg.telemetry.host == "https://cloud.langfuse.com"
+
+
 def test_outside_root_cannot_be_disabled(tmp_path):
     """A1.50: accepting the name and not honouring it is worse than rejecting."""
     root = write_config(tmp_path, '[permissions]\nfloor_disable = ["outside-root"]\n')
