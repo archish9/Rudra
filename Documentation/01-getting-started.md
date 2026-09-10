@@ -330,6 +330,7 @@ Rudra keeps its working state in a `.rudra/` folder inside your project, split b
 | File | What it is |
 |---|---|
 | `run/ledger.json` | The tasks, their status, and why anything stopped |
+| `run/logs/meta.json` | Which Rudra, Python, platform, permission mode and models this run used. Written when the run starts, and carries no API key |
 | `run/logs/verify.log` | The verification gate's full output from the last check |
 | `run/checkpoints.db` | Conversation checkpoints |
 | `run/logs/permissions.jsonl` | One line per gated decision — what was allowed, denied, or approved |

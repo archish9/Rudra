@@ -185,6 +185,7 @@ Rudra keeps its state inside your project:
 | `run/ledger.json` | planner + Rudra | The tasks, their status, and why anything stopped. **`rudra --continue` reads this** |
 | `run/logs/verify.log` | Rudra | The gate's full output from the last check |
 | `run/logs/usage.json` | Rudra | What the last run cost, per role |
+| `run/logs/meta.json` | Rudra | Which Rudra, Python, platform, mode and models produced this run. Written at the start, so a run still going has one |
 | `AGENTS.md` | Rudra | Project notes fed into the planner's prompt — a line per completed task, plus an architecture summary rewritten each run |
 | `facts.json` | planner | What this project's agents established, and why |
 | `checkpoints.db` | LangGraph | Conversation checkpoints. Written, but never replayed — see [Context and Memory](13-context-and-memory.md) |

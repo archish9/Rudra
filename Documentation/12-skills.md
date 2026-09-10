@@ -4,7 +4,9 @@ Rudra ships a methodology library — [superpowers](https://github.com/obra/supe
 
 > ### Status: live, for some agents
 >
-> The three planning stages, the coder and the tester carry the skill index and can read any of the fourteen skills by path. The reviewer and the general-purpose agent do not — neither is choosing a method, and both would pay tokens for descriptions they cannot act on.
+> The coder and the tester carry the skill index and can read any of the fourteen skills by path. The reviewer and the general-purpose agent do not — neither is choosing a method, and both would pay tokens for descriptions they cannot act on.
+>
+> **Neither do the three planning stages, and that is deliberate rather than pending.** The corpus is a planning methodology written for *one* agent that clarifies, designs and implements in a single conversation. Handed to a stage that does one of those, it was followed literally: measured four times on a 550B model, the planner emitted `Ask clarifying questions`, `Propose 2-3 architectural approaches` and `Write design doc to docs/superpowers/specs/` **as the task list**. Its methodology is merged into the stage prompts instead, so it applies on every run and every model rather than when one chooses to open a file.
 >
 > Select a different set with `[skills] enabled` in `config.toml`, or turn skills off entirely with `enabled = []`. You can also write your own — see [Adding your own](#adding-your-own).
 

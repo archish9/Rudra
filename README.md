@@ -310,25 +310,33 @@ and summarising it mid-task, so a long fix loop doesn't run out of room.
     export/       markdown copy of long-term memory ← worth committing
     palace/       the searchable store itself         (binary, ignored)
   run/            ledger.json, checkpoints, artifacts,
+                  logs/meta.json,
                   logs/debug-<id>.jsonl,
                   logs/permissions.jsonl,
+                  logs/verify.log,
                   logs/tests.log,
                   logs/usage.json                     (regenerated every run)
 ```
 
 **Every run leaves a complete log** at `.rudra/run/logs/debug-<id>.jsonl` —
 one JSON object per line covering every trace event, Rudra's own log records
-and any traceback, with nothing truncated and no flag required. That is the
-file to attach to a bug report. Newest 20 runs are kept; `--no-debug` skips
-one run and `[agent] debug_log = false` turns it off.
+and any traceback, with nothing truncated and no flag required. Newest 20
+runs are kept; `--no-debug` skips one run and `[agent] debug_log = false`
+turns it off.
+
+**Send that whole folder, not a checklist.** Beside the log, `meta.json` is
+written when the run starts and says which Rudra, which Python, which
+platform, which permission mode and which model each role used — so a bug
+report needs no *"run these four commands and paste the output"*. It carries
+no API key.
 
 **And a copy of it outlives the project.** Everything above lives inside
 `.rudra/`, so deleting the project deletes the record of what Rudra did in
-it. As each run ends its evidence — that log, `usage.json`, the ledger and
+it. As each run ends its evidence — the log, `meta.json`, `usage.json`,
+`verify.log`, `permissions.jsonl`, `tests.log`, the ledger, the facts and
 the transcript — is copied to
 `~/.local/state/rudra/runs/<project>/<run-id>/` (`$XDG_STATE_HOME` if you
-set it), with a `meta.json` naming the project, the run and the models it
-used. Never your API key. Newest 20 runs per project and at most 2 GiB of
+set it). Never your API key. Newest 20 runs per project and at most 2 GiB of
 them; `[agent] run_archive = false` turns it off.
 
 Three of those are worth knowing about:
@@ -352,6 +360,37 @@ nothing ages out of here. Section below, full guide in
 **[Memory](Documentation/15-memory.md)**.
 
 Rudra writes a `.rudra/.gitignore` covering only the throwaway parts, so committing `.rudra/` is safe by default. It never touches your project's own `.gitignore` — whether you commit any of it is your call.
+
+### Sending a run to someone else
+
+If a run goes wrong, the folder above is the whole story — zip
+`.rudra/run/logs/` and it explains itself.
+
+You can also have runs report themselves as they go. Put
+[Langfuse](https://langfuse.com) keys in your config and each run becomes one
+trace you can open in a browser and share as a link:
+
+```toml
+[telemetry]
+public_key     = "pk-lf-..."
+secret_key_env = "LANGFUSE_SECRET_KEY"
+host           = "https://cloud.langfuse.com"   # or your own instance
+```
+
+Every model call, tool call and subagent shows up nested under the run, along
+with what *Rudra* decided on its own account — a guard that stopped a runaway
+agent, a plan it refused, an edit it repaired — and the run's verdict and
+token cost at the end. The trace is named after the run id, so it matches
+`meta.json` and the debug log.
+
+**Off until you set keys.** No keys means no client, no handler and no network
+call, which is the default for every install. Credential-shaped values are
+redacted before anything is sent, by the same rule the local logs follow — but
+your prompts and your code are what a trace *is*, so point `host` at a
+Langfuse instance you run if that matters. If it can't reach the host, the run
+carries on and says so in the log.
+
+Details: **[Configuration](Documentation/02-configuration.md#the-telemetry-section)**.
 
 ---
 
@@ -385,7 +424,7 @@ They cost almost nothing to carry. Only each skill's name and one-line descripti
 
 **The copy is frozen.** No version check, no update fetch, no network call at run time — ever. A methodology library that changed under you would change how your agent behaves between two runs of the same command, with nothing in your project explaining why. The freeze is enforced rather than promised: a hash manifest covers all 52 vendored files and a test verifies it on every run.
 
-The planner, coder and tester draw on it; the reviewer doesn't. Narrow the set with `[skills] enabled` in your config, or switch it off with `enabled = []`.
+The coder and tester draw on it; the planner and reviewer don't. The planner's absence is deliberate — the corpus is written for one agent that clarifies, designs and builds in a single conversation, and a planning *stage* handed it tried to run all four of its steps at once. Its methodology is built into the planning stages instead. Narrow the set with `[skills] enabled` in your config, or switch it off with `enabled = []`.
 
 **You can write your own too** — drop a `SKILL.md` in `.rudra/skills/<name>/` and it joins the library, overriding a bundled skill of the same name. `rudra skills validate` tells you whether it will actually load, which matters because the loader skips a malformed one in silence.
 
@@ -506,7 +545,7 @@ Setup, settings, a full worked example, and what to do when a server misbehaves:
 | Guide | What's inside |
 |---|---|
 | **[1. Getting Started](Documentation/01-getting-started.md)** | Install step by step, set up a model, run your first task |
-| **[2. Configuration](Documentation/02-configuration.md)** | `config.toml`, the five layers, per-role models |
+| **[2. Configuration](Documentation/02-configuration.md)** | `config.toml`, the five layers, per-role models, sending runs to Langfuse |
 | **[3. Choosing a Model](Documentation/03-providers.md)** | Ollama, OpenRouter, vLLM, Anthropic, OpenAI, Google — with working examples |
 | **[4. CLI Reference](Documentation/04-cli-reference.md)** | `init`, `config`, `doctor`, `models test`, flags, interactive mode |
 | **[5. How It Works](Documentation/05-how-it-works.md)** | What happens between your prompt and the files on disk |

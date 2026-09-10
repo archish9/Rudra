@@ -40,7 +40,7 @@ Install is editable, so source edits take effect immediately. Reinstall only aft
 ```
 
 ```
-656 passed, 2 skipped
+3046 passed, 2 skipped
 ```
 
 The two skips are live tests, which need a real model — see [below](#testing-against-a-real-model).
@@ -75,17 +75,20 @@ Coverage is reported but not enforced. The orchestration loop in `agent/main_age
 .venv/bin/ruff format --check src/ tests/  # check without changing
 ```
 
-Both must be clean before anything merges. CI enforces it.
+Both must be clean before anything commits. **There is no CI and none is
+planned** — pull requests are not accepted (see `CONTRIBUTING.md`), so a
+`pull_request` gate would guard nothing. The pre-push hook below is the only
+gate that runs.
 
 ### Run the gates before you push
 
-The repo ships a `pre-push` hook that runs exactly what CI runs. Enable it once per clone:
+The repo ships a `pre-push` hook that runs all three gates. Enable it once per clone:
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-It runs `ruff check`, `ruff format --check`, and `pytest`, and aborts the push if any of them fails. `git push --no-verify` skips it for one push.
+It runs `ruff check`, `ruff format --check`, and `pytest`, and aborts the push if any of them fails. A clone that never set `core.hooksPath`, or a `--no-verify` push, is checked by nothing. `git push --no-verify` skips it for one push.
 
 The hook prefers `uv run` over `.venv/bin` deliberately: `uv run` reconciles the environment with `uv.lock` first. A `.venv` built up incrementally over time drifts from the lockfile, and a drifted `.venv` reports failures that have nothing to do with the code you changed — which is exactly how two real defects reached `main` while the local suite was red for unrelated reasons.
 
@@ -155,8 +158,8 @@ src/rudra/
 │   ├── interaction_tools.py  ask_user, record_fact
 │   ├── git_tools.py          git_diff — thin wrapper over git/core.py
 │   └── testing_tools.py      run_tests — thin wrapper over testing/runner.py
-├── skills/           Vendored methodology corpora. Nothing here is wired to
-│   │                 an agent yet — that is the next step
+├── skills/           Vendored methodology corpora, indexed by the coder and
+│   │                 tester. No planner stage indexes one, deliberately
 │   ├── registry.py   BUNDLES · DEFAULT_ENABLED — the one list of what ships
 │   ├── bundle.py     Bundle + load_bundle(), one BUNDLE.toml at a time
 │   ├── transform.py  render(bundles, enabled, dest) — pure; library/ + active/
@@ -167,8 +170,18 @@ src/rudra/
 │                     hashes all 52 files and fails if anyone does
 ├── stacks/           Language/framework detection
 ├── filesystem/       Project tree walking
+├── context/          Context budgeting and the per-run token tally
+├── memory/           Long-term memory (MemPalace) — the only module that
+│                     imports it, and lazily
+├── mcp/              MCP client and `.mcp.json`, in Claude Code's schema
+├── trace/            One event vocabulary, three consumers: the console, the
+│                     always-on run log, the transcript
+├── telemetry/        The run, sent to a user's own Langfuse project when they
+│                     configure keys. One trace per run; off until they do
+├── cli_repl.py       The REPL's input layer: history, multiline, completion
 ├── compat/           deepagents version guards and monkeypatches
-└── state/            paths.py (the .rudra/ layout) and the session id
+└── state/            paths.py (the .rudra/ layout), the session id, and
+                      archive.py — the one thing that writes outside the project
 ```
 
 **Four architectural rules worth knowing:**

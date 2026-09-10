@@ -353,11 +353,15 @@ posting it — it contains file paths and whatever your model wrote.
 
 A copy is kept outside the project, because everything above is deleted
 with it: at the end of each run `debug-<id>.jsonl`, `usage.json`,
-`ledger.json` and the transcript are archived to
+`ledger.json`, `facts.json`, `verify.log`, `permissions.jsonl`, `tests.log`
+and the transcript are archived to
 `~/.local/state/rudra/runs/<project>/<run-id>/` — `$XDG_STATE_HOME/rudra/runs/`
 where that is set — beside a `meta.json` naming the project path, the run
-id and the provider, model and `base_url` of each role. The API key is
-never recorded and `config.toml` is never copied. Retention is per project:
+id, the platform and Python it ran on, the permission mode, and the
+provider, model and `base_url` of each role. The same `meta.json` is written
+into `.rudra/run/logs/` when the run starts, so the folder you would attach
+to a bug report says what produced it. The API key is never recorded and
+`config.toml` is never copied. Retention is per project:
 the newest 20 runs, and never more than 2 GiB of them, whole runs dropped
 rather than files truncated. `[agent] run_archive = false` turns it off.
 

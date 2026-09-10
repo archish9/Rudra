@@ -5,7 +5,7 @@ Welcome. Start wherever fits — the guides are ordered but each stands alone.
 | | Guide | Read this if you want to… |
 |---|---|---|
 | 1 | **[Getting Started](01-getting-started.md)** | Install Rudra, connect a model, run your first task |
-| 2 | **[Configuration](02-configuration.md)** | Write a `config.toml`, understand the five layers, use different models per role |
+| 2 | **[Configuration](02-configuration.md)** | Write a `config.toml`, understand the five layers, use different models per role, send runs to Langfuse |
 | 3 | **[Choosing a Model](03-providers.md)** | Set up Ollama, OpenRouter, vLLM, Anthropic, OpenAI, or Google |
 | 4 | **[CLI Reference](04-cli-reference.md)** | Look up a command, flag, or interactive shortcut |
 | 5 | **[How It Works](05-how-it-works.md)** | See what happens between your prompt and the files on disk |

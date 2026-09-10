@@ -58,9 +58,16 @@ Each stage is a separate agent with its own tools, so a stage cannot do another 
 
 **Keys stay out of the shell.** Anything shaped like a secret — `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, `AWS_*`, plus whatever `api_key_env` names — is stripped from the environment commands run in.
 
+**Runs can report themselves.** Put Langfuse keys in `[telemetry]` and each
+run becomes one trace — every model call, tool call and subagent, plus what
+Rudra decided on its own account (a guard that stopped a runaway agent, a plan
+it refused), plus the verdict and token cost at the end. Off until keys are
+set: no keys means no client and no network call. Credential-shaped values are
+redacted before anything is sent. See [Configuration](02-configuration.md#the-telemetry-section).
+
 **Keys stay out of config.** `RUDRA_API_KEY_ENV` names a variable; the value lives in the environment. A test asserts a built model's `repr()` cannot leak it.
 
-**A methodology library the agents can draw on.** The [superpowers](https://github.com/obra/superpowers) corpus (14 skills, MIT) ships inside the package, frozen and hash-verified. Nine are indexed by default for the three planning stages, the coder and the tester — `brainstorming` before designing, `test-driven-development` before implementing, `systematic-debugging` before guessing at a fix. Only names and descriptions sit in the prompt; the full text is read on demand. Narrow the set with `[skills] enabled`, or switch it off with `enabled = []`. The reviewer and general-purpose agent get none, by design.
+**A methodology library the agents can draw on.** The [superpowers](https://github.com/obra/superpowers) corpus (14 skills, MIT) ships inside the package, frozen and hash-verified. Nine are indexed by default for the coder and the tester — `brainstorming` before designing, `test-driven-development` before implementing, `systematic-debugging` before guessing at a fix. Only names and descriptions sit in the prompt; the full text is read on demand. Narrow the set with `[skills] enabled`, or switch it off with `enabled = []`. The planner, the reviewer and the general-purpose agent get none, by design: the corpus assumes one agent doing the whole job, and a planning stage handed it emitted *"write a design doc"* as a task.
 
 **You can add your own**, in `<project>/.rudra/skills/` or `~/.rudra/skills/`, and a project skill overrides a bundled one of the same name. `rudra skills list` shows what exists and what is shadowed; `rudra skills validate` catches a malformed skill, which the loader otherwise skips in silence. See [Skills](12-skills.md).
 

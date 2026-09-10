@@ -68,6 +68,7 @@ def _project_with_evidence(root: Path, session_id: str = "abc123def456") -> Path
     (paths.logs / "permissions.jsonl").write_text(
         '{"tool":"write_file","decision":"deny"}\n', encoding="utf-8"
     )
+    (paths.logs / "tests.log").write_text("12 passed, 1 failed\n", encoding="utf-8")
     return root
 
 
@@ -127,9 +128,11 @@ def test_archive_run_copies_every_instrument(home: Path, tmp_path: Path) -> None
         META_NAME,
         "usage.json",
         "ledger.json",
-        # The gate's output and the permission audit, since OPEN-107.
+        # The gate's output, the permission audit and the test output,
+        # since OPEN-107 and OPEN-111.
         "verify.log",
         "permissions.jsonl",
+        "tests.log",
         "debug-abc123def456.jsonl",
         "transcript.jsonl",
     }
@@ -168,6 +171,7 @@ def test_meta_records_where_the_run_came_from(home: Path, tmp_path: Path) -> Non
         "debug-abc123def456.jsonl",
         "ledger.json",
         "permissions.jsonl",
+        "tests.log",
         "transcript.jsonl",
         "usage.json",
         "verify.log",
@@ -754,7 +758,8 @@ def test_the_gate_and_the_audit_are_archived(home: Path, tmp_path: Path) -> None
     assert where is not None
     assert (where / "verify.log").read_text(encoding="utf-8").startswith("== test ==")
     assert (where / "permissions.jsonl").read_text(encoding="utf-8").count("deny") == 1
-    assert {"verify.log", "permissions.jsonl"} <= set(
+    assert (where / "tests.log").read_text(encoding="utf-8").startswith("12 passed")
+    assert {"verify.log", "permissions.jsonl", "tests.log"} <= set(
         json.loads((where / META_NAME).read_text(encoding="utf-8"))["files"]
     )
 

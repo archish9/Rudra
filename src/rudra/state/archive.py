@@ -32,6 +32,7 @@ Layout, one directory per run:
         facts.json                 what the planner settled (OPEN-79)
         verify.log                 what the gate ran and said (OPEN-107)
         permissions.jsonl          every gated decision (OPEN-107)
+        tests.log                  the last test run's full output (OPEN-111)
         debug-<run-id>.jsonl       the complete record (trace/debug.py)
         transcript.jsonl           the readable record (trace/transcript.py)
 
@@ -319,6 +320,12 @@ def _sources(paths: Any, session_id: str) -> list[tuple[Path, str]]:
         # the neighbouring runs rather than no answer at all.
         (logs / "verify.log", "verify.log"),
         (logs / "permissions.jsonl", "permissions.jsonl"),
+        # The third of the same kind (OPEN-111). OPEN-107 added the two
+        # above and stopped, and this is the file a "my tests fail and the
+        # summary cut the part I need" report is answered from -- four
+        # documents tell the user it exists, `testing/runner.py:155` writes
+        # it, and the archive did not carry it.
+        (logs / "tests.log", "tests.log"),
         (logs / f"debug-{session_id}.jsonl", f"debug-{session_id}.jsonl"),
         (Path(paths.transcripts) / f"{session_id}.jsonl", "transcript.jsonl"),
     ]
