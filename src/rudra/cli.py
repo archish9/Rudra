@@ -442,8 +442,17 @@ def _flatten(cfg) -> list[tuple[str, object]]:
             value = getattr(block, field.name)
             # Tuples are an implementation detail of the frozen dataclasses;
             # the user wrote a TOML array and should see one back.
+            # Through _safe_value, like the model rows above. It was not,
+            # and nothing in a section held a credential until
+            # `[telemetry] secret_key` did (OPEN-110) -- so `config list`,
+            # the command the troubleshooting docs point at and whose output
+            # people paste into bug reports, would have printed it (CR-D9's
+            # shape, one section over).
             rows.append(
-                (f"{section}.{field.name}", list(value) if isinstance(value, tuple) else value)
+                (
+                    f"{section}.{field.name}",
+                    _safe_value(field.name, list(value) if isinstance(value, tuple) else value),
+                )
             )
     return rows
 
@@ -904,6 +913,16 @@ def doctor_command(
 # what doctor is FOR, so it must not make the command exit non-zero. A
 # server whose command is not on PATH says "fail" for the same reason: the
 # status column is what decides the exit code, so it has to mean one thing.
+_SECRET_KEYS = frozenset({"api_key", "secret_key"})
+"""Fields that hold a credential by definition. Masked with no inspection:
+printing a prefix or a length is still printing part of a secret."""
+
+_SECRET_NAME_KEYS = frozenset({"api_key_env", "secret_key_env", "public_key_env"})
+"""Fields that name an environment variable. Checked rather than masked --
+the value is meant to be a variable name, and the failure mode is a user
+pasting the key itself into one."""
+
+
 def _safe_value(name: str, value: object) -> object:
     """A config value, masked when it is or might be a key.
 
@@ -919,12 +938,17 @@ def _safe_value(name: str, value: object) -> object:
     same value straight to the terminal, from the command the
     troubleshooting docs point at and whose output people paste into bug
     reports (CR-D9).
+
+    Both rules are SETS rather than two `==` comparisons since OPEN-110,
+    which added `[telemetry] secret_key` -- a second field that holds a key
+    by definition. The membership test is what makes a third one a one-line
+    change instead of a fourth branch somebody forgets to add.
     """
     if not isinstance(value, str):
         return value
-    if name == "api_key":
+    if name in _SECRET_KEYS:
         return "<set — value hidden>"
-    if name != "api_key_env":
+    if name not in _SECRET_NAME_KEYS:
         return value
     from rudra.llm.errors import _looks_like_a_secret
 

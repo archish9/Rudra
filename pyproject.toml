@@ -71,6 +71,15 @@ dependencies = [
     # via PATH -- see stacks/detect.py::_bundled.
     "ruff>=0.15.8",
     "mypy>=1.14",
+    # Optional AT RUN TIME, mandatory as a dependency (OPEN-110). Rudra sends
+    # a run to Langfuse only when the user configures keys -- no keys, no
+    # client, no network call -- but the package ships with every install so
+    # that configuring it is one config edit rather than a second install
+    # step. Four small pure-python wheels, and it does NOT move the
+    # OpenTelemetry chromadb already pulls: chromadb's otel pins are floors
+    # (>=1.2.0), and this resolves onto the same 1.44.0 line. Imported
+    # function-locally in rudra/telemetry/, the memory/store.py rule.
+    "langfuse>=4.15.2",
 ]
 
 [dependency-groups]

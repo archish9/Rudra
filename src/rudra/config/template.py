@@ -193,6 +193,26 @@ timeout     = 60         # seconds per MCP call
 # the palace always lives at .rudra/memory/palace/. See
 # Documentation/15-memory.md.
 backend = "chroma"       # chroma | sqlite | milvus | qdrant | pgvector
+
+# [telemetry]
+# Send this project's runs to YOUR Langfuse project, so a run can be handed
+# over as a link instead of a folder. Off until keys are set: with no key
+# pair Rudra builds no client and makes no call.
+#
+# Prompts, tool arguments and model output are redacted on the way out by the
+# same rule the local logs follow — credential-shaped values never leave the
+# machine. Everything else in them does, so point `host` at a self-hosted
+# instance if that matters.
+#
+# Put the SECRET key in ~/.config/rudra/config.toml or name an environment
+# variable: this file is documented as safe to commit.
+# public_key     = "pk-lf-..."
+# secret_key_env = "LANGFUSE_SECRET_KEY"
+# host           = "https://cloud.langfuse.com"   # or your own instance
+# environment    = "production"                    # tags every trace
+# sample_rate    = 1.0                             # 0.0-1.0
+# timeout        = 10                              # seconds per export
+# enabled        = false                           # off for this project only
 """
 
 __all__ = ["CONFIG_TEMPLATE"]

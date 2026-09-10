@@ -281,6 +281,64 @@ The setting that affects memory most is not in this section at all: it is
 `[model.<role>] context_tokens`. A role that declares none gets no recalled memories
 in its prompt — see [Memory](15-memory.md#6-how-a-memory-comes-back-recall).
 
+## The telemetry section
+
+Sends this project's runs to **your** Langfuse project, so a run can be handed
+to somebody as a link instead of a folder.
+
+| Key | Means |
+|---|---|
+| `public_key` / `secret_key` | Langfuse credentials. Either one may instead be named by `public_key_env` / `secret_key_env` |
+| `host` | Langfuse Cloud, or your own instance |
+| `enabled` | `false` turns it off for this project even when keys are set elsewhere |
+| `environment` | A tag on every trace — `production`, `staging`, whatever you sort by |
+| `sample_rate` | 0.0–1.0. `1.0` traces every run |
+| `timeout` | Seconds per export before it gives up |
+
+```toml
+[telemetry]
+public_key     = "pk-lf-..."
+secret_key_env = "LANGFUSE_SECRET_KEY"
+host           = "https://cloud.langfuse.com"   # or your own instance
+```
+
+**The keys are the switch.** With no key pair Rudra builds no client, installs
+no handler and makes no call, so an install that never configures this pays
+nothing for it. `enabled` exists for the other case: a key pair in
+`~/.config/rudra/config.toml` and one project that must not be traced.
+
+**Put the secret key in the user-global config**, not the project one. This
+project's `.rudra/config.toml` is documented as safe to commit, and Rudra says
+so once per run if it finds a credential there.
+
+### What is traced
+
+One Langfuse trace per run, carrying three things a maintainer reads together:
+
+- every model call, tool call and subagent subtree, with tokens and latency;
+- what **Rudra** did on its own account — a guard that halted an invocation, a
+  plan it refused, an edit it repaired. No LangChain event covers these, and
+  they are usually the answer;
+- the run's verdict and its `usage.json` numbers, posted when it ends.
+
+The trace id is the run id, so a Langfuse trace, `.rudra/run/logs/meta.json`
+and `debug-<run-id>.jsonl` all name the same run.
+
+### What leaves the machine
+
+Prompts, tool arguments, file paths and model output — that is what a trace is.
+Credential-shaped values are redacted first, by the same rule the local logs
+follow: `API_KEY=…`, `Bearer …`, and known vendor key prefixes are replaced
+before anything is sent.
+
+That is pattern matching, not a guarantee. Your project's source code is in
+those payloads. If that matters, point `host` at a Langfuse instance you run.
+
+Tracing never fails a run: an unreachable host, a rejected key or a missing SDK
+each turn it off with one line and the run continues. The SDK's own retry
+chatter is kept off your terminal and written to `debug-<run-id>.jsonl`, which
+is where to look if a project stays empty.
+
 ## The skills section
 
 | Key | Means |

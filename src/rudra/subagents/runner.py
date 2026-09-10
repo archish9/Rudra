@@ -348,6 +348,11 @@ class SubagentContext:
     # palace handle and one cached collection. Optional because the
     # subagent machinery must stay constructible without a run.
     memory: Any = None
+    # The run's Langfuse client, or None when it is not configured
+    # (OPEN-110). Shared by reference for the reason the gate and the
+    # FactStore are: one run, one trace -- two clients would be two traces
+    # of one run, which is the thing this feature exists to avoid.
+    telemetry: Any = None
     # The run's TraceSink, or None when nothing is watching. Shared by
     # reference for the reason the gate and the FactStore are: one run,
     # one level and one record of it. Optional because the subagent
@@ -551,7 +556,15 @@ async def run_subagent(
         return SubagentResult(name=name, text="", ok=False, error=str(exc), tools={})
 
     thread = thread_id or f"{context.session_id}-{name}-{uuid.uuid4().hex[:8]}"
-    config = {"configurable": {"thread_id": thread}}
+    config: dict[str, Any] = {"configurable": {"thread_id": thread}}
+    telemetry = getattr(context, "telemetry", None)
+    if telemetry is not None:
+        # One Langfuse trace per RUN, not per invocation (OPEN-110): every
+        # subagent dispatch carries the same trace id, so a maintainer opens
+        # one link and sees the coder, the tester and the planner stages in
+        # one tree. langgraph propagates `callbacks` into subgraphs, so the
+        # model and tool spans under this agent come for free.
+        config.update(telemetry.config(name))
 
     # One counter per subgraph namespace, not one for the run (A1.20).
     # Parent and subagent carry separate `messages` lists, so a shared

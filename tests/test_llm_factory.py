@@ -18,6 +18,7 @@ from rudra.config import (
     ModelConfig,
     PermissionsConfig,
     SkillsConfig,
+    TelemetryConfig,
     ToolsConfig,
 )
 from rudra.llm import build_model
@@ -61,6 +62,12 @@ def make_config(**overrides) -> Config:
             readonly=(),
         ),
         memory=MemoryConfig(backend="chroma"),
+        telemetry=TelemetryConfig(
+            enabled=False,
+            host="https://cloud.langfuse.com",
+            public_key=None,
+            public_key_env=None,
+        ),
         models={"default": settings, "planner": settings, "coder": settings},
     )
 

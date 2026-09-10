@@ -24,7 +24,8 @@ from rudra.loop.plan_view import (
     render_plan,
 )
 from rudra.state import ensure_layout
-from rudra.state.archive import env_facts, model_facts
+from rudra.state.archive import env_facts, model_facts, project_slug, write_run_meta
+from rudra.telemetry import build_telemetry
 
 if TYPE_CHECKING:  # pragma: no cover - the import is lazy at runtime
     from rudra.permissions.grants import SessionGrants
@@ -166,6 +167,7 @@ class RudraAgent:
         archive_models=None,
         archive_env=None,
         debug_handler=None,
+        telemetry=None,
     ):
         self.context = context
         # Kept for callers that pass one; a real run does not. Since
@@ -217,8 +219,17 @@ class RudraAgent:
         self._archive_models = archive_models or {}
         # What machine and what settings produced this run (OPEN-78).
         self._archive_env = archive_env or {}
+        # This run's Langfuse client, or None when it is not configured
+        # (OPEN-110). Held so close() can post the verdict and flush --
+        # the same moment the archive copies the local instruments out,
+        # and for the same reason: it is the last point at which the
+        # numbers still exist.
+        self._telemetry = telemetry
         # A resume works the ledger already on disk and never plans (C7.2).
         self.resume = resume
+        # What the run concluded, filled in by run(). close() reports it to
+        # telemetry and runs after run() has returned or raised.
+        self._last_message = ""
         self.iterations = 0
 
     def _write_usage_log(self) -> None:
@@ -254,6 +265,17 @@ class RudraAgent:
         # end, where `summarise` reads the same object immediately after;
         # this is the backstop for every end it cannot reach.
         self._write_usage_log()
+
+        # The run's verdict and cost to Langfuse, then flush (OPEN-110).
+        # After `_write_usage_log` so the numbers it reports are the ones
+        # on disk, and before the archive so the "archiving run ..." line
+        # is not the last thing a remote reader sees.
+        if self._telemetry is not None:
+            self._telemetry.finish(
+                usage=getattr(self._loop_context, "usage", None),
+                ledger=self._ledger,
+                message=self._last_message,
+            )
 
         # LAST, and the order is OPEN-69. This used to run right after the
         # transcript closed, reasoning that "what is copied must be complete"
@@ -332,9 +354,14 @@ class RudraAgent:
             result = await self._run()
         except BaseException as exc:
             self._notice(f"run {self.session_id} ended: {type(exc).__name__}", "run")
+            self._last_message = f"ended: {type(exc).__name__}"
             raise
         verdict = "ok" if result.success else "failed"
         self._notice(f"run {self.session_id} ended: {verdict}: {result.message}", "run")
+        # Kept for close(), which runs after this and has no result to read:
+        # the panel cli.py prints is drawn after close() has already gone
+        # (the reason the end NOTICE carries the message at all, OPEN-77).
+        self._last_message = result.message
         return result
 
     async def _run(self) -> AgentResult:
@@ -756,6 +783,47 @@ def build_memory_store(project_path: Path, cfg: Any, console: Console) -> Any:
         return None
 
 
+def _open_run_log(
+    paths: Any,
+    session_id: str,
+    *,
+    cfg: Any,
+    debug: bool | None,
+    console: Console,
+) -> Any:
+    """Open this run's complete record, and tee the console into it.
+
+    Called before the run's setup rather than after it (OPEN-108). What
+    this opens is a `logging` handler on the `rudra` tree plus the console
+    tee, both of which stand on their own: the TraceSink is pointed at the
+    same handler later, when there is a sink to point.
+
+    Not behind a flag since OPEN-7 -- `--debug`/`--no-debug` override
+    `[agent] debug_log` for one run, three-state like `--verbose`.
+
+    A log that cannot be opened is reported as `None` and skipped, never
+    raised: bookkeeping must not end a run (loop/engine.py:501-515).
+    """
+    want_log = cfg.agent.debug_log if debug is None else debug
+    if not want_log:
+        return None
+
+    from rudra.trace.console_log import install_console_recorder
+    from rudra.trace.debug import configure_debug_logging, debug_log_path, prune_debug_logs
+
+    prune_debug_logs(paths.logs)
+    log_path = debug_log_path(paths, session_id)
+    handler = configure_debug_logging(log_path, enabled=True)
+    if handler is None:
+        console.print(f"[yellow]Could not open the run log at {log_path}[/yellow]")
+        return None
+    # OPEN-76: and everything Rudra PRINTS, which no sink event covers --
+    # including `RudraAgent.run()`'s own crash traceback. Installed only
+    # when there is a file to write to, so `--no-debug` costs nothing.
+    install_console_recorder(console)
+    return handler
+
+
 async def create_main_agent(
     project_path: Path,
     task: str,
@@ -801,6 +869,46 @@ async def create_main_agent(
     from rudra.skills.sources import resolve_sources
 
     paths = ensure_layout(project_path)
+
+    # The run's id and its log, BEFORE anything that can fail (OPEN-108).
+    # Everything between here and the old position -- the skills cache
+    # render, the backend, the gate, `.mcp.json` and the MCP subprocess,
+    # aiosqlite's connect and the checkpointer's setup -- can raise on a
+    # machine that is not the maintainer's, and every one of those
+    # failures used to reach a terminal and no file: `debug-<id>.jsonl`
+    # did not exist yet, and neither did the console tee that would have
+    # caught the traceback (OPEN-76). The complete record was absent
+    # exactly in the class of failure it exists for.
+    session_id = uuid.uuid4().hex[:12]
+    debug_handler = _open_run_log(paths, session_id, cfg=cfg, debug=debug, console=console)
+
+    # What ran, on what, in which mode (OPEN-106). Built once here and
+    # handed to the archive below, so the copy inside the project and the
+    # copy that outlives it cannot disagree -- and written at the START,
+    # because the run that needs explaining is the one still going.
+    archive_models = model_facts(cfg)
+    archive_env = env_facts(cfg)
+    write_run_meta(
+        paths,
+        project_path=project_path,
+        session_id=session_id,
+        models=archive_models,
+        env=archive_env,
+    )
+
+    # Where this run reports itself, besides the folder it writes
+    # (OPEN-110). None whenever no Langfuse keys are configured, which is
+    # every install that did not ask for this -- so there is no client, no
+    # handler and no network call, and `CLAUDE.md` §1 goal 7 holds.
+    #
+    # Built here, beside the run log it complements, and before anything
+    # that can fail: a setup crash is a thing worth having a trace of.
+    telemetry = build_telemetry(
+        cfg,
+        session_id=session_id,
+        project_slug=project_slug(project_path),
+        console=console,
+    )
 
     # Durable: what previous runs established about this project is still
     # true (D15). An absent or corrupt file loads empty rather than raising.
@@ -894,8 +1002,6 @@ async def create_main_agent(
         checkpointer = AsyncSqliteSaver(conn=db_conn)
         await checkpointer.setup()
 
-        session_id = uuid.uuid4().hex[:12]
-
         from rudra.agent.planner_agent import STAGES, consult_planner, create_planner_agent
         from rudra.context.usage import RunUsage
         from rudra.loop import Ledger, LoopContext
@@ -932,41 +1038,29 @@ async def create_main_agent(
         transcript = TranscriptWriter(transcript_path(paths, session_id))
         trace.add(transcript)
 
-        # The complete record, beside the readable one (OPEN-7). Also not
-        # behind a flag since OPEN-7 -- `--debug`/`--no-debug` now only
-        # override [agent] debug_log for one run, three-state like --verbose.
+        # The complete record, beside the readable one (OPEN-7). The file
+        # itself was opened before any of this run's setup could fail
+        # (`_open_run_log`, OPEN-108); what is left here is pointing the
+        # sink at it, which cannot happen until the sink exists.
         #
         # add_recorder, NOT add: as an ordinary consumer this sat behind the
         # sink's level filter and could not hold more than the console
         # printed, so `--no-verbose` quietly cut the bug-report log down to
         # errors. A recorder takes every event, which is what makes the file
         # complete and leaves the transcript the readable one.
-        #
-        # A log that cannot be opened is reported as None and skipped, never
-        # raised: bookkeeping must not end a run (loop/engine.py:501-515).
-        want_log = cfg.agent.debug_log if debug is None else debug
-        debug_handler = None
-        if want_log:
-            from rudra.trace.debug import (
-                configure_debug_logging,
-                debug_consumer,
-                debug_log_path,
-                prune_debug_logs,
-            )
+        if debug_handler is not None:
+            from rudra.trace.debug import debug_consumer
 
-            prune_debug_logs(paths.logs)
-            log_path = debug_log_path(paths, session_id)
-            debug_handler = configure_debug_logging(log_path, enabled=True)
-            if debug_handler is not None:
-                trace.add_recorder(debug_consumer())
-                # OPEN-76: and everything Rudra PRINTS, which no sink event
-                # covers. Installed only when there is a file to write to,
-                # so `--no-debug` costs nothing.
-                from rudra.trace.console_log import install_console_recorder
+            trace.add_recorder(debug_consumer())
 
-                install_console_recorder(console)
-            else:
-                console.print(f"[yellow]Could not open the run log at {log_path}[/yellow]")
+        # And the same events to Langfuse, when it is configured (OPEN-110).
+        # A recorder rather than a consumer for `debug_consumer`'s reason:
+        # a NOTICE is what Rudra did on its own account -- a guard halt, a
+        # refused plan -- and no LangChain callback fires for any of them,
+        # so behind the level filter `--no-verbose` would cut the remote
+        # record down to errors.
+        if telemetry is not None:
+            trace.add_recorder(telemetry.consumer())
 
         # One store, shared by reference between the subagents and the loop --
         # the rule the gate, the FactStore and the Ledger all follow. Two
@@ -987,6 +1081,7 @@ async def create_main_agent(
             mcp=mcp_client,
             memory=memory_store,
             trace=trace,
+            telemetry=telemetry,
         )
         loop_context = LoopContext(
             subagents=subagent_context,
@@ -1080,6 +1175,9 @@ async def create_main_agent(
                 # middleware -- one run, one usage.json. `_stream_planner_turn`
                 # writes `planner_halts` into it when a bound fires (OPEN-100).
                 usage=usage,
+                # One trace for the whole run, planner stages included
+                # (OPEN-110).
+                telemetry=telemetry,
             )
 
         return RudraAgent(
@@ -1098,9 +1196,10 @@ async def create_main_agent(
             mcp=mcp_client,
             transcript=transcript,
             archive_paths=paths if cfg.agent.run_archive else None,
-            archive_models=model_facts(cfg),
-            archive_env=env_facts(cfg),
+            archive_models=archive_models,
+            archive_env=archive_env,
             debug_handler=debug_handler,
+            telemetry=telemetry,
         )
     except BaseException:
         await db_conn.close()

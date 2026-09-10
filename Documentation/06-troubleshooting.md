@@ -603,17 +603,22 @@ Rudra imports a large dependency tree, and your model may need loading into memo
 
 ## Still stuck?
 
-Gather this before opening an issue:
+**Send the folder, not a checklist.** Everything an issue needs is already
+written, and by the run itself rather than by you:
 
 ```bash
-rudra --version
-rudra models test
-python3 --version
-env | grep RUDRA_ | sed -E 's/(KEY=).*/\1***/'      # masks any key values
+ls .rudra/run/logs/
+# meta.json  debug-<run-id>.jsonl  usage.json  verify.log  permissions.jsonl
 ```
 
-If the problem happened during a run, **the log already exists** — you do
-not have to reproduce it with a flag:
+`meta.json` is written when the run starts and answers the first four
+questions of any triage — which Rudra, which Python, which platform, which
+permission mode, and which model each role used. It carries no API key.
+`rudra models test` is still worth running if the problem is a provider one.
+
+If the project is gone, the same evidence is at
+`~/.local/state/rudra/runs/<project>/<run-id>/`, which also holds the run's
+ledger, its facts and its transcript.
 
 ```bash
 ls -t .rudra/run/logs/debug-*.jsonl | head -1     # the most recent run
@@ -629,10 +634,21 @@ the console had printed, so `--no-verbose` produced a nearly empty file. If
 you are on such a version, `rudra --debug --verbose` is the pair that gets
 you a full one.
 
-Three more files are usually worth attaching: `verify.log` (what the gate
-ran and what it said), `usage.json` (tokens and wall clock per role), and
+One more file is worth adding if the run got that far:
 `.rudra/run/transcripts/<run-id>.jsonl` — the readable record, capped at
 2000 characters per payload, which `rudra log --last` replays.
+
+A failed model call carries what the provider actually said, and its
+traceback, on its own line:
+
+```bash
+grep '"ok": false' .rudra/run/logs/debug-*.jsonl | head
+```
+
+If Langfuse is configured (`[telemetry]`), the same run is a link you can
+share instead — one trace per run, named by the same run id. See
+[Configuration](02-configuration.md#the-telemetry-section) for what leaves
+the machine.
 
 **Read the debug log before you post it.** It contains file paths and
 whatever your model wrote, which may include contents of your project.

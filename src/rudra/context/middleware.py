@@ -50,6 +50,38 @@ to "why is my filter empty".
 """
 
 
+ERROR_CHARS = 500
+"""How much of a provider's exception text is kept (OPEN-109).
+
+Bounded because a provider's error can carry a whole response body, and
+this file is uncapped by design -- retention bounds the directory, not the
+line. 500 characters holds a status line, a message and a model name,
+which is what a triage read needs.
+"""
+
+
+def _detail(exc: BaseException | None) -> str:
+    """What the provider actually said, redacted and bounded (OPEN-109).
+
+    `repr` rather than `str`: several provider clients raise with an empty
+    message and put everything in the constructor arguments, and an empty
+    string is the failure this item was filed on.
+
+    Redacted through the one function that owns the rule
+    (`trace/redact.py`), imported here rather than at module scope because
+    this module is on the import path of every agent build and that one
+    imports nothing.
+    """
+    if exc is None:
+        return ""
+    try:
+        from rudra.trace.redact import redact
+
+        return redact(repr(exc))[:ERROR_CHARS]
+    except Exception:  # noqa: BLE001 - accounting must not end a run
+        return ""
+
+
 def log_model_call(
     role: str,
     seconds: float,
@@ -58,6 +90,7 @@ def log_model_call(
     output_tokens: int | None = None,
     ok: bool = True,
     error: str = "",
+    exc: BaseException | None = None,
 ) -> None:
     """Write one model call's cost to the debug log. Never raises.
 
@@ -70,6 +103,21 @@ def log_model_call(
     exactly that way, with a throwaway parser; a user filing a bug will
     not write one.
 
+    OPEN-109: `error` used to carry `type(exc).__name__` and nothing else,
+    so a 400 *model not found*, a 401, a 429 and a read timeout all reached
+    the file as the same five characters -- the one field a maintainer
+    reads, discarded at the moment it was in hand (`CLAUDE.md` §8a failure
+    shape 1). `exc` is the exception itself, and passing it does two
+    things: its `repr` is kept in `error_detail`, and the record is logged
+    with `exc_info` so `trace/debug.py::_JsonLines.format` attaches the
+    traceback it already knows how to attach. Measured before the change:
+    run `f845b496a2aa`'s complete record held 149 `model_call` lines and
+    **zero** lines carrying a traceback.
+
+    The detail is REDACTED, for `trace/console_log.py`'s stated reason: a
+    provider's own exception can carry a URL with credentials in it, and
+    this file is what a user attaches to a public issue.
+
     Swallowing follows write_usage_log's rule (loop/engine.py): a run that
     did its work must not fail because its own bookkeeping could not be
     written.
@@ -77,6 +125,7 @@ def log_model_call(
     try:
         _LOG.debug(
             "model call",
+            exc_info=exc if exc is not None else None,
             extra={
                 "event": {
                     "kind": MODEL_CALL_KIND,
@@ -89,6 +138,7 @@ def log_model_call(
                     "output_tokens": output_tokens,
                     "ok": ok,
                     "error": error,
+                    "error_detail": _detail(exc),
                 }
             },
         )
@@ -144,7 +194,7 @@ class UsageMiddleware(AgentMiddleware):
             # A call that raised still cost the user the wait. Recorded
             # before re-raising, because a run that dies slowly is when
             # "where did the time go" is hardest to answer afterwards.
-            self._record_failure(time.perf_counter() - started, type(exc).__name__)
+            self._record_failure(time.perf_counter() - started, type(exc).__name__, exc)
             raise
         self._record(response, time.perf_counter() - started)
         return response
@@ -154,19 +204,21 @@ class UsageMiddleware(AgentMiddleware):
         try:
             response = await handler(request)
         except BaseException as exc:
-            self._record_failure(time.perf_counter() - started, type(exc).__name__)
+            self._record_failure(time.perf_counter() - started, type(exc).__name__, exc)
             raise
         self._record(response, time.perf_counter() - started)
         return response
 
-    def _record_failure(self, seconds: float, error: str = "") -> None:
+    def _record_failure(
+        self, seconds: float, error: str = "", exc: BaseException | None = None
+    ) -> None:
         self.usage.record(self.role, input_tokens=None, output_tokens=None, seconds=seconds)
         # A failed call is the one most worth naming: it cost the wait AND
         # bought nothing, and `RoleUsage` cannot tell it apart from a
         # successful one that reported no tokens. Run `fc543fb2b82f` took
         # four provider 500s and the debug log recorded the retry notices
         # with no cost attached to either the failure or the re-issue.
-        log_model_call(self.role, seconds, ok=False, error=error)
+        log_model_call(self.role, seconds, ok=False, error=error, exc=exc)
 
     def wrap_tool_call(self, request, handler):
         self._record_tool(request)
@@ -177,4 +229,4 @@ class UsageMiddleware(AgentMiddleware):
         return await handler(request)
 
 
-__all__ = ["COMPACTION_TOOL", "MODEL_CALL_KIND", "UsageMiddleware", "log_model_call"]
+__all__ = ["COMPACTION_TOOL", "ERROR_CHARS", "MODEL_CALL_KIND", "UsageMiddleware", "log_model_call"]

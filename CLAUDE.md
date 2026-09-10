@@ -81,6 +81,18 @@ user did. **Check a plan's arithmetic against the archived run before
 implementing it** — these documents are written carefully and are still
 written from memory of the log, not from a re-read of it.
 
+**One more round happened on 2026-09-10, and it is the fifth for five.**
+OPEN-106 … OPEN-110 were filed and closed the same day, from an *audit* rather
+than a run: *can the folder an end-user sends explain their run?* No, five
+ways — `logs/` carried no version/platform/mode record, the archive carried
+neither `verify.log` nor `permissions.jsonl`, a setup-phase crash left no
+debug log at all, a failed model call recorded `type(exc).__name__` and
+nothing else, and a run could only ever be *mailed* rather than *seen*.
+`[telemetry]` is a live config section now, `langfuse` is a dependency, and
+`src/rudra/telemetry/` sends one trace per run when a user configures keys.
+**Every one of those five was closable offline, which is what the paragraph
+above is about** — they say nothing about how a model behaves.
+
 **Three ledgers, and they are not interchangeable.**
 
 | File | Owns |
@@ -733,6 +745,48 @@ src/rudra/
 │                           Rudra but state/paths.py, never raises, and
 │                           records the models a run used in meta.json --
 │                           NOT config.toml, which may hold an api_key
+├── telemetry/              The run, sent somewhere the maintainer can reach
+│                           it (OPEN-110). `.rudra/run/logs/` is the whole
+│                           support channel and it is a folder the user has
+│                           to find, read for secrets and attach; this is
+│                           the other half. `langfuse_sink.py` builds ONE
+│                           trace per run — `create_trace_id(seed=session_id)`
+│                           is deterministic, so the Langfuse URL, the debug
+│                           log's filename and `meta.json`'s `run_id` name
+│                           the same run. THREE layers, because LangChain
+│                           sees only what LangChain does: the
+│                           `CallbackHandler` in the RunnableConfig at
+│                           `subagents/runner.py` and
+│                           `planner_agent.py::_stream_planner_turn` (model
+│                           and tool spans, propagated into subgraphs);
+│                           `Telemetry.consumer()` registered with
+│                           `TraceSink.add_recorder` beside `debug_consumer`
+│                           (guard halts, refused plans, every NOTICE — no
+│                           LangChain callback fires for any of them); and
+│                           `finish()` at `close()` (the ledger's verdict and
+│                           usage.json's numbers). `loop/engine.py`'s
+│                           AGENTS.md summariser is the fourth site and gets
+│                           `config=` explicitly, because "everything except
+│                           one call" is what makes a trace untrustworthy.
+│                           **The security argument is `mask=`**: the
+│                           handler builds LangfuseSpan/LangfuseGeneration
+│                           objects and every `input`, `output` and
+│                           `metadata` on one passes through the client's
+│                           mask before export, so routing it through
+│                           `trace/redact.py` covers payloads Rudra never
+│                           touches. It FAILS CLOSED — the one swallow in
+│                           the project that does — because every other one
+│                           protects a run from its bookkeeping and this
+│                           protects a user's secrets from a cloud host.
+│                           Off unless keys are configured: no keys, no
+│                           client, no handler, no call, so §1 goal 7 holds
+│                           for every install that did not ask. The SDK's
+│                           own retry chatter is FORWARDED into the run log
+│                           rather than silenced — `langfuse` AND
+│                           `opentelemetry.exporter.otlp.proto.http.trace_exporter`,
+│                           the second being the louder one, and named
+│                           exactly rather than by its parent tree because
+│                           chromadb has an OpenTelemetry of its own
 ├── mcp/                    MCP client + config (Step 13). `.mcp.json` in
 │                           Claude Code's schema, so an existing config
 │                           pastes in unchanged; three meta-tools rather
@@ -971,6 +1025,7 @@ only function that creates anything.
 | `.gitignore` | durable | `ensure_layout` | git | Written by Rudra, scopes **only** `.rudra/` |
 | `run/ledger.json` | volatile | `add_tasks`/`drop_task` (agent) + `engine.py` (status) | `run_loop`, `summarise` | Tasks are **work**, not filenames. Written atomically after every status change; never resumed. A task's `halts` records every subagent guard that fired on it, and is separate from `note` because `note` is read by a MODEL later — `consult_planner` interpolates it and `record_block_memory` files it in the palace (CR-C4) — and because every branch that finishes a task rewrites `note`, which is how six guard halts vanished from run7 (OPEN-44). **`run_errors` is the same field for the opposite event** (OPEN-46, 2026-09-01): a halt is an invocation Rudra STOPPED, and this is one that never STARTED — a build failure, or a retry budget that ran out. It exists because that landed in `note` alone and so vanished exactly when the task later succeeded, which is OPEN-44's failure one field over. Both dispatch sites write it, and the TESTER's was the worse silence: its result reached only `_record_halt`, which returns early unless a guard fired, so a tester that never ran was recorded in **no field at all**. **A THIRD member since OPEN-98**: an invocation that started, ended cleanly, and did not do its job — run 2cde3406f7d6's tester spent 180.4 s and 22 tool calls and called `run_tests` zero times, and `ok: true` with no halt and no error meant it landed in no field either. Its sentence is its own, because `_record_run_error`'s asserts the invocation never ran; and it states what was OBSERVED (`ended without calling run_tests`) rather than what follows from it — that tester DID shell out to `python3 -m pytest --co`. `SubagentResult.tools` is what answers it, and **None is not `{}`**: None means nothing measured it, `{}` means it ran and called nothing |
 | `run/checkpoints.db` | volatile | `AsyncSqliteSaver` | nothing | **fresh uuid4 thread_id each run — never resumed** (A1.2) |
+| `run/logs/meta.json` | volatile | `state/archive.py::write_run_meta`, at run START | humans, `state/archive.py` | **What ran, on what, in which mode (OPEN-106).** Rudra's version, python, platform, deepagents' version, the permission mode, whether a terminal was attached, the four bounds, and each role's provider/model/base_url. **Never `api_key` or `api_key_env`** — `model_facts`'s omission, and stricter here because this file is inside the project. Written at the START for §8a failure shape 2: the run that needs explaining has not ended. The archive writes the same dict plus `archived_at` and `files`, from `run_meta`, so the copy in the project and the copy that outlives it cannot disagree |
 | `run/logs/permissions.jsonl` | volatile | `permissions.AuditLog` | humans; later `rudra audit` | One line per gated decision, every mode (Step 7) |
 | `run/logs/verify.log` | volatile | `verify_project` | humans | Every stage's full output from the last gate run (Step 9a) |
 | `run/repl_history` | volatile | `cli_repl.build_session` | prompt_toolkit | Per project, because a Rust project's prompts are not a Python project's. A read-only project loses history, never the REPL (Step 15b) |
@@ -1118,7 +1173,9 @@ Owner decisions are recorded in `TODO-old.md` §0. Summary: TOML config, vendore
 5. CLI flags
 
 **Every section is live:** `[model.*]`, `[agent]`, `[permissions]`,
-`[compat]`, `[tools]`, `[skills]`, `[mcp]`, `[memory]`. Nothing is reserved
+`[compat]`, `[tools]`, `[skills]`, `[mcp]`, `[memory]`, `[telemetry]`
+(OPEN-110 — Langfuse keys; the keys are the switch, `enabled` defaults true
+and does nothing without them). Nothing is reserved
 any more — `RESERVED_SECTIONS` is `{}`. Corrected 2026-08-21 (CR-DOC2): this
 said `[skills]` and `[memory]` were reserved and writing one was a hard
 error, which stopped being true when Steps 11 and 14 shipped. MCP *servers*
@@ -1435,7 +1492,11 @@ either.
 | What did Rudra stop, and why? | `debug-<id>.jsonl` | `"kind": "notice"` — `guard`, `retry`, `suspended` |
 | Which task, how many tries, how long? | `ledger.json` | `seconds`, `attempts`, `halts`, `run_errors`, `files_touched` |
 | Did the gate pass, and on whose interpreter? | `verify.log` | the `command:` line of each stage — OPEN-80 was invisible without it |
-| Was anything denied? | `permissions.jsonl` | one line per gated decision, every mode |
+| Was anything denied? | `permissions.jsonl` | one line per gated decision, every mode. **In the archive too since OPEN-107** — it and `verify.log` were the two instruments the archive did not carry, so neither folder could answer a report alone |
+| Which Rudra, which Python, which mode? | `meta.json` | **In `logs/` since OPEN-106**, written at run start. Before that it existed only in the archive, written at run end, and the docs asked the user to gather the same facts by hand — which is the step that gets skipped (OPEN-68's own argument) |
+| What did the provider actually say? | `debug-<id>.jsonl` | `"kind": "model_call"` with `"ok": false` → `error_detail` and `traceback`, both redacted. **Before OPEN-109 this was `type(exc).__name__` alone**, so a 400 *model not found*, a 401 and a read timeout were one word; run `f845b496a2aa`'s 240 KB record held 149 model calls and zero tracebacks |
+| Did the run die during SETUP? | `debug-<id>.jsonl` | It now exists — the log is opened before the skills cache, the backend, the gate, `.mcp.json`, sqlite and the checkpointer (OPEN-108). A run that leaves `meta.json` and a debug log holding only a traceback died in one of those, which is the class of failure that cannot be reproduced on the maintainer's machine |
+| Is Langfuse configured, and why is the project empty? | `debug-<id>.jsonl` | `"logger": "rudra.telemetry*"`. The SDK's export failures are forwarded there rather than to the terminal (OPEN-110); `Langfuse tracing → <url>` on the console says it started at all |
 | Did a subagent get stopped for spending too long? | `ledger.json` · `debug-<id>.jsonl` | `halts` naming a `NNNs limit`, and a `"kind": "notice"`, `name: "guard"` line. **Which bound fired is the diagnosis**: "80 tool calls" is a loop, "over the 1200s limit" is a slow provider or a loop (OPEN-91). `meta.json` in the archive records the limit that was in force |
 | Did an agent go hunting the machine's filesystem? | `debug-<id>.jsonl` | `"kind": "notice"`, `name: "machine-path"` — one per tool result Rudra had to explain. Non-zero means OPEN-91's defect fired and was answered at call two instead of call forty. **Trustworthy as a count since OPEN-96**, which stopped it firing on the project's own absolute path and on `//x` typos — 3 of 4 firings in run `2cde3406f7d6` were false, so the number meant nothing before that. Read the payload anyway, not only the count: it quotes the spelling, so a false positive is visible by eye without a parser |
 | Did edits have to be repaired? | `usage.json` | `roles.<role>.edits_reindented` — non-zero means OPEN-92's gutter defect fired and was caught. Paired with a `"kind": "notice"`, `name: "reindent"` line per repair in `debug-<id>.jsonl` |

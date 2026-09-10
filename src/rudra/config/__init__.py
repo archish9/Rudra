@@ -28,6 +28,7 @@ from rudra.config.schema import (
     ModelConfig,
     PermissionsConfig,
     SkillsConfig,
+    TelemetryConfig,
     ToolsConfig,
 )
 
@@ -41,6 +42,7 @@ __all__ = [
     "ModelConfig",
     "PermissionsConfig",
     "SkillsConfig",
+    "TelemetryConfig",
     "ToolsConfig",
     "build_config",
     "committed_api_key_notice",

@@ -208,3 +208,145 @@ def test_a_failing_model_call_still_records_the_time_it_burned():
         middleware.wrap_model_call(object(), boom)
 
     assert usage.as_dict()["coder"]["seconds"] >= 0.01
+
+
+# --- what a failed call SAYS (OPEN-109) -------------------------------------
+
+
+def _capture_records():
+    """The debug log's own formatter over an in-memory handler.
+
+    Formatted rather than inspected, because the thing under test is what
+    reaches the FILE: `error_detail` is built here and `traceback` is added
+    by `_JsonLines`, and a test that read `record.event` would see only the
+    first half.
+    """
+    import io
+    import json
+    import logging
+
+    from rudra.trace.debug import _JsonLines
+
+    buffer = io.StringIO()
+    handler = logging.StreamHandler(buffer)
+    handler.setFormatter(_JsonLines())
+    logger = logging.getLogger("rudra")
+    previous = logger.handlers[:]
+    logger.handlers = [handler]
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+    def read():
+        handler.flush()
+        return [json.loads(line) for line in buffer.getvalue().splitlines() if line.strip()]
+
+    def restore():
+        logger.handlers = previous
+
+    return read, restore
+
+
+def test_a_failed_model_call_records_what_the_provider_said():
+    """`type(exc).__name__` alone made a 400, a 401 and a timeout one word.
+
+    Measured before the fix: run f845b496a2aa's complete record held 149
+    model_call lines and zero tracebacks, so the one field a maintainer
+    reads was in hand at the moment of failure and discarded -- CLAUDE.md
+    §8a failure shape 1.
+    """
+    import pytest
+
+    from rudra.context.middleware import UsageMiddleware
+    from rudra.context.usage import RunUsage
+
+    read, restore = _capture_records()
+    try:
+
+        def boom(request):
+            raise RuntimeError("400 model 'qwen3:32b' not found")
+
+        with pytest.raises(RuntimeError):
+            UsageMiddleware("coder", RunUsage()).wrap_model_call(object(), boom)
+        records = read()
+    finally:
+        restore()
+
+    line = next(record for record in records if record.get("kind") == "model_call")
+    assert line["ok"] is False
+    assert line["error"] == "RuntimeError"
+    assert "qwen3:32b" in line["error_detail"]
+    assert "not found" in line["traceback"]
+
+
+def test_what_the_provider_said_is_redacted_in_both_places():
+    """A provider's exception carries whatever it was given -- including a
+    URL with a key in it -- and this file is attached to public issues.
+
+    The traceback is the half that was raw: `error_detail` goes through
+    `redact` where it is built, and `_JsonLines` formatted the exception
+    itself straight into the record beside it.
+    """
+    import pytest
+
+    from rudra.context.middleware import UsageMiddleware
+    from rudra.context.usage import RunUsage
+
+    read, restore = _capture_records()
+    try:
+
+        def boom(request):
+            raise RuntimeError("401 unauthorized: api_key=sk-abcdefgh12345")
+
+        with pytest.raises(RuntimeError):
+            UsageMiddleware("coder", RunUsage()).wrap_model_call(object(), boom)
+        records = read()
+    finally:
+        restore()
+
+    line = next(record for record in records if record.get("kind") == "model_call")
+    assert "sk-abcdefgh12345" not in line["error_detail"]
+    assert "sk-abcdefgh12345" not in line["traceback"]
+    assert "<redacted>" in line["traceback"]
+
+
+def test_a_successful_call_carries_no_error_detail_and_no_traceback():
+    """The common line stays the size it was: this is one line per model
+    call in a file with uncapped payloads."""
+    from rudra.context.middleware import UsageMiddleware
+    from rudra.context.usage import RunUsage
+
+    read, restore = _capture_records()
+    try:
+        UsageMiddleware("coder", RunUsage()).wrap_model_call(
+            object(), lambda request: _response(_meta(1, 1))
+        )
+        records = read()
+    finally:
+        restore()
+
+    line = next(record for record in records if record.get("kind") == "model_call")
+    assert line["error_detail"] == ""
+    assert "traceback" not in line
+
+
+def test_the_exception_text_is_bounded():
+    """A provider error can carry a whole response body."""
+    import pytest
+
+    from rudra.context.middleware import ERROR_CHARS, UsageMiddleware
+    from rudra.context.usage import RunUsage
+
+    read, restore = _capture_records()
+    try:
+
+        def boom(request):
+            raise RuntimeError("x" * (ERROR_CHARS * 3))
+
+        with pytest.raises(RuntimeError):
+            UsageMiddleware("coder", RunUsage()).wrap_model_call(object(), boom)
+        records = read()
+    finally:
+        restore()
+
+    line = next(record for record in records if record.get("kind") == "model_call")
+    assert len(line["error_detail"]) == ERROR_CHARS

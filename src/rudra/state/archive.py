@@ -26,11 +26,19 @@ so many words not to fix it by adding a sentence to a checklist.
 Layout, one directory per run:
 
     $XDG_STATE_HOME/rudra/runs/<project-slug>/<run-id>/
-        meta.json                  project path, run id, version, file list
+        meta.json                  project path, run id, versions, env, file list
         usage.json                 the run's tally (loop/engine.py)
         ledger.json                what the run was asked to do and did
+        facts.json                 what the planner settled (OPEN-79)
+        verify.log                 what the gate ran and said (OPEN-107)
+        permissions.jsonl          every gated decision (OPEN-107)
         debug-<run-id>.jsonl       the complete record (trace/debug.py)
         transcript.jsonl           the readable record (trace/transcript.py)
+
+**The project keeps a `meta.json` of its own** (`write_run_meta`, OPEN-106),
+written at run START into `.rudra/run/logs/`. Both come from `run_meta`, so
+the folder a user attaches and the copy that outlives their project answer
+the same first four questions identically.
 
 `<project-slug>` is the directory's name plus a digest of its resolved
 path, because two projects called `app` are one name and two projects.
@@ -291,9 +299,97 @@ def _sources(paths: Any, session_id: str) -> list[tuple[Path, str]]:
         # holding only the archive otherwise cannot tell what the run
         # believed about the work.
         (Path(paths.facts_json), "facts.json"),
+        # The gate's own output and the permission audit (OPEN-107). Both
+        # were missing, and the two absences composed into one defect: the
+        # project's `logs/` held these two and no environment record, the
+        # archive held the environment and neither of these, so NEITHER
+        # folder could answer a bug report on its own.
+        #
+        # `verify.log` is what says whether the gate passed and on whose
+        # interpreter -- OPEN-80 was invisible without its `command:` line
+        # -- and rows 27 and 31 of the run18 checklist read it and saw ""
+        # against every archived run. It can be large; that is answered by
+        # MAX_PROJECT_BYTES, which already drops whole runs to stay under a
+        # bound, rather than by leaving the instrument out.
+        #
+        # `permissions.jsonl` is the only record of what was DENIED, in
+        # every mode, and it is per project rather than per run -- so this
+        # copy is a superset of the run, which is the honest direction: a
+        # reader asking "was my write refused" gets an answer that includes
+        # the neighbouring runs rather than no answer at all.
+        (logs / "verify.log", "verify.log"),
+        (logs / "permissions.jsonl", "permissions.jsonl"),
         (logs / f"debug-{session_id}.jsonl", f"debug-{session_id}.jsonl"),
         (Path(paths.transcripts) / f"{session_id}.jsonl", "transcript.jsonl"),
     ]
+
+
+def run_meta(
+    *,
+    project_path: Path,
+    session_id: str,
+    models: dict[str, Any] | None = None,
+    env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """What ran, where, on what. The fields both meta files share (OPEN-106).
+
+    One builder with two writers, for `deep_merge`'s reason
+    (`CLAUDE.md` §7): the copy inside the project and the copy in the
+    archive answer the same first four triage questions -- which Rudra,
+    which python, which platform, which mode -- and two constructions of
+    that dict is two answers to them.
+
+    `model_facts`'s omission holds here and is stricter here: this dict is
+    written INSIDE the user's project, so `api_key` and `api_key_env`
+    reaching it would put a secret in a directory the user is told to
+    attach to an issue.
+    """
+    return {
+        "meta_version": META_VERSION,
+        "run_id": session_id,
+        "project_path": str(Path(project_path).resolve()),
+        "project_slug": project_slug(project_path),
+        "rudra_version": _version(),
+        "models": models or {},
+        "env": env or {},
+    }
+
+
+def write_run_meta(
+    paths: Any,
+    *,
+    project_path: Path,
+    session_id: str,
+    models: dict[str, Any] | None = None,
+    env: dict[str, Any] | None = None,
+) -> Path | None:
+    """Write `logs/meta.json` at run START. Returns where, or None (OPEN-106).
+
+    **At the start, not the end**, which is `CLAUDE.md` §8a failure shape
+    2: a record whose subject is a run in progress must be written while
+    the run is in progress. The archive's copy is written by `close()` and
+    a run that is still going -- the only kind anybody complains about --
+    has none.
+
+    It answers what `Documentation/06-troubleshooting.md` used to ask the
+    user to gather by hand with `rudra --version`, `python3 --version` and
+    `env | grep RUDRA_`. A manual step is the step that gets skipped, which
+    is OPEN-68's argument for this file's existence in the first place.
+
+    Never raises: bookkeeping may not end a run (C7.5).
+    """
+    try:
+        directory = Path(paths.logs)
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / META_NAME
+        meta = {
+            **run_meta(project_path=project_path, session_id=session_id, models=models, env=env),
+            "started_at": time.time(),
+        }
+        destination.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        return destination
+    except Exception:  # noqa: BLE001 -- bookkeeping never ends a run (C7.5)
+        return None
 
 
 def archive_run(
@@ -359,14 +455,8 @@ def archive_run(
             copied.append(name)
 
         meta = {
-            "meta_version": META_VERSION,
-            "run_id": session_id,
-            "project_path": str(project_path.resolve()),
-            "project_slug": project_slug(project_path),
-            "rudra_version": _version(),
+            **run_meta(project_path=project_path, session_id=session_id, models=models, env=env),
             "archived_at": time.time(),
-            "models": models or {},
-            "env": env or {},
             "files": copied,
         }
         (destination / META_NAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -396,6 +486,8 @@ __all__ = [
     "env_facts",
     "model_facts",
     "project_slug",
+    "run_meta",
     "prune_runs",
     "run_dir",
+    "write_run_meta",
 ]

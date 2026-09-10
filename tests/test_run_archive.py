@@ -39,6 +39,7 @@ from rudra.state.archive import (
     project_slug,
     prune_runs,
     run_dir,
+    run_meta,
 )
 from rudra.state.paths import ensure_layout
 
@@ -63,6 +64,10 @@ def _project_with_evidence(root: Path, session_id: str = "abc123def456") -> Path
         '{"kind":"notice","name":"retry"}\n', encoding="utf-8"
     )
     (paths.transcripts / f"{session_id}.jsonl").write_text('{"kind":"tool"}\n', encoding="utf-8")
+    (paths.logs / "verify.log").write_text("== test ==\ncommand: pytest -q\n", encoding="utf-8")
+    (paths.logs / "permissions.jsonl").write_text(
+        '{"tool":"write_file","decision":"deny"}\n', encoding="utf-8"
+    )
     return root
 
 
@@ -122,6 +127,9 @@ def test_archive_run_copies_every_instrument(home: Path, tmp_path: Path) -> None
         META_NAME,
         "usage.json",
         "ledger.json",
+        # The gate's output and the permission audit, since OPEN-107.
+        "verify.log",
+        "permissions.jsonl",
         "debug-abc123def456.jsonl",
         "transcript.jsonl",
     }
@@ -159,8 +167,10 @@ def test_meta_records_where_the_run_came_from(home: Path, tmp_path: Path) -> Non
     assert sorted(meta["files"]) == [
         "debug-abc123def456.jsonl",
         "ledger.json",
+        "permissions.jsonl",
         "transcript.jsonl",
         "usage.json",
+        "verify.log",
     ]
     assert meta["archived_at"] > 0
 
@@ -723,3 +733,105 @@ def test_facts_travel_with_the_archive(tmp_path: Path) -> None:
 
     names = [name for _source, name in _sources(rudra_paths(tmp_path), "abc123def456")]
     assert "facts.json" in names
+
+
+# --- what the archive must contain (OPEN-107) -------------------------------
+
+
+def test_the_gate_and_the_audit_are_archived(home: Path, tmp_path: Path) -> None:
+    """`verify.log` and `permissions.jsonl` outlive the project too.
+
+    Before OPEN-107 neither folder could answer a bug report alone: the
+    project's `logs/` held these two and no environment record, and the
+    archive held the environment and neither of these. Rows 27 and 31 of
+    the run18 checklist read `verify.log` and saw "" against every archived
+    run.
+    """
+    project = _project_with_evidence(tmp_path / "app")
+
+    where = archive_run(project_path=project, session_id="abc123def456", home=home, paths=None)
+
+    assert where is not None
+    assert (where / "verify.log").read_text(encoding="utf-8").startswith("== test ==")
+    assert (where / "permissions.jsonl").read_text(encoding="utf-8").count("deny") == 1
+    assert {"verify.log", "permissions.jsonl"} <= set(
+        json.loads((where / META_NAME).read_text(encoding="utf-8"))["files"]
+    )
+
+
+def test_a_run_without_a_gate_run_still_archives(home: Path, tmp_path: Path) -> None:
+    """An absent instrument is a gap in one archive, not a failure.
+
+    `rudra --plan` never runs the gate, so there is no verify.log to copy.
+    """
+    project = tmp_path / "app"
+    paths = ensure_layout(project)
+    paths.ledger_json.write_text("{}", encoding="utf-8")
+
+    where = archive_run(project_path=project, session_id="run1", home=home, paths=None)
+
+    assert where is not None
+    assert not (where / "verify.log").exists()
+
+
+# --- meta.json inside the project (OPEN-106) --------------------------------
+
+
+def test_run_meta_is_written_into_the_project_at_run_start(tmp_path: Path) -> None:
+    """The folder a user is told to send has to say which Rudra wrote it.
+
+    `Documentation/06-troubleshooting.md` used to ask the user to gather
+    `rudra --version`, `python3 --version` and `env | grep RUDRA_` by hand,
+    and a manual step is the step that gets skipped -- which is OPEN-68's
+    own argument for the archive existing at all.
+    """
+    from rudra.state.archive import write_run_meta
+
+    paths = ensure_layout(tmp_path / "app")
+    where = write_run_meta(
+        paths,
+        project_path=tmp_path / "app",
+        session_id="run1",
+        models={"coder": {"provider": "ollama", "model": "qwen3:32b"}},
+        env={"mode": "ask", "python": "3.12.0"},
+    )
+
+    assert where is not None
+    assert where.name == META_NAME
+    assert where.parent == paths.logs
+    meta = json.loads(where.read_text(encoding="utf-8"))
+    assert meta["run_id"] == "run1"
+    assert meta["env"]["mode"] == "ask"
+    assert meta["models"]["coder"]["model"] == "qwen3:32b"
+    # Written at the START, so it exists while the run is still going --
+    # CLAUDE.md §8a failure shape 2.
+    assert "started_at" in meta
+
+
+def test_the_two_meta_files_agree_about_the_run(home: Path, tmp_path: Path) -> None:
+    """One builder, two writers: the copy in the project and the copy that
+    outlives it must not answer the same question differently."""
+    project = _project_with_evidence(tmp_path / "app")
+    shared = run_meta(
+        project_path=project, session_id="abc123def456", models={}, env={"mode": "auto"}
+    )
+
+    where = archive_run(project_path=project, session_id="abc123def456", home=home, paths=None)
+
+    assert where is not None
+    archived = json.loads((where / META_NAME).read_text(encoding="utf-8"))
+    for key in ("meta_version", "run_id", "project_path", "project_slug", "rudra_version"):
+        assert archived[key] == shared[key]
+
+
+def test_write_run_meta_never_raises(tmp_path: Path) -> None:
+    """Bookkeeping must not end a run (C7.5)."""
+    from rudra.state.archive import write_run_meta
+
+    blocked = tmp_path / "wall"
+    blocked.write_text("not a directory", encoding="utf-8")
+
+    class Paths:
+        logs = blocked / "logs"
+
+    assert write_run_meta(Paths(), project_path=tmp_path, session_id="r") is None

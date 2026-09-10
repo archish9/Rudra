@@ -237,6 +237,46 @@ class McpConfig:
 
 
 @dataclass(frozen=True)
+class TelemetryConfig:
+    """Where a run reports itself, besides `.rudra/run/logs/` (OPEN-110).
+
+    Rudra's whole support channel is a user emailing that folder
+    (CLAUDE.md §8a) -- found by hand, read for secrets by hand, attached by
+    hand. This section is the other half: keys here send the run to the
+    user's own Langfuse project as it happens, so the maintainer can be
+    given a live trace tree instead of a zip file.
+
+    **The keys are the switch.** `enabled` defaults to true and does
+    nothing on its own: with no key pair there is no client, no handler and
+    no network call, which is what keeps `CLAUDE.md` §1 goal 7 (local-first)
+    true for every install that did not ask for this. `enabled = false` is
+    for the other case -- a key pair in `~/.config/rudra/config.toml` and
+    one project that must not be traced.
+
+    `secret_key` is `repr=False` for `ModelConfig.api_key`'s reason
+    (OPEN-6): a key may be STORED and is never SHOWN, and shown-ness is
+    structural rather than a convention -- it cannot reach a repr, a log
+    line or a traceback frame, and `cli.py::_safe_value` masks it in
+    `config list`.
+
+    `host` carries Langfuse Cloud's EU endpoint as its default because that
+    is the SDK's own, and a self-hosted instance is one line -- which is
+    the answer to "does this break local-first": the endpoint is the
+    user's choice, and the feature is off until they make it.
+    """
+
+    enabled: bool
+    host: str
+    public_key: str | None
+    public_key_env: str | None
+    secret_key: str | None = field(repr=False, default=None)
+    secret_key_env: str | None = None
+    sample_rate: float = 1.0
+    timeout: int = 10
+    environment: str | None = None
+
+
+@dataclass(frozen=True)
 class MemoryConfig:
     """Long-term memory policy (Step 14, C8.2).
 
@@ -315,6 +355,20 @@ DEFAULTS: dict[str, Any] = {
     "memory": {
         "backend": "chroma",
     },
+    # Off in effect, on by switch (OPEN-110): `enabled` is true and the KEYS
+    # are what turns tracing on, so an install that never configures Langfuse
+    # makes no network call and pays nothing. See TelemetryConfig.
+    "telemetry": {
+        "enabled": True,
+        "host": "https://cloud.langfuse.com",
+        "public_key": None,
+        "public_key_env": None,
+        "secret_key": None,
+        "secret_key_env": None,
+        "sample_rate": 1.0,
+        "timeout": 10,
+        "environment": None,
+    },
 }
 
 __all__ = [
@@ -327,6 +381,7 @@ __all__ = [
     "McpConfig",
     "MemoryConfig",
     "SkillsConfig",
+    "TelemetryConfig",
     "VALID_MEMORY_BACKENDS",
     "VALID_MODES",
     "VALID_PROVIDERS",

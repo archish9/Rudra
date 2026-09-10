@@ -1004,16 +1004,29 @@ async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
 
             model = build_model("default", context.cfg)
 
-        reply = await model.ainvoke(
-            [
-                {
-                    "role": "user",
-                    "content": _ARCHITECTURE_PROMPT.format(
-                        notes=section_body(text, "Architecture Notes"),
-                        log=section_body(text, "Session Log"),
-                    ),
-                }
-            ]
+        # The one model call in this file that does not go through a
+        # subagent or a planner stage, so it is the one that needs the
+        # callbacks handed to it (OPEN-110). Without this the AGENTS.md
+        # summariser is the single model call missing from a run's trace,
+        # which is exactly the kind of "everything except" that makes a
+        # trace untrustworthy.
+        telemetry = getattr(getattr(context, "subagents", None), "telemetry", None)
+        prompt = [
+            {
+                "role": "user",
+                "content": _ARCHITECTURE_PROMPT.format(
+                    notes=section_body(text, "Architecture Notes"),
+                    log=section_body(text, "Session Log"),
+                ),
+            }
+        ]
+        # `config=` only when there is something to put in it: an argument
+        # that is always passed is an argument every caller's model must
+        # accept, and the models here are sometimes doubles.
+        reply = (
+            await model.ainvoke(prompt, config=telemetry.config("summariser"))
+            if telemetry is not None
+            else await model.ainvoke(prompt)
         )
         notes = str(getattr(reply, "content", "")).strip()
         if notes:

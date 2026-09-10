@@ -26,8 +26,9 @@ cannot happen. For example:
 - A tool call that should have been denied by the permission engine, the deny
   floor, or the `--auto` shell rule, and was allowed.
 - A credential reaching the console, `.rudra/run/transcripts/`, or
-  `.rudra/run/logs/debug.jsonl` — redaction happens where a trace event is
-  built, and a path around it is a real defect.
+  `.rudra/run/logs/debug-<run-id>.jsonl` — redaction happens where a trace
+  event is built, and a path around it is a real defect. That includes a
+  traceback: an exception's own message reaches the log too (OPEN-109).
 - A write escaping the project root through a filesystem tool, which
   `virtual_mode=True` is supposed to confine.
 - Config or `.env` handling that discloses an API key.

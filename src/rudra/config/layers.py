@@ -40,6 +40,19 @@ _NON_CONFIG_VARS = frozenset({"RUDRA_LIVE_TESTS"})
 
 _NUMERIC_MODEL_KEYS = frozenset({"temperature", "context_tokens", "max_output_tokens", "timeout"})
 
+# RUDRA_* spellings of the [telemetry] string keys (OPEN-110). A table
+# rather than five branches, and it does NOT carry `enabled`, which is a
+# boolean and needs `_as_bool` -- a typo there must not fail permissive
+# (CR-D4).
+_TELEMETRY_VARS = {
+    "LANGFUSE_HOST": "host",
+    "LANGFUSE_PUBLIC_KEY": "public_key",
+    "LANGFUSE_SECRET_KEY": "secret_key",
+    "LANGFUSE_PUBLIC_KEY_ENV": "public_key_env",
+    "LANGFUSE_SECRET_KEY_ENV": "secret_key_env",
+    "TELEMETRY_ENVIRONMENT": "environment",
+}
+
 _warned_vars: set[str] = set()
 """Deduped explicitly rather than via the warnings module's per-location
 filter, so "warns once per variable" is deterministically testable."""
@@ -206,6 +219,16 @@ def env_layer(known_roles: Iterable[str]) -> dict[str, Any]:
         # a [model.test] section out of a [tools] setting.
         if tail == "TEST_TIMEOUT":
             put("tools", "test_timeout", value=_as_number(raw))
+            continue
+        # [telemetry], each spelled out for the reason above: every one of
+        # these ends in a word `_split_role_and_suffix` would try to read as
+        # a role, and a silently dropped key here means a user who believes
+        # their runs are traced and is not (OPEN-110).
+        if tail in _TELEMETRY_VARS:
+            put("telemetry", _TELEMETRY_VARS[tail], value=raw.strip())
+            continue
+        if tail == "TELEMETRY_ENABLED":
+            put("telemetry", "enabled", value=_as_bool(raw, name))
             continue
         role, suffix = _split_role_and_suffix(tail, roles)
         if suffix in MODEL_KEYS:

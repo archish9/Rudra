@@ -42,11 +42,22 @@ from rudra.config.schema import (
     ModelConfig,
     PermissionsConfig,
     SkillsConfig,
+    TelemetryConfig,
     ToolsConfig,
 )
 from rudra.state.paths import rudra_paths
 
-_TOP_LEVEL = ("model", "agent", "permissions", "compat", "tools", "skills", "mcp", "memory")
+_TOP_LEVEL = (
+    "model",
+    "agent",
+    "permissions",
+    "compat",
+    "tools",
+    "skills",
+    "mcp",
+    "memory",
+    "telemetry",
+)
 _AGENT_KEYS = frozenset(
     {
         "verbose",
@@ -68,6 +79,10 @@ _MCP_BOOL_KEYS = frozenset({"enabled", "mcp_in_auto"})
 _MCP_LIST_KEYS = frozenset({"disabled_servers", "allow", "deny", "readonly"})
 _MCP_KEYS = _MCP_BOOL_KEYS | _MCP_LIST_KEYS | frozenset({"timeout"})
 _MEMORY_KEYS = frozenset({"backend"})
+_TELEMETRY_STR_KEYS = frozenset(
+    {"host", "public_key", "public_key_env", "secret_key", "secret_key_env", "environment"}
+)
+_TELEMETRY_KEYS = _TELEMETRY_STR_KEYS | frozenset({"enabled", "sample_rate", "timeout"})
 _POSITIVE_INT_KEYS = ("context_tokens", "max_output_tokens", "timeout")
 
 
@@ -309,7 +324,71 @@ def validate(
             valid = ", ".join(sorted(VALID_MEMORY_BACKENDS))
             raise ConfigError(f"[memory] backend must be one of {valid}, got {value!r}.")
 
+    _validate_telemetry(merged.get("telemetry", {}))
+
     _validate_skills(merged.get("skills", {}))
+
+
+def _validate_telemetry(section: dict[str, Any]) -> None:
+    """Reject a [telemetry] section the client could not be built from.
+
+    Typos are fatal here for the reason they are everywhere else in this
+    file, and the reason bites harder in this section than most: a
+    misspelled key means a user who believes their runs are being traced
+    is not being traced, and finds out when they are asked for a trace
+    that does not exist.
+    """
+    for key, value in section.items():
+        if key not in _TELEMETRY_KEYS:
+            raise ConfigError(
+                f"Unknown key '{key}' in [telemetry].{_suggest(key, _TELEMETRY_KEYS)}"
+            )
+        if key == "enabled":
+            if not isinstance(value, bool):
+                raise ConfigError(f"[telemetry] enabled must be true or false, got {value!r}.")
+        elif key == "sample_rate":
+            # bool is a subclass of int, so `sample_rate = true` would
+            # otherwise pass as 1.0 -- the [tools] test_timeout trap.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ConfigError(
+                    f"[telemetry] sample_rate must be a number between 0 and 1, got {value!r}."
+                )
+            if not 0.0 <= float(value) <= 1.0:
+                raise ConfigError(
+                    f"[telemetry] sample_rate must be between 0 and 1, got {value!r}."
+                )
+        elif key == "timeout":
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ConfigError(
+                    f"[telemetry] timeout must be a whole number of seconds, got {value!r}."
+                )
+            if value <= 0:
+                raise ConfigError(f"[telemetry] timeout must be greater than 0, got {value!r}.")
+        elif value is not None and not isinstance(value, str):
+            raise ConfigError(f"[telemetry] {key} must be a string, got {value!r}.")
+
+    host = section.get("host")
+    if isinstance(host, str) and not host.startswith(("http://", "https://")):
+        # Named rather than accepted, because the SDK would take it, fail
+        # every export in a background thread, and say so nowhere the user
+        # is looking.
+        raise ConfigError(f"[telemetry] host must start with http:// or https://, got {host!r}.")
+
+
+def _build_telemetry(merged: dict[str, Any]) -> TelemetryConfig:
+    """The [telemetry] policy. Mirrors _build_mcp so the two read alike."""
+    section = {**DEFAULTS["telemetry"], **merged.get("telemetry", {})}
+    return TelemetryConfig(
+        enabled=bool(section["enabled"]),
+        host=str(section["host"]),
+        public_key=section["public_key"] or None,
+        public_key_env=section["public_key_env"] or None,
+        secret_key=section["secret_key"] or None,
+        secret_key_env=section["secret_key_env"] or None,
+        sample_rate=float(section["sample_rate"]),
+        timeout=int(section["timeout"]),
+        environment=section["environment"] or None,
+    )
 
 
 def _build_skills(merged: dict[str, Any]) -> SkillsConfig:
@@ -396,6 +475,7 @@ class Config:
     skills: SkillsConfig
     mcp: McpConfig
     memory: MemoryConfig
+    telemetry: TelemetryConfig
     models: dict[str, ModelConfig]
     provenance: dict[str, str] = field(default_factory=dict)
     sources: dict[str, Path | None] = field(default_factory=dict)
@@ -436,13 +516,28 @@ def committed_api_key_notice(cfg: Config) -> str | None:
         for role in cfg.models
         if cfg.models[role].api_key and cfg.provenance.get(f"model.{role}.api_key") == "project"
     )
-    if not roles:
+    # `[telemetry] secret_key` is the same exposure in a different section
+    # (OPEN-110): a Langfuse secret key in the file README tells users to
+    # commit is one `git add` from a public repository, exactly as a model
+    # key is. One notice rather than two, because the remedy is identical
+    # and a user who sees the first and not the second will move one key.
+    telemetry_key = bool(
+        getattr(getattr(cfg, "telemetry", None), "secret_key", None)
+        and cfg.provenance.get("telemetry.secret_key") == "project"
+    )
+    if not roles and not telemetry_key:
         return None
+
+    named = []
+    if roles:
+        named.append(f"api_key ({', '.join(roles)})")
+    if telemetry_key:
+        named.append("[telemetry] secret_key")
     return (
-        f"An api_key is set in this project's .rudra/config.toml "
-        f"({', '.join(roles)}). That file is documented as safe to commit, so the "
+        f"A credential is set in this project's .rudra/config.toml: "
+        f"{' and '.join(named)}. That file is documented as safe to commit, so the "
         f"key would be committed with it. Move it to ~/.config/rudra/config.toml, "
-        f"or use api_key_env to name an environment variable instead."
+        f"or name an environment variable instead (api_key_env / secret_key_env)."
     )
 
 
@@ -548,6 +643,7 @@ def build_config(
         skills=_build_skills(merged),
         mcp=_build_mcp(merged),
         memory=_build_memory(merged),
+        telemetry=_build_telemetry(merged),
         models=_build_models(merged),
         provenance=provenance,
         sources=sources,

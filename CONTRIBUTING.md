@@ -33,9 +33,11 @@ cannot be acted on at all:
    Rudra behaviour, and this is what distinguishes them.
 3. **The exact command**, including flags, and the permission mode. `--auto`
    and `ask` behave differently on purpose.
-4. **The run record.** Re-run with `--debug` and attach
-   `.rudra/run/logs/debug.jsonl`, or give the run id from `rudra log` and
-   attach `.rudra/run/transcripts/<id>.jsonl`.
+4. **The run record.** It already exists — every run writes one, no flag
+   needed. Attach `.rudra/run/logs/`, which holds `debug-<run-id>.jsonl`,
+   `meta.json` (versions, platform, permission mode, models — no keys),
+   `usage.json`, `verify.log` and `permissions.jsonl`. Give the run id from
+   `rudra log` if you have it.
 
 > **Check the attachment before you post it.** Both files record tool
 > arguments and command strings. Payloads are redacted where trace events are

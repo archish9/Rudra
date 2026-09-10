@@ -831,6 +831,7 @@ async def _stream_planner_turn(
     console: Console,
     trace: Any = None,
     usage: Any = None,
+    telemetry: Any = None,
 ) -> bool:
     """Stream one planner turn. Returns False if a guard halted it.
 
@@ -861,7 +862,13 @@ async def _stream_planner_turn(
     `trace` is optional because consult_planner's callers built no sink
     before Step 15a and its tests still do not.
     """
-    lg_config = {"configurable": {"thread_id": thread_id}}
+    lg_config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+    if telemetry is not None:
+        # The callbacks langgraph propagates into every subgraph, plus the
+        # metadata that puts this stage in the run's one Langfuse trace
+        # (OPEN-110). Merged rather than assigned, so `configurable` above
+        # keeps the thread id the checkpointer needs.
+        lg_config.update(telemetry.config("planner"))
     # One counter per subgraph namespace, not one for the turn (A1.20).
     seen: dict[tuple[str, ...], int] = {}
     state = StreamState(role="planner")
@@ -1012,6 +1019,7 @@ async def consult_planner(
     session_id: str,
     trace: Any = None,
     usage: Any = None,
+    telemetry: Any = None,
 ) -> None:
     """Ask one planning stage to do its job. It mutates state via tools.
 
@@ -1135,4 +1143,5 @@ async def consult_planner(
         console=console,
         trace=trace,
         usage=usage,
+        telemetry=telemetry,
     )

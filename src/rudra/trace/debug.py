@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from rudra.trace.events import TraceEvent
+from rudra.trace.redact import redact
 
 LOGGER_NAME = "rudra"
 """The tree this attaches to. Rudra's own modules and nothing else."""
@@ -116,8 +117,17 @@ class _JsonLines(logging.Formatter):
         # exc_info=True and this dropped it, so the line a user attached to
         # a bug report -- as the troubleshooting docs ask -- carried the
         # message and none of the diagnosis (CR-G8).
+        #
+        # REDACTED, since OPEN-109. A traceback's last line is the
+        # exception's own message, and a provider's exception carries
+        # whatever it was given -- a base_url with a key in the query
+        # string, an echoed request body. Every other writer of this file
+        # redacts where the record is BUILT (A1.95, `trace/redact.py`), and
+        # this was the one payload reaching it raw: measured, an exception
+        # reading `api_key=sk-...` was redacted in `error_detail` and
+        # printed in full three lines below it.
         if record.exc_info and "traceback" not in payload:
-            payload = {**payload, "traceback": self.formatException(record.exc_info)}
+            payload = {**payload, "traceback": redact(self.formatException(record.exc_info))}
         return json.dumps(payload)
 
 
