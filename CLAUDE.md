@@ -1,10 +1,15 @@
 # CLAUDE.md — Rudra
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **Three are open as of 2026-09-09:
-OPEN-103, OPEN-104 and OPEN-105**, all filed by the live run `f845b496a2aa`
-that day. OPEN-99 … OPEN-102 and the whole 2026-09-04 board — OPEN-93 …
-OPEN-98 — closed the same day; each has a self-contained document under
+is the live ledger of what is open. **Seven are open as of 2026-09-14:
+OPEN-103, OPEN-104 and OPEN-105**, filed by the live run `f845b496a2aa` on
+2026-09-09, **and OPEN-114 … OPEN-117**, filed on 2026-09-14 from run
+`8f160d92c6da` beside OPEN-113, which closed that day. **OPEN-117 is a security
+item** — any agent can read `.rudra/config.toml` and the `api_key` in it — and
+is first on that board. Every one of the four has a plan under
+`docs/superpowers/plans/2026-09-14-open-11*.md`.
+OPEN-99 … OPEN-102 and the whole 2026-09-04 board — OPEN-93 …
+OPEN-98 — closed on 2026-09-09; each has a self-contained document under
 `docs/superpowers/plans/`, carrying a closing section saying what shipped and
 where it deviated from the plan. Trust `grep -n PENDING TODO.md` over any
 heading, including this sentence.
