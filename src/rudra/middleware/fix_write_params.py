@@ -7,8 +7,8 @@ Fixes applied (in order):
 4. Sandbox prefix stripping: removes known LLM-hallucinated path prefixes
    (/testbed/, /workspace/, /home/user/, etc.) from all file tool paths
 
-It also REFUSES two calls rather than repairing them, both on the SHAPE of
-the content rather than on the path:
+It also REFUSES three calls rather than repairing them, the first two on the
+SHAPE of the content rather than on the path, and the third on both:
 
 * a write whose only purpose is to bring a directory into being (OPEN-22).
   There is nothing to repair there -- the model wants a directory and
@@ -18,6 +18,10 @@ the content rather than on the path:
   (OPEN-97). Refused and not repaired for the same reason, and refused
   rather than annotated because a note arrives after the bytes are already
   on disk and the bytes are the damage.
+* a write of a file at the project root whose name and one-sentence content
+  both say "finished" -- `COMPLETION`, `DONE`, `task_complete.txt`
+  (OPEN-104). OPEN-42's reflex, measured again four runs later, and out of
+  the second rule's reach because that rule needs a known suffix.
 
 Neither rewrites content. Both are held to `_is_directory_placeholder`'s
 bar: a content rule must not be able to fire on something a person would
@@ -28,13 +32,14 @@ from __future__ import annotations
 
 import logging
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from rudra.compat.path_constants import SANDBOX_PREFIXES
+from rudra.compat.virtual_paths import virtual_to_relative
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +252,114 @@ def _is_prose_not_content(path: str, content: object) -> bool:
     return len(body.split()) >= _PROSE_MIN_WORDS and body[0].isupper() and body[-1] in ".!?"
 
 
+COMPLETION_FILE_NOTICE = "completion-file"
+"""The `name` on the NOTICE, and what a maintainer greps `debug-<id>.jsonl`
+for. One spelling, as a module constant (`CLAUDE.md` §8a)."""
+
+# Words a completion marker's NAME is built from. A name qualifies when every
+# word in it is from `_MARKER_WORDS` and at least one is from
+# `_COMPLETION_WORDS` -- `DONE`, `COMPLETION`, `task_complete`, `ALL_DONE`,
+# `tasks-completed`. A category read off the name rather than a list of names
+# seen so far, for OPEN-42 §10's reason: the model invents the name, and run7's
+# `DONE` would not have covered this run's `COMPLETION`.
+_COMPLETION_WORDS = frozenset(
+    {"done", "complete", "completed", "completion", "finish", "finished", "success", "succeeded"}
+)
+_MARKER_WORDS = _COMPLETION_WORDS | {"task", "tasks", "all", "work", "job"}
+
+# The suffixes a marker has been written with: none (`DONE`, `COMPLETION`) and
+# the two a model reaches for when it wants a "text file" (`task_complete.txt`).
+# Anything else declines -- `done.py` and `completion.sh` are code.
+_MARKER_SUFFIXES = frozenset({"", ".txt", ".md"})
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])")
+_NAME_WORD_SEPARATORS = re.compile(r"[_\-.\s]+")
+
+_COMPLETION_FILE = (
+    "REJECTED: `{path}` would be a file whose only content says the work is "
+    "finished. Nothing was written.\n\n"
+    "A file announces nothing: it stays in the user's project as though they "
+    "had asked for it, and your turn is not over. If you are finished, reply "
+    "with one or two lines saying what you did and call no tool -- that is "
+    "what ends your turn, and your reply is the only thing the caller sees."
+)
+
+
+def _is_completion_name(name: str) -> bool:
+    """Is this file NAME built only of completion-marker words?"""
+    if not name or name.startswith("."):
+        return False
+    pure = PurePosixPath(name)
+    if pure.suffix.lower() not in _MARKER_SUFFIXES:
+        return False
+    stem = _CAMEL_BOUNDARY.sub("_", pure.stem if pure.suffix else name)
+    words = {word for word in _NAME_WORD_SEPARATORS.split(stem.lower()) if word}
+    return bool(words) and words <= _MARKER_WORDS and bool(words & _COMPLETION_WORDS)
+
+
+def _root_level_name(path: str, project_root: Path | None) -> str | None:
+    """The file name `path` writes, when that file is at the project root.
+
+    With a root, the answer is `virtual_to_relative`'s -- the one authority on
+    which real file a spelling names (CR-B4) -- so the host spelling run
+    `f845b496a2aa` used, `/private/tmp/<project>/COMPLETION`, is placed where
+    the backend put it. Without one only a single-segment spelling can be
+    placed at all, so anything longer declines: the degraded mode is the old
+    accepting one, never a wider refusal.
+    """
+    if project_root is not None:
+        relative = virtual_to_relative(path, project_root)
+    else:
+        relative = path.replace("\\", "/").lstrip("/")
+    if not relative:
+        return None
+    relative = relative.rstrip("/")
+    if not relative or "/" in relative:
+        return None
+    return relative
+
+
+def _is_completion_announcement(path: str, content: object, project_root: Path | None) -> bool:
+    """Is this a file written only to say the work is finished?
+
+    Held to `_is_directory_placeholder`'s bar: it must not be able to fire on
+    something a person would write by hand. Three conditions, all required.
+
+    * **The name is a completion marker** -- every word in it one of
+      `_MARKER_WORDS`, at least one a completion word, suffix none, `.txt` or
+      `.md`, not a dotfile. `Makefile`, `LICENSE`, `NOTICE`, `CHANGELOG` and
+      `.gitignore` carry no such word; `STATUS.md` and `TODO.md` neither.
+    * **It is at the project root.** `build/COMPLETE` is somebody's artefact.
+    * **The content is one short sentence-shaped announcement** -- at most
+      1,000 characters and three lines, two or more words, opening with a
+      capital and closing on ".", "!" or "?", no template marker. A build
+      stamp holding nothing, a timestamp, a digest or JSON declines, and so
+      does a one-line `complete -F` shell completion script.
+
+    Not OPEN-97's predicate, deliberately: that one needs a suffix from its
+    closed table and eight words, and the first measured write here is
+    "All tasks complete." -- three words, no suffix.
+
+    The measured shape (OPEN-104, run `f845b496a2aa`): `COMPLETION` at the
+    project root, written twice -- "All tasks complete." then "Task t2
+    complete: database.py implemented with SQLite CRUD operations ..." --
+    and before it run7's `/DONE` and `/task_complete.txt` (OPEN-42).
+    """
+    if not isinstance(content, str) or not isinstance(path, str):
+        return False
+    name = _root_level_name(path, project_root)
+    if name is None or not _is_completion_name(name):
+        return False
+    body = content.strip()
+    if not body or len(body) > _PROSE_MAX_CHARS:
+        return False
+    if len(body.splitlines()) > _PROSE_MAX_LINES:
+        return False
+    if any(marker in body for marker in _TEMPLATE_MARKERS):
+        return False
+    return len(body.split()) >= 2 and body[0].isupper() and body[-1] in ".!?"
+
+
 class FixWriteParamsMiddleware(AgentMiddleware):
     """Auto-correct file tool parameters: rename args, clean paths, strip fences.
 
@@ -274,16 +387,21 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         role: str | None = None,
         usage: Any = None,
         trace: Any = None,
+        project_path: Path | None = None,
     ) -> None:
         super().__init__()
         self.strip_sandbox_prefixes = strip_sandbox_prefixes
         # All three default to None for GutterIndentMiddleware's reason
         # (OPEN-92): this middleware is constructed by compat tests and by
         # callers outside a full run, and a stack that reported nowhere must
-        # still fix parameters. Only the OPEN-97 refusal reads them.
+        # still fix parameters. Only the OPEN-97 and OPEN-104 refusals read
+        # them.
         self.role = role
         self.usage = usage
         self.trace = trace
+        # Only the OPEN-104 refusal reads it, to place a host-spelled path at
+        # the project root. None narrows that rule; it never widens it.
+        self.project_path = project_path
 
     def _fix_args(self, request):
         name = request.tool_call.get("name")
@@ -356,12 +474,37 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         except Exception:  # noqa: BLE001 - same rule
             logger.debug("prose write refusal not announced", exc_info=True)
 
+    def _announce_completion(self, path: str) -> None:
+        """Say that a completion-marker write was refused (CLAUDE.md 8a).
+
+        `_announce_prose`'s reason exactly: the file never reaches disk, so
+        nothing else in the run records that the model tried. Swallows its
+        own failure for the same rule.
+        """
+        role = self.role or "agent"
+        try:
+            if self.usage is not None:
+                self.usage.record_completion_file_refused(role)
+        except Exception:  # noqa: BLE001 - bookkeeping may never end a run
+            logger.debug("completion file refusal not counted", exc_info=True)
+        try:
+            if self.trace is not None:
+                self.trace.notice(
+                    f"refused a write to {path}: its only content announces that "
+                    "the work is finished, so nothing was written",
+                    role=role,
+                    name=COMPLETION_FILE_NOTICE,
+                )
+        except Exception:  # noqa: BLE001 - same rule
+            logger.debug("completion file refusal not announced", exc_info=True)
+
     def _refusal(self, request):
         """A ToolMessage refusing this write on the shape of its content, or None.
 
-        TWO independent rules, neither of which can fire on the other's
-        shape: `_is_directory_placeholder` wants a suffix-less path, and
-        `_is_prose_not_content` wants a suffix in a closed table.
+        THREE independent rules, none of which can fire on another's shape:
+        `_is_directory_placeholder` wants `#` comments, `_is_prose_not_content`
+        wants a suffix in its closed table, and `_is_completion_announcement`
+        wants a sentence under a marker name with no suffix, `.txt` or `.md`.
 
         Both lead with `REJECTED:` and neither with `Error:`, deliberately:
         `trace/stream.py::looks_like_error` counts a leading `Error:` and
@@ -382,6 +525,9 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         elif _is_prose_not_content(path, content):
             text = _PROSE_NOT_CONTENT.format(path=path, suffix=_suffix_of(path))
             self._announce_prose(path)
+        elif _is_completion_announcement(path, content, self.project_path):
+            text = _COMPLETION_FILE.format(path=path)
+            self._announce_completion(path)
         else:
             return None
 

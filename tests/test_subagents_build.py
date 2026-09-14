@@ -1128,6 +1128,18 @@ def test_every_subagent_param_fixer_can_report_a_refused_prose_write(name, conte
 
 
 @pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_param_fixer_knows_the_project_root(name, context):
+    # OPEN-104. Run f845b496a2aa's coder spelled its completion file with the
+    # HOST path, `/private/tmp/<project>/COMPLETION`, so "is this at the
+    # project root" has no answer without the root -- and with none the rule
+    # declines that spelling, which is exactly the write it exists for.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    fixer = next(m for m in middleware if type(m).__name__ == "FixWriteParamsMiddleware")
+
+    assert fixer.project_path == context.project_path
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
 def test_a_subagent_param_fixer_still_builds_with_no_run_around_it(name, context):
     # The context fixture carries neither, as every 9b-era stand-in does,
     # and the refusal must go on refusing without them -- counting is the

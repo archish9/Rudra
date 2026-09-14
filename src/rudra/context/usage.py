@@ -194,6 +194,17 @@ class RoleUsage:
     # the unrouted echo came back 17 times and killed 3 of 4 coder
     # invocations, 487.5 s of the coder's 1565.8 s.
     tool_routes_answered: int = 0
+    # Writes refused for being a file whose only content announces that the
+    # work is finished -- `COMPLETION`, `DONE`, `task_complete.txt` at the
+    # project root (OPEN-104, FixWriteParamsMiddleware). Writer roles only.
+    #
+    # Read it beside tool_routes_answered: both measure a model reaching for a
+    # completion signal other than stopping, one as a tool and one as a file.
+    # A false positive here is a REFUSED REAL WRITE, so the paired
+    # `completion-file` notice names the path -- check the first one by eye.
+    # In run `f845b496a2aa` the unrefused file reached the user's project
+    # root twice and nothing counted it.
+    completion_files_refused: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -457,6 +468,16 @@ class RunUsage:
         """
         self._slot(role).tool_routes_answered += 1
 
+    def record_completion_file_refused(self, role: str) -> None:
+        """One write refused for announcing completion instead of being a file.
+
+        Mirrors record_write_rejected_as_prose: both count bytes that never
+        reached disk, and neither leaves a mark on calls, seconds or tokens.
+        That one's prose was aimed at a deliverable; this one's at a file the
+        task never asked for (OPEN-104).
+        """
+        self._slot(role).completion_files_refused += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -539,6 +560,7 @@ class RunUsage:
                 "planner_halts": tally.planner_halts,
                 "planner_writes_refused": tally.planner_writes_refused,
                 "tool_routes_answered": tally.tool_routes_answered,
+                "completion_files_refused": tally.completion_files_refused,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

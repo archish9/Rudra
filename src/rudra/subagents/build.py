@@ -260,6 +260,8 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             role=spec.role,
             usage=getattr(context, "usage", None),
             trace=getattr(context, "trace", None),
+            # OPEN-104: places a host-spelled completion file at the root.
+            project_path=getattr(context, "project_path", None),
         ),
         # OPEN-41. Outermost of the MODEL-call wrappers, which is the only
         # thing its position decides -- it implements the model-call hooks

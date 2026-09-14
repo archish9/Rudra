@@ -431,3 +431,221 @@ def test_bookkeeping_failure_never_reaches_the_caller():
     )
     result = middleware.wrap_tool_call(request, lambda _req: "unreachable")
     assert result.content.startswith("REJECTED:")
+
+
+# ---------------------------------------------------------------------------
+# OPEN-104: a file written to ANNOUNCE that the work is finished.
+#
+# Run `f845b496a2aa`: the coder wrote `COMPLETION` into the project root
+# twice, spelled with the host path -- "All tasks complete." at=121.7, then
+# "Task t2 complete: database.py implemented ..." at=176.1 -- and
+# `write_file` answered "Updated file /COMPLETION" both times. OPEN-42's run7
+# wrote `/DONE` and `/task_complete.txt` eleven times. Neither content rule
+# above can see either: the placeholder rule wants comments, and the prose
+# rule wants a suffix from its closed table and eight words, while the first
+# measured write is three.
+#
+# As with OPEN-97, the must-NOT-refuse half is the important half.
+
+MEASURED_ROOT = "/private/tmp/rudra-verify-a-20260909-182903"
+MEASURED_COMPLETIONS = (
+    "All tasks complete.",
+    "Task t2 complete: database.py implemented with SQLite CRUD operations for "
+    "Todo items (create, read, update, delete).",
+)
+
+
+def _announces(path: str, content: object, root: str | None = MEASURED_ROOT) -> bool:
+    from pathlib import Path
+
+    from rudra.middleware.fix_write_params import _is_completion_announcement
+
+    return _is_completion_announcement(path, content, Path(root) if root else None)
+
+
+def _completion_call(path: str, content: str, *, root: str | None = MEASURED_ROOT, **kwargs):
+    from pathlib import Path
+
+    reached: list[bool] = []
+    request = SimpleNamespace(
+        tool_call={
+            "name": "write_file",
+            "args": {"file_path": path, "content": content},
+            "id": "c1",
+        }
+    )
+    middleware = FixWriteParamsMiddleware(project_path=Path(root) if root else None, **kwargs)
+    result = middleware.wrap_tool_call(request, lambda _req: reached.append(True) or "Updated file")
+    return result, reached
+
+
+def test_a_completion_file_at_the_root_is_refused():
+    """The regression pin: run `f845b496a2aa`'s two writes, verbatim."""
+    for content in MEASURED_COMPLETIONS:
+        result, reached = _completion_call(f"{MEASURED_ROOT}/COMPLETION", content)
+
+        assert reached == [], content
+        assert result.status == "error"
+        assert result.content.startswith("REJECTED:")
+        # It must name the channel the model actually wanted, or it retries.
+        assert "reply" in result.content.lower()
+        assert "call no tool" in result.content
+
+
+def test_open_42s_markers_are_refused_too():
+    """Run7's names, four runs earlier, in the virtual spelling it used."""
+    sentence = "Task t5 completed: JSON validation fixed in Flask todo backend."
+    assert _announces("/DONE", sentence)
+    assert _announces("/task_complete.txt", sentence)
+
+
+def test_the_marker_is_a_category_not_one_runs_spelling():
+    """OPEN-42 §10: the model invents the name, so a list of names seen so
+    far would not cover the next one. The NAME is read as words."""
+    sentence = "All tasks are complete."
+    for name in (
+        "COMPLETE.md",
+        "ALL_DONE",
+        "tasks-completed.txt",
+        "FINISHED",
+        "SUCCESS",
+        "Task_Done.md",
+        "completion.txt",
+    ):
+        assert _announces(name, sentence), name
+
+
+def test_a_makefile_is_not_refused():
+    """The pin against over-widening, and the one that matters: suffix-less
+    and root-level files a person writes by hand, each with a sentence in
+    it, every one a REFUSED REAL WRITE if this fired."""
+    sentence = "Build the project before running the tests."
+    for name in (
+        "Makefile",
+        "Dockerfile",
+        "LICENSE",
+        "NOTICE",
+        "CHANGELOG",
+        "Procfile",
+        "CODEOWNERS",
+        "Jenkinsfile",
+        ".gitignore",
+        "README.md",
+        "TODO.md",
+        "STATUS.md",
+        "done.py",
+        "completion.sh",
+        "success_page.html",
+    ):
+        assert not _announces(name, sentence), name
+        assert not _announces(f"/{name}", sentence), name
+        assert not _announces(f"{MEASURED_ROOT}/{name}", sentence), name
+
+
+def test_a_completion_name_with_real_content_is_not_refused():
+    """Both conditions are required. A `COMPLETE` stamp file is a real build
+    artefact, and what it holds is not a sentence."""
+    for content in (
+        "",
+        "1",
+        '{"status": "ok"}',
+        "2026-09-14T10:00:00Z",
+        "complete -F _rudra rudra",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "{{ build_status }}",
+        "Done.",
+    ):
+        assert not _announces("COMPLETE", content), content
+    four_lines = "Build finished.\nAll stages passed.\nArtifacts uploaded.\nSee the log."
+    assert not _announces("DONE.md", four_lines)
+    assert not _announces("DONE", "Task complete. " * 100)
+    assert not _announces("DONE", ["Task complete."])
+
+
+def test_a_completion_name_outside_the_root_is_not_refused():
+    """`build/COMPLETE` is somebody's artefact, whatever it says."""
+    sentence = "Build complete."
+    assert not _announces("build/COMPLETE", sentence)
+    assert not _announces("/build/COMPLETE", sentence)
+    assert not _announces(f"{MEASURED_ROOT}/build/DONE", sentence)
+    assert not _announces("/src/done.txt", sentence)
+
+
+def test_without_a_project_root_only_a_single_segment_is_judged():
+    """With no root the host spelling cannot be placed, so it declines --
+    the degraded mode is the old accepting one, never a wider refusal."""
+    sentence = "All tasks complete."
+    assert _announces("/COMPLETION", sentence, root=None)
+    assert _announces("COMPLETION", sentence, root=None)
+    assert not _announces(f"{MEASURED_ROOT}/COMPLETION", sentence, root=None)
+
+
+def test_the_completion_refusal_is_counted_as_a_tool_failure():
+    """Pinned against the counter itself, not the text.
+
+    The plan (§7.1.5) asked for the opposite, inheriting a claim OPEN-118
+    shows is false for every `REJECTED:` refusal: `message_is_error` answers
+    from `status="error"` before it reads a word. Kept counted on purpose --
+    the owner's OPEN-103 decision: a coder halt still runs the gate, while an
+    uncounted refusal a model ignores is bounded only by 80 calls.
+    """
+    from rudra.trace.stream import is_rudra_refusal, message_is_error
+
+    result, _ = _completion_call("/COMPLETION", MEASURED_COMPLETIONS[0])
+
+    assert message_is_error(result) is True
+    assert is_rudra_refusal(result) is False
+
+
+def test_a_refused_completion_file_is_counted_and_announced():
+    """CLAUDE.md §8a: bytes that never reach disk leave no other mark."""
+    from rudra.middleware.fix_write_params import COMPLETION_FILE_NOTICE
+
+    counted: list[str] = []
+    notices: list[dict] = []
+    usage = SimpleNamespace(record_completion_file_refused=counted.append)
+    trace = SimpleNamespace(
+        notice=lambda message, role=None, name=None: notices.append(
+            {"message": message, "role": role, "name": name}
+        )
+    )
+    _completion_call(
+        f"{MEASURED_ROOT}/COMPLETION",
+        MEASURED_COMPLETIONS[1],
+        role="coder",
+        usage=usage,
+        trace=trace,
+    )
+
+    assert COMPLETION_FILE_NOTICE == "completion-file"
+    assert counted == ["coder"]
+    assert len(notices) == 1
+    assert notices[0]["name"] == COMPLETION_FILE_NOTICE
+    assert notices[0]["role"] == "coder"
+    # A false positive is a REFUSED REAL WRITE: the path, visible by eye.
+    assert "COMPLETION" in notices[0]["message"]
+
+
+def test_a_completion_bookkeeping_failure_never_reaches_the_caller():
+    def boom(*_a, **_k):
+        raise RuntimeError("no")
+
+    result, reached = _completion_call(
+        "/DONE",
+        MEASURED_COMPLETIONS[0],
+        role="coder",
+        usage=SimpleNamespace(record_completion_file_refused=boom),
+        trace=SimpleNamespace(notice=boom),
+    )
+    assert reached == []
+    assert result.content.startswith("REJECTED:")
+
+
+def test_the_three_content_rules_do_not_shadow_each_other():
+    """Each fires on its own shape and neither of the others does."""
+    measured = MEASURED_COMPLETIONS[0]
+    assert _announces("/COMPLETION", measured) is True
+    assert _is_directory_placeholder("/COMPLETION", measured) is False
+    assert _is_prose_not_content("/COMPLETION", measured) is False
+    assert _announces("src/iphone15.html", PROSE) is False
+    assert _announces("tests", "# placeholder") is False

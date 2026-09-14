@@ -87,6 +87,9 @@ def test_sync_hook_records_the_reported_counts():
         # Added by OPEN-103, zero for the same reason as OPEN-99's line: a
         # routed call is a TOOL call ToolRouteMiddleware answered.
         "tool_routes_answered": 0,
+        # Added by OPEN-104, zero for that reason again: a refused completion
+        # file is a TOOL call FixWriteParamsMiddleware answered.
+        "completion_files_refused": 0,
     }
     assert result.result[0].content == "hi"
 
