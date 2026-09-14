@@ -37,6 +37,7 @@ from rich.markup import escape
 from rudra.config import get_config
 from rudra.context.budget import evict_limit, recall_limit
 from rudra.context.middleware import UsageMiddleware
+from rudra.context.usage import model_time_of, model_wait_note
 from rudra.facts import facts_block
 from rudra.filesystem import project_tree
 from rudra.llm import build_model
@@ -299,6 +300,7 @@ def build_planner_middleware(
     trace: Any = None,
     project_path: Any = None,
     stage_tools: tuple[str, ...] = (),
+    console: Any = None,
 ) -> list:
     """The planner's middleware stack, with both D4 workarounds gated.
 
@@ -450,7 +452,9 @@ def build_planner_middleware(
         # AGENTS.md, which is what OPEN-66 tried.
         middleware.append(build_memory_middleware(backend))
     if usage is not None:
-        middleware.append(UsageMiddleware("planner", usage))
+        # `console` so a call slow enough to explain a wait says so as it
+        # finishes (OPEN-113).
+        middleware.append(UsageMiddleware("planner", usage, console=console))
     if compat_task_anchor:
         middleware.append(TaskAnchorMiddleware(task))
     return middleware
@@ -609,6 +613,7 @@ def create_planner_agent(
         # a stage's tools would eventually disagree, which is the whole of
         # _tools_for_stage's own argument.
         stage_tools=tuple(getattr(tool, "name", "") for tool in custom_tools),
+        console=console,
     )
     if gate is not None:
         # First in the list: a denied call must be stopped before any other
@@ -822,6 +827,56 @@ def _announce_halt(reason: str, *, console: Console, trace: Any, usage: Any) -> 
         logger.debug("planner halt not announced", exc_info=True)
 
 
+def _unrun_tool_calls(chunk: Any, seen: dict[tuple[str, ...], int]) -> list[str]:
+    """Tool names in the part of `chunk` this stage has not processed yet.
+
+    The time bound reads the clock when a chunk arrives -- right after a
+    model call returned and before the tool node runs -- so these are calls
+    the model asked for that the halt will stop from executing (OPEN-114).
+    """
+    namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+    messages = event.get("messages", []) if isinstance(event, dict) else []
+    fresh = messages[seen.get(tuple(namespace or ()), 0) :]
+    return [
+        call.get("name", "")
+        for message in fresh
+        if type(message).__name__ == "AIMessage"
+        for call in getattr(message, "tool_calls", None) or []
+    ]
+
+
+def _time_halt_detail(
+    chunk: Any,
+    seen: dict[tuple[str, ...], int],
+    usage: Any,
+    model_before: tuple[int, float] | None,
+    elapsed: float,
+) -> str:
+    """What a planner time halt adds to its own sentence (OPEN-113).
+
+    Run `8f160d92c6da` printed `1888s in one planner stage, over the 1200s
+    limit -- stopping after 3 tool calls.` and nothing more, for a stage
+    that was 99.98% planner-model latency and whose last answer -- a
+    `record_fact` it had waited 218 s for -- the halt then discarded. Both
+    facts were in hand at the moment of the halt. Each half is omitted when
+    it cannot be stated, and neither can raise into the guard.
+    """
+    parts: list[str] = []
+    wait = model_wait_note(usage, "planner", model_before, elapsed)
+    if wait:
+        parts.append(wait)
+    try:
+        dropped = _unrun_tool_calls(chunk, seen)
+    except Exception:  # noqa: BLE001 - a diagnostic must not disarm a guard
+        dropped = []
+    if dropped:
+        parts.append(
+            f"The answer that arrived past the limit asked for {', '.join(dropped)}, "
+            "which will not run."
+        )
+    return "".join(f" {part}" for part in parts)
+
+
 async def _stream_planner_turn(
     agent: Any,
     message: str,
@@ -877,6 +932,9 @@ async def _stream_planner_turn(
     total_calls = 0
     started = time.monotonic()
     time_limit = _stage_time_limit()
+    # What the planner model had cost before this stage began, so a time halt
+    # can say how much of the stage was spent waiting on it (OPEN-113).
+    model_before = model_time_of(usage, "planner")
     _halt = False
 
     def halt(reason: str) -> None:
@@ -915,6 +973,7 @@ async def _stream_planner_turn(
             halt(
                 f"{elapsed:.0f}s in one planner stage, over the {time_limit:.0f}s "
                 f"limit -- stopping after {total_calls} tool calls."
+                + _time_halt_detail(chunk, seen, usage, model_before, elapsed)
             )
             break
 

@@ -32,13 +32,19 @@ from pathlib import Path
 import pytest
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
+from rich.console import Console
 
-from rudra.context.middleware import MODEL_CALL_KIND, UsageMiddleware, log_model_call
-from rudra.context.usage import RunUsage
+from rudra.context.middleware import (
+    MODEL_CALL_KIND,
+    SLOW_CALL_SECONDS,
+    UsageMiddleware,
+    log_model_call,
+)
+from rudra.context.usage import RunUsage, model_time_of, model_wait_note
 from rudra.loop.engine import flush_usage
 from rudra.subagents import runner as runner_module
 from rudra.subagents.runner import SUBAGENT_KIND, TOP_TOOLS, log_invocation
-from rudra.trace.debug import configure_debug_logging
+from rudra.trace.debug import TRANSPORT_LOGGER, configure_debug_logging
 
 
 @pytest.fixture
@@ -412,3 +418,184 @@ async def test_a_time_halt_reaches_the_invocation_log_too(monkeypatch, invocatio
     # carries it: "it stopped" is not "why".
     assert record["tool_calls"] >= 1
     assert record["tools"] == {"glob": record["tool_calls"]}
+
+
+# --- OPEN-113: a slow run says where the time went ---------------------------
+#
+# Run `8f160d92c6da`: 4089.7 s, of which 4088.0 s was eleven planner model
+# calls averaging 371.6 s. The console printed two time halts that did not say
+# so, and the debug log could not say whether its 733.7 s call was one HTTP
+# attempt or three.
+
+
+def _slow_response(output_tokens: int, model: str = "nvidia/nemotron-3-ultra-550b-a55b"):
+    message = AIMessage(
+        content="",
+        usage_metadata=_meta(3621, output_tokens),
+        response_metadata={"model_name": model},
+    )
+    return ModelResponse(result=[message])
+
+
+def _recording_console() -> Console:
+    return Console(record=True, width=400)
+
+
+def test_a_slow_model_call_is_printed_as_it_finishes():
+    """The token counts are the diagnosis: 73 output tokens in 444 s is a
+    request waiting at the provider, not a model writing."""
+    console = _recording_console()
+    middleware = UsageMiddleware("planner", RunUsage(), console=console)
+
+    middleware._record(_slow_response(73), 443.63)
+
+    text = console.export_text()
+    assert "slow model call: the planner model took 444s" in text
+    assert "3,621 input / 73 output tokens" in text
+    assert "(nvidia/nemotron-3-ultra-550b-a55b)" in text
+
+
+def test_a_fast_model_call_prints_nothing():
+    console = _recording_console()
+    middleware = UsageMiddleware("planner", RunUsage(), console=console)
+
+    middleware._record(_slow_response(73), SLOW_CALL_SECONDS - 1)
+
+    assert console.export_text() == ""
+
+
+def test_a_slow_failure_names_what_the_provider_returned():
+    """The retry NOTICE renders at VERBOSE only, so the run's 500 after
+    733.7 s never reached the user's console."""
+
+    class InternalServerError(Exception):
+        status_code = 500
+
+    console = _recording_console()
+    middleware = UsageMiddleware("planner", RunUsage(), console=console)
+
+    middleware._record_failure(733.71, "InternalServerError", InternalServerError("boom"))
+
+    assert "failed after 734s with InternalServerError (500)" in console.export_text()
+
+
+def test_a_cancelled_call_is_not_reported_as_slow():
+    """Ctrl-C is the user's act; blaming the provider for it would be false."""
+    console = _recording_console()
+    middleware = UsageMiddleware("planner", RunUsage(), console=console)
+
+    middleware._record_failure(135.85, "CancelledError", asyncio.CancelledError())
+
+    assert console.export_text() == ""
+
+
+def test_without_a_console_a_slow_call_is_still_logged(captured):
+    middleware = UsageMiddleware("planner", RunUsage())
+
+    middleware._record(_slow_response(73), 443.63)
+
+    assert _lines(captured, MODEL_CALL_KIND)[0]["seconds"] == 443.63
+
+
+def test_the_wait_note_says_when_the_time_was_model_latency():
+    """Clarify's five calls, as measured."""
+    usage = RunUsage()
+    before = model_time_of(usage, "planner")
+    for seconds in (248.07, 443.63, 244.04, 733.71, 218.11):
+        usage.record("planner", input_tokens=None, output_tokens=None, seconds=seconds)
+
+    note = model_wait_note(usage, "planner", before, 1888.0)
+
+    assert note.startswith("1888s of it (100%) was the planner model answering 5 calls, 378s each")
+    assert note.endswith("-- the time went to model latency, not to tool work.")
+
+
+def test_the_wait_note_does_not_blame_the_provider_for_tool_time():
+    usage = RunUsage()
+    before = model_time_of(usage, "coder")
+    usage.record("coder", input_tokens=None, output_tokens=None, seconds=300.0)
+
+    note = model_wait_note(usage, "coder", before, 1200.0)
+
+    assert "(25%)" in note
+    assert "latency" not in note
+
+
+def test_the_wait_note_counts_only_the_span_it_was_given():
+    """An earlier stage's calls are not this stage's."""
+    usage = RunUsage()
+    usage.record("planner", input_tokens=None, output_tokens=None, seconds=5000.0)
+    before = model_time_of(usage, "planner")
+    usage.record("planner", input_tokens=None, output_tokens=None, seconds=100.0)
+
+    note = model_wait_note(usage, "planner", before, 1200.0)
+
+    assert "answering 1 call, 100s each" in note
+
+
+@pytest.mark.parametrize("usage, before", [(None, (0, 0.0)), (RunUsage(), None)])
+def test_the_wait_note_is_empty_when_nothing_was_counting(usage, before):
+    assert model_wait_note(usage, "planner", before, 1200.0) == ""
+
+
+def test_model_time_creates_no_role():
+    """Asking must not add an empty role block to usage.json."""
+    usage = RunUsage()
+
+    assert usage.model_time("tester") == (0, 0.0)
+    assert "tester" not in usage.as_dict()
+
+
+def _transport_lines(path: Path) -> list[dict]:
+    return [line for line in _lines(path, "log") if line.get("logger") == TRANSPORT_LOGGER]
+
+
+def test_a_client_side_retry_reaches_the_run_log(captured):
+    """The openai SDK re-issues a 5xx by itself (`max_retries` defaults to 2)
+    and logs it to a logger outside the `rudra` tree."""
+    logging.getLogger("openai._base_client").info(
+        "Retrying request to %s in %f seconds", "/chat/completions", 0.4
+    )
+    logging.getLogger("httpx").info(
+        'HTTP Request: %s %s "%s %d %s"',
+        "POST",
+        "https://integrate.api.nvidia.com/v1/chat/completions",
+        "HTTP/1.1",
+        500,
+        "Internal Server Error",
+    )
+
+    lines = _transport_lines(captured)
+
+    assert [line["payload"].split(":", 1)[0] for line in lines] == ["openai._base_client", "httpx"]
+    assert "Retrying request to /chat/completions" in lines[0]["payload"]
+    assert '"HTTP/1.1 500 Internal Server Error"' in lines[1]["payload"]
+
+
+def test_client_debug_chatter_stays_out_of_the_run_log(captured):
+    """At DEBUG these loggers print whole request bodies."""
+    logger = logging.getLogger("openai._base_client")
+    previous = logger.level
+    logger.setLevel(logging.DEBUG)
+    try:
+        logger.debug("Request options: %s", {"json_data": "a whole prompt"})
+    finally:
+        logger.setLevel(previous)
+
+    assert _transport_lines(captured) == []
+
+
+def test_forwarding_is_attached_once_however_many_runs_open_a_log(tmp_path):
+    """The REPL opens a run log per input against one process."""
+    for n in range(3):
+        handler = configure_debug_logging(Path(tmp_path) / f"debug-{n}.jsonl", enabled=True)
+        assert handler is not None
+        logging.getLogger("rudra").removeHandler(handler)
+        handler.close()
+
+    forwarders = [
+        handler
+        for handler in logging.getLogger("httpx").handlers
+        if type(handler).__name__ == "_TransportForward"
+    ]
+    assert len(forwarders) == 1

@@ -310,6 +310,17 @@ class RunUsage:
         slot.output_tokens = _add(slot.output_tokens, output_tokens)
         slot.seconds += seconds
 
+    def model_time(self, role: str) -> tuple[int, float]:
+        """`role`'s model calls and seconds so far, for a caller to difference.
+
+        OPEN-113: a time bound knows how long its span ran and nothing about
+        where the time went. Read-only and creates no slot, so a role that
+        has not called yet answers `(0, 0.0)` without appearing in
+        `usage.json`.
+        """
+        slot = self.per_role.get(role)
+        return (0, 0.0) if slot is None else (slot.calls, slot.seconds)
+
     def record_recall(self, role: str, chars: int) -> None:
         """One recall block injected into `role`'s prompt."""
         slot = self._slot(role)
@@ -541,6 +552,65 @@ class RunUsage:
                 ),
             },
         }
+
+
+PROVIDER_BOUND_SHARE = 80
+"""Percent of a halted span spent inside model calls at which the halt says
+the time went to latency rather than to tool work (OPEN-113).
+
+Arithmetic, not a guess about causes: at 80% the tools, approvals and Rudra
+together had at most a fifth of the clock, so no change to them could have
+kept the span under its bound. Run `8f160d92c6da`'s two halted stages were
+99.98% and 99.99%.
+"""
+
+
+def model_time_of(usage: Any, role: str) -> tuple[int, float] | None:
+    """`usage.model_time(role)`, or None when nothing is counting.
+
+    Duck-typed and swallowing for the reason every reader of `usage` is: the
+    halt this feeds must fire whether or not its diagnostic can be built.
+    """
+    if usage is None:
+        return None
+    try:
+        calls, seconds = usage.model_time(role)
+        return int(calls), float(seconds)
+    except Exception:  # noqa: BLE001 - a diagnostic must not end a run
+        return None
+
+
+def model_wait_note(usage: Any, role: str, before: tuple[int, float] | None, elapsed: float) -> str:
+    """How much of `elapsed` was `role` waiting on its model, as a sentence.
+
+    OPEN-113. Both time bounds printed `<N>s ... over the <L>s limit --
+    stopping after <K> tool calls.`, and their own docstrings concede that
+    reads the same for a loop and for a slow provider. Run `8f160d92c6da`
+    printed it twice for stages that made three tool calls each and spent
+    all but a second of their time in five and four planner calls averaging
+    378 s -- and the number that says so was already in this object.
+
+    `before` is `model_time_of` taken when the span began, so a role's calls
+    in an earlier stage or invocation are not charged to this one. Empty
+    whenever the sentence cannot be stated truthfully: no tally, no
+    snapshot, or no call inside the span.
+    """
+    after = model_time_of(usage, role)
+    if after is None or before is None or elapsed <= 0:
+        return ""
+    calls = after[0] - before[0]
+    seconds = after[1] - before[1]
+    if calls <= 0:
+        return ""
+    share = min(100, round(100 * seconds / elapsed))
+    plural = "call" if calls == 1 else "calls"
+    note = (
+        f"{seconds:.0f}s of it ({share}%) was the {role} model answering "
+        f"{calls} {plural}, {seconds / calls:.0f}s each on average"
+    )
+    if share >= PROVIDER_BOUND_SHARE:
+        return f"{note} -- the time went to model latency, not to tool work."
+    return f"{note}."
 
 
 def _count(value: int | None) -> str:

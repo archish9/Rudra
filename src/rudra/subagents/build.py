@@ -404,7 +404,10 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
     if getattr(context, "usage", None) is not None:
         from rudra.context.middleware import UsageMiddleware
 
-        middleware.append(UsageMiddleware(spec.role, context.usage))
+        # `console` so a slow call says so as it finishes (OPEN-113).
+        middleware.append(
+            UsageMiddleware(spec.role, context.usage, console=getattr(context, "console", None))
+        )
 
     if spec.wants_compaction:
         from deepagents.middleware.summarization import create_summarization_tool_middleware

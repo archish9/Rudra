@@ -146,13 +146,32 @@ def log_model_call(
         return
 
 
-class UsageMiddleware(AgentMiddleware):
-    """Records one role's model calls into a shared RunUsage."""
+SLOW_CALL_SECONDS = 120.0
+"""A model call at least this long is printed as it finishes (OPEN-113).
 
-    def __init__(self, role: str, usage: Any) -> None:
+Run `8f160d92c6da` spent 4088 of its 4090 seconds inside eleven planner
+calls, 184-734 s each, and the console said nothing about any of them: the
+`model_call` record holds the number, and a user watching a quiet terminal
+does not read the debug log. Two minutes because a call that long IS the
+explanation for whatever the user is waiting on, while below it a line per
+call would bury the trace -- OPEN-100 measured a whole run averaging 28.7 s
+per planner call.
+"""
+
+
+class UsageMiddleware(AgentMiddleware):
+    """Records one role's model calls into a shared RunUsage.
+
+    `console` is only ever printed to, and only for a call over
+    `SLOW_CALL_SECONDS` (OPEN-113). Optional for the reason `usage` is
+    duck-typed: the tests that build this bare keep the silent behaviour.
+    """
+
+    def __init__(self, role: str, usage: Any, console: Any = None) -> None:
         super().__init__()
         self.role = role
         self.usage = usage
+        self.console = console
 
     def _record(self, response: Any, seconds: float) -> None:
         messages = getattr(response, "result", None) or []
@@ -162,6 +181,7 @@ class UsageMiddleware(AgentMiddleware):
             # exactly what somebody would be trying to diagnose.
             self.usage.record(self.role, input_tokens=None, output_tokens=None, seconds=seconds)
             log_model_call(self.role, seconds)
+            self._say_if_slow(seconds)
             return
         metadata = getattr(messages[0], "usage_metadata", None) or {}
         self.usage.record(
@@ -180,6 +200,66 @@ class UsageMiddleware(AgentMiddleware):
             input_tokens=metadata.get("input_tokens"),
             output_tokens=metadata.get("output_tokens"),
         )
+        self._say_if_slow(
+            seconds,
+            input_tokens=metadata.get("input_tokens"),
+            output_tokens=metadata.get("output_tokens"),
+            model=(getattr(messages[0], "response_metadata", None) or {}).get("model_name") or "",
+        )
+
+    def _say_if_slow(
+        self,
+        seconds: float,
+        *,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        model: str = "",
+        exc: BaseException | None = None,
+    ) -> None:
+        """Print one line for a slow call, or nothing. Never raises (OPEN-113).
+
+        Printed rather than emitted as a NOTICE, which renders at VERBOSE
+        only (`trace/render.py:38`): the person this is for is the one
+        waiting at a default console. It still reaches `debug-<id>.jsonl`,
+        through the console recorder (OPEN-76), beside the `model_call` line
+        carrying the same number.
+
+        The token counts are in the sentence because they separate the two
+        causes without a claim from Rudra: 5,540 output tokens in 152 s is a
+        model writing a document, and 73 in 444 s is a request waiting its
+        turn at the provider.
+
+        A cancellation is not reported: Ctrl-C is the user's act, and "the
+        model failed after 136s with CancelledError" would blame the provider
+        for it.
+        """
+        if self.console is None or seconds < SLOW_CALL_SECONDS:
+            return
+        if exc is not None and not isinstance(exc, Exception):
+            return
+        try:
+            from rich.markup import escape
+
+            if exc is not None:
+                from rudra.llm.retry import status_of
+
+                status = status_of(exc)
+                failure = type(exc).__name__ + (f" ({status})" if status is not None else "")
+                line = (
+                    f"slow model call: the {self.role} model failed after "
+                    f"{seconds:.0f}s with {failure}"
+                )
+            else:
+                if input_tokens is None or output_tokens is None:
+                    tokens = "a token count the provider did not report"
+                else:
+                    tokens = f"{input_tokens:,} input / {output_tokens:,} output tokens"
+                line = f"slow model call: the {self.role} model took {seconds:.0f}s for {tokens}"
+            if model:
+                line = f"{line} ({model})"
+            self.console.print(f"[yellow]{escape(line)}[/yellow]")
+        except Exception:  # noqa: BLE001 - a print must not end a run
+            return
 
     def _record_tool(self, request: Any) -> None:
         name = (getattr(request, "tool_call", None) or {}).get("name")
@@ -219,6 +299,7 @@ class UsageMiddleware(AgentMiddleware):
         # four provider 500s and the debug log recorded the retry notices
         # with no cost attached to either the failure or the re-issue.
         log_model_call(self.role, seconds, ok=False, error=error, exc=exc)
+        self._say_if_slow(seconds, exc=exc)
 
     def wrap_tool_call(self, request, handler):
         self._record_tool(request)
@@ -229,4 +310,11 @@ class UsageMiddleware(AgentMiddleware):
         return await handler(request)
 
 
-__all__ = ["COMPACTION_TOOL", "ERROR_CHARS", "MODEL_CALL_KIND", "UsageMiddleware", "log_model_call"]
+__all__ = [
+    "COMPACTION_TOOL",
+    "ERROR_CHARS",
+    "MODEL_CALL_KIND",
+    "SLOW_CALL_SECONDS",
+    "UsageMiddleware",
+    "log_model_call",
+]

@@ -1106,3 +1106,30 @@ def test_the_nudge_makes_stopping_the_easy_answer():
     from rudra.trace.stream import looks_like_error
 
     assert not looks_like_error(text)
+
+
+async def test_a_time_halt_says_how_much_was_model_latency(monkeypatch, tmp_path):
+    """OPEN-113, the subagent half: "over the 1200s limit" reads the same for
+    t7's 55-call hunt and for a provider taking six minutes a call."""
+    import dataclasses
+
+    from rudra.context.usage import RunUsage
+
+    usage = RunUsage()
+    chunks = _glob_stream(8)
+
+    async def billing_stream(*args, **kwargs):
+        async for chunk in chunks(*args, **kwargs):
+            usage.record("coder", input_tokens=None, output_tokens=None, seconds=499.0)
+            yield chunk
+
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", billing_stream)
+
+    context = dataclasses.replace(make_context(tmp_path), usage=usage)
+    result = await run_subagent("coder", "write it", context=context)
+
+    assert result.ok is False
+    assert "1200s limit" in (result.halted_reason or "")
+    assert "was the coder model answering" in (result.halted_reason or "")

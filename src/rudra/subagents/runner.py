@@ -24,6 +24,7 @@ from typing import Any
 from rich.console import Console
 
 from rudra.compat.virtual_paths import virtual_to_relative
+from rudra.context.usage import model_time_of, model_wait_note
 from rudra.permissions.approval import run_with_approvals
 from rudra.subagents.build import build_agent
 from rudra.subagents.registry import REGISTRY
@@ -539,6 +540,9 @@ async def run_subagent(
     # still cost the user the wait, and an invocation missing from the log
     # is the shape OPEN-89 was filed on.
     invocation_started = time.monotonic()
+    # What this role's model had cost before the invocation, so a time halt
+    # can say how much of it was waiting on the model (OPEN-113).
+    model_before = model_time_of(getattr(context, "usage", None), spec.role)
     try:
         # The prompt IS the task: passing it through is what makes the
         # subagent's memory recall about the work rather than about its own
@@ -649,6 +653,14 @@ async def run_subagent(
                     f"{elapsed:.0f}s in one invocation, over the {limit:.0f}s limit "
                     f"-- stopping after {total_calls} tool calls."
                 )
+                # Where the time went, from the tally that already holds it
+                # (OPEN-113): "over the limit" alone reads the same for a
+                # 55-call hunt and for a provider taking six minutes a call.
+                wait = model_wait_note(
+                    getattr(context, "usage", None), spec.role, model_before, elapsed
+                )
+                if wait:
+                    halted = f"{halted} {wait}"
                 announce(halted, (), 0)
                 break
 

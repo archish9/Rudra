@@ -24,7 +24,10 @@ answer to "why is this line missing".
 Scoped to the `rudra` logger tree on purpose. Two Rudra modules already
 log (llm/factory.py:32, memory/degrade.py:32) and had nowhere to be seen;
 third-party loggers are left alone because httpx at DEBUG buries Rudra's
-own lines in request noise.
+own lines in request noise. **One exception, at INFO only** (OPEN-113): the
+provider clients' own request lines are forwarded under
+`rudra.llm.transport`, because the openai SDK re-issues a failed call by
+itself and says so nowhere this file could see.
 
 The console is deliberately untouched: the human trace is the sink's
 console consumer, and this file is what gets attached to a bug report.
@@ -140,6 +143,66 @@ class _RunLogHandler(logging.FileHandler):
     """
 
 
+TRANSPORT_LOGGER = "rudra.llm.transport"
+"""Where a provider client's own request lines are re-emitted (OPEN-113).
+
+`grep '"logger": "rudra.llm.transport"'` reads every HTTP attempt behind a
+model call, which the `model_call` line after them cannot show: that line
+times the whole call, and inside it the client may have tried three times.
+"""
+
+TRANSPORT_SOURCES = ("openai._base_client", "anthropic._base_client", "httpx")
+"""The client loggers forwarded, at INFO and above.
+
+At INFO each says one line per event worth having. `openai._base_client`
+logs `Retrying request to <path> in <n> seconds` for every re-issue its own
+`max_retries` makes (`openai/_base_client.py:1801`; anthropic's client is
+the same generator's output), and httpx logs `HTTP Request: POST <url>
+"HTTP/1.1 500 Internal Server Error"` once per response
+(`httpx/_client.py:1740`). Run `8f160d92c6da` recorded a 733.7 s call that
+ended in a 500 and could not say whether it was one attempt or three. At
+DEBUG the same loggers print every request body -- the noise this module
+keeps out -- so the forwarder's own level is INFO whatever the logger's is.
+"""
+
+
+class _TransportForward(logging.Handler):
+    """Re-emit one provider-client record under `TRANSPORT_LOGGER`.
+
+    Redacted, because a request URL can carry a key and this file is what a
+    user attaches to a public issue.
+    """
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            logging.getLogger(TRANSPORT_LOGGER).debug(
+                "%s: %s", record.name, redact(record.getMessage())
+            )
+        except Exception:  # noqa: BLE001 -- logging about logging never raises
+            return
+
+
+def _forward_transport_logs() -> None:
+    """Attach the forwarder to each client logger, once per process.
+
+    Idempotent by handler type, `telemetry/langfuse_sink.py`'s reason: the
+    REPL opens a run log per input against one process, and a handler added
+    per turn would multiply every line.
+
+    A logger's level is lowered to INFO only when it is above INFO, so an
+    `OPENAI_LOG=debug` the user set is left as they set it. `propagate` is
+    NOT touched, unlike the langfuse loggers: `openai`'s own `OPENAI_LOG`
+    handler sits on a parent of `openai._base_client`, and cutting
+    propagation would silence the one switch a user debugging the SDK has.
+    """
+    for name in TRANSPORT_SOURCES:
+        logger = logging.getLogger(name)
+        if not any(isinstance(handler, _TransportForward) for handler in logger.handlers):
+            logger.addHandler(_TransportForward(level=logging.INFO))
+        if logger.getEffectiveLevel() > logging.INFO:
+            logger.setLevel(logging.INFO)
+
+
 def configure_debug_logging(path: Path, *, enabled: bool) -> logging.Handler | None:
     """Attach a JSONL handler to the `rudra` tree, or do nothing.
 
@@ -177,6 +240,7 @@ def configure_debug_logging(path: Path, *, enabled: bool) -> logging.Handler | N
     # Rudra's own records stop here rather than climbing to the root
     # logger, whose handlers belong to whoever embedded Rudra.
     logger.propagate = False
+    _forward_transport_logs()
     return handler
 
 
@@ -236,6 +300,7 @@ __all__ = [
     "FILE_PREFIX",
     "KEEP_RUNS",
     "LOGGER_NAME",
+    "TRANSPORT_LOGGER",
     "configure_debug_logging",
     "debug_consumer",
     "debug_log_path",

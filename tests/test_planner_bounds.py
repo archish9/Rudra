@@ -375,3 +375,76 @@ async def test_the_consecutive_failure_guard_is_untouched(monkeypatch):
     ok = await _run(monkeypatch, chunks, trace=TraceSink(level=TraceLevel.NORMAL))
 
     assert ok is False
+
+
+# --- OPEN-113: a time halt says where the time went -------------------------
+
+
+def _billing_stream(names: list[str], usage: RunUsage, seconds_per_call: float):
+    """`_stream_of_calls`, with the model call behind each chunk recorded
+    first -- UsageMiddleware's order, since a chunk is yielded only after the
+    model node returns."""
+    chunks = _stream_of_calls(names)
+
+    async def fake_stream(agent, inputs, config, gate, console, **kwargs):
+        for chunk in chunks:
+            usage.record("planner", input_tokens=None, output_tokens=None, seconds=seconds_per_call)
+            yield chunk
+
+    return fake_stream
+
+
+async def test_a_time_halt_says_the_stage_was_waiting_on_the_model(monkeypatch):
+    """Run `8f160d92c6da` printed `1888s in one planner stage, over the 1200s
+    limit -- stopping after 3 tool calls.` and nothing else, for a stage that
+    was 99.98% planner-model latency."""
+    usage = RunUsage()
+    trace = FakeTrace()
+    monkeypatch.setattr(planner_agent, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(
+        planner_agent, "run_with_approvals", _billing_stream(["ls"] * 8, usage, 499.0)
+    )
+
+    ok = await _stream_planner_turn(
+        object(),
+        "plan it",
+        thread_id="t",
+        gate=None,
+        console=Console(quiet=True),
+        trace=trace,
+        usage=usage,
+    )
+
+    assert ok is False
+    ((name, reason),) = trace.notices
+    assert name == PLANNER_HALT_NOTICE
+    assert "s limit" in reason
+    assert "was the planner model answering" in reason
+    assert "the time went to model latency, not to tool work." in reason
+
+
+async def test_a_time_halt_names_the_calls_it_will_not_run(monkeypatch):
+    """The halt fires on the chunk carrying a finished answer, before the tool
+    node: clarify's `record_fact project_type` (218.1 s) and architect's
+    second `record_fact` (549.4 s) never reached `facts.json` (OPEN-114)."""
+    trace = FakeTrace()
+    monkeypatch.setattr(planner_agent, "time", FakeClock(step=500.0))
+
+    await _run(monkeypatch, _stream_of_calls(["ls", "ls", "record_fact", "ls"]), trace=trace)
+
+    assert "asked for record_fact, which will not run." in trace.notices[0][1]
+
+
+async def test_a_call_cap_halt_carries_no_time_detail(monkeypatch):
+    """Only the seconds bound is ambiguous between a loop and a slow provider;
+    the call ceiling already names a loop."""
+    trace = FakeTrace()
+
+    await _run(
+        monkeypatch,
+        _stream_of_calls(["ls"] * MAX_PLANNER_TOOL_CALLS),
+        trace=trace,
+        usage=RunUsage(),
+    )
+
+    assert "model answering" not in trace.notices[0][1]
