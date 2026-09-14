@@ -100,7 +100,7 @@ Rudra runs without prompting you, and prints one line saying so.
 
 **It is not `--auto`, and the difference is deliberate.** `!` silences the
 question; it does not lift a refusal. Every deny rule you wrote still
-refuses, and so does Rudra's built-in floor — `git-dir` and
+refuses, and so does Rudra's built-in floor — `git-dir`, `rudra-state` and
 `catastrophic-command` — exactly as before you pressed it. Nothing you have
 forbidden becomes permitted. What changes is that everything Rudra would
 have *asked* about now proceeds.
@@ -185,15 +185,27 @@ hit, so a typo fails immediately rather than mid-run.
 
 ## The deny floor
 
-Three rules that apply in **every** mode, including `--auto`:
+Four rules that apply in **every** mode, including `--auto`:
 
 | Rule | Blocks |
 |---|---|
 | `outside-root` | Writing or deleting outside your project |
 | `git-dir` | Writing or deleting inside `.git/` |
+| `rudra-state` | Writing or deleting inside `.rudra/` — Rudra's own state, including the `config.toml` that decides the next run's permissions |
 | `catastrophic-command` | `rm -rf /`, `mkfs`, `dd of=/dev/*` |
 
-Two of them can be switched off if you have a real reason:
+Rudra itself still writes `.rudra/` — facts, the task ledger, `AGENTS.md`,
+logs — but none of that goes through an agent's file tools, so `rudra-state`
+blocks only the agent.
+
+**Agents cannot read `.rudra/` either.** Its `config.toml` may hold an
+`api_key`, so every agent's `read_file`, `ls`, `glob` and `grep` treat the
+directory as if it did not exist — `grep "api_key" /` does not find it. That
+is not a floor rule and cannot be switched off: it is how the file tools are
+built. A shell command can still read it; see
+[What this does and doesn't protect](#what-this-does-and-doesnt-protect).
+
+Three of them can be switched off if you have a real reason:
 
 ```toml
 [permissions]
@@ -347,6 +359,8 @@ It lives under `run/`, which Rudra's own `.gitignore` excludes.
 - Keep your API keys out of the environment handed to commands — anything
   matching `*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD` or `AWS_*`, plus
   whatever `api_key_env` names, is stripped
+- Keep `.rudra/` — and an `api_key` in `.rudra/config.toml` — out of every
+  agent's file tools, and stop an agent rewriting it
 - Leave a record of everything it allowed
 
 **It does not:**
@@ -355,7 +369,9 @@ It lives under `run/`, which Rudra's own `.gitignore` excludes.
   command runs with your user's full access. Real containment needs OS-level
   isolation, which Rudra does not do.
 - Stop a command reading files your account can read, including credentials
-  on disk.
+  on disk — `cat .rudra/config.toml` among them. If that matters, keep the key
+  in `~/.config/rudra/config.toml` or name an environment variable with
+  `api_key_env`, rather than writing it into the project.
 - Verify that generated code is correct. That is `rudra verify`'s job, not
   the permission layer's — the gate decides whether a task is done; this
   layer only decides whether a tool call is allowed to happen.
@@ -384,7 +400,7 @@ runs. It has no say in what that command can reach once it does.
 
 ### What the deny floor actually covers
 
-The floor's path rules (`outside-root`, `git-dir`) are evaluated against a
+The floor's path rules (`outside-root`, `git-dir`, `rudra-state`) are evaluated against a
 resolved filesystem path — and only `write_file`, `edit_file` and `delete`
 carry one. `execute` is checked against exactly one floor rule,
 `catastrophic-command`, which matches shapes like `rm -rf /`, `mkfs*` and

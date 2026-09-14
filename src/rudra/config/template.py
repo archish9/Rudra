@@ -131,6 +131,7 @@ deny  = []
 # switch it off; the run prints which are disabled, and calls they would
 # have blocked are still written to the audit log.
 #   git-dir               write or delete under .git/
+#   rudra-state           write or delete under .rudra/ (this file lives there)
 #   catastrophic-command  rm -rf /, mkfs, dd of=/dev/*
 # ("outside-root" is not listed and is rejected here: writes are confined to
 #  the project by the backend, not by this rule, so there is nothing to

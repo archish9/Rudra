@@ -29,14 +29,14 @@ VALID_MODES = ("ask", "auto", "plan")
 # the rest of Rudra, so it stays readable and testable with no agent
 # machinery. Kept in agreement by test_config_permissions_and_tools.py::
 # test_the_schema_names_the_same_floor_rules_the_floor_module_does.
-FLOOR_RULE_NAMES = ("outside-root", "git-dir", "catastrophic-command")
+FLOOR_RULE_NAMES = ("outside-root", "git-dir", "rudra-state", "catastrophic-command")
 
 # `outside-root` is deliberately absent: for the tools it covers, confinement
 # comes from the backend's virtual_mode=True, not from Rudra's floor, so
 # disabling it changed nothing and silently redirected the write into the
 # project instead. Accepting a name and then not honouring it is worse than
 # rejecting it. See TODO.md A1.50.
-DISABLEABLE_FLOOR_RULES = ("git-dir", "catastrophic-command")
+DISABLEABLE_FLOOR_RULES = ("git-dir", "rudra-state", "catastrophic-command")
 
 # `tools`, `skills`, `mcp` and `memory` were all reserved here naming their
 # implementing steps. Step 7 implemented `tools`, Step 11b `skills`, Step 13

@@ -721,24 +721,33 @@ def build_backend(cfg, project_path: Path, sources=()):
     """
     from deepagents.backends.composite import CompositeBackend
     from deepagents.backends.filesystem import FilesystemBackend
-    from deepagents.backends.local_shell import LocalShellBackend
 
+    from rudra.filesystem.rudra_state import (
+        HiddenStateFilesystemBackend,
+        HiddenStateLocalShellBackend,
+    )
     from rudra.permissions.env import scrubbed_env
     from rudra.state.paths import rudra_paths
 
     paths = rudra_paths(project_path)
 
+    # The project root's backend hides `.rudra/` from every file tool, for
+    # every agent: `.rudra/config.toml` may hold an api_key (OPEN-117). The
+    # default only -- the artifacts route lives under `.rudra/run/` on disk,
+    # must stay readable, and is reached as `/artifacts/`, never as a state
+    # path. Subclasses rather than a wrapper, because deepagents reads
+    # `isinstance(backend.default, LocalShellBackend)` into a prompt.
     if cfg.tools.shell:
         # env= rather than inherit_env=True: the latter hands the model's
         # shell every API key the user exported, and anything the agent
         # prints goes to the provider. See TODO.md A1.44 and C1.5.
-        default = LocalShellBackend(
+        default = HiddenStateLocalShellBackend(
             root_dir=str(project_path),
             virtual_mode=True,
             env=scrubbed_env(cfg),
         )
     else:
-        default = FilesystemBackend(root_dir=str(project_path), virtual_mode=True)
+        default = HiddenStateFilesystemBackend(root_dir=str(project_path), virtual_mode=True)
 
     routes = {
         ARTIFACTS_PREFIX: FilesystemBackend(root_dir=str(paths.artifacts), virtual_mode=True),

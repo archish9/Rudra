@@ -216,7 +216,7 @@ grep '"decision":"deny"' .rudra/run/logs/permissions.jsonl
 
 ### `floor_disable` won't accept `outside-root`
 
-That is deliberate. Writes are confined to your project by the file-access layer, not by that rule, so switching it off would change nothing and quietly redirect the write back inside your project. Rejecting the setting is more honest than accepting one that does nothing. `git-dir` and `catastrophic-command` can be disabled.
+That is deliberate. Writes are confined to your project by the file-access layer, not by that rule, so switching it off would change nothing and quietly redirect the write back inside your project. Rejecting the setting is more honest than accepting one that does nothing. `git-dir`, `rudra-state` and `catastrophic-command` can be disabled.
 
 ---
 

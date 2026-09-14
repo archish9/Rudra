@@ -26,7 +26,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-FLOOR_RULE_NAMES = ("outside-root", "git-dir", "catastrophic-command")
+from rudra.state.paths import is_rudra_state
+
+FLOOR_RULE_NAMES = ("outside-root", "git-dir", "rudra-state", "catastrophic-command")
 
 # Tools whose effect is destructive. Reads are never a floor violation --
 # the floor governs destruction, and gating reads would fire on the dozens
@@ -70,6 +72,15 @@ def floor_hit(
             return "outside-root"
         if ".git" in Path(path).parts:
             return "git-dir"
+        # OPEN-117. `.rudra/config.toml` decides the NEXT run's permissions
+        # and may hold an api_key, so under --auto an agent that can write it
+        # can grant itself anything. Nothing Rudra writes there goes through
+        # a file tool -- facts, the ledger, AGENTS.md and the logs are all
+        # Python -- so this refuses no legitimate write. Any depth, like
+        # `.git`, and case-folded: `.RUDRA` is the same directory on the
+        # default macOS and Windows filesystems.
+        if is_rudra_state(Path(path).relative_to(root)):
+            return "rudra-state"
 
     if tool == "execute" and command is not None:
         if any(pattern.search(command) for pattern in _CATASTROPHIC):

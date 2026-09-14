@@ -19,9 +19,24 @@ effect made read-only commands mutate the filesystem — see TODO.md A1.43.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
 RUDRA_DIR_NAME = ".rudra"
+
+
+def is_rudra_state(relative: PurePath) -> bool:
+    """Does this project-relative path lie inside a Rudra state directory?
+
+    The one spelling of that question, asked by the floor about a write and
+    by the backend about a read (OPEN-117). Any depth, the way
+    `filesystem/tree.py` already hides `.rudra` at any depth: a nested
+    project's state holds its own `config.toml`. Case-folded, because on the
+    default macOS and Windows filesystems `.RUDRA` is the same directory --
+    on a case-sensitive one that hides a `.Rudra/` nobody makes, which is the
+    safe direction.
+    """
+    return any(part.casefold() == RUDRA_DIR_NAME for part in relative.parts)
+
 
 GITIGNORE_BODY = """\
 # Written by Rudra. Scopes only this directory — your project's own
@@ -115,4 +130,11 @@ def ensure_layout(project_root: Path) -> RudraPaths:
     return paths
 
 
-__all__ = ["GITIGNORE_BODY", "RUDRA_DIR_NAME", "RudraPaths", "ensure_layout", "rudra_paths"]
+__all__ = [
+    "GITIGNORE_BODY",
+    "RUDRA_DIR_NAME",
+    "RudraPaths",
+    "ensure_layout",
+    "is_rudra_state",
+    "rudra_paths",
+]

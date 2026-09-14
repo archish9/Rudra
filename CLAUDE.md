@@ -1,12 +1,13 @@
 # CLAUDE.md — Rudra
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **Seven are open as of 2026-09-14:
+is the live ledger of what is open. **Six are open as of 2026-09-14:
 OPEN-103, OPEN-104 and OPEN-105**, filed by the live run `f845b496a2aa` on
-2026-09-09, **and OPEN-114 … OPEN-117**, filed on 2026-09-14 from run
-`8f160d92c6da` beside OPEN-113, which closed that day. **OPEN-117 is a security
-item** — any agent can read `.rudra/config.toml` and the `api_key` in it — and
-is first on that board. Every one of the four has a plan under
+2026-09-09, **and OPEN-114 … OPEN-116**, filed on 2026-09-14 from run
+`8f160d92c6da` beside OPEN-113, which closed that day. **OPEN-117, the security
+item** — any agent could read `.rudra/config.toml` and the `api_key` in it —
+was filed and closed the same day, offline; §3's `filesystem/` entry says how.
+Every one of the three still open has a plan under
 `docs/superpowers/plans/2026-09-14-open-11*.md`.
 OPEN-99 … OPEN-102 and the whole 2026-09-04 board — OPEN-93 …
 OPEN-98 — closed on 2026-09-09; each has a self-contained document under
@@ -736,7 +737,24 @@ src/rudra/
 │                           only for what it alone knows.
 │                           The last two are thin wrappers over git/ and
 │                           testing/, whose APIs the orchestrator calls directly
-├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7)
+├── filesystem/             capped project_tree() — VFS deleted in Step 2 (D7).
+│                           rudra_state.py (OPEN-117): the project root's
+│                           backend, subclassed so `read`/`ls`/`glob`/`grep`
+│                           never see `.rudra/` — its `config.toml` may hold an
+│                           `api_key`, and `grep("api_key", "/")` returned the
+│                           key line without the model naming `.rudra`. The
+│                           BACKEND, because a tool middleware cannot filter a
+│                           grep over `/` without parsing its output; a
+│                           SUBCLASS, because deepagents reads
+│                           `isinstance(backend.default, LocalShellBackend)`
+│                           into the execute prompt and a wrapper failed it.
+│                           `download_files` is NOT filtered — MemoryMiddleware
+│                           loads `.rudra/AGENTS.md` through it. Paths resolve
+│                           through `virtual_to_relative` + realpath, case-
+│                           folded (`/.RUDRA/` reads the same dir on APFS).
+│                           Writes are the floor's `rudra-state` rule, and
+│                           `state/paths.py::is_rudra_state` is the one
+│                           predicate both ask. `execute` still reads it
 ├── state/                  paths.py (D15 layout), session id (unused).
 │                           ProjectConfigManager died with C6.8a.
 │                           archive.py is the ONE thing here that writes
@@ -853,7 +871,7 @@ stops asking for the rest of the session, `d` shows the full diff and asks
 again. `!` sets `SessionGrants.approve_all`, which `decide` reads at the
 *session grants* step — so it is third in the precedence list above, and the
 deny floor and `permissions.deny` have already returned by the time it is
-consulted. `git-dir`, `catastrophic-command` and every user deny rule still
+consulted. `git-dir`, `rudra-state`, `catastrophic-command` and every user deny rule still
 refuse after `!`; every call is still audited, with `source:
 "session-grant-all"`.
 
@@ -1248,7 +1266,7 @@ deny  = ["execute:rm -rf *", "write_file:.env"]
 
 # Built-in rules denied in EVERY mode, including --auto. Name one to switch
 # it off; the run says so, and calls it would have blocked are still audited.
-#   git-dir · catastrophic-command
+#   git-dir · rudra-state · catastrophic-command
 # ("outside-root" is rejected here: the backend confines writes, not this
 #  rule, so disabling it would change nothing — see A1.50. Since CR-B4 it
 #  fires only on a REAL escape — `../..` traversal, or a symlink inside the
