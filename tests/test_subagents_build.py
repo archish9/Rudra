@@ -1210,3 +1210,48 @@ def test_no_subagent_carries_the_planner_write_refusal(name, context):
     names = [type(m).__name__ for m in middleware]
 
     assert "PlannerWriteMiddleware" not in names
+
+
+# --- OPEN-103: an unregistered shell or completion call gets the route ------
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_answers_an_unregistered_call_with_its_own_route(name, context):
+    """Once per stack, and reading the spec's OWN grants -- the tuples
+    `_rules_for` and `_interrupt_on_for` read -- so the route and the prompt
+    cannot disagree about which tools this agent has (OPEN-15)."""
+    spec = REGISTRY[name]
+    middleware = _middleware_for(spec, context, _model_for(spec, context.cfg))
+    routes = [m for m in middleware if type(m).__name__ == "ToolRouteMiddleware"]
+
+    assert len(routes) == 1
+    assert routes[0].granted == frozenset(spec.fs_tools) | frozenset(spec.rudra_tools)
+    assert routes[0].role == spec.role
+
+
+def test_the_tool_route_sits_outside_every_guard_that_reads_a_tool_call(context):
+    """An unregistered call has no tool for the gutter repair, the path notes
+    or the repeat guard to act on; answered outside them, none records a call
+    that never existed."""
+    spec = REGISTRY["coder"]
+    names = [
+        type(m).__name__ for m in _middleware_for(spec, context, _model_for(spec, context.cfg))
+    ]
+
+    route = names.index("ToolRouteMiddleware")
+    assert names.index("FixWriteParamsMiddleware") < route
+    for inner in ("GutterIndentMiddleware", "MachinePathMiddleware", "RepeatGuardMiddleware"):
+        assert route < names.index(inner), inner
+
+
+def test_the_tool_route_is_wired_to_the_run(context):
+    import dataclasses
+
+    usage, sink = object(), object()
+    wired = dataclasses.replace(context, trace=sink, usage=usage)
+    spec = REGISTRY["coder"]
+    middleware = _middleware_for(spec, wired, _model_for(spec, wired.cfg))
+    route = next(m for m in middleware if type(m).__name__ == "ToolRouteMiddleware")
+
+    assert route.usage is usage
+    assert route.trace is sink

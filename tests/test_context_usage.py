@@ -84,6 +84,9 @@ def test_recording_accumulates_per_role():
         "test_writes_rejected": 0,
         "planner_halts": 0,
         "planner_writes_refused": 0,
+        # Added by OPEN-103: calls to a shell or completion tool the agent
+        # does not have, answered with the route instead of the tool list.
+        "tool_routes_answered": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -388,6 +391,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "test_writes_rejected",
         "planner_halts",
         "planner_writes_refused",
+        "tool_routes_answered",
         "seconds",
     }
 

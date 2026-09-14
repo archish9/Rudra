@@ -184,6 +184,16 @@ class RoleUsage:
     # where it climbs is the refusal being read and ignored, and is worth
     # knowing before the next prompt attempt is argued for.
     planner_writes_refused: int = 0
+    # Calls to a shell- or completion-shaped tool this agent does not have --
+    # `bash`, `exit` -- answered with the route rather than langgraph's
+    # tool-list echo (OPEN-103, ToolRouteMiddleware). Subagent roles only.
+    #
+    # Read it per invocation, beside the `tool-route` NOTICE: one is the route
+    # working, and three in a row still halt the invocation, because the
+    # answer is counted as a tool failure on purpose. In run `f845b496a2aa`
+    # the unrouted echo came back 17 times and killed 3 of 4 coder
+    # invocations, 487.5 s of the coder's 1565.8 s.
+    tool_routes_answered: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -437,6 +447,16 @@ class RunUsage:
         """
         self._slot(role).planner_writes_refused += 1
 
+    def record_tool_route_answered(self, role: str) -> None:
+        """One call to a tool this agent lacks, answered with the route.
+
+        Mirrors record_planner_write_refused on the subagent stack. The
+        routed call costs what the echo did in calls, seconds and tokens, so
+        without this a run where the route worked and one where it was
+        ignored read the same (OPEN-103).
+        """
+        self._slot(role).tool_routes_answered += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -518,6 +538,7 @@ class RunUsage:
                 "test_writes_rejected": tally.test_writes_rejected,
                 "planner_halts": tally.planner_halts,
                 "planner_writes_refused": tally.planner_writes_refused,
+                "tool_routes_answered": tally.tool_routes_answered,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

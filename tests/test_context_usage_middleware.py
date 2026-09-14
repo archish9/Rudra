@@ -84,6 +84,9 @@ def test_sync_hook_records_the_reported_counts():
         "test_writes_rejected": 0,
         "planner_halts": 0,
         "planner_writes_refused": 0,
+        # Added by OPEN-103, zero for the same reason as OPEN-99's line: a
+        # routed call is a TOOL call ToolRouteMiddleware answered.
+        "tool_routes_answered": 0,
     }
     assert result.result[0].content == "hi"
 

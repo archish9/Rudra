@@ -16,6 +16,7 @@ from rudra.middleware.planner_write import PlannerWriteMiddleware
 from rudra.middleware.repeat_guard import RepeatGuardMiddleware
 from rudra.middleware.task_anchor import TaskAnchorMiddleware
 from rudra.middleware.test_extension import TestExtensionMiddleware
+from rudra.middleware.tool_route import ToolRouteMiddleware
 
 __all__ = [
     "PLANNER_MEMORY_SOURCES",
@@ -31,5 +32,6 @@ __all__ = [
     "RepeatGuardMiddleware",
     "TaskAnchorMiddleware",
     "TestExtensionMiddleware",
+    "ToolRouteMiddleware",
     "build_memory_middleware",
 ]

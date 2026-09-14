@@ -35,6 +35,7 @@ from rudra.middleware import (
     ModelRetryMiddleware,
     RepeatGuardMiddleware,
     TestExtensionMiddleware,
+    ToolRouteMiddleware,
 )
 from rudra.permissions.interrupts import narrow_interrupt_on
 from rudra.subagents.registry import PROJECT_PATH_TOKEN
@@ -278,6 +279,22 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             spec.role,
             trace=getattr(context, "trace", None),
             usage=getattr(context, "usage", None),
+        ),
+        # OPEN-103. Outside every wrapper below that reads a tool call,
+        # because an unregistered call has no tool for any of them to act on:
+        # the gutter repair, the path notes and the repeat guard would each
+        # record a call that never existed. After the param fixer, whose front
+        # seat U.14 keeps.
+        #
+        # `granted` is read off the spec -- the tuples `_rules_for` builds the
+        # prompt from and `_interrupt_on_for` narrows with -- so the route
+        # names only tools this agent was given (OPEN-15): the tester is told
+        # `execute`, the coder that the gate runs the tests when it stops.
+        ToolRouteMiddleware(
+            spec.role,
+            granted=frozenset(spec.fs_tools) | frozenset(spec.rudra_tools),
+            usage=getattr(context, "usage", None),
+            trace=getattr(context, "trace", None),
         ),
         # After the param fixer, so it reads the path the call ENDED UP with
         # rather than the one the model mistyped, and before the repeat guard,
