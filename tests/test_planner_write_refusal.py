@@ -29,6 +29,7 @@ from rudra.agent import planner_agent
 from rudra.context.usage import RunUsage
 from rudra.middleware import PlannerWriteMiddleware
 from rudra.middleware.planner_write import PLANNER_WRITE_NOTICE
+from rudra.trace.stream import is_rudra_refusal, message_is_error
 
 
 class FakeTrace:
@@ -103,20 +104,27 @@ async def test_the_async_path_answers_identically():
     assert "REJECTED:" in result.content
 
 
-# --- OPEN-94's pin ---------------------------------------------------------
+# --- how the failure counter reads it (OPEN-118) ----------------------------
 
 
-def test_the_refusal_leads_with_REJECTED_and_never_Error():
-    """`trace/stream.py::looks_like_error` counts a leading `Error:` and
-    `subagents/runner.py` halts an invocation on three in a row (OPEN-94).
-    `fix_write_params.py`'s two refusals and `test_extension.py`'s carry the
-    same pin; this is the fourth."""
+def test_the_refusal_is_counted_as_a_planner_failure():
+    """Pinned against the counter itself, not the text (OPEN-118).
+
+    This was `test_the_refusal_leads_with_REJECTED_and_never_Error`, whose
+    docstring said the lead kept the failure counter from firing. The
+    planner's counter (`agent/planner_agent.py::_stream_planner_turn`) asks
+    `message_is_error`, which answers from `status="error"` before any text,
+    so three of these in a row DO end a stage. Kept counted on purpose, the
+    owner's OPEN-103 decision applied here: an uncounted refusal a model
+    ignores is bounded only by the stage's call and time caps (OPEN-100)."""
     mw = PlannerWriteMiddleware(stage_tools=("record_fact",))
 
     result, _ = _handled(mw, Request("write_file", file_path="/index.html", content="x"))
 
     assert result.content.startswith("REJECTED:")
-    assert not result.content.startswith("Error")
+    assert result.status == "error"
+    assert message_is_error(result) is True
+    assert is_rudra_refusal(result) is False
 
 
 # --- it names only tools the stage holds (OPEN-15) -------------------------

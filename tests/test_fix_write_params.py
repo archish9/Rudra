@@ -352,16 +352,29 @@ def test_the_prose_write_is_refused_before_the_backend_sees_it(tmp_path):
     assert "REPLY" in result.content
 
 
-def test_the_prose_refusal_does_not_lead_with_a_failure_marker():
-    """§10's first rule, and OPEN-94's bug. `Error:` here would be counted by
-    `subagents/runner.py` and three in a row kill the invocation."""
-    from rudra.middleware.fix_write_params import _PROSE_NOT_CONTENT
-    from rudra.trace.stream import _FIRST_LINE_MARKERS, looks_like_error
+def test_the_placeholder_and_prose_refusals_are_counted_as_tool_failures():
+    """Pinned against the counter itself, not the text (OPEN-118).
 
-    text = _PROSE_NOT_CONTENT.format(path="src/x.html", suffix=".html")
-    assert text.startswith("REJECTED:")
-    assert not looks_like_error(text)
-    assert "REJECTED:" not in _FIRST_LINE_MARKERS
+    This was `test_the_prose_refusal_does_not_lead_with_a_failure_marker`,
+    which asserted `looks_like_error(text)` is False and read that as "the
+    counter cannot halt an invocation on it". `message_is_error` answers from
+    `status="error"` before it reads any text, so both refusals were always
+    counted -- as the completion refusal is, pinned below. Kept counted on
+    purpose, the owner's OPEN-103 decision: a coder halt still runs the gate,
+    while an uncounted refusal a model ignores is bounded only by 80 calls.
+    """
+    from rudra.trace.stream import is_rudra_refusal, message_is_error
+
+    for args in (
+        {"file_path": "/tests", "content": "# This is a placeholder to create the directory"},
+        {"file_path": "/src/iphone15.html", "content": PROSE},
+    ):
+        result, sentinel = _handled("write_file", args)
+
+        assert result is not sentinel, args["file_path"]
+        assert result.content.startswith("REJECTED:")
+        assert message_is_error(result) is True
+        assert is_rudra_refusal(result) is False
 
 
 def test_a_real_html_write_still_reaches_the_backend():

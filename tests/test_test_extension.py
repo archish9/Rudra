@@ -26,7 +26,7 @@ from rudra.middleware.test_extension import (
     is_uncollectable_test,
     suggested_name,
 )
-from rudra.trace.stream import _FIRST_LINE_MARKERS, looks_like_error
+from rudra.trace.stream import _FIRST_LINE_MARKERS, is_rudra_refusal, message_is_error
 
 # The shape of what the tester actually wrote, trimmed. Module docstring, an
 # import, a test function -- Python by `ast.parse`, `.html` by name.
@@ -259,25 +259,35 @@ def test_a_non_string_path_is_declined_rather_than_crashing():
 
 
 # --------------------------------------------------------------------------
-# Section 8.3 -- the refusal must not read as a tool failure
+# Section 8.3 -- how the failure counter reads the refusal (OPEN-118)
 # --------------------------------------------------------------------------
 
 
-def test_the_refusal_does_not_lead_with_a_failure_marker():
-    """Section 10's first rule, and OPEN-94's bug. `subagents/runner.py`
-    halts an invocation on three consecutive results whose first line matches
-    one of these markers, so a refusal leading with `Error:` would spend an
-    invocation's budget on Rudra's own guard."""
+def test_the_refusal_is_counted_as_a_tool_failure():
+    """Pinned against the counter itself, not the text (OPEN-118).
+
+    Section 8.3 asked for the opposite, and this test used to "prove" it by
+    asserting `looks_like_error(result.content)` is False. That function is
+    never reached for this message: `message_is_error` -- what
+    `subagents/runner.py` calls -- answers from `status="error"` first, so
+    three in a row DO halt the tester. Kept counted on purpose, the owner's
+    OPEN-103 decision: an uncounted refusal a model ignores is bounded only
+    by 80 calls."""
     result = TestExtensionMiddleware("tester").wrap_tool_call(
         _request("tests/test_page.html", PY_SOURCE), lambda _req: "Updated file"
     )
-    assert looks_like_error(result.content) is False
+    assert result.status == "error"
+    assert message_is_error(result) is True
+    assert is_rudra_refusal(result) is False
 
 
 def test_rejected_is_not_a_first_line_marker():
     """Pinned so that adding `REJECTED:` to that tuple breaks a test rather
-    than a run -- it would silently start halting invocations on this
-    middleware's own text, plus fix_write_params' two refusals."""
+    than a run. Not for this middleware's sake -- its refusal is counted by
+    `status` either way (OPEN-118) -- but for the tools that answer a
+    malformed call with `REJECTED:` and a SUCCESSFUL status: `record_fact`
+    and `add_tasks` did so 17 times across five archived runs, and a marker
+    would start counting every one of them toward a halt."""
     assert "REJECTED:" not in _FIRST_LINE_MARKERS
 
 

@@ -506,10 +506,14 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         wants a suffix in its closed table, and `_is_completion_announcement`
         wants a sentence under a marker name with no suffix, `.txt` or `.md`.
 
-        Both lead with `REJECTED:` and neither with `Error:`, deliberately:
-        `trace/stream.py::looks_like_error` counts a leading `Error:` and
-        `subagents/runner.py` halts an invocation on three in a row, which is
-        OPEN-94 exactly.
+        All three lead with `REJECTED:` and set `status="error"`, and the
+        status is what the failure counters read: `trace/stream.py::message_is_error`
+        answers from it before any text, so `subagents/runner.py` DOES halt an
+        invocation on three of these in a row. Counted on purpose (OPEN-118,
+        the owner's OPEN-103 decision): a coder halt still runs the gate, while
+        an uncounted refusal a model ignores is bounded only by
+        `MAX_TOTAL_CALLS`. Corrected 2026-09-15 -- this said the lead kept the
+        counter from firing, and it never did.
         """
         call = request.tool_call
         if call.get("name") != "write_file":

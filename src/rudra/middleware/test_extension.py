@@ -92,10 +92,13 @@ _REJECTED = (
     "If you did mean to write a fixture rather than a test, put it outside "
     "the test directory or give it a name that is not `test_*`."
 )
-"""Leads with `REJECTED:` and never with `Error:`, matching
-`fix_write_params.py`'s two refusals. `trace/stream.py::looks_like_error`
-counts a leading `Error:` and `subagents/runner.py` halts an invocation on
-three in a row, which is OPEN-94 exactly."""
+"""Leads with `REJECTED:`, matching `fix_write_params.py`'s refusals, and sets
+`status="error"` -- which, not the lead, decides how it is counted.
+`trace/stream.py::message_is_error` reads `status` before any text, so
+`subagents/runner.py` halts the tester on three of these in a row. Counted on
+purpose (OPEN-118, the owner's OPEN-103 decision): an uncounted refusal a
+model ignores is bounded only by `MAX_TOTAL_CALLS`. Corrected 2026-09-15 --
+this said the lead kept the counter from firing, and it never did."""
 
 
 def _pure(file_path: str) -> PurePosixPath:
