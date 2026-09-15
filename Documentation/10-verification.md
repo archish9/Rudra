@@ -106,6 +106,34 @@ python -m pip install mypy      # inside your project's .venv
 Either way the findings are printed, and `rudra verify` still shows them under
 `typecheck`, tagged `(advisory)` when they came from the bundled copy.
 
+### Your project's `.venv` {#project-venv}
+
+During a run, a Python project's tests run in a `.venv` that Rudra keeps. If
+the project has no virtualenv of its own, Rudra creates `.venv` with your
+machine's `python3` before the first task. Before every gate run it then
+installs pytest plus what the project declares: every `requirements*.txt` at
+the root, and `pyproject.toml`'s `[project] dependencies`,
+`[project.optional-dependencies]` and `[dependency-groups]`. It reinstalls only
+after one of those files changes.
+
+Rudra leaves alone any virtualenv it did not create: a `.venv` or `venv`
+already in the project, or one you activated before starting Rudra (Poetry,
+Pipenv). Its own is marked with `.venv/.rudra-sync.json`. You can delete
+`.venv` at any time, and the next run rebuilds it.
+
+These installs are commands, so they follow the gate's rules: `ask` mode shows
+you each one first, and `--auto` without `--allow-shell` denies them. If an
+install fails, the coder sees pip's output next to the failing tests.
+`rudra verify` on its own installs nothing.
+
+Every shell command Rudra runs, the agents' included, carries
+`PIP_REQUIRE_VIRTUALENV=1`. pip then refuses to install into a Python that is
+not a virtualenv, so an agent cannot change the packages on your machine.
+
+Not covered: editable installs and `setup.py`-only projects (declare the
+dependencies in `requirements.txt` instead), and conda environments, which pip
+does not count as virtualenvs.
+
 ### Rust {#rust}
 
 `cargo check` covers both syntax and typecheck. Lint needs clippy:

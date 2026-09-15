@@ -1,15 +1,16 @@
 # CLAUDE.md — Rudra
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **Seven are open as of 2026-09-15:
+is the live ledger of what is open. **Six are open as of 2026-09-15:
 OPEN-114 … OPEN-116**, filed on 2026-09-14 from run
-`8f160d92c6da` beside OPEN-113, which closed that day, **and OPEN-120 …
-OPEN-123**, filed on 2026-09-15 from live run A `a04f89bd2ed6` — an agent
-`pip install`ing into the machine's Python, a planner guard that counts
-replayed history, a nudge outcome that labels an unfinished agent done, and a
-`files_touched` that keeps only the last attempt. That run's fifth,
-**OPEN-119** — a failing test's blocker that dropped the exception — **closed
-the same day, offline**; §3's *Control flow* step 4 says how.
+`8f160d92c6da` beside OPEN-113, which closed that day, **and OPEN-121 …
+OPEN-123**, filed on 2026-09-15 from live run A `a04f89bd2ed6` — a planner
+guard that counts replayed history, a nudge outcome that labels an unfinished
+agent done, and a `files_touched` that keeps only the last attempt. That run's
+other two **closed the same day, offline**: **OPEN-119** — a failing test's
+blocker that dropped the exception; §3's *Control flow* step 4 says how — and
+**OPEN-120** — an agent `pip install`ing into the machine's Python; §3's
+`testing/` entry says how.
 That run did 6 of 10 tasks where the last run A did 0 of 11, and its board is in
 `TODO-closed.md`. **OPEN-118** — four
 `REJECTED:` refusals documented as escaping the failure counter, which counts
@@ -120,7 +121,7 @@ above is about** — they say nothing about how a model behaves.
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **Pending items and the order to work them, and nothing else.** Read it first. It opens with the **Fix next** queue — one order across every board, its `Next:` line naming the item to work and its own rules for keeping itself right — then one summary per `PENDING` item, in queue order, each linking its self-contained plan. **Seven open as of 2026-09-15: OPEN-114 … OPEN-116 and OPEN-120 … OPEN-123.** Cut to that on 2026-09-14 at the owner's request (1062 → 257 lines); everything else it held — census history, run boards, unfiled follow-ups, watch items, rules, and the *Before you start* reference — moved verbatim to `TODO-closed.md`. **Keep it that way:** a closed entry, a board or reference text goes to `TODO-closed.md` in the same edit |
+| `TODO.md` | **Pending items and the order to work them, and nothing else.** Read it first. It opens with the **Fix next** queue — one order across every board, its `Next:` line naming the item to work and its own rules for keeping itself right — then one summary per `PENDING` item, in queue order, each linking its self-contained plan. **Six open as of 2026-09-15: OPEN-114 … OPEN-116 and OPEN-121 … OPEN-123.** Cut to that on 2026-09-14 at the owner's request (1062 → 257 lines); everything else it held — census history, run boards, unfiled follow-ups, watch items, rules, and the *Before you start* reference — moved verbatim to `TODO-closed.md`. **Keep it that way:** a closed entry, a board or reference text goes to `TODO-closed.md` in the same edit |
 | `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 102 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Four blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument; and **the 2026-09-06 board**, moved here 2026-09-09, which carries run `5775ba1f9855`'s numbers and its **exercised / not-exercised tables** — the record of what a verification run can and cannot prove. **OPEN-100, OPEN-101 and OPEN-102 sit at the end**, each moved there the day it was filed; OPEN-100's closing carries the per-stage call and seconds table measured across every archived run — the evidence that its own plan's recommended number was wrong. Its index table at the top is the map; read that before scrolling. **Since 2026-09-14 it also ends with *TODO.md's context, moved here 2026-09-14*** — not items: the census history, the 2026-09-14 and both 2026-09-09 run boards with their exercised / not-exercised tables, the unfiled follow-ups, the four watch items, *Rules*, and *Before you start* (test baseline, **the fresh-project recipe**, model availability, where evidence lands, four lessons). That last part is live reference, not history |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
@@ -128,7 +129,7 @@ When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-15 those are OPEN-114 … OPEN-116 and OPEN-120 … OPEN-123 —
+2026-09-15 those are OPEN-114 … OPEN-116 and OPEN-121 … OPEN-123 —
 cited in this file only in the paragraphs above and in §2 rule 1; every other
 `OPEN-N` here points at a record. When
 the next item lands, its own document's closing section says which paragraphs
@@ -190,7 +191,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. Seven are open as of 2026-09-15 — OPEN-114 … OPEN-116 and OPEN-120 … OPEN-123; OPEN-119, the test blocker that listed pytest's frames and dropped the exception, closed offline that day; OPEN-118, the refusals documented as escaping a failure counter that counts them, closed offline that day by correcting the documents; OPEN-105, the checklist row that reported a missing archive for an archived run, closed offline that day; OPEN-103, the run-killer everything else in its run was downstream of, closed offline that day, and OPEN-104 after it, so the next live run is what says whether either fix works on a model. Since 2026-09-14 the file holds only that queue and the `PENDING` entries (owner's request); the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. Six are open as of 2026-09-15 — OPEN-114 … OPEN-116 and OPEN-121 … OPEN-123; OPEN-120, the agent that pip-installed into the machine's Python, closed offline that day; OPEN-119, the test blocker that listed pytest's frames and dropped the exception, closed offline that day; OPEN-118, the refusals documented as escaping a failure counter that counts them, closed offline that day by correcting the documents; OPEN-105, the checklist row that reported a missing archive for an archived run, closed offline that day; OPEN-103, the run-killer everything else in its run was downstream of, closed offline that day, and OPEN-104 after it, so the next live run is what says whether either fix works on a model. Since 2026-09-14 the file holds only that queue and the `PENDING` entries (owner's request); the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
@@ -214,12 +215,40 @@ src/rudra/
 ├── stacks/                 Multi-language stack detection (Step 4)
 ├── permissions/            The gate (Step 7). One pure engine, two mechanisms:
 │                           rules/floor/grants decide; middleware denies;
-│                           interrupts+approval ask; diff/audit/env support it
+│                           interrupts+approval ask; diff/audit/env support it.
+│                           env.py sets PIP_REQUIRE_VIRTUALENV=1 in EVERY
+│                           command's environment (OPEN-120): pip refuses to
+│                           install outside a virtualenv. Run a04f89bd2ed6's
+│                           tester downgraded the user's Flask and SQLAlchemy
+│                           in the machine's Python with `pip3 install`. An
+│                           env var and not a deny rule, for env.py's own
+│                           reason: it removes the capability rather than
+│                           naming a spelling, so `pip3`, `python -m pip` and
+│                           a Makefile target are all covered. ExecuteGuard-
+│                           Middleware explains the refusal in-band and
+│                           counts `installs_refused`
 ├── shell/                  runner.py — the ONLY subprocess call site (Step 8).
 │                           Renders argv, asks the engine as execute:<command>
 ├── git/                    core.py — Python git API (C3.5). Orchestrator-facing
 ├── testing/                runner.py → TestResult, parse.py counts (C3.6).
-│                           Step 9c's fix loop consumes this directly
+│                           Step 9c's fix loop consumes this directly.
+│                           project_env.py (OPEN-120): for a PYTHON project
+│                           only, builds `.venv` with the machine's
+│                           interpreter and installs pytest, then what the
+│                           project declares (requirements*.txt, pyproject's
+│                           dependency tables), at the top of work() and
+│                           before every gate run -- never in plan(), so
+│                           `--plan` writes nothing. Rudra installs and not
+│                           an agent, because once `.venv/bin/python` exists
+│                           the gate runs under it, a venv with no pytest
+│                           ESCALATES, and a missing module is reported to the
+│                           coder, which has no shell. pytest is its own step:
+│                           pip resolves a whole install before writing, so a
+│                           bad pin in one call would leave no pytest.
+│                           Leaves alone any venv without its
+│                           `.venv/.rudra-sync.json` marker and any active
+│                           VIRTUAL_ENV; runs nothing without a gate. Every
+│                           command is `execute` through run_gated
 ├── verify/                 The deterministic gate (Step 9a, C6.6):
 │                           syntax · lint · typecheck · test · stubs.
 │                           Blocking except lint — and except typecheck when
@@ -1017,6 +1046,12 @@ after `!` is a lie printed once per turn.
    stages still list findings alone, because a typecheck finding line *is* its
    message. Corrected 2026-09-15: "verbatim" held before this only for a
    failure with no located findings.
+
+   **Before every gate run, a Python project's `.venv` is synced (OPEN-120,
+   `testing/project_env.py`)**, and a failed dependency install is appended to
+   the next blocker (`_env_sync_note`), so a coder shown a missing module is
+   also shown pip's reason. The sync never ends a run: an error in it degrades
+   to the gate as it ran before.
 5. Success = **`VerifyReport.passed`, or a failing gate whose every located
    failure was already failing before this task ran** (OPEN-23,
    `loop/regressions.py`). Only `engine.py` writes `DONE`, and only there —
@@ -1496,6 +1531,13 @@ counts as opting in for that command — naming it *is* the consent. Turning
 `shell_in_auto` on restores the original exposure; the audit log is then the
 only control, and real containment would need OS-level isolation.
 
+**One write outside the project is refused whatever the mode: `pip install`
+into an interpreter that is not a virtualenv (OPEN-120).** Every command's
+environment carries `PIP_REQUIRE_VIRTUALENV=1`, so pip exits 3 instead, and for
+a Python project Rudra builds and fills the project's own `.venv` itself. It is
+pip's switch, so `pip install --isolated`, `setup.py install`, conda and every
+installer that is not pip are not covered.
+
 ---
 
 ## 8a. Debuggability Is a Product Requirement, Not a Convenience
@@ -1612,6 +1654,8 @@ either.
 | Did an agent write a file to say it had finished? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.completion_files_refused`, and a `"kind": "notice"`, `name: "completion-file"` line naming the path. Non-zero means OPEN-104's defect fired and the file never landed. **Read it beside `tool_routes_answered`**: both are a model reaching for a finish signal other than stopping, one as a tool and one as a file. **A false positive here is a REFUSED REAL WRITE** — check the first path by eye. A `DONE`/`COMPLETION`-shaped file in the project with this at 0 means it was spelled in a shape the rule does not see — nested, a code suffix, or not a sentence |
 | Was the plan itself the problem? | `usage.json` · `ledger.json` | `roles.planner.plans_refused` is 1 when OPEN-90's guard made the planner re-plan, with a `"kind": "notice"`, `name: "plan-shape"` line saying so. Read it against `files_touched: []`: a run with `plans_refused: 1` and no empty-`files_touched` `DONE` task is that guard working; empty `files_touched` with `plans_refused: 0` is the defect firing in a shape the guard did not see |
 | Was the time the provider's? | console · `debug-<id>.jsonl` | **Since OPEN-113 the run says so.** Every call over 120 s prints `slow model call: the <role> model took <N>s for <in> input / <out> output tokens` (in the debug log as `"kind": "console"`), and a time halt ends `<N>s of it (<P>%) was the <role> model answering <K> calls … -- the time went to model latency, not to tool work.` **The token counts separate the causes**: thousands of output tokens is a model writing, tens is a request queueing. Then `"logger": "rudra.llm.transport"` — one `httpx: HTTP Request: … "HTTP/1.1 <status>"` per attempt and one `openai._base_client: Retrying request …` per re-issue the **SDK** made, which `usage.json`'s `retries` does not count (OPEN-115). A planner halt saying `asked for <tool>, which will not run` threw away an answer it had waited for (OPEN-114) |
+| Did Rudra build or sync the project's `.venv`, and what did it cost? | `usage.json` · `debug-<id>.jsonl` | `run.env_syncs` and `run.env_sync_seconds`, then `"kind": "project_env"` — one line per command with `step` (`create`/`pytest`/`deps`), `outcome`, `seconds`, `command` and pip's `tail`, and one `step: "check"` line per skip reason (OPEN-120). A `deps` line with `outcome: "failed"` means the next blocker carried pip's output. **A Python project with no `project_env` line at all** means the loop never reached a gate run |
+| Did an agent try to install into the machine's Python? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.installs_refused`, and a `"kind": "notice"`, `name: "pip-refused"` line quoting the command. Non-zero is `PIP_REQUIRE_VIRTUALENV` working — before OPEN-120, run `a04f89bd2ed6`'s tester downgraded the user's Flask and SQLAlchemy. **A climbing count is the note being read and ignored.** A `Successfully installed` in a `tool_result` for a path outside the project's `.venv` means an installer pip's switch does not cover |
 
 **`files_touched: []` on a `DONE` task is the single highest-signal line in
 that folder.** It means a coder invocation was dispatched, paid for, and wrote

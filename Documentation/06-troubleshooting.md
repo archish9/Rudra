@@ -541,6 +541,32 @@ A task marked `done` passed the verification gate: it parsed, type checked, its 
 
 Run `rudra verify` yourself to see the same verdict. Always review generated code.
 
+### `ERROR: Could not find an activated virtualenv (required).`
+
+This is on purpose. Rudra sets `PIP_REQUIRE_VIRTUALENV=1` for every command,
+so pip refuses to install into a Python that is not a virtualenv. Without it,
+an agent's `pip install` changes packages on your machine, and one did
+(OPEN-120).
+
+For a Python project, Rudra installs the project's declared dependencies into
+its `.venv` before running tests. Add a missing dependency to
+`requirements.txt` or `pyproject.toml`. To install something by hand, install
+into the venv:
+
+```bash
+.venv/bin/python -m pip install <package>
+```
+
+pip does not count a conda environment as a virtualenv, so it refuses there
+too. Use `conda install`, or a venv.
+
+### Rudra created a `.venv` in my project
+
+This happens in a Python project that has no virtualenv of its own; see
+[Your project's `.venv`](10-verification.md#project-venv). Rudra marks it with
+`.venv/.rudra-sync.json` and gives it its own `.gitignore`, so `git status`
+does not list it. You can delete it at any time.
+
 ### `run_tests` says "Running tests was not permitted"
 
 You're in `--auto` without `--allow-shell`. Tests are a shell command underneath, and unattended shell is opt-in — nobody is reading the command before it runs.
