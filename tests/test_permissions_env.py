@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from rudra.config.loader import build_config, reset_config
-from rudra.permissions.env import scrubbed_env
+from rudra.permissions.env import PIP_REQUIRE_VIRTUALENV, scrubbed_env
 
 
 @pytest.fixture(autouse=True)
@@ -136,3 +136,22 @@ def test_a_path_entry_spelled_differently_is_still_removed(tmp_path, monkeypatch
     a symlink and its resolved form differ, and a miss reads as 'not Rudra'."""
     monkeypatch.setenv("PATH", os.pathsep.join([_rudra_bin() + "/.", "/usr/bin"]))
     assert scrubbed_env(build_config(tmp_path))["PATH"] == "/usr/bin"
+
+
+# --- OPEN-120: pip may not install into an interpreter outside a venv -----
+#
+# Run a04f89bd2ed6's tester ran `pip3 install Flask==3.0.3 SQLAlchemy==2.0.29`
+# in a project with no venv. OPEN-80 had taken Rudra's own venv off PATH, so
+# `pip3` meant the MACHINE's Python, and it downgraded the user's Flask and
+# SQLAlchemy. pip's own switch refuses that for `pip`, `pip3`, `python -m pip`
+# and anything that shells out to one.
+
+
+def test_pip_is_told_to_require_a_virtualenv(tmp_path):
+    assert scrubbed_env(build_config(tmp_path))[PIP_REQUIRE_VIRTUALENV] == "1"
+
+
+def test_a_user_exported_zero_does_not_switch_it_off(tmp_path, monkeypatch):
+    """Owner's call, 2026-09-15: a floor, not a default."""
+    monkeypatch.setenv(PIP_REQUIRE_VIRTUALENV, "0")
+    assert scrubbed_env(build_config(tmp_path))[PIP_REQUIRE_VIRTUALENV] == "1"

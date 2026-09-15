@@ -30,6 +30,10 @@ if TYPE_CHECKING:  # pragma: no cover
 # AWS_ is a prefix because its credential vars do not share a suffix.
 SECRET_NAME_RE = re.compile(r"(_KEY|_KEY_ID|_TOKEN|_SECRET|_PASSWORD|_CREDENTIALS)$|^AWS_")
 
+# pip's own switch: refuse `install`, `uninstall` and `download` outside a
+# virtualenv (OPEN-120). Named once, because tests and the docs quote it.
+PIP_REQUIRE_VIRTUALENV = "PIP_REQUIRE_VIRTUALENV"
+
 
 def scrubbed_env(cfg: Config) -> dict[str, str]:
     """`os.environ` minus every secret-shaped key, and minus Rudra's own venv.
@@ -53,6 +57,20 @@ def scrubbed_env(cfg: Config) -> dict[str, str]:
     instead of removing the capability. `pip`, `python -m pip`, `uv pip`,
     `pip3`, a `setup.py`, a `Makefile` target and a test that shells out all
     reach the same place.
+
+    **And pip may not install outside a virtualenv (OPEN-120).** Run
+    `a04f89bd2ed6`'s tester, in a project with no venv, found `pip3` on PATH
+    and ran `pip3 install Flask==3.0.3 SQLAlchemy==2.0.29` -- into the
+    MACHINE's Python, downgrading both. That is the paragraph above's
+    argument answered the other way: `PIP_REQUIRE_VIRTUALENV` is not a
+    spelling but pip's own switch, read by `pip`, `pip3`, `python -m pip`, a
+    `Makefile` target and a test that shells out alike, and pip inside a
+    venv ignores it. `uv pip` already refuses without a venv. Not covered:
+    `pip install --isolated` (ignores the environment), `setup.py install`,
+    and conda, whose environments pip does not count as virtualenvs. Set
+    rather than defaulted, so an exported `0` cannot switch it off -- the
+    owner made it a floor. For a Python project, `testing/project_env.py`
+    builds the `.venv` that pip is then allowed to install into.
     """
     configured = {model.api_key_env for model in cfg.models.values() if model.api_key_env}
     env = {
@@ -65,7 +83,10 @@ def scrubbed_env(cfg: Config) -> dict[str, str]:
         env["PATH"] = path_without_own(env["PATH"])
     if "VIRTUAL_ENV" in env and is_own_virtualenv(env["VIRTUAL_ENV"]):
         del env["VIRTUAL_ENV"]
+
+    env[PIP_REQUIRE_VIRTUALENV] = "1"
+
     return env
 
 
-__all__ = ["SECRET_NAME_RE", "scrubbed_env"]
+__all__ = ["PIP_REQUIRE_VIRTUALENV", "SECRET_NAME_RE", "scrubbed_env"]
