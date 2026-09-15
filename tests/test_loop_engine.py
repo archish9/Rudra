@@ -14,6 +14,7 @@ from rudra.loop.engine import git_snapshot as real_git_snapshot
 from rudra.loop.ledger import Ledger, TaskStatus
 from rudra.state.paths import rudra_paths
 from rudra.subagents import SubagentResult
+from rudra.verify.pipeline import _parse_findings
 from rudra.verify.result import (
     DENIED,
     FAILED,
@@ -1309,6 +1310,118 @@ def test_the_blocker_note_fires_on_an_unquoted_pytest_message(tmp_path):
     text = engine._blocker_text(report, project_path=tmp_path)
     assert "Note:" in text
     assert "/src/iphone15.html" in text
+
+
+# --- OPEN-119: a test blocker's frames, with the exception dropped ----------
+# Run `a04f89bd2ed6`'s t5 went BLOCKED after three attempts, `files_touched:
+# []`, and its last words were "Let me check what the actual error is more
+# carefully." The coder had been sent three frame lines and no exception:
+# `_parse_findings` matches pytest's `path:line: in <func>` frames, and
+# `_blocker_text` appended the tail only when there were NO findings. Every
+# earlier pin here built its findings by hand, with the exception already in
+# the message -- which pytest never prints on a frame line -- so these run the
+# real parser over real pytest output.
+
+# t5's gate output from `=== ERRORS ===` on, verbatim (verify.log).
+_COLLECTION_ERROR_TAIL = """\
+==================================== ERRORS ====================================
+________________ ERROR collecting tests/unit/test_todo_model.py ________________
+tests/unit/test_todo_model.py:5: in <module>
+    from src.models import Todo
+src/models.py:14: in <module>
+    class Todo(Base):
+src/models.py:19: in Todo
+    id = Column(Integer, primary_key=True, index=True)
+         ^^^^^^
+E   NameError: name 'Column' is not defined
+=========================== short test summary info ============================
+ERROR tests/unit/test_todo_model.py - NameError: name 'Column' is not defined
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+=============================== 1 error in 0.11s ===============================
+"""
+
+# pytest 9's default long format for two failing tests, the shape of t8's
+# first blocker (eight `tests/unit/test_todo_model.py:<n>: AttributeError`
+# findings and no message). Produced by real pytest, trimmed to two failures.
+_FAILED_TESTS_TAIL = """\
+=================================== FAILURES ===================================
+____________________________________ test_0 ____________________________________
+
+    def test_0():
+>       assert Todo.create_0() is not None
+               ^^^^^^^^^^^^^
+E       AttributeError: type object 'Todo' has no attribute 'create_0'
+
+tests/unit/test_todo_model.py:5: AttributeError
+____________________________________ test_1 ____________________________________
+
+    def test_1():
+>       assert Todo.create_1() is not None
+               ^^^^^^^^^^^^^
+E       AttributeError: type object 'Todo' has no attribute 'create_1'
+
+tests/unit/test_todo_model.py:8: AttributeError
+=========================== short test summary info ============================
+FAILED tests/unit/test_todo_model.py::test_0 - AttributeError: type object 'T...
+FAILED tests/unit/test_todo_model.py::test_1 - AttributeError: type object 'T...
+============================== 2 failed in 0.03s ===============================
+"""
+
+
+def _gate_blocker(name: str, tail: str):
+    """A failing stage exactly as `verify/pipeline.py` builds one: findings
+    parsed from the same tail it carries."""
+    return VerifyReport.from_stages(
+        [
+            StageResult(
+                name=name,
+                outcome=FAILED,
+                blocking=True,
+                findings=_parse_findings(tail),
+                output_tail=tail,
+                detail="1 run, 1 failed, 0 skipped",
+            )
+        ]
+    )
+
+
+def test_a_collection_error_blocker_carries_the_exception():
+    report = _gate_blocker("test", _COLLECTION_ERROR_TAIL)
+    assert report.blocker.findings, "the frames must parse, or this is not OPEN-119's shape"
+
+    text = engine._blocker_text(report)
+
+    assert text.startswith("test failed: 1 run, 1 failed, 0 skipped")
+    assert "E   NameError: name 'Column' is not defined" in text
+
+
+def test_a_failed_test_blocker_carries_every_exception_message():
+    report = _gate_blocker("test", _FAILED_TESTS_TAIL)
+    assert len(report.blocker.findings) == 2
+
+    text = engine._blocker_text(report)
+
+    assert "AttributeError: type object 'Todo' has no attribute 'create_0'" in text
+    assert "AttributeError: type object 'Todo' has no attribute 'create_1'" in text
+
+
+def test_a_test_blocker_quotes_each_frame_once():
+    """The findings are parsed FROM the tail (`verify/pipeline.py`'s test
+    stage), so listing them beside it would only say every frame twice."""
+    text = engine._blocker_text(_gate_blocker("test", _COLLECTION_ERROR_TAIL))
+    assert text.count("src/models.py:19: in Todo") == 1
+
+
+def test_a_typecheck_blocker_still_lists_its_findings_alone():
+    """mypy's finding line IS its message, so the tail would add only noise.
+    OPEN-119 is about a test runner's frames, and nothing else changes."""
+    tail = (
+        'src/app.py:3: error: Name "x" is not defined  [name-defined]\n'
+        "Found 1 error in 1 file (checked 1 source file)\n"
+    )
+    text = engine._blocker_text(_gate_blocker("typecheck", tail))
+    assert 'src/app.py:3: error: Name "x" is not defined' in text
+    assert "Found 1 error" not in text
 
 
 # --- OPEN-98 option C: a tester that finished cleanly and tested nothing ----

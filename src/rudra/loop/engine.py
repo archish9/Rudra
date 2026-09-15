@@ -319,16 +319,33 @@ def _blocker_text(report: Any, project_path: Any = None) -> str:
     meaning: without it this is exactly the function it has always been, and
     with it the gate can also say when the TEST's path is what is wrong
     (OPEN-93).
+
+    **A failing test stage quotes the runner's output, never its findings
+    (OPEN-119).** Those findings are pytest's frame lines -- `path:line: in
+    <func>`, `path:line: AttributeError` -- parsed out of this same tail
+    (verify/pipeline.py's test stage), and not one of them carries the
+    exception, which pytest prints on an `E` line the parser does not match.
+    This used to list the findings and append the tail only when there were
+    none, so a single frame suppressed the whole tail: run `a04f89bd2ed6`'s
+    t5 was sent three frames twice as "fix exactly this", never read
+    `NameError: name 'Column' is not defined`, and went BLOCKED having
+    written nothing. Quoting the tail loses nothing, since every finding is
+    a line of it, and needs no per-runner parser, since every runner's own
+    words are in it. Other stages are unchanged: a typecheck finding line IS
+    its message. `findings` themselves are untouched, and both the no-progress
+    signature (loop/bounds.py) and the regression keys (loop/regressions.py)
+    still read only them.
     """
     blocker = report.blocker
     if blocker is None:  # pragma: no cover - only called on a failure
         return ""
     lines = [f"{blocker.name} failed: {blocker.detail}".rstrip(": ")]
-    lines.extend(
-        f"  {finding.file}:{finding.line}: {finding.message}" for finding in blocker.findings
-    )
-    if not blocker.findings and blocker.output_tail:
+    if blocker.output_tail and (blocker.name == "test" or not blocker.findings):
         lines.append(blocker.output_tail)
+    else:
+        lines.extend(
+            f"  {finding.file}:{finding.line}: {finding.message}" for finding in blocker.findings
+        )
     return "\n".join(lines) + _test_path_note(report, project_path)
 
 
