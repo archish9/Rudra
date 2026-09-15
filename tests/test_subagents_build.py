@@ -1267,3 +1267,18 @@ def test_the_tool_route_is_wired_to_the_run(context):
 
     assert route.usage is usage
     assert route.trace is sink
+
+
+def test_the_execute_guard_is_wired_to_the_run(context):
+    """OPEN-120: a pip refusal is counted on the run's tally and named in its trace."""
+    import dataclasses
+
+    usage, sink = object(), object()
+    wired = dataclasses.replace(context, trace=sink, usage=usage)
+    spec = REGISTRY["tester"]
+    middleware = _middleware_for(spec, wired, _model_for(spec, wired.cfg))
+    guard = next(m for m in middleware if type(m).__name__ == "ExecuteGuardMiddleware")
+
+    assert guard.usage is usage
+    assert guard.trace is sink
+    assert guard.role == spec.role

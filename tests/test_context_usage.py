@@ -90,6 +90,11 @@ def test_recording_accumulates_per_role():
         # Added by OPEN-104: writes refused for being a file whose only
         # content announces the work is finished.
         "completion_files_refused": 0,
+        # Added by OPEN-120: pip installs refused for running outside a
+        # virtualenv. Zero here for the reason every refusal above is -- a
+        # key that appears only on runs that refused one is a key every
+        # reader of usage.json has to guard.
+        "installs_refused": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -396,6 +401,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "planner_writes_refused",
         "tool_routes_answered",
         "completion_files_refused",
+        "installs_refused",
         "seconds",
     }
 
@@ -711,3 +717,12 @@ def test_venv_sync_cost_is_written_in_the_run_block():
 
     assert run["env_syncs"] == 2
     assert run["env_sync_seconds"] == pytest.approx(3.75)
+
+
+def test_installs_refused_is_counted_per_role():
+    """OPEN-120: a refused install leaves no mark on calls, seconds or tokens."""
+    usage = RunUsage()
+    usage.record_install_refused("tester")
+    usage.record_install_refused("tester")
+
+    assert usage.as_dict()["tester"]["installs_refused"] == 2

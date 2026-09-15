@@ -205,6 +205,15 @@ class RoleUsage:
     # In run `f845b496a2aa` the unrefused file reached the user's project
     # root twice and nothing counted it.
     completion_files_refused: int = 0
+    # `execute` results in which pip refused to install outside a virtualenv,
+    # explained in-band by ExecuteGuardMiddleware (OPEN-120). The tester in
+    # practice -- the one role holding `execute`.
+    #
+    # One per invocation is PIP_REQUIRE_VIRTUALENV working and the note being
+    # read; a number that climbs is the note being ignored. In run
+    # `a04f89bd2ed6`, before the floor existed, the same attempt downgraded
+    # Flask and SQLAlchemy in the machine's own Python and nothing counted it.
+    installs_refused: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -491,6 +500,10 @@ class RunUsage:
         """
         self._slot(role).completion_files_refused += 1
 
+    def record_install_refused(self, role: str) -> None:
+        """One `pip install` refused for running outside a virtualenv (OPEN-120)."""
+        self._slot(role).installs_refused += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -574,6 +587,7 @@ class RunUsage:
                 "planner_writes_refused": tally.planner_writes_refused,
                 "tool_routes_answered": tally.tool_routes_answered,
                 "completion_files_refused": tally.completion_files_refused,
+                "installs_refused": tally.installs_refused,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

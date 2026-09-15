@@ -399,7 +399,13 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
         # construction order does not reach it. Placed here because a reader
         # following the stack top to bottom meets the three argument-and-
         # prompt repairs together (OPEN-25).
-        ExecuteGuardMiddleware(),
+        ExecuteGuardMiddleware(
+            # OPEN-120: a pip refusal is counted and named, like every other
+            # answer this stack gives the model in-band.
+            role=spec.role,
+            usage=getattr(context, "usage", None),
+            trace=getattr(context, "trace", None),
+        ),
         # The gated general-purpose spec below stays passed to
         # create_deep_agent -- it is what suppresses deepagents' ungated one
         # (OPEN-14) -- so `task` is registered for every agent whether the

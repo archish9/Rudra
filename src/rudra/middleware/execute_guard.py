@@ -44,12 +44,22 @@ the shell already starts where the work is. Keying on the `cd` leaves
 no prefix set. `SANDBOX_PREFIXES` only sharpens the wording once the `cd`
 has already decided.
 
+**A third thing the model is told, since OPEN-120: why pip refused.**
+`permissions/env.py` sets `PIP_REQUIRE_VIRTUALENV=1`, so an install outside a
+virtualenv now fails with pip's own sentence. Run `a04f89bd2ed6`'s tester had
+already hunted `pip`, then `which pip3`, before it installed into the
+machine's Python; refused and told nothing, the next hunt is `--user` or
+`--isolated`. So the result says where a dependency goes instead. Keyed on
+pip's OUTPUT, never on the command, for `permissions/env.py`'s reason: `pip`,
+`pip3`, `python -m pip` and a Makefile target all print it.
+
 Nothing here rewrites a command. The audit log records what the model asked
 for, and what ran is what the user approved.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -58,6 +68,8 @@ from langchain_core.tools import BaseTool
 
 from rudra.compat.path_constants import SANDBOX_PREFIXES
 from rudra.compat.virtual_paths import looks_windows_absolute
+
+logger = logging.getLogger(__name__)
 
 EXECUTE = "execute"
 
@@ -95,6 +107,20 @@ _CD_RE = re.compile(
 # signal both write, which is why it is the fallback when no artifact
 # carries the exit code.
 _FAILED_MARKER = "[Command failed with exit code"
+
+# pip's own words when PIP_REQUIRE_VIRTUALENV refuses
+# (pip/_internal/cli/base_command.py:213). tests/test_execute_guard.py runs
+# the machine's real pip to pin this text, because pip owns it.
+PIP_REFUSAL = "Could not find an activated virtualenv (required)."
+PIP_REFUSED_NOTICE = "pip-refused"
+
+_PIP_NOTE = (
+    "\n\n[Rudra] pip refuses to install outside a virtualenv here, on purpose: "
+    "installing into the machine's Python changes the user's own packages. "
+    "Declare the dependency in requirements.txt or pyproject.toml instead -- "
+    "Rudra installs declared dependencies into this project's .venv before "
+    "every gate run."
+)
 
 
 def _is_absolute(path: str) -> bool:
@@ -175,18 +201,42 @@ def _rewrite_execute_description(tools: Any) -> list[Any] | None:
 
 
 class ExecuteGuardMiddleware(AgentMiddleware):
-    """Re-describe `execute`, and explain a `cd` that has just failed.
+    """Re-describe `execute`, and explain a `cd` or a pip refusal that just failed.
 
-    Stateless, so one instance per agent costs nothing and the two halves
-    never need to agree about anything at runtime.
+    The three handles below only report, and default to None so the guard
+    still builds with no run at all -- which every test above does.
     """
+
+    def __init__(self, *, role: str | None = None, usage: Any = None, trace: Any = None) -> None:
+        super().__init__()
+        self.role = role
+        self.usage = usage
+        self.trace = trace
 
     def _request(self, request):
         tools = _rewrite_execute_description(getattr(request, "tools", None))
         return request if tools is None else request.override(tools=tools)
 
+    def _announce_pip_refusal(self, command: str) -> None:
+        """Count and name a refused install (CLAUDE.md §8a). Swallows its own failure."""
+        role = self.role or "agent"
+        try:
+            if self.usage is not None:
+                self.usage.record_install_refused(role)
+        except Exception:  # noqa: BLE001 - bookkeeping may never end a run
+            logger.debug("pip refusal not counted", exc_info=True)
+        try:
+            if self.trace is not None:
+                self.trace.notice(
+                    f"pip refused to install outside a virtualenv: {command}",
+                    role=role,
+                    name=PIP_REFUSED_NOTICE,
+                )
+        except Exception:  # noqa: BLE001 - same rule
+            logger.debug("pip refusal not announced", exc_info=True)
+
     def _annotated(self, request, result):
-        """The result with a note appended, or the result itself."""
+        """The result with every note that applies appended, or the result itself."""
         if (request.tool_call or {}).get("name") != EXECUTE:
             return result
         if not _failed(result):
@@ -194,11 +244,16 @@ class ExecuteGuardMiddleware(AgentMiddleware):
         command = (request.tool_call.get("args") or {}).get("command")
         if not isinstance(command, str):
             return result
-        target = _absolute_cd_target(command)
-        if target is None:
-            return result
-        note = _note(target)
         content = _content(result)
+        note = ""
+        target = _absolute_cd_target(command)
+        if target is not None:
+            note += _note(target)
+        if PIP_REFUSAL in content:
+            note += _PIP_NOTE
+            self._announce_pip_refusal(command)
+        if not note:
+            return result
         if isinstance(result, str):
             return result + note
         return result.model_copy(update={"content": content + note})
@@ -216,4 +271,9 @@ class ExecuteGuardMiddleware(AgentMiddleware):
         return self._annotated(request, await handler(request))
 
 
-__all__ = ["RUDRA_EXECUTE_DESCRIPTION", "ExecuteGuardMiddleware"]
+__all__ = [
+    "PIP_REFUSAL",
+    "PIP_REFUSED_NOTICE",
+    "RUDRA_EXECUTE_DESCRIPTION",
+    "ExecuteGuardMiddleware",
+]

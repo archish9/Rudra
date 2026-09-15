@@ -22,6 +22,8 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 
 from rudra.middleware.execute_guard import (
+    PIP_REFUSAL,
+    PIP_REFUSED_NOTICE,
     RUDRA_EXECUTE_DESCRIPTION,
     ExecuteGuardMiddleware,
 )
@@ -398,3 +400,124 @@ def test_the_real_deepagents_execute_tool_survives_the_swap(tmp_path):
     for name, tool in before.items():
         if name != "execute":
             assert after[name] is tool, f"{name} was copied for no reason"
+
+
+# --------------------------------------------------------------------------
+# 4. pip refusing to install outside a virtualenv (OPEN-120)
+# --------------------------------------------------------------------------
+
+
+def _refused() -> ToolMessage:
+    return ToolMessage(
+        content=f"ERROR: {PIP_REFUSAL}\n[Command failed with exit code 3]",
+        name="execute",
+        tool_call_id="c1",
+        artifact={"exit_code": 3},
+        status="success",
+    )
+
+
+class _Trace:
+    def __init__(self):
+        self.notices: list[dict] = []
+
+    def notice(self, payload, *, role="", name="", **kwargs):
+        self.notices.append({"payload": payload, "role": role, "name": name})
+
+
+def test_a_pip_refusal_is_explained_with_the_route():
+    """Run a04f89bd2ed6's tester, refused, would have looked for another pip.
+    A refusal carrying no correction is answered by retrying (OPEN-95)."""
+    guard = ExecuteGuardMiddleware()
+    request = _tool_request("execute", "pip3 install Flask==3.0.3 SQLAlchemy==2.0.29 2>&1")
+
+    result = guard.wrap_tool_call(request, _Handler(_refused()))
+
+    assert PIP_REFUSAL in result.content, "the original result survives"
+    assert "requirements.txt or pyproject.toml" in result.content
+    assert ".venv" in result.content
+
+
+def test_a_pip_refusal_is_counted_and_named():
+    from rudra.context.usage import RunUsage
+
+    usage, trace = RunUsage(), _Trace()
+    guard = ExecuteGuardMiddleware(role="tester", usage=usage, trace=trace)
+    command = "python3 -m pip install flask"
+
+    guard.wrap_tool_call(_tool_request("execute", command), _Handler(_refused()))
+
+    assert usage.as_dict()["tester"]["installs_refused"] == 1
+    assert [(n["name"], n["role"]) for n in trace.notices] == [(PIP_REFUSED_NOTICE, "tester")]
+    assert command in trace.notices[0]["payload"]
+
+
+def test_an_install_that_failed_for_another_reason_is_never_annotated():
+    guard = ExecuteGuardMiddleware()
+    request = _tool_request("execute", ".venv/bin/python -m pip install flask==99")
+    result = _failed("ERROR: No matching distribution found for flask==99")
+
+    assert guard.wrap_tool_call(request, _Handler(result)) is result
+
+
+def test_a_cd_and_a_pip_refusal_in_one_command_get_both_notes():
+    guard = ExecuteGuardMiddleware()
+    request = _tool_request("execute", "cd /app && pip install -r requirements.txt")
+
+    result = guard.wrap_tool_call(request, _Handler(_refused()))
+
+    assert "already runs in this project's root directory" in result.content
+    assert "requirements.txt or pyproject.toml" in result.content
+
+
+@pytest.mark.asyncio
+async def test_the_pip_note_also_runs_on_the_async_path():
+    guard = ExecuteGuardMiddleware()
+    request = _tool_request("execute", "pip install flask")
+
+    result = await guard.awrap_tool_call(request, _Handler(_refused()).acall)
+
+    assert "requirements.txt or pyproject.toml" in result.content
+
+
+def test_pip_itself_refuses_with_the_text_this_guard_keys_on(tmp_path):
+    """The upstream contract, pinned against the machine's real pip.
+
+    The note keys on pip's OUTPUT, and pip owns that sentence
+    (pip/_internal/cli/base_command.py:213). A release that rewords it would
+    silence the note with every stand-in test above still green -- so this
+    one runs pip. Skipped where the machine has no pip outside a venv.
+    """
+    import subprocess
+    from pathlib import Path
+
+    from rudra.permissions.env import scrubbed_env
+    from rudra.stacks.detect import system_interpreter
+
+    interpreter = system_interpreter()
+    if not Path(interpreter).is_absolute():
+        pytest.skip("no python3 on PATH outside Rudra's own venv")
+    probe = subprocess.run(
+        [interpreter, "-c", "import sys, pip; print(sys.prefix == sys.base_prefix)"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if probe.returncode != 0 or probe.stdout.strip() != "True":
+        pytest.skip("the machine's python has no pip, or is itself a virtualenv")
+    env = scrubbed_env(SimpleNamespace(models={}))
+    env.pop("VIRTUAL_ENV", None)
+
+    result = subprocess.run(
+        [interpreter, "-m", "pip", "install", "--no-index", "rudra-probe-does-not-exist"],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert PIP_REFUSAL in result.stdout + result.stderr
