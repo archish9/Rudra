@@ -403,3 +403,38 @@ async def test_a_provider_error_to_a_re_consult_ends_the_run(monkeypatch, contex
     # to pick up, and main_agent only offers it when resumable() is truthy.
     saved = Ledger.load(context.paths.ledger_json)
     assert saved.resumable(), "the run is only recoverable if the ledger kept the pending work"
+
+
+# --- OPEN-120 ---------------------------------------------------------------
+
+
+async def test_work_syncs_the_project_env_before_the_first_task(monkeypatch, context):
+    """Before any agent holding a shell runs."""
+    order: list[str] = []
+
+    def fake_ensure(project_path, **kwargs):
+        order.append("sync")
+        return "skipped"
+
+    async def fake_run_task(task, ledger, *, context):
+        order.append("task")
+        task.status = TaskStatus.DONE
+        task.attempts = 1
+        return Outcome.DONE
+
+    monkeypatch.setattr(engine, "ensure_project_env", fake_ensure)
+    monkeypatch.setattr(engine, "run_task", fake_run_task)
+    monkeypatch.setattr(engine, "review_once", _noop)
+    await run_loop("build it", context=context, planner=FakePlanner([["a"]]))
+
+    assert order[:2] == ["sync", "task"]
+
+
+async def test_plan_alone_never_syncs_the_project_env(monkeypatch, context):
+    """`--plan` shows the plan and writes nothing (loop/engine.py::plan)."""
+    calls: list[str] = []
+    monkeypatch.setattr(engine, "ensure_project_env", lambda *a, **k: calls.append("sync"))
+
+    await engine.plan("build it", context=context, planner=FakePlanner([["a"]]))
+
+    assert calls == []

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,8 +35,11 @@ from rudra.middleware.content_paths import (
     project_top_level,
 )
 from rudra.subagents import SubagentContext, run_subagent
+from rudra.testing.project_env import ProjectEnvState, ensure_project_env
 from rudra.verify import verify_project
 from rudra.verify.stubs import is_build_output, project_files
+
+_LOG = logging.getLogger("rudra.loop.engine")
 
 
 class Outcome(StrEnum):
@@ -82,6 +86,11 @@ class LoopContext:
     # persisted, for the reason `failure_baseline` is not: a fresh process
     # starts at zero and gets its full budget, which is the safe direction.
     run_errors: int = 0
+    # What this run has learned about the project's .venv (OPEN-120):
+    # installs that failed, and whether building it was denied. Created on
+    # first use by `_sync_project_env`, and not persisted, for
+    # `failure_baseline`'s reason.
+    project_env: Any = None
 
 
 def _digest(path: Path) -> str:
@@ -420,6 +429,53 @@ def _inherited_note(report: Any, inherited: frozenset[str]) -> str:
     )
 
 
+async def _sync_project_env(context: LoopContext) -> None:
+    """Build or sync a Python project's .venv, off the event loop (OPEN-120).
+
+    Before every gate run, because the gate is what reads it: once
+    `.venv/bin/python` exists `stacks/detect.py` runs the tests under it,
+    and the tester -- the one agent holding `execute` -- runs only after a
+    gate. Off the loop for `_verify`'s reason: `pip install` is a
+    subprocess with `test_timeout` seconds, and Ctrl-C must not wait on it.
+
+    Never ends a run. An internal error degrades to the gate as it ran
+    before OPEN-120, and pip still refuses to install outside a venv
+    whatever happens here: that is the shell's environment, not this.
+    """
+    if context.project_env is None:
+        context.project_env = ProjectEnvState()
+    try:
+        await asyncio.to_thread(
+            ensure_project_env,
+            context.project_path,
+            gate=getattr(context.subagents, "gate", None),
+            console=context.console,
+            cfg=context.cfg,
+            state=context.project_env,
+            usage=context.usage,
+            trace=getattr(context.subagents, "trace", None),
+        )
+    except Exception:  # noqa: BLE001 - a failed sync must not end the run
+        _LOG.debug("syncing the project's .venv raised", exc_info=True)
+
+
+def _env_sync_note(context: Any) -> str:
+    """pip's output from a failed dependency install, for the blocker (OPEN-120).
+
+    Beside the gate's text, never instead of it. A failure the install
+    explains shows up as a missing module, and the coder -- which holds no
+    shell -- can fix a bad pin in requirements.txt only if it is shown one.
+    """
+    failure = getattr(getattr(context, "project_env", None), "failure", "")
+    if not failure:
+        return ""
+    return (
+        "\n\nBefore this gate ran, installing the project's declared dependencies into "
+        ".venv failed, so a missing module above may be that rather than the code. "
+        f"pip said:\n{failure}"
+    )
+
+
 async def _verify(task: Task, context: LoopContext) -> Any:
     """Run the gate over what this task touched.
 
@@ -433,6 +489,7 @@ async def _verify(task: Task, context: LoopContext) -> Any:
     cancel must not need a kill from another terminal -- was deferred
     just as long (CR-C5).
     """
+    await _sync_project_env(context)
     return await asyncio.to_thread(
         verify_project,
         context.project_path,
@@ -782,7 +839,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             return outcome
 
         signature = failure_signature(report)
-        blocker_text = _blocker_text(report, context.project_path)
+        blocker_text = _blocker_text(report, context.project_path) + _env_sync_note(context)
         if signature is not None and signature == task.last_signature:
             task.status = TaskStatus.BLOCKED
             # The blocker, not just the shape of the failure. `task.note` is
@@ -1371,6 +1428,10 @@ async def work(
     here ends the run and `--continue` picks the pending tasks up. See
     plan() for why, and OPEN-83 for what the alternative would cost.
     """
+    # Before any agent that holds a shell runs (OPEN-120) -- and not in
+    # plan(), whose promise is that `--plan` writes nothing into the project.
+    # No planner stage holds `execute`, so nothing is lost by waiting.
+    await _sync_project_env(context)
     consulted_on_empty = False
     consulted_on_stale = False
     blocked_consults = 0

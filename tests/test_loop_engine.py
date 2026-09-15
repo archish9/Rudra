@@ -1544,3 +1544,61 @@ async def test_the_untested_record_is_appended_beside_a_provider_failure(monkeyp
         "the coder could not run: Error code: 500 - internal",
         "the tester ended without calling run_tests",
     )
+
+
+# --- OPEN-120: the project's .venv is synced before the gate reads it -------
+
+
+async def test_the_project_env_is_synced_before_every_gate_run(monkeypatch, context):
+    order: list[str] = []
+
+    def fake_ensure(project_path, **kwargs):
+        order.append("sync")
+        return "ok"
+
+    def fake_verify(*args, **kwargs):
+        order.append("verify")
+        return passing_report()
+
+    monkeypatch.setattr(engine, "ensure_project_env", fake_ensure)
+    monkeypatch.setattr(engine, "verify_project", fake_verify)
+    ledger = Ledger()
+    task = ledger.add("write it")
+
+    assert await run_task(task, ledger, context=context) is Outcome.DONE
+    assert order[:2] == ["sync", "verify"]
+    assert order.count("sync") == order.count("verify")
+
+
+async def test_a_failed_dependency_install_reaches_the_blocker(monkeypatch, context):
+    """The coder holds no shell. A bad pin it cannot see is a missing module
+    it will try to fix in code for three attempts."""
+    from rudra.testing.project_env import ProjectEnvState
+
+    context.project_env = ProjectEnvState(
+        failure="ERROR: No matching distribution found for flask==99"
+    )
+    monkeypatch.setattr(engine, "ensure_project_env", lambda *a, **k: "failed")
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report())
+    ledger = Ledger()
+    task = ledger.add("write it")
+
+    assert await run_task(task, ledger, context=context) is Outcome.BLOCKED
+    assert "installing the project's declared dependencies" in task.note
+    assert "flask==99" in task.note
+
+
+async def test_a_sync_that_raises_never_ends_the_run(monkeypatch, context):
+    def broken(*args, **kwargs):
+        raise RuntimeError("a bug in the sync")
+
+    monkeypatch.setattr(engine, "ensure_project_env", broken)
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    ledger = Ledger()
+    task = ledger.add("write it")
+
+    assert await run_task(task, ledger, context=context) is Outcome.DONE
+
+
+def test_the_blocker_gains_nothing_when_no_install_failed(context):
+    assert engine._env_sync_note(context) == ""
