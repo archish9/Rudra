@@ -254,6 +254,15 @@ def _system_interpreter() -> str:
     return "python3"
 
 
+# Public spellings for testing/project_env.py (OPEN-120), which BUILDS the
+# venv these find. Aliases rather than renames: tests/test_stacks.py imports
+# `_system_interpreter` by name, and inside this module the private names
+# still read as the gate's own resolution.
+VENV_DIRS = _VENV_DIRS
+venv_executable = _venv_executable
+system_interpreter = _system_interpreter
+
+
 _TEST_DIRS = ("tests", "test")
 
 

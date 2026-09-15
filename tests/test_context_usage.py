@@ -697,3 +697,17 @@ def test_an_exhaustion_does_not_read_as_a_retry_in_the_panel():
     usage.record("coder", input_tokens=10, output_tokens=1)
     usage.record_exhaustion("coder")
     assert "retr" not in render_usage(usage)
+
+
+def test_venv_sync_cost_is_written_in_the_run_block():
+    """OPEN-120: Rudra's own installs belong to the run, not to any role, and
+    a slow first task whose time went to `pip install` must be answerable
+    from usage.json alone."""
+    usage = RunUsage()
+    usage.record_env_sync(1.25)
+    usage.record_env_sync(2.5)
+
+    run = usage.as_log(wall_now=usage.started_wall, mono_now=usage.started_mono)["run"]
+
+    assert run["env_syncs"] == 2
+    assert run["env_sync_seconds"] == pytest.approx(3.75)

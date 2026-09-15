@@ -287,6 +287,14 @@ class RunUsage:
     # schema is read by scripts in this repo's own ledger.
     write_beliefs: dict[str, dict[str, str]] = field(default_factory=dict)
 
+    # What building and syncing the project's .venv cost (OPEN-120): one per
+    # command testing/project_env.py ran, and their seconds. Run-level rather
+    # than per role because no agent ran them -- Rudra did, before a gate run
+    # -- and a first task whose time went to `pip install` must be
+    # answerable from usage.json alone (CLAUDE.md §8a).
+    env_syncs: int = 0
+    env_sync_seconds: float = 0.0
+
     def beliefs_for(self, role: str) -> dict[str, str]:
         """`role`'s write-belief map, created on first use.
 
@@ -305,6 +313,11 @@ class RunUsage:
     def has_served(self, role: str) -> bool:
         """Has `role`'s endpoint answered at least one call this run?"""
         return role in self.served_roles
+
+    def record_env_sync(self, seconds: float) -> None:
+        """One command that built or synced the project's .venv (OPEN-120)."""
+        self.env_syncs += 1
+        self.env_sync_seconds += max(0.0, float(seconds))
 
     def _slot(self, role: str) -> RoleUsage:
         if role not in self.per_role:
@@ -593,6 +606,8 @@ class RunUsage:
                 "suspended_seconds": round(
                     self.suspended_seconds(wall_now=wall_now, mono_now=mono_now), 3
                 ),
+                "env_syncs": self.env_syncs,
+                "env_sync_seconds": round(self.env_sync_seconds, 3),
             },
         }
 
