@@ -827,6 +827,36 @@ def _announce_halt(reason: str, *, console: Console, trace: Any, usage: Any) -> 
         logger.debug("planner halt not announced", exc_info=True)
 
 
+def _history_baseline(msgs: list[Any]) -> int:
+    """How many of `msgs` this turn inherited rather than produced (OPEN-121).
+
+    A stage's consults share one thread on purpose (`consult_planner` below,
+    OPEN-65 relies on it) and the planner streams `stream_mode="values"`, so a
+    re-consult's FIRST chunk carries every earlier consult's messages followed
+    by this turn's own user message -- and nothing else, since no model has
+    answered yet. Counting from zero charges this turn for work earlier ones
+    did: run `a04f89bd2ed6`'s fourth breakdown consult opened on 17 replayed
+    tool calls, 4 of them `add_tasks`, and `MAX_PLANNING_CALLS` halted it
+    before the model was asked anything. Its fifth did the same. History only
+    grows, so from there that run could not answer a block at all.
+
+    The anchor is the LAST `HumanMessage`, which is the message
+    `consult_planner` just sent. Everything before it belongs to an earlier
+    consult; the message itself is deliberately left to be walked, so the
+    trace still records ONE `USER` event saying what this stage was asked --
+    the record a reader of `debug-<id>.jsonl` finds each consult by, and which
+    that run's log held five copies of.
+
+    No `HumanMessage` means nothing here can be identified as history -- a
+    subgraph namespace, or a synthetic chunk in a test -- and the answer is 0,
+    which is exactly the behaviour every caller had before this existed.
+    """
+    for index in range(len(msgs) - 1, -1, -1):
+        if type(msgs[index]).__name__ == "HumanMessage":
+            return index
+    return 0
+
+
 def _unrun_tool_calls(chunk: Any, seen: dict[tuple[str, ...], int]) -> list[str]:
     """Tool names in the part of `chunk` this stage has not processed yet.
 
@@ -960,9 +990,34 @@ async def _stream_planner_turn(
         if _halt:
             break
 
-        # Before the chunk is parsed, so a stage that is spending without
-        # producing tool calls is caught too -- which is this item's own
-        # shape: three of run `d8f742805b9b`'s model calls emitted 4932,
+        namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+        msgs = event.get("messages", [])
+        where = tuple(namespace or ())
+
+        if where not in seen:
+            # This namespace's first chunk of this turn: everything the
+            # thread already held is history, and belongs to no bound here
+            # (OPEN-121). BOTH counters are seeded, because the trace has
+            # the identical zero-start (`trace/stream.py`, and `state` is
+            # rebuilt per turn above) -- run `a04f89bd2ed6`'s debug log held
+            # eight planner records naming `edit_file`/`write_file` for ONE
+            # refused write, replayed by the three consults after it.
+            #
+            # Before the clock check below, not after it: that check's own
+            # halt text asks `_unrun_tool_calls` which calls it is stopping
+            # (OPEN-113), and unseeded it would name an earlier consult's
+            # calls as ones that "will not run". Taken once per namespace,
+            # so an approval resume -- which re-enters the stream inside
+            # this same turn (`permissions/approval.py`) and repeats the
+            # state it paused on -- cannot reset the position and re-walk
+            # what was already counted.
+            baseline = _history_baseline(msgs)
+            seen[where] = baseline
+            state.counters[where] = baseline
+
+        # Before the chunk's MESSAGES are walked, so a stage that is spending
+        # without producing tool calls is caught too -- which is this item's
+        # own shape: three of run `d8f742805b9b`'s model calls emitted 4932,
         # 5540 and 4636 output tokens of HTML across 430.9 s, and only one
         # of the three reached a tool at all. Each bound names itself, for
         # OPEN-91's reason: "40 tool calls" is a loop and "over the 1200s
@@ -977,9 +1032,6 @@ async def _stream_planner_turn(
             )
             break
 
-        namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
-        msgs = event.get("messages", [])
-
         if trace is not None:
             # Before the guards read it, and before any `break`: an event
             # the guard stops on is exactly the one worth seeing. The
@@ -987,8 +1039,7 @@ async def _stream_planner_turn(
             # "(planner subagent ...)" line is gone.
             trace.feed(chunk, state)
 
-        where = tuple(namespace or ())
-        processed = seen.get(where, 0)
+        processed = seen[where]
         while processed < len(msgs):
             msg = msgs[processed]
             msg_type = type(msg).__name__
