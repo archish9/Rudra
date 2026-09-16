@@ -435,8 +435,18 @@ async def _sync_project_env(context: LoopContext) -> None:
     Before every gate run, because the gate is what reads it: once
     `.venv/bin/python` exists `stacks/detect.py` runs the tests under it,
     and the tester -- the one agent holding `execute` -- runs only after a
-    gate. Off the loop for `_verify`'s reason: `pip install` is a
-    subprocess with `test_timeout` seconds, and Ctrl-C must not wait on it.
+    gate. Off the loop for `_verify`'s reason: the event loop must not block
+    on a subprocess with `test_timeout` seconds to run.
+
+    That does not make Ctrl-C free. `asyncio.to_thread` cancellation cancels
+    only the awaiting coroutine -- the worker thread keeps running the
+    blocking `subprocess.communicate()` underneath it to completion, and
+    `asyncio.run`'s shutdown joins that thread (up to `THREAD_JOIN_TIMEOUT`,
+    300s in 3.12). So the await returns promptly, but a Ctrl-C during a long
+    `venv`/pip install can appear to hang until that command finishes or its
+    `test_timeout` expires -- and since this now also runs at the top of
+    `work()`, that exposure is wider than `_verify`'s. The double-Ctrl-C hard
+    exit (`cli.py::_cancel_on_sigint`) is the escape hatch for that wait.
 
     Never ends a run. An internal error degrades to the gate as it ran
     before OPEN-120, and pip still refuses to install outside a venv

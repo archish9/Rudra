@@ -67,6 +67,7 @@ from rudra.permissions.env import scrubbed_env
 from rudra.shell.runner import CommandResult, run_gated
 from rudra.stacks.detect import VENV_DIRS, detect, system_interpreter, venv_executable
 from rudra.testing.runner import _tail
+from rudra.trace.redact import redact
 
 _LOG = logging.getLogger(__name__)
 
@@ -299,7 +300,13 @@ def _record(
     """Write one command to the run log, the tally, the trace and -- on failure -- the console.
 
     CLAUDE.md §8a. Swallows its own failure: a run must not be reported
-    failed because a log line could not be written.
+    failed because a log line could not be written. `command` and `tail` are
+    redacted before they enter the event -- the same rule every other
+    diagnostic in this project follows (`trace/redact.py`): redaction happens
+    where the event is BUILT, not where it is rendered. `trace.notice()`
+    below already redacts through `TraceSink`, so this is what makes the two
+    agree instead of one showing `<redacted>` and the other showing the
+    credential.
     """
     try:
         _LOG.debug(
@@ -312,9 +319,9 @@ def _record(
                     "step": step,
                     "outcome": outcome,
                     "seconds": round(seconds, 2),
-                    "command": result.command,
+                    "command": redact(result.command),
                     "exit_code": result.exit_code,
-                    "tail": tail,
+                    "tail": redact(tail),
                 }
             },
         )

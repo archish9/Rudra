@@ -117,9 +117,10 @@ PIP_REFUSED_NOTICE = "pip-refused"
 _PIP_NOTE = (
     "\n\n[Rudra] pip refuses to install outside a virtualenv here, on purpose: "
     "installing into the machine's Python changes the user's own packages. "
-    "Declare the dependency in requirements.txt or pyproject.toml instead -- "
-    "Rudra installs declared dependencies into this project's .venv before "
-    "every gate run."
+    "If this is a Python project, declare the dependency in requirements.txt "
+    "or pyproject.toml instead -- Rudra installs declared dependencies into "
+    ".venv before every gate run. If it is not, use this project's own "
+    "package manager instead."
 )
 
 

@@ -390,6 +390,49 @@ def test_every_step_reaches_the_run_log_the_tally_and_the_trace(tmp_path, monkey
     assert [n["name"] for n in trace.notices] == [PROJECT_ENV_NOTICE] * 3
 
 
+def test_a_credential_in_the_command_or_output_never_reaches_the_event_raw(
+    tmp_path, monkeypatch, events
+):
+    """Final whole-branch review, finding 1: `_record` put `result.command` and
+    `tail` straight into the debug event with no redaction, while
+    `TraceSink.notice()` a few lines below redacts the very same command
+    string -- so a PEP 508 direct URL with basic-auth credentials (a real
+    private-index pattern) reached debug-<id>.jsonl once redacted (via the
+    notice) and once raw (via the event). CLAUDE.md §8a: "Never put a secret
+    in a diagnostic. Redaction happens where the event is built."."""
+    secret = "ghp_abcdefgh12345678"
+    _requirements(tmp_path, f"pkg @ https://x-access-token:{secret}@github.com/org/repo.git\n")
+
+    def fake_run_gated(argv, *, cwd, gate, console, timeout, env=None, read_only=False):
+        argv = tuple(str(part) for part in argv)
+        step = _step_of(argv)
+        if step == "create":
+            directory = tmp_path / ".venv" / "bin"
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "python").write_text("", encoding="utf-8")
+            return CommandResult(argv, " ".join(argv), 0, "done", "")
+        if step == "pytest":
+            (tmp_path / ".venv" / "bin" / "pytest").write_text("", encoding="utf-8")
+            return CommandResult(argv, " ".join(argv), 0, "done", "")
+        command = f'pip install "pkg @ https://x-access-token:{secret}@github.com/org/repo.git"'
+        stderr = f"ERROR: could not fetch https://x-access-token:{secret}@github.com/org/repo.git"
+        return CommandResult(argv, command, 1, "", stderr)
+
+    monkeypatch.setattr(project_env, "run_gated", fake_run_gated)
+
+    assert _ensure(tmp_path) == FAILED
+
+    steps = [e for e in events if e["kind"] == PROJECT_ENV_KIND and e["step"] == "deps"]
+    assert len(steps) == 1
+    event = steps[0]
+    assert secret not in event["command"], "the secret leaked into the debug event's command"
+    assert secret not in event["tail"], "the secret leaked into the debug event's tail"
+    # The rest of the text must survive -- a redactor that eats the whole
+    # line defeats the point of having a diagnostic at all.
+    assert "pip install" in event["command"]
+    assert "could not fetch" in event["tail"]
+
+
 def test_a_skip_is_written_once_per_reason(tmp_path, monkeypatch, events):
     (tmp_path / "index.html").write_text("<html></html>", encoding="utf-8")
     _shell(monkeypatch, tmp_path)

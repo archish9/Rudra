@@ -438,6 +438,26 @@ def test_a_pip_refusal_is_explained_with_the_route():
     assert ".venv" in result.content
 
 
+def test_the_pip_note_is_true_whether_or_not_this_is_a_python_project():
+    """Final whole-branch review, finding 2: the note used to state flatly
+    that "Rudra installs declared dependencies into this project's .venv
+    before every gate run," but `testing/project_env.py::_skip_reason`
+    returns "not a python project" for anything `stacks.detect` does not call
+    Python -- so in a Node or Rust project that sentence is false, and can
+    steer a model into inventing a bogus requirements.txt/pyproject.toml
+    there. The middleware has no reliable project-type signal at this point,
+    so the routing half is worded conditionally instead of detected."""
+    guard = ExecuteGuardMiddleware()
+    request = _tool_request("execute", "pip install flask")
+
+    result = guard.wrap_tool_call(request, _Handler(_refused()))
+
+    lowered = result.content.lower()
+    assert "requirements.txt or pyproject.toml" in lowered
+    assert "if this is a python project" in lowered
+    assert "if it is not" in lowered
+
+
 def test_a_pip_refusal_is_counted_and_named():
     from rudra.context.usage import RunUsage
 
