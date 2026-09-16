@@ -1104,14 +1104,28 @@ async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
                 ),
             }
         ]
+
         # `config=` only when there is something to put in it: an argument
         # that is always passed is an argument every caller's model must
         # accept, and the models here are sometimes doubles.
-        reply = (
-            await model.ainvoke(prompt, config=telemetry.config("summariser"))
-            if telemetry is not None
-            else await model.ainvoke(prompt)
+        def call(request: Any) -> Any:
+            if telemetry is not None:
+                return model.ainvoke(request, config=telemetry.config("summariser"))
+            return model.ainvoke(request)
+
+        # Outside any agent graph, so no ModelRetryMiddleware wraps this
+        # call -- and since OPEN-115 switched every client SDK's own retries
+        # off, it would otherwise have none. The middleware's method is
+        # called directly so the policy, the backoff and the `retry` notice
+        # are the ones every other model call gets. `usage` is deliberately
+        # not passed: this call is not in `usage.json`'s `calls`, and a
+        # retry count with no call count is a rate with no denominator.
+        from rudra.middleware.model_retry import ModelRetryMiddleware
+
+        retry = ModelRetryMiddleware(
+            "summariser", trace=getattr(getattr(context, "subagents", None), "trace", None)
         )
+        reply = await retry.awrap_model_call(prompt, call)
         notes = str(getattr(reply, "content", "")).strip()
         if notes:
             write_agents_md(path, replace_section(text, "Architecture Notes", notes))

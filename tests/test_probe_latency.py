@@ -244,3 +244,73 @@ def test_the_table_says_what_one_round_trip_is(monkeypatch, tmp_path) -> None:
     output = render_models_test(monkeypatch, tmp_path, probe_result(tools_seconds=3.14))
 
     assert "round trip" in output
+
+
+# --- OPEN-115: the probe's only retry layer is Rudra's now ------------------
+
+
+class _Status(Exception):
+    def __init__(self, code: int) -> None:
+        super().__init__(f"Error code: {code}")
+        self.status_code = code
+
+
+class _FlakyReach(StubModel):
+    """Fails the reach call `failures` times, then answers."""
+
+    def __init__(self, failures: int) -> None:
+        super().__init__()
+        self.failures = failures
+        self.reach_calls = 0
+
+    def invoke(self, prompt: str) -> StubResponse:
+        self.reach_calls += 1
+        if self.reach_calls <= self.failures:
+            raise _Status(502)
+        return super().invoke(prompt)
+
+
+def test_a_transient_reach_failure_is_retried_rather_than_reported(probe_with, monkeypatch) -> None:
+    """The client SDK used to absorb a flap here, and its retries are off.
+    A red row for an endpoint that answers on the second try would send a
+    user to debug a config that is fine."""
+    monkeypatch.setattr("rudra.middleware.model_retry.time.sleep", lambda *_: None)
+    model = _FlakyReach(failures=2)
+
+    result = probe_with(model)
+
+    assert result.reach == "ok"
+    assert result.tools == "ok"
+    assert model.reach_calls == 3
+
+
+def test_a_transient_tools_failure_is_retried_too(probe_with, monkeypatch) -> None:
+    monkeypatch.setattr("rudra.middleware.model_retry.time.sleep", lambda *_: None)
+
+    class FlakyBound(StubBound):
+        calls = 0
+
+        def invoke(self, prompt: str) -> StubResponse:
+            FlakyBound.calls += 1
+            if FlakyBound.calls == 1:
+                raise _Status(500)
+            return super().invoke(prompt)
+
+    class Model(StubModel):
+        def bind_tools(self, _tools: list[Any]) -> StubBound:
+            return FlakyBound(0.0, None)
+
+    result = probe_with(Model())
+
+    assert result.tools == "ok"
+    assert FlakyBound.calls == 2
+
+
+def test_an_exhausted_reach_is_reported_as_a_failure(probe_with, monkeypatch) -> None:
+    monkeypatch.setattr("rudra.middleware.model_retry.time.sleep", lambda *_: None)
+
+    result = probe_with(_FlakyReach(failures=99))
+
+    assert result.ok is False
+    assert result.reach_seconds is None
+    assert "502" in result.reach

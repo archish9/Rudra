@@ -124,9 +124,18 @@ def probe_role(role: str, cfg: Any = None) -> ProbeResult:
 
     context_tokens = (model.profile or {}).get("max_input_tokens")
 
+    # The client SDK's own retries are off (OPEN-115), and a probe runs
+    # outside any agent graph, so both calls go through the same retry an
+    # agent's calls do. A flap that clears on the second attempt is an
+    # endpoint that works, and a red row for it sends a user to debug a
+    # config that is fine. A retried call's seconds include its backoff.
+    from rudra.middleware.model_retry import ModelRetryMiddleware
+
+    retry = ModelRetryMiddleware(role)
+
     started = time.perf_counter()
     try:
-        model.invoke("Reply with the single word: ok")
+        retry.wrap_model_call("Reply with the single word: ok", model.invoke)
     except Exception as error:  # noqa: BLE001
         return ProbeResult(
             role=role,
@@ -147,7 +156,9 @@ def probe_role(role: str, cfg: Any = None) -> ProbeResult:
     tools_seconds: float | None = None
     started = time.perf_counter()
     try:
-        response = model.bind_tools([echo]).invoke("Call the echo tool with text hello.")
+        response = retry.wrap_model_call(
+            "Call the echo tool with text hello.", model.bind_tools([echo]).invoke
+        )
         tools = "ok" if response.tool_calls else "no tool_calls emitted"
         tools_seconds = time.perf_counter() - started
     except Exception as error:  # noqa: BLE001

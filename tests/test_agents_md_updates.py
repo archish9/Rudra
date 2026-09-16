@@ -153,3 +153,103 @@ def test_a_failing_summariser_costs_polish_not_the_run(tmp_path):
 
     context = _context(tmp_path, paths, Exploding())
     asyncio.run(summarise_architecture(context, ledger))  # must not raise
+
+
+# --- OPEN-115: the summariser's only retry layer is Rudra's now -------------
+#
+# `summarise_architecture` calls the model directly, outside any agent graph,
+# so it never passed through ModelRetryMiddleware -- the client SDK's retries
+# were its only ones. Those are switched off for every provider, so without
+# this a single 500 at run end costs the Architecture Notes.
+
+
+class _Status(Exception):
+    def __init__(self, code: int) -> None:
+        super().__init__(f"Error code: {code}")
+        self.status_code = code
+
+
+class _Sink:
+    def __init__(self) -> None:
+        self.notices: list[dict] = []
+
+    def notice(self, payload, *, role, name="", namespace=(), index=0, at=0.0):
+        self.notices.append({"payload": payload, "role": role, "name": name})
+
+
+def _flaky_model(failures: int):
+    @dataclass
+    class Reply:
+        content: str
+
+    class Flaky:
+        calls = 0
+
+        async def ainvoke(self, messages):
+            Flaky.calls += 1
+            if Flaky.calls <= failures:
+                raise _Status(503)
+            return Reply(content="The parser is hand-rolled and recursive-descent.")
+
+    return Flaky()
+
+
+def _no_sleep(monkeypatch) -> None:
+    async def _instant(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _instant)
+
+
+def test_a_transient_summariser_failure_is_retried(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    paths = _paths(tmp_path)
+    ledger = Ledger()
+    ledger.add("write the parser").status = TaskStatus.DONE
+    model = _flaky_model(failures=2)
+
+    asyncio.run(summarise_architecture(_context(tmp_path, paths, model), ledger))
+
+    body = section_body(paths.agents_md.read_text(encoding="utf-8"), "Architecture Notes")
+    assert "recursive-descent" in body
+    assert type(model).calls == 3
+
+
+def test_a_summariser_retry_reaches_the_trace(tmp_path, monkeypatch):
+    """Noticed, under the name telemetry already gives this call."""
+    _no_sleep(monkeypatch)
+    paths = _paths(tmp_path)
+    ledger = Ledger()
+    ledger.add("write the parser").status = TaskStatus.DONE
+    context = _context(tmp_path, paths, _flaky_model(failures=1))
+    sink = _Sink()
+
+    @dataclass
+    class Subagents:
+        trace: Any
+        telemetry: Any = None
+
+    context.subagents = Subagents(trace=sink)
+
+    asyncio.run(summarise_architecture(context, ledger))
+
+    assert [(n["name"], n["role"]) for n in sink.notices] == [("retry", "summariser")]
+    assert "503" in sink.notices[0]["payload"]
+
+
+def test_a_non_transient_summariser_failure_is_not_retried(tmp_path, monkeypatch):
+    _no_sleep(monkeypatch)
+    paths = _paths(tmp_path)
+    ledger = Ledger()
+    ledger.add("write the parser").status = TaskStatus.DONE
+
+    class Unauthorised:
+        calls = 0
+
+        async def ainvoke(self, messages):
+            Unauthorised.calls += 1
+            raise _Status(401)
+
+    asyncio.run(summarise_architecture(_context(tmp_path, paths, Unauthorised()), ledger))
+
+    assert Unauthorised.calls == 1
