@@ -238,37 +238,19 @@ async def test_an_approval_resume_does_not_re_baseline(monkeypatch):
     assert await _run(monkeypatch, chunks) is True
 
 
-class _FakeClock:
-    """A monotonic clock advancing a fixed step per reading, as
-    `tests/test_planner_bounds.py` and `tests/test_subagents_runner.py` use."""
-
-    def __init__(self, step: float = 0.0):
-        self.step = step
-        self.now = 0.0
-
-    def monotonic(self) -> float:
-        self.now += self.step
-        return self.now
-
-
-async def test_a_time_halt_on_a_first_chunk_names_no_historical_call(monkeypatch):
-    """The clock is read before the chunk is parsed (`:971-979`), and its halt
-    text asks `_unrun_tool_calls` which calls the halt will stop (OPEN-113).
-    A re-consult's first chunk carries history and no live answer, so the
-    baseline has to be in place before that question is asked -- otherwise the
-    halt reports an earlier consult's `add_tasks` as a call that "will not run".
-    """
-    monkeypatch.setattr(planner_agent, "time", _FakeClock(step=1300.0))
-    events: list[Any] = []
-    sink = TraceSink(level=TraceLevel.VERBOSE, consumers=[events.append])
-    chunks = _reconsult(_history([["add_tasks", "read_ledger"]]), _calls(["ls"]))
-
-    await _run(monkeypatch, chunks, trace=sink, usage=RunUsage())
-
-    notices = [e for e in events if e.kind is TraceKind.NOTICE]
-    assert len(notices) == 1
-    assert "s limit" in notices[0].payload
-    assert "which will not run" not in notices[0].payload
+# `test_a_time_halt_on_a_first_chunk_names_no_historical_call` stood here, with
+# a `_FakeClock` beside it. It pinned that the baseline is seeded before the
+# loop's clock check, so a time halt could not report an earlier consult's
+# `add_tasks` as a call that "will not run".
+#
+# OPEN-114 deleted both halves of what it pinned: the clock check left the loop
+# for a `before_model` hook, and the sentence naming the calls a halt discards
+# went with it, because the bound no longer lands on an answer. There is nothing
+# left for the ordering to protect -- the baseline is now seeded above
+# `trace.feed`, which is the reason it was always really there.
+#
+# The baseline's own behaviour is pinned by every test above; the time bound is
+# pinned in `tests/test_span_deadline.py`, on a real graph.
 
 
 # --- the boundary itself ----------------------------------------------------

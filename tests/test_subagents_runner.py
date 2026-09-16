@@ -8,6 +8,8 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from rich.console import Console
 
+from rudra.context import deadline as deadline_module
+from rudra.context.deadline import SPAN_DEADLINE
 from rudra.subagents import runner
 from rudra.subagents.runner import SubagentContext, SubagentResult, run_subagent
 from rudra.trace.stream import REFUSAL_KEY
@@ -588,6 +590,50 @@ def _glob_stream(count: int):
     return stream_of(*[{"messages": messages[: n + 1]} for n in range(count)])
 
 
+def _out_of_seconds(inner):
+    """A stream whose graph ended because the span ran out of seconds.
+
+    Since OPEN-114 the time bound is not read in `run_subagent`'s own loop --
+    it fires in `SpanDeadlineMiddleware`'s `before_model` hook, which ends the
+    graph, and `run_subagent` then finds a tripped deadline and announces it.
+    The old check read the clock as a chunk ARRIVED and `break`, which threw
+    away the answer that chunk carried: on this stack, typically the
+    `write_file` holding the deliverable.
+
+    So this stands in for the middleware the way `refusal()` below stands in
+    for `RepeatGuardMiddleware`: the tests in this section are about what
+    `run_subagent` DOES with a tripped deadline -- announce it, count it,
+    withhold the nudge -- and the tripped deadline is the contract between the
+    two. `tests/test_span_deadline.py` holds the other end of it, on a real
+    graph and a real hook.
+    """
+
+    async def fake_stream(agent, inputs, config, gate, console, **kwargs):
+        async for chunk in inner(agent, inputs, config, gate, console, **kwargs):
+            yield chunk
+        deadline = SPAN_DEADLINE.get()
+        if deadline is not None:
+            deadline.trip()
+
+    return fake_stream
+
+
+def _watching(inner, box: list):
+    """Records the span's live deadline per chunk.
+
+    So a test can assert the bound did NOT fire -- and on what number -- rather
+    than only that the invocation came back ok, which it would do with no bound
+    at all.
+    """
+
+    async def fake_stream(agent, inputs, config, gate, console, **kwargs):
+        async for chunk in inner(agent, inputs, config, gate, console, **kwargs):
+            box.append(SPAN_DEADLINE.get())
+            yield chunk
+
+    return fake_stream
+
+
 async def test_a_subagent_stops_after_the_wall_clock_bound(monkeypatch, tmp_path):
     """OPEN-91. Run `fc543fb2b82f`'s t7 made 55 calls over 2,704 s and
     MAX_TOTAL_CALLS = 80 never fired: at 46 s/call that ceiling is 61 minutes
@@ -595,7 +641,8 @@ async def test_a_subagent_stops_after_the_wall_clock_bound(monkeypatch, tmp_path
     be denominated in them."""
     monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
-    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(8))
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _out_of_seconds(_glob_stream(8)))
 
     result = await run_subagent("coder", "write it", context=make_context(tmp_path))
 
@@ -619,30 +666,59 @@ async def test_the_two_bounds_name_themselves_differently(monkeypatch, tmp_path)
 
 async def test_the_wall_clock_bound_is_configurable(monkeypatch, tmp_path):
     """A user on a slow provider is the person best placed to raise it --
-    the same argument `[agent] max_fix_attempts` is configurable on."""
+    the same argument `[agent] max_fix_attempts` is configurable on.
+
+    Asserted on the SPAN since OPEN-114: the limit is what the hook is bounded
+    by, so "the configured number reached the deadline" is the whole claim. A
+    stub that tripped anyway would prove nothing about the number.
+    """
     monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
-    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(8))
+    seen: list[object] = []
+
+    monkeypatch.setattr(runner, "run_with_approvals", _watching(_glob_stream(8), seen))
 
     result = await run_subagent(
         "coder", "write it", context=make_context(tmp_path, max_invocation_seconds=100_000)
     )
 
     assert result.ok is True
+    assert {d.limit for d in seen} == {100_000}
 
 
 async def test_zero_turns_the_wall_clock_bound_off(monkeypatch, tmp_path):
     """0 disables, the way `[agent] max_questions = 0` does. The call ceiling
-    still holds -- each bound covers the regime where the other is loose."""
+    still holds -- each bound covers the regime where the other is loose.
+
+    `SpanDeadline(0.0).expired()` is always False, which is where "no bound"
+    now lives; `tests/test_span_deadline.py` runs that case on a real graph.
+    """
     monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
     monkeypatch.setattr(runner, "time", FakeClock(step=5_000.0))
-    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(4))
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=5_000.0))
+    seen: list[object] = []
+
+    monkeypatch.setattr(runner, "run_with_approvals", _watching(_glob_stream(4), seen))
 
     result = await run_subagent(
         "coder", "write it", context=make_context(tmp_path, max_invocation_seconds=0)
     )
 
     assert result.ok is True
+    assert [d.limit for d in seen] == [0.0] * 4
+    assert not any(d.expired() for d in seen)
+
+
+async def test_the_span_is_closed_when_the_invocation_ends(monkeypatch, tmp_path):
+    """The variable must not outlive the invocation. `run_subagent` reports a
+    raised exception rather than raising it, so a leaked deadline would bound
+    the NEXT invocation from this one's start."""
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(2))
+
+    await run_subagent("coder", "write it", context=make_context(tmp_path))
+
+    assert SPAN_DEADLINE.get() is None
 
 
 async def test_a_context_with_no_agent_config_still_gets_the_bound(monkeypatch, tmp_path):
@@ -653,7 +729,8 @@ async def test_a_context_with_no_agent_config_still_gets_the_bound(monkeypatch, 
 
     monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
-    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(8))
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _out_of_seconds(_glob_stream(8)))
 
     bare = SubagentContext(
         project_path=tmp_path,
@@ -675,7 +752,8 @@ async def test_the_time_halt_says_it_fired(monkeypatch, tmp_path):
     trace = FakeTrace()
     monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
-    monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(8))
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _out_of_seconds(_glob_stream(8)))
 
     result = await run_subagent("coder", "write it", context=make_context(tmp_path, trace=trace))
 
@@ -1125,7 +1203,8 @@ async def test_a_time_halt_says_how_much_was_model_latency(monkeypatch, tmp_path
 
     monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
-    monkeypatch.setattr(runner, "run_with_approvals", billing_stream)
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(runner, "run_with_approvals", _out_of_seconds(billing_stream))
 
     context = dataclasses.replace(make_context(tmp_path), usage=usage)
     result = await run_subagent("coder", "write it", context=context)

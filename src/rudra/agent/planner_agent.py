@@ -25,7 +25,6 @@ corpus, being single agents doing one job.
 from __future__ import annotations
 
 import logging
-import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,6 +35,7 @@ from rich.markup import escape
 
 from rudra.config import get_config
 from rudra.context.budget import evict_limit, recall_limit
+from rudra.context.deadline import span_deadline
 from rudra.context.middleware import UsageMiddleware
 from rudra.context.usage import model_time_of, model_wait_note
 from rudra.facts import facts_block
@@ -50,6 +50,7 @@ from rudra.middleware import (
     ModelRetryMiddleware,
     PlannerWriteMiddleware,
     RepeatGuardMiddleware,
+    SpanDeadlineMiddleware,
     TaskAnchorMiddleware,
     build_memory_middleware,
 )
@@ -348,6 +349,16 @@ def build_planner_middleware(
     """
     middleware: list = [
         FixWriteParamsMiddleware(strip_sandbox_prefixes=compat_sandbox_paths),
+        # OPEN-114, and it takes no arguments: the deadline reaches it through
+        # a ContextVar `_stream_planner_turn` sets (`context/deadline.py`),
+        # because a stage agent is compiled per consult (OPEN-32) and the span
+        # it is bounded by starts later. Inert without one.
+        #
+        # First of the `before_model` implementers -- the only thing its
+        # position decides. The hooks run in list order and this one jumps to
+        # `end`, so a stage out of seconds pays for neither the summarization
+        # nor the accounting of a call it is not going to make.
+        SpanDeadlineMiddleware(),
         # OPEN-100 option C. `PLANNER_FS_TOOLS` grants no write tool, which
         # is correct and is not the defect -- the defect was that upstream
         # answered the attempt with a tool-list echo, and run d8f742805b9b's
@@ -857,27 +868,7 @@ def _history_baseline(msgs: list[Any]) -> int:
     return 0
 
 
-def _unrun_tool_calls(chunk: Any, seen: dict[tuple[str, ...], int]) -> list[str]:
-    """Tool names in the part of `chunk` this stage has not processed yet.
-
-    The time bound reads the clock when a chunk arrives -- right after a
-    model call returned and before the tool node runs -- so these are calls
-    the model asked for that the halt will stop from executing (OPEN-114).
-    """
-    namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
-    messages = event.get("messages", []) if isinstance(event, dict) else []
-    fresh = messages[seen.get(tuple(namespace or ()), 0) :]
-    return [
-        call.get("name", "")
-        for message in fresh
-        if type(message).__name__ == "AIMessage"
-        for call in getattr(message, "tool_calls", None) or []
-    ]
-
-
 def _time_halt_detail(
-    chunk: Any,
-    seen: dict[tuple[str, ...], int],
     usage: Any,
     model_before: tuple[int, float] | None,
     elapsed: float,
@@ -886,25 +877,19 @@ def _time_halt_detail(
 
     Run `8f160d92c6da` printed `1888s in one planner stage, over the 1200s
     limit -- stopping after 3 tool calls.` and nothing more, for a stage
-    that was 99.98% planner-model latency and whose last answer -- a
-    `record_fact` it had waited 218 s for -- the halt then discarded. Both
-    facts were in hand at the moment of the halt. Each half is omitted when
-    it cannot be stated, and neither can raise into the guard.
+    that was 99.98% planner-model latency. Omitted when it cannot be stated
+    truthfully, and it cannot raise into the guard.
+
+    **It used to have a second half, and OPEN-114 deleted it rather than
+    rewording it.** `_unrun_tool_calls` named the calls the halt was about to
+    discard -- *"The answer that arrived past the limit asked for
+    record_fact, which will not run."* -- which described the defect
+    accurately while it existed. The bound now fires before the next model
+    call rather than on the answer to the last one, so there is no answer in
+    hand to describe, and the sentence would be false.
     """
-    parts: list[str] = []
     wait = model_wait_note(usage, "planner", model_before, elapsed)
-    if wait:
-        parts.append(wait)
-    try:
-        dropped = _unrun_tool_calls(chunk, seen)
-    except Exception:  # noqa: BLE001 - a diagnostic must not disarm a guard
-        dropped = []
-    if dropped:
-        parts.append(
-            f"The answer that arrived past the limit asked for {', '.join(dropped)}, "
-            "which will not run."
-        )
-    return "".join(f" {part}" for part in parts)
+    return f" {wait}" if wait else ""
 
 
 async def _stream_planner_turn(
@@ -960,7 +945,6 @@ async def _stream_planner_turn(
     consecutive_failures = 0
     planning_tool_calls: dict[str, int] = {}
     total_calls = 0
-    started = time.monotonic()
     time_limit = _stage_time_limit()
     # What the planner model had cost before this stage began, so a time halt
     # can say how much of the stage was spent waiting on it (OPEN-113).
@@ -972,131 +956,144 @@ async def _stream_planner_turn(
         _announce_halt(reason, console=console, trace=trace, usage=usage)
         _halt = True
 
-    # run_with_approvals yields exactly what astream yields, so the parse
-    # loop below is unchanged. It reads interrupts from get_state after
-    # the stream drains, because __interrupt__ never appears in "values"
-    # chunks and changing stream_mode would change the chunk shape this
-    # loop depends on.
-    async for chunk in run_with_approvals(
-        agent,
-        {"messages": [{"role": "user", "content": message}]},
-        lg_config,
-        gate,
-        console,
-        trace=trace,
-        stream_tokens=get_config().agent.stream_tokens,
-        role="planner",
-    ):
-        if _halt:
-            break
-
-        namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
-        msgs = event.get("messages", [])
-        where = tuple(namespace or ())
-
-        if where not in seen:
-            # This namespace's first chunk of this turn: everything the
-            # thread already held is history, and belongs to no bound here
-            # (OPEN-121). BOTH counters are seeded, because the trace has
-            # the identical zero-start (`trace/stream.py`, and `state` is
-            # rebuilt per turn above) -- run `a04f89bd2ed6`'s debug log held
-            # eight planner records naming `edit_file`/`write_file` for ONE
-            # refused write, replayed by the three consults after it.
-            #
-            # Before the clock check below, not after it: that check's own
-            # halt text asks `_unrun_tool_calls` which calls it is stopping
-            # (OPEN-113), and unseeded it would name an earlier consult's
-            # calls as ones that "will not run". Taken once per namespace,
-            # so an approval resume -- which re-enters the stream inside
-            # this same turn (`permissions/approval.py`) and repeats the
-            # state it paused on -- cannot reset the position and re-walk
-            # what was already counted.
-            baseline = _history_baseline(msgs)
-            seen[where] = baseline
-            state.counters[where] = baseline
-
-        # Before the chunk's MESSAGES are walked, so a stage that is spending
-        # without producing tool calls is caught too -- which is this item's
-        # own shape: three of run `d8f742805b9b`'s model calls emitted 4932,
-        # 5540 and 4636 output tokens of HTML across 430.9 s, and only one
-        # of the three reached a tool at all. Each bound names itself, for
-        # OPEN-91's reason: "40 tool calls" is a loop and "over the 1200s
-        # limit" is a slow provider or a loop, and a reader of
-        # `debug-<id>.jsonl` has to be able to tell them apart.
-        elapsed = time.monotonic() - started
-        if time_limit and elapsed >= time_limit:
-            halt(
-                f"{elapsed:.0f}s in one planner stage, over the {time_limit:.0f}s "
-                f"limit -- stopping after {total_calls} tool calls."
-                + _time_halt_detail(chunk, seen, usage, model_before, elapsed)
-            )
-            break
-
-        if trace is not None:
-            # Before the guards read it, and before any `break`: an event
-            # the guard stops on is exactly the one worth seeing. The
-            # namespace rides on every event now, so the old
-            # "(planner subagent ...)" line is gone.
-            trace.feed(chunk, state)
-
-        processed = seen[where]
-        while processed < len(msgs):
-            msg = msgs[processed]
-            msg_type = type(msg).__name__
-
-            if msg_type == "AIMessage":
-                for tc in getattr(msg, "tool_calls", []):
-                    name = tc.get("name", "")
-                    # EVERY name, and `write_file` above all (OPEN-100). This
-                    # branch used to read `if name in ("write_file",):
-                    # planning_tool_calls.clear()`, so the one call the
-                    # planner can never legitimately make was the one that
-                    # disarmed the guard -- and the two names it did count
-                    # were both absent from the stage that ran away.
-                    total_calls += 1
-                    if total_calls >= MAX_PLANNER_TOOL_CALLS:
-                        halt(
-                            f"{total_calls} tool calls in one planner stage, over "
-                            f"the {MAX_PLANNER_TOOL_CALLS} limit -- stopping."
-                        )
-                        break
-                    if name in ("add_tasks", "read_ledger"):
-                        planning_tool_calls[name] = planning_tool_calls.get(name, 0) + 1
-                        if planning_tool_calls[name] >= MAX_PLANNING_CALLS:
-                            halt(
-                                f"planner loop guard: '{name}' called "
-                                f"{planning_tool_calls[name]}x -- stopping."
-                            )
-                            break
-                if _halt:
-                    break
-
-            elif msg_type == "ToolMessage":
-                # The shared predicate, not a fourth private copy. This
-                # guard's own four markers could not see "BLOCKED:", so
-                # three consecutive denials never tripped it. It reads the
-                # whole message rather than the content since OPEN-16:
-                # `status` says whether a tool failed without guessing from
-                # text that may simply quote a failure.
-                if is_rudra_refusal(msg):
-                    # NO EVENT (OPEN-94), the same rule as
-                    # subagents/runner.py. The repeat guard is live on this
-                    # stack too -- run 2cde3406f7d6 recorded
-                    # roles.planner.reads_deduped: 2 -- so the defect was
-                    # here as well, and a refusal must neither count as a
-                    # failure nor clear a real streak.
-                    pass
-                elif message_is_error(msg):
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        halt("3 consecutive planner failures -- stopping.")
-                else:
-                    consecutive_failures = 0
-
+    # The seconds bound lives in SpanDeadlineMiddleware's `before_model` hook
+    # now, and this is where the span it reads begins (OPEN-114). The clock
+    # used to be read at the top of the loop below, on a chunk that carries a
+    # finished answer and whose tools have not run yet -- so `break` closed
+    # the generator langgraph's step loop lives inside and cancelled them.
+    # Run `8f160d92c6da` lost a `record_fact project_type` it had waited
+    # 733.7 s plus a 218.1 s retry for, and a second `record_fact` after
+    # 549.4 s; `facts.json` holds neither, and its clarify stage ended with
+    # zero facts having produced one.
+    #
+    # The context manager resets the variable however the turn ends, which
+    # matters because this coroutine is awaited in `consult_planner`'s own
+    # task: a leak would bound every later stage from this one's start.
+    with span_deadline(time_limit) as deadline:
+        # run_with_approvals yields exactly what astream yields, so the parse
+        # loop below is unchanged. It reads interrupts from get_state after
+        # the stream drains, because __interrupt__ never appears in "values"
+        # chunks and changing stream_mode would change the chunk shape this
+        # loop depends on.
+        async for chunk in run_with_approvals(
+            agent,
+            {"messages": [{"role": "user", "content": message}]},
+            lg_config,
+            gate,
+            console,
+            trace=trace,
+            stream_tokens=get_config().agent.stream_tokens,
+            role="planner",
+        ):
             if _halt:
                 break
-            processed += 1
-        seen[where] = processed
+
+            namespace, event = (
+                chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
+            )
+            msgs = event.get("messages", [])
+            where = tuple(namespace or ())
+
+            if where not in seen:
+                # This namespace's first chunk of this turn: everything the
+                # thread already held is history, and belongs to no bound here
+                # (OPEN-121). BOTH counters are seeded, because the trace has
+                # the identical zero-start (`trace/stream.py`, and `state` is
+                # rebuilt per turn above) -- run `a04f89bd2ed6`'s debug log
+                # held eight planner records naming `edit_file`/`write_file`
+                # for ONE refused write, replayed by the three consults after
+                # it.
+                #
+                # Above `trace.feed`, which is what it has to be ahead of. It
+                # was ahead of a clock check as well until OPEN-114, whose
+                # halt text named the calls it was discarding; that check and
+                # that sentence are both gone. Taken once per namespace, so an
+                # approval resume -- which re-enters the stream inside this
+                # same turn (`permissions/approval.py`) and repeats the state
+                # it paused on -- cannot reset the position and re-walk what
+                # was already counted.
+                baseline = _history_baseline(msgs)
+                seen[where] = baseline
+                state.counters[where] = baseline
+
+            if trace is not None:
+                # Before the guards read it, and before any `break`: an event
+                # the guard stops on is exactly the one worth seeing. The
+                # namespace rides on every event now, so the old
+                # "(planner subagent ...)" line is gone.
+                trace.feed(chunk, state)
+
+            processed = seen[where]
+            while processed < len(msgs):
+                msg = msgs[processed]
+                msg_type = type(msg).__name__
+
+                if msg_type == "AIMessage":
+                    for tc in getattr(msg, "tool_calls", []):
+                        name = tc.get("name", "")
+                        # EVERY name, and `write_file` above all (OPEN-100).
+                        # This branch used to read `if name in
+                        # ("write_file",): planning_tool_calls.clear()`, so
+                        # the one call the planner can never legitimately
+                        # make was the one that disarmed the guard -- and the
+                        # two names it did count were both absent from the
+                        # stage that ran away.
+                        total_calls += 1
+                        if total_calls >= MAX_PLANNER_TOOL_CALLS:
+                            halt(
+                                f"{total_calls} tool calls in one planner stage, over "
+                                f"the {MAX_PLANNER_TOOL_CALLS} limit -- stopping."
+                            )
+                            break
+                        if name in ("add_tasks", "read_ledger"):
+                            planning_tool_calls[name] = planning_tool_calls.get(name, 0) + 1
+                            if planning_tool_calls[name] >= MAX_PLANNING_CALLS:
+                                halt(
+                                    f"planner loop guard: '{name}' called "
+                                    f"{planning_tool_calls[name]}x -- stopping."
+                                )
+                                break
+                    if _halt:
+                        break
+
+                elif msg_type == "ToolMessage":
+                    # The shared predicate, not a fourth private copy. This
+                    # guard's own four markers could not see "BLOCKED:", so
+                    # three consecutive denials never tripped it. It reads the
+                    # whole message rather than the content since OPEN-16:
+                    # `status` says whether a tool failed without guessing
+                    # from text that may simply quote a failure.
+                    if is_rudra_refusal(msg):
+                        # NO EVENT (OPEN-94), the same rule as
+                        # subagents/runner.py. The repeat guard is live on
+                        # this stack too -- run 2cde3406f7d6 recorded
+                        # roles.planner.reads_deduped: 2 -- so the defect was
+                        # here as well, and a refusal must neither count as a
+                        # failure nor clear a real streak.
+                        pass
+                    elif message_is_error(msg):
+                        consecutive_failures += 1
+                        if consecutive_failures >= 3:
+                            halt("3 consecutive planner failures -- stopping.")
+                    else:
+                        consecutive_failures = 0
+
+                if _halt:
+                    break
+                processed += 1
+            seen[where] = processed
+
+    # Announced here rather than by the hook, because the sentence needs
+    # `total_calls` and the model-latency share and only this function holds
+    # them -- the same reason `subagents/runner.py` announces its own. The
+    # three counting guards above have already spoken if they fired, and the
+    # first to fire keeps the sentence.
+    if not _halt and deadline.tripped_at is not None:
+        halt(
+            f"{deadline.tripped_at:.0f}s in one planner stage, over the "
+            f"{time_limit:.0f}s limit -- stopping after {total_calls} tool calls."
+            + _time_halt_detail(usage, model_before, deadline.tripped_at)
+        )
 
     return not _halt
 

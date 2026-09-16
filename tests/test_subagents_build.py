@@ -1043,6 +1043,22 @@ def test_the_listings_truncation_footer_is_not_given_a_leading_slash(context):
     assert footer.startswith("…")
 
 
+# --- OPEN-114: the seconds bound reaches every subagent ------------------
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_carries_the_span_deadline(name, context):
+    # `[agent] max_invocation_seconds` bounds an invocation, and since
+    # OPEN-114 that bound is read in a `before_model` hook rather than in
+    # `run_subagent`'s own chunk loop -- so a spec this is missing from is an
+    # UNBOUNDED one, and silently, because `run_subagent` would simply never
+    # find a tripped deadline. OPEN-101 is what that costs when nobody pins
+    # it: a fix that lived on one stack for a year because nothing made the
+    # other use it.
+    middleware = _middleware_for(REGISTRY[name], context, _model_for(REGISTRY[name], context.cfg))
+    assert any(type(m).__name__ == "SpanDeadlineMiddleware" for m in middleware)
+
+
 # --- OPEN-91: the machine-path hint reaches every subagent ---------------
 
 

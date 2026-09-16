@@ -226,7 +226,8 @@ def test_planner_middleware_without_a_backend_is_unchanged():
 
     RepeatGuardMiddleware joined the always-on set with OPEN-10,
     DelegationGuardMiddleware with OPEN-37, ModelRetryMiddleware with
-    OPEN-41 and MachinePathMiddleware with OPEN-91, and the ORDER is the
+    OPEN-41, MachinePathMiddleware with OPEN-91 and SpanDeadlineMiddleware
+    with OPEN-114, and the ORDER is the
     assertion that matters: the repeat guard must sit after the param fixer
     so a repaired path is judged as the call it became, not as the one the
     model mistyped -- and the machine-path hint must sit BEFORE the repeat
@@ -237,6 +238,13 @@ def test_planner_middleware_without_a_backend_is_unchanged():
     middleware = build_planner_middleware("a task")
     assert [type(m).__name__ for m in middleware] == [
         "FixWriteParamsMiddleware",
+        # OPEN-114, and it is FIRST of the `before_model` implementers, which
+        # is the only thing its position decides: the hooks run in list order
+        # and this one jumps to `end`, so a stage out of seconds pays for
+        # neither the summarization nor the accounting of a call it is not
+        # going to make. It reads no tool argument, so the front seat U.14
+        # keeps for the param fixer is not in question.
+        "SpanDeadlineMiddleware",
         # OPEN-100 option C. After the param fixer for the same reason the
         # repeat guard is: the refusal names the file the model meant, which
         # is the one `filename`/`path` -> `file_path` aliasing produced.

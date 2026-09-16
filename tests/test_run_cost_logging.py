@@ -396,16 +396,33 @@ async def test_a_time_halt_reaches_the_invocation_log_too(monkeypatch, invocatio
     """OPEN-91. The seconds bound is the one a user's complaint is
     denominated in, so `debug-<id>.jsonl` has to say it fired -- and say
     which bound it was, since "80 tool calls" and "20 minutes" mean
-    different things."""
-    from tests.test_subagents_runner import FakeClock, ai, call, make_context, stream_of
+    different things.
+
+    Since OPEN-114 the bound fires in `SpanDeadlineMiddleware`'s `before_model`
+    hook rather than in `run_subagent`'s chunk loop, so the stream stands in for
+    it (`_out_of_seconds`). What this file pins is unchanged: the halt, and what
+    the invocation spent reaching it, both reach the log.
+    """
+    from rudra.context import deadline as deadline_module
+    from tests.test_subagents_runner import (
+        FakeClock,
+        _out_of_seconds,
+        ai,
+        call,
+        make_context,
+        stream_of,
+    )
 
     monkeypatch.setattr(runner_module, "build_agent", lambda spec, context, task="": object())
     monkeypatch.setattr(runner_module, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
     messages = [ai("looking", [call("glob", pattern=f"/usr/bin/python{n}*")]) for n in range(6)]
     monkeypatch.setattr(
         runner_module,
         "run_with_approvals",
-        stream_of(*[{"messages": messages[: n + 1]} for n in range(len(messages))]),
+        _out_of_seconds(
+            stream_of(*[{"messages": messages[: n + 1]} for n in range(len(messages))])
+        ),
     )
 
     result = await runner_module.run_subagent("coder", "go", context=make_context(tmp_path))

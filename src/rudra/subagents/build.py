@@ -34,6 +34,7 @@ from rudra.middleware import (
     MachinePathMiddleware,
     ModelRetryMiddleware,
     RepeatGuardMiddleware,
+    SpanDeadlineMiddleware,
     TestExtensionMiddleware,
     ToolRouteMiddleware,
 )
@@ -263,6 +264,19 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             # OPEN-104: places a host-spelled completion file at the root.
             project_path=getattr(context, "project_path", None),
         ),
+        # OPEN-114, and it takes no arguments at all: the deadline reaches it
+        # through a ContextVar the SPAN sets (`context/deadline.py`), because
+        # this agent is compiled before `run_subagent` starts the span it will
+        # be bounded by. Inert without one, which is every agent built outside
+        # a run.
+        #
+        # First of the `before_model` implementers, which is the only thing
+        # its position decides -- the hooks run in list order and jump to
+        # `end`, so a stage that is out of seconds must not pay for the
+        # summarization or the accounting of a call it is not going to make.
+        # It reads no tool argument, so it has no claim on the front seat
+        # U.14 keeps for the param fixer.
+        SpanDeadlineMiddleware(),
         # OPEN-41. Outermost of the MODEL-call wrappers, which is the only
         # thing its position decides -- it implements the model-call hooks
         # only and never sees a tool argument, so it has no claim on the

@@ -24,6 +24,7 @@ from typing import Any
 from rich.console import Console
 
 from rudra.compat.virtual_paths import virtual_to_relative
+from rudra.context.deadline import span_deadline
 from rudra.context.usage import model_time_of, model_wait_note
 from rudra.permissions.approval import run_with_approvals
 from rudra.subagents.build import build_agent
@@ -598,10 +599,10 @@ async def run_subagent(
 
         The namespace and index are where it fired: a delegate's events
         read `role: coder` with a namespace and are not the coder's own,
-        which is the distinction OPEN-37 turned on. The time bound is
-        checked before any message is parsed, so it passes the empty
-        namespace -- it is a fact about the invocation, not about a
-        position in a subgraph's message list.
+        which is the distinction OPEN-37 turned on. The time bound fires in
+        a `before_model` hook and is announced once the stream has drained
+        (OPEN-114), so it passes the empty namespace -- it is a fact about
+        the invocation, not about a position in a subgraph's message list.
         """
         if context.trace is None:
             return
@@ -640,28 +641,6 @@ async def run_subagent(
             role=name,
         ):
             if halted is not None:
-                break
-
-            # Before the chunk is parsed, so an invocation that is spending
-            # without producing tool calls is caught too. Each bound names
-            # itself: "80 tool calls" is a loop, "20 minutes" is a slow
-            # provider or a loop, and a reader of ledger.json has to be able
-            # to tell them apart (OPEN-91).
-            elapsed = time.monotonic() - invocation_started
-            if limit and elapsed >= limit:
-                halted = (
-                    f"{elapsed:.0f}s in one invocation, over the {limit:.0f}s limit "
-                    f"-- stopping after {total_calls} tool calls."
-                )
-                # Where the time went, from the tally that already holds it
-                # (OPEN-113): "over the limit" alone reads the same for a
-                # 55-call hunt and for a provider taking six minutes a call.
-                wait = model_wait_note(
-                    getattr(context, "usage", None), spec.role, model_before, elapsed
-                )
-                if wait:
-                    halted = f"{halted} {wait}"
-                announce(halted, (), 0)
                 break
 
             namespace, event = (
@@ -731,22 +710,57 @@ async def run_subagent(
                 processed += 1
             seen[where] = processed
 
+        # The time bound is not read here (OPEN-114). It fires in
+        # SpanDeadlineMiddleware's `before_model` hook, which runs after the
+        # previous answer's tools have run and before the next call is paid
+        # for; this loop used to read the clock as a chunk ARRIVED and
+        # `break`, which closed the generator langgraph's step loop lives
+        # inside and cancelled the tool node -- on the subagent stack that
+        # discarded call is typically `write_file`, the deliverable itself.
+        #
+        # So the halt is ANNOUNCED here instead, once the stream has drained:
+        # the sentence needs `total_calls` and the model-latency share, which
+        # only this function holds. `halted is None` keeps the first guard to
+        # fire, and the announcement before the nudge below is what stops a
+        # halted invocation being handed another turn.
+        if halted is None and deadline.tripped_at is not None:
+            halted = (
+                f"{deadline.tripped_at:.0f}s in one invocation, over the {limit:.0f}s limit "
+                f"-- stopping after {total_calls} tool calls."
+            )
+            # Where the time went, from the tally that already holds it
+            # (OPEN-113): "over the limit" alone reads the same for a
+            # 55-call hunt and for a provider taking six minutes a call.
+            wait = model_wait_note(
+                getattr(context, "usage", None), spec.role, model_before, deadline.tripped_at
+            )
+            if wait:
+                halted = f"{halted} {wait}"
+            announce(halted, (), 0)
+
     try:
-        await drain({"messages": [{"role": "user", "content": prompt}]})
-        # ONE more turn, and only when the last thing said was a plan
-        # rather than a report (OPEN-98). After the guards, so a halted
-        # invocation is never handed another turn -- that would undo the
-        # guard -- and bounded by construction: there is one call site,
-        # and the nudge itself says it is the last turn either way.
-        if halted is None and announces_continuation(last_text):
-            nudged = True
-            calls_before = total_calls
-            await drain({"messages": [{"role": "user", "content": CONTINUATION_NUDGE}]})
-            # What the number is FOR: mostly `continued` means the
-            # heuristic is earning its keep, mostly `confirmed_done`
-            # means it is firing on finished agents and the opener list
-            # must be narrowed (CLAUDE.md 8a).
-            nudge_outcome = "continued" if total_calls > calls_before else "confirmed_done"
+        # ONE deadline for the invocation, nudge included: the second turn
+        # must not buy an agent a second allowance, exactly as `total_calls`
+        # and the call ceiling carry across it. The context manager resets the
+        # variable however the span ends -- a leak would bound the NEXT
+        # invocation from this one's start, and this function reports a raised
+        # exception rather than raising it.
+        with span_deadline(limit) as deadline:
+            await drain({"messages": [{"role": "user", "content": prompt}]})
+            # ONE more turn, and only when the last thing said was a plan
+            # rather than a report (OPEN-98). After the guards, so a halted
+            # invocation is never handed another turn -- that would undo the
+            # guard -- and bounded by construction: there is one call site,
+            # and the nudge itself says it is the last turn either way.
+            if halted is None and announces_continuation(last_text):
+                nudged = True
+                calls_before = total_calls
+                await drain({"messages": [{"role": "user", "content": CONTINUATION_NUDGE}]})
+                # What the number is FOR: mostly `continued` means the
+                # heuristic is earning its keep, mostly `confirmed_done`
+                # means it is firing on finished agents and the opener list
+                # must be narrowed (CLAUDE.md 8a).
+                nudge_outcome = "continued" if total_calls > calls_before else "confirmed_done"
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         log_invocation(
             name,

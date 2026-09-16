@@ -33,6 +33,8 @@ from rudra.agent.planner_agent import (
     PLANNER_HALT_NOTICE,
     _stream_planner_turn,
 )
+from rudra.context import deadline as deadline_module
+from rudra.context.deadline import SPAN_DEADLINE
 from rudra.context.usage import RunUsage
 from rudra.subagents.runner import MAX_INVOCATION_SECONDS, _invocation_limit
 from rudra.trace import TraceLevel
@@ -42,11 +44,11 @@ from rudra.trace.sink import TraceSink
 class FakeClock:
     """A monotonic clock advancing a fixed step per reading.
 
-    `planner_agent` reads the clock through its module-global `time`, so
-    replacing that name replaces the clock for this module only -- the real
-    `time.monotonic` is untouched everywhere else. Copied deliberately from
-    `tests/test_subagents_runner.py`, whose bound this one is the missing
-    half of.
+    `SpanDeadline` reads the clock through `rudra.context.deadline`'s
+    module-global `time`, so replacing that name replaces the clock for the
+    deadline only -- the real `time.monotonic` is untouched everywhere else.
+    It used to be `planner_agent`'s own global; OPEN-114 moved the clock into
+    the deadline object, and this module no longer reads one.
     """
 
     def __init__(self, step: float = 0.0):
@@ -83,6 +85,55 @@ def _stream_of_calls(names: list[str]):
     """
     messages = [AIMessage(content="", tool_calls=[_call(n)]) for n in names]
     return [((), {"messages": messages[: n + 1]}) for n in range(len(names))]
+
+
+def _stream_fn(chunks):
+    async def fake_stream(agent, inputs, config, gate, console, **kwargs):
+        for chunk in chunks:
+            yield chunk
+
+    return fake_stream
+
+
+def _out_of_seconds(inner):
+    """A stream whose graph ended because the stage ran out of seconds.
+
+    Since OPEN-114 the clock is not read in `_stream_planner_turn`'s own loop.
+    It is read in `SpanDeadlineMiddleware`'s `before_model` hook, which ends the
+    graph, and the loop then finds a tripped deadline and announces it. The old
+    check read the clock as a chunk ARRIVED -- right after a model call returned
+    and before its tools ran -- so it discarded the answer it had just paid for:
+    run `8f160d92c6da` lost two `record_fact` calls worth 767.5 s that way.
+
+    So this stands in for the middleware, the way the `ToolMessage`s below stand
+    in for the guards that produce them: these tests are about what
+    `_stream_planner_turn` DOES with a tripped deadline. The hook itself, and
+    that the crossing answer's tools still run, are pinned in
+    `tests/test_span_deadline.py` on a real graph.
+    """
+
+    async def fake_stream(agent, inputs, config, gate, console, **kwargs):
+        async for chunk in inner(agent, inputs, config, gate, console, **kwargs):
+            yield chunk
+        deadline = SPAN_DEADLINE.get()
+        if deadline is not None:
+            deadline.trip()
+
+    return fake_stream
+
+
+async def _run_stream(monkeypatch, stream, *, trace=None, usage=None):
+    monkeypatch.setattr(planner_agent, "run_with_approvals", stream)
+
+    return await _stream_planner_turn(
+        object(),
+        "plan it",
+        thread_id="t",
+        gate=None,
+        console=Console(quiet=True),
+        trace=trace,
+        usage=usage,
+    )
 
 
 async def _run(monkeypatch, chunks, *, trace=None, usage=None):
@@ -192,40 +243,68 @@ async def test_seconds_bound_halts_a_slow_stage(monkeypatch):
     """OPEN-91's argument at the planner. On this run's 28.7 s/call provider
     a 40-call ceiling is 19 minutes, and three of its calls took over 138 s
     each -- so a call cap alone bounds nothing a user would call bounded."""
-    monkeypatch.setattr(planner_agent, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
 
-    ok = await _run(monkeypatch, _stream_of_calls(["ls"] * 8))
-
-    assert ok is False
-
-
-async def test_a_stage_that_spends_without_calling_tools_is_still_bounded(monkeypatch):
-    """The clock is read before the chunk is parsed, so a stage generating
-    5,540 output tokens of HTML and calling nothing is caught too."""
-    monkeypatch.setattr(planner_agent, "time", FakeClock(step=500.0))
-    chunks = [((), {"messages": [AIMessage(content="<!DOCTYPE html>")]}) for _ in range(8)]
-
-    ok = await _run(monkeypatch, chunks)
+    ok = await _run_stream(monkeypatch, _out_of_seconds(_stream_fn(_stream_of_calls(["ls"] * 8))))
 
     assert ok is False
+
+
+# `test_a_stage_that_spends_without_calling_tools_is_still_bounded` stood here.
+# It fed eight text-only `AIMessage` chunks, because the clock was read before
+# the chunk was parsed and so caught a stage generating 5,540 output tokens of
+# HTML and calling nothing.
+#
+# That shape is not one a compiled graph can produce: an `AIMessage` with no
+# tool calls ENDS the agent, so the second such chunk never arrives. The
+# scenario it stood for -- run `d8f742805b9b`'s planner generating documents --
+# ended each of those turns in a `write_file` call, which the bound still sees.
+# Deleted rather than rewritten: what a stage spending without calling tools
+# actually does now is pinned in `tests/test_span_deadline.py`, where the model
+# is real enough to end its own graph.
 
 
 async def test_a_fast_stage_is_not_halted_by_the_clock(monkeypatch):
-    monkeypatch.setattr(planner_agent, "time", FakeClock(step=0.0))
+    """A deadline that never tripped announces nothing."""
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=0.0))
 
     ok = await _run(monkeypatch, _stream_of_calls(["ls"] * 8))
 
     assert ok is True
 
 
-async def test_a_zero_limit_disables_the_clock_bound(monkeypatch):
-    """0 means no bound, exactly as `_invocation_limit` reads it."""
-    monkeypatch.setattr(planner_agent, "_stage_time_limit", lambda: 0.0)
-    monkeypatch.setattr(planner_agent, "time", FakeClock(step=500.0))
+@pytest.mark.parametrize("limit", [0.0, 42.0, 1200.0])
+async def test_the_stage_limit_is_what_reaches_the_span(monkeypatch, limit):
+    """`_stage_time_limit` is what the hook is bounded by, 0 included -- and 0
+    means no bound, exactly as `_invocation_limit` reads it.
 
-    ok = await _run(monkeypatch, _stream_of_calls(["ls"] * 8))
+    Pinned on the span rather than on a halt, because with no limit there is no
+    halt to observe: `SpanDeadline(0.0).expired()` is always False, so a stub
+    that tripped anyway would be asserting a lie.
+    `tests/test_span_deadline.py` runs the 0 case end to end on a real graph.
+    """
+    seen: list[object] = []
+
+    async def capture(agent, inputs, config, gate, console, **kwargs):
+        seen.append(SPAN_DEADLINE.get())
+        for chunk in ():
+            yield chunk  # pragma: no cover - an empty stream, typed as one
+
+    monkeypatch.setattr(planner_agent, "_stage_time_limit", lambda: limit)
+
+    ok = await _run_stream(monkeypatch, capture)
 
     assert ok is True
+    assert [d.limit for d in seen] == [limit]
+
+
+async def test_the_span_is_closed_when_the_turn_ends(monkeypatch):
+    """The variable must not outlive the stage. `_stream_planner_turn` is
+    awaited in `consult_planner`'s own task, so a leaked deadline would bound
+    every later stage of the run from this one's start."""
+    await _run(monkeypatch, _stream_of_calls(["ls"]))
+
+    assert SPAN_DEADLINE.get() is None
 
 
 @pytest.mark.parametrize("raw", [None, "nonsense", object()])
@@ -279,8 +358,12 @@ async def test_each_bound_names_itself(monkeypatch):
     await _run(monkeypatch, _stream_of_calls(["ls"] * MAX_PLANNER_TOOL_CALLS), trace=calls_trace)
 
     clock_trace = FakeTrace()
-    monkeypatch.setattr(planner_agent, "time", FakeClock(step=500.0))
-    await _run(monkeypatch, _stream_of_calls(["ls"] * 8), trace=clock_trace)
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
+    await _run_stream(
+        monkeypatch,
+        _out_of_seconds(_stream_fn(_stream_of_calls(["ls"] * 8))),
+        trace=clock_trace,
+    )
 
     assert "tool calls" in calls_trace.notices[0][1]
     assert "s limit" in clock_trace.notices[0][1]
@@ -400,17 +483,11 @@ async def test_a_time_halt_says_the_stage_was_waiting_on_the_model(monkeypatch):
     was 99.98% planner-model latency."""
     usage = RunUsage()
     trace = FakeTrace()
-    monkeypatch.setattr(planner_agent, "time", FakeClock(step=500.0))
-    monkeypatch.setattr(
-        planner_agent, "run_with_approvals", _billing_stream(["ls"] * 8, usage, 499.0)
-    )
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
 
-    ok = await _stream_planner_turn(
-        object(),
-        "plan it",
-        thread_id="t",
-        gate=None,
-        console=Console(quiet=True),
+    ok = await _run_stream(
+        monkeypatch,
+        _out_of_seconds(_billing_stream(["ls"] * 8, usage, 499.0)),
         trace=trace,
         usage=usage,
     )
@@ -423,16 +500,26 @@ async def test_a_time_halt_says_the_stage_was_waiting_on_the_model(monkeypatch):
     assert "the time went to model latency, not to tool work." in reason
 
 
-async def test_a_time_halt_names_the_calls_it_will_not_run(monkeypatch):
-    """The halt fires on the chunk carrying a finished answer, before the tool
-    node: clarify's `record_fact project_type` (218.1 s) and architect's
-    second `record_fact` (549.4 s) never reached `facts.json` (OPEN-114)."""
+async def test_a_time_halt_no_longer_names_calls_it_will_not_run(monkeypatch):
+    """**The sentence this replaces was true, and OPEN-114 made it false.**
+
+    `test_a_time_halt_names_the_calls_it_will_not_run` pinned *"The answer that
+    arrived past the limit asked for record_fact, which will not run."* -- an
+    accurate description of the defect: the halt landed on a finished answer and
+    cancelled its tools. The bound fires before the next model call now, so
+    there is no answer in hand to name, and `_unrun_tool_calls` is deleted
+    rather than reworded.
+    """
     trace = FakeTrace()
-    monkeypatch.setattr(planner_agent, "time", FakeClock(step=500.0))
+    monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
 
-    await _run(monkeypatch, _stream_of_calls(["ls", "ls", "record_fact", "ls"]), trace=trace)
+    await _run_stream(
+        monkeypatch,
+        _out_of_seconds(_stream_fn(_stream_of_calls(["ls", "ls", "record_fact", "ls"]))),
+        trace=trace,
+    )
 
-    assert "asked for record_fact, which will not run." in trace.notices[0][1]
+    assert "will not run" not in trace.notices[0][1]
 
 
 async def test_a_call_cap_halt_carries_no_time_detail(monkeypatch):
