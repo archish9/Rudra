@@ -49,7 +49,13 @@ from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
 
-from rudra.llm.retry import ProviderUnavailable, is_transient, retry_delays, status_of
+from rudra.llm.retry import (
+    ProviderUnavailable,
+    is_transient,
+    retry_delays,
+    retry_wait,
+    status_of,
+)
 
 
 class ModelRetryMiddleware(AgentMiddleware):
@@ -149,23 +155,45 @@ class ModelRetryMiddleware(AgentMiddleware):
         except Exception:  # noqa: BLE001 -- observability never ends a run
             pass
 
-    def _report(self, error: BaseException, attempt: int, budget: int) -> None:
+    def _report(
+        self, error: BaseException, attempt: int, budget: int, directed: float | None = None
+    ) -> None:
         """Say that a retry is about to happen, to whoever is listening.
 
         Called once per retry ACTUALLY MADE. The give-up is reported by
         `_report_exhaustion` instead, under its own name -- see there for
         why this function used to be the only one.
+
+        `directed` is a wait the ENDPOINT chose through `Retry-After`
+        (OPEN-115), and only then is it named: up to two minutes of silence
+        is otherwise indistinguishable from a hang in the debug log, while
+        the ordinary 1-4 s backoff is not worth a word.
         """
         if self.usage is not None:
             try:
                 self.usage.record_retry(self.role)
             except Exception:  # noqa: BLE001 -- observability never ends a run
                 pass
+        waiting = (
+            ""
+            if directed is None
+            else f", after waiting {directed:g}s as the endpoint's Retry-After asked"
+        )
         self._notice(
             f"{self._provider()} failed with {self._detail(error)}; "
-            f"retrying, attempt {attempt} of {budget}",
+            f"retrying, attempt {attempt} of {budget}{waiting}",
             "retry",
         )
+
+    @staticmethod
+    def _wait(error: BaseException, backoff: float) -> tuple[float, float | None]:
+        """The sleep before the next attempt, and whether the endpoint chose it.
+
+        Since OPEN-115 this layer is the only one that retries, so it waits
+        out `Retry-After` the way the client SDKs used to (`retry_wait`).
+        """
+        wait = retry_wait(error, backoff)
+        return wait, (wait if wait != backoff else None)
 
     def _report_exhaustion(self, error: BaseException, attempts: int) -> None:
         """Say that the budget ran out (OPEN-46, reopened).
@@ -216,8 +244,9 @@ class ModelRetryMiddleware(AgentMiddleware):
                         self._report_exhaustion(error, attempt + 1)
                         raise ProviderUnavailable(self._provider(), attempt + 1, error) from error
                     raise
-                self._report(error, attempt + 1, len(delays))
-                time.sleep(delays[attempt])
+                wait, directed = self._wait(error, delays[attempt])
+                self._report(error, attempt + 1, len(delays), directed)
+                time.sleep(wait)
             else:
                 self._mark_served()
                 return response
@@ -237,8 +266,9 @@ class ModelRetryMiddleware(AgentMiddleware):
                         self._report_exhaustion(error, attempt + 1)
                         raise ProviderUnavailable(self._provider(), attempt + 1, error) from error
                     raise
-                self._report(error, attempt + 1, len(delays))
-                await asyncio.sleep(delays[attempt])
+                wait, directed = self._wait(error, delays[attempt])
+                self._report(error, attempt + 1, len(delays), directed)
+                await asyncio.sleep(wait)
             else:
                 self._mark_served()
                 return response

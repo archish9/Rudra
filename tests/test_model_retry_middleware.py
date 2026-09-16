@@ -776,3 +776,101 @@ def test_a_sink_that_raises_does_not_replace_the_provider_error(instant) -> None
         ModelRetryMiddleware("coder", trace=_Angry(), usage=_AngryUsage()).wrap_model_call(
             {}, handler
         )
+
+
+# --- OPEN-115: the wait the endpoint asked for ------------------------------
+#
+# The client SDKs used to wait out `Retry-After` before re-issuing a 429.
+# With their retries switched off this middleware is the only layer left,
+# and its jittered 1/2/4 s would spend the whole budget inside the window
+# the endpoint named.
+
+
+class _Headers:
+    def __init__(self, **headers: str) -> None:
+        self.headers = {name.replace("_", "-"): value for name, value in headers.items()}
+
+
+def _rate_limited(retry_after: str) -> _Status:
+    error = _Status(429)
+    error.response = _Headers(retry_after=retry_after)  # type: ignore[attr-defined]
+    return error
+
+
+@pytest.fixture
+def slept(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Every sleep the middleware asks for, on either half, and none taken."""
+    import asyncio
+    import time
+
+    waits: list[float] = []
+
+    async def _async_sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(time, "sleep", waits.append)
+    monkeypatch.setattr(asyncio, "sleep", _async_sleep)
+    return waits
+
+
+def test_a_retry_waits_as_long_as_the_endpoint_asked(slept) -> None:
+    handler = _Handler(failures=1, error=_rate_limited("5"))
+
+    assert ModelRetryMiddleware("coder").wrap_model_call({}, handler) == "response"
+
+    assert slept == [5.0]
+
+
+@pytest.mark.asyncio
+async def test_the_async_half_waits_as_long_as_the_endpoint_asked(slept) -> None:
+    """The async half is the one a run takes."""
+    handler = _Handler(failures=1, error=_rate_limited("5"))
+
+    assert await ModelRetryMiddleware("planner").awrap_model_call({}, handler.acall) == "response"
+
+    assert slept == [5.0]
+
+
+def test_a_retry_after_beyond_the_cap_waits_the_cap(slept) -> None:
+    from rudra.llm.retry import RETRY_AFTER_CAP_SECONDS
+
+    handler = _Handler(failures=1, error=_rate_limited("86400"))
+
+    ModelRetryMiddleware("coder").wrap_model_call({}, handler)
+
+    assert slept == [RETRY_AFTER_CAP_SECONDS]
+
+
+def test_a_retry_with_no_retry_after_keeps_its_own_backoff(slept) -> None:
+    handler = _Handler(failures=1, error=_Status(500))
+
+    ModelRetryMiddleware("coder").wrap_model_call({}, handler)
+
+    assert len(slept) == 1
+    assert 0.5 <= slept[0] <= 1.0
+
+
+def test_a_directed_wait_is_named_in_the_notice(slept) -> None:
+    """A two-minute pause with no explanation is §8a's number-not-written.
+
+    The notice is the only place the debug log can say why a retry took
+    that long, so a wait the endpoint chose is stated there.
+    """
+    sink = _Sink()
+    handler = _Handler(failures=1, error=_rate_limited("30"))
+
+    ModelRetryMiddleware("coder", trace=sink).wrap_model_call({}, handler)
+
+    assert "30s" in sink.notices[0]["payload"]
+    assert "Retry-After" in sink.notices[0]["payload"]
+
+
+def test_an_undirected_retry_notice_is_unchanged(slept) -> None:
+    sink = _Sink()
+    handler = _Handler(failures=1, error=_Status(500))
+
+    ModelRetryMiddleware("coder", trace=sink).wrap_model_call({}, handler)
+
+    assert sink.notices[0]["payload"] == (
+        "the coder model failed with _Status (500); retrying, attempt 1 of 3"
+    )
