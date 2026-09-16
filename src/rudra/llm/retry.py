@@ -17,11 +17,21 @@ import that `tests/test_no_direct_provider_imports.py` would reject.
 
 from __future__ import annotations
 
+import email.utils
+import math
 import random
+import time
 
 # Worth another attempt: the request never landed, or the far end was
-# briefly unable to serve it.
+# briefly unable to serve it. Every OTHER status from 500 to 599 is too --
+# see `is_transient` -- and these server errors stay listed only because
+# `status_of` scans an error's message for exactly this set.
 _TRANSIENT_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+
+# Longest a server-directed wait may hold a retry (OPEN-115). openai's own
+# `MAX_RETRY_AFTER_DELAY` is this value; anthropic's is 60. A daily-quota
+# 429 can name an hour, and a run should give up on that rather than sleep.
+RETRY_AFTER_CAP_SECONDS = 120.0
 
 # 404 is deliberately NOT in the set above, and is retryable only with
 # evidence -- see `is_transient`. Measured 2026-08-31 against
@@ -93,15 +103,100 @@ def is_transient(error: BaseException, *, served: bool = False) -> bool:
     cause, is judged exactly as before. Evidence rather than a guess, which
     is the `CLAUDE.md` §1.8 rule applied to a provider instead of an OS:
     a caller that has no evidence passes nothing and gets the old answer.
+
+    Since OPEN-115 this is the ONLY retry policy a model call has: every
+    client SDK's own retries are switched off (`llm/providers.py`), so what
+    that layer retried and this did not would have become fatal. Two rules
+    were missing and are here for that parity. Every status from 500 to 599
+    is transient, as openai and anthropic both treat it -- anthropic's
+    overload is 529. And the endpoint's own `x-should-retry` header decides
+    before the status does, `served` included: it is the one party that
+    knows.
     """
+    directive = _header(error, "x-should-retry")
+    if directive == "true":
+        return True
+    if directive == "false":
+        return False
+
     status = status_of(error)
     if status is not None:
         if served and status in _SERVED_TRANSIENT_STATUS:
             return True
-        return status in _TRANSIENT_STATUS
+        return status in _TRANSIENT_STATUS or 500 <= status < 600
 
     name = type(error).__name__.lower()
     return any(hint in name for hint in _TRANSIENT_NAME_HINTS)
+
+
+def _header(error: BaseException, name: str) -> str | None:
+    """One response header off a provider error, or None.
+
+    Duck-typed for the reason `status_of` is: the error classes live in
+    provider packages this module must not import. openai's and anthropic's
+    status errors carry the httpx response as `.response`, whose headers
+    are case-insensitive; a transport error carries none.
+    """
+    headers = getattr(getattr(error, "response", None), "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get(name)
+    except Exception:  # noqa: BLE001 -- an odd headers object is no header
+        return None
+    return value if isinstance(value, str) else None
+
+
+def retry_after_of(error: BaseException) -> float | None:
+    """Seconds the endpoint asked us to wait before retrying, or None.
+
+    Read the way openai's client reads it (`_parse_retry_after_header`):
+    the non-standard `retry-after-ms` first, then `retry-after` as seconds,
+    then as an HTTP date. A value that asks for no real wait -- zero,
+    negative, not finite, unparseable -- is None, so the caller's own
+    backoff applies.
+    """
+    seconds: float | None = None
+    milliseconds = _header(error, "retry-after-ms")
+    if milliseconds is not None:
+        try:
+            seconds = float(milliseconds) / 1000
+        except ValueError:
+            seconds = None
+    if seconds is None:
+        value = _header(error, "retry-after")
+        if value is None:
+            return None
+        try:
+            seconds = float(value)
+        except ValueError:
+            try:
+                stamp = email.utils.parsedate_to_datetime(value)
+            except (TypeError, ValueError, IndexError):
+                return None
+            seconds = stamp.timestamp() - time.time()
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return seconds
+
+
+def retry_wait(error: BaseException, backoff: float) -> float:
+    """How long to sleep before re-issuing a call that raised `error`.
+
+    The backoff, unless the endpoint asked for longer -- then what it
+    asked, up to `RETRY_AFTER_CAP_SECONDS`. Never shorter than the backoff:
+    a server saying "0.1 s" does not make several agents failing together
+    retry in lockstep.
+
+    This is what makes switching the SDK retries off safe for a 429
+    (OPEN-115): the SDKs waited out `Retry-After`, and the jittered 1/2/4 s
+    of `retry_delays` alone would spend the whole budget inside the window
+    the endpoint named and end in an exhaustion.
+    """
+    asked = retry_after_of(error)
+    if asked is None:
+        return backoff
+    return max(backoff, min(asked, RETRY_AFTER_CAP_SECONDS))
 
 
 def retry_delays(attempts: int = 3, *, base: float = 1.0) -> list[float]:
@@ -183,4 +278,12 @@ class ProviderUnavailable(RuntimeError):
         self.progress = progress
 
 
-__all__ = ["ProviderUnavailable", "is_transient", "retry_delays", "status_of"]
+__all__ = [
+    "RETRY_AFTER_CAP_SECONDS",
+    "ProviderUnavailable",
+    "is_transient",
+    "retry_after_of",
+    "retry_delays",
+    "retry_wait",
+    "status_of",
+]

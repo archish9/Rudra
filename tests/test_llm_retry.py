@@ -308,3 +308,141 @@ def test_the_attempt_count_survives_on_the_exception_either_way() -> None:
 
     assert err.attempts == 1
     assert err.progress == "Files exist."
+
+
+# --- OPEN-115: the policy the client SDKs used to apply ---------------------
+#
+# Rudra now turns every client SDK's own retries off, so whatever that layer
+# retried and `is_transient` did not would silently become fatal. Measured
+# against the installed SDKs: openai and anthropic retry EVERY status >= 500
+# (`openai/_base_client.py:862`, `anthropic/_base_client.py:870`), obey
+# `x-should-retry` (`:832`, `:844`), and wait out `Retry-After`. Anthropic's
+# overload is 529, which this set did not contain.
+
+
+class _Response:
+    """The duck-typed shape of `error.response` -- httpx's, in practice."""
+
+    def __init__(self, headers: dict[str, str]) -> None:
+        self.headers = headers
+
+
+def _with_headers(error: BaseException, **headers: str) -> BaseException:
+    error.response = _Response({name.replace("_", "-"): value for name, value in headers.items()})  # type: ignore[attr-defined]
+    return error
+
+
+@pytest.mark.parametrize("code", [501, 505, 507, 520, 524, 529, 599])
+def test_every_server_error_is_retryable(code: int) -> None:
+    """Parity with the SDK layer this replaces, and the owner's call.
+
+    529 is the one that matters most: it is how Anthropic says overloaded
+    (`anthropic/_exceptions.py:145`), and `status_of` finding it meant the
+    `overloaded` name hint was never read -- 0 Rudra retries, measured.
+    """
+    assert is_transient(_Status(code)) is True
+
+
+def test_anthropics_overload_is_retryable_by_its_real_shape() -> None:
+    class OverloadedError(Exception):
+        status_code = 529
+
+    assert is_transient(OverloadedError("Overloaded")) is True
+
+
+def test_a_status_past_the_http_range_is_not_a_server_error() -> None:
+    assert is_transient(_Status(600)) is False
+
+
+def test_the_server_can_ask_for_a_retry_the_status_would_refuse() -> None:
+    """`x-should-retry: true` wins over the status, as both SDKs obey it."""
+    assert is_transient(_with_headers(_Status(400), x_should_retry="true")) is True
+
+
+def test_the_server_can_refuse_a_retry_the_status_would_allow() -> None:
+    assert is_transient(_with_headers(_Status(500), x_should_retry="false")) is False
+
+
+def test_a_refusal_from_the_server_outranks_served_evidence() -> None:
+    """OPEN-61 widens a 404 on evidence; the endpoint's own word is better."""
+    error = _with_headers(_Status(404), x_should_retry="false")
+
+    assert is_transient(error, served=True) is False
+
+
+def test_an_unrecognised_directive_leaves_the_status_to_decide() -> None:
+    assert is_transient(_with_headers(_Status(503), x_should_retry="maybe")) is True
+    assert is_transient(_with_headers(_Status(401), x_should_retry="maybe")) is False
+
+
+def test_retry_after_in_seconds_is_read() -> None:
+    from rudra.llm.retry import retry_after_of
+
+    assert retry_after_of(_with_headers(_Status(429), retry_after="2")) == 2.0
+
+
+def test_retry_after_in_milliseconds_is_preferred() -> None:
+    """openai reads the non-standard `retry-after-ms` first; so does Rudra."""
+    from rudra.llm.retry import retry_after_of
+
+    error = _with_headers(_Status(429), retry_after_ms="1500", retry_after="9")
+
+    assert retry_after_of(error) == 1.5
+
+
+def test_retry_after_as_an_http_date_is_read() -> None:
+    import email.utils
+    import time
+
+    from rudra.llm.retry import retry_after_of
+
+    stamp = email.utils.formatdate(time.time() + 30, usegmt=True)
+    seconds = retry_after_of(_with_headers(_Status(429), retry_after=stamp))
+
+    assert seconds is not None
+    assert 25 <= seconds <= 31
+
+
+@pytest.mark.parametrize("value", ["", "soon", "0", "-3", "nan", "inf"])
+def test_a_retry_after_that_asks_for_no_real_wait_is_ignored(value: str) -> None:
+    from rudra.llm.retry import retry_after_of
+
+    assert retry_after_of(_with_headers(_Status(429), retry_after=value)) is None
+
+
+def test_an_error_with_no_response_has_no_retry_after() -> None:
+    from rudra.llm.retry import retry_after_of
+
+    class APITimeoutError(Exception):
+        pass
+
+    assert retry_after_of(APITimeoutError("Request timed out.")) is None
+    assert retry_after_of(_Status(429)) is None
+
+
+def test_the_wait_is_the_backoff_when_the_server_names_none() -> None:
+    from rudra.llm.retry import retry_wait
+
+    assert retry_wait(_Status(500), 1.5) == 1.5
+
+
+def test_the_wait_honours_a_longer_retry_after() -> None:
+    """Without this, OPEN-115 turns a polite 429 into four fast failures."""
+    from rudra.llm.retry import retry_wait
+
+    assert retry_wait(_with_headers(_Status(429), retry_after="7"), 0.5) == 7.0
+
+
+def test_the_wait_never_shortens_the_backoff() -> None:
+    from rudra.llm.retry import retry_wait
+
+    assert retry_wait(_with_headers(_Status(429), retry_after="0.1"), 2.0) == 2.0
+
+
+def test_the_wait_is_capped() -> None:
+    """A daily-quota 429 can say an hour; a run must not sleep that long."""
+    from rudra.llm.retry import RETRY_AFTER_CAP_SECONDS, retry_wait
+
+    error = _with_headers(_Status(429), retry_after="86400")
+
+    assert retry_wait(error, 1.0) == RETRY_AFTER_CAP_SECONDS
