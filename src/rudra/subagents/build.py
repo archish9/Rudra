@@ -24,6 +24,10 @@ from deepagents.middleware.filesystem import FilesystemMiddleware
 
 from rudra.context.budget import evict_kwargs, execute_kwargs
 from rudra.facts import facts_block
+
+# The PROJECT FILES block's cap. Defined beside the listing since OPEN-116,
+# because the planner's PROJECT STRUCTURE block is capped by the same number.
+from rudra.filesystem.tree import TREE_MAX_ENTRIES
 from rudra.llm import build_model
 from rudra.middleware import (
     ContentPathMiddleware,
@@ -49,14 +53,6 @@ from rudra.tools.testing_tools import create_testing_tools
 # the spec then selects by tool name. Names rather than callables because
 # the factories need per-run arguments a frozen spec cannot hold.
 _TOOL_FACTORIES = (create_git_tools, create_testing_tools, create_memory_tools)
-
-# How many paths the PROJECT FILES block may list. Below project_tree's own
-# 300 default on purpose: 300 paths is roughly 1,800 tokens paid on every
-# call the coder makes -- 133 of them in run8 -- and the cap is the only
-# thing that keeps this block off a large repository's every call. It is a
-# constant rather than a config key because an inert key is worse than no
-# key (CLAUDE.md 6); `tree_chars` in usage.json is what revises it.
-TREE_MAX_ENTRIES = 150
 
 
 def _model_for(spec: RudraSubagent, cfg: Any = None) -> Any:

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rudra.agent.planner_agent import build_planner_prompt
+import pytest
+
+from rudra.agent.planner_agent import STAGES, build_planner_prompt
 from rudra.facts import FactStore
 
 
@@ -60,3 +62,93 @@ def test_the_prompt_still_names_no_rudra_path(tmp_path: Path):
     """C6.10's property: the ledger is reached only through tools."""
     prompt = build_planner_prompt("build a web API", tmp_path)
     assert ".rudra" not in prompt
+
+
+# --- OPEN-116: the listing replaces the order to list ----------------------
+
+
+@pytest.mark.parametrize("can_read", [True, False])
+@pytest.mark.parametrize("stage", STAGES)
+def test_no_stage_is_told_to_list_the_project(tmp_path: Path, stage: str, can_read: bool):
+    """`_COMMON_HEADER` said *"To find out what is here, call ls("/")"*, and
+    20 of 25 archived planner stages opened with exactly that call -- 53.6%
+    of run `8f160d92c6da`'s model time. Removing an order, not adding a
+    counter-order (OPEN-17)."""
+    prompt = build_planner_prompt("build a web API", tmp_path, stage=stage, can_read=can_read)
+
+    assert 'ls("/")' not in prompt
+    assert "To find out what is here" not in prompt
+
+
+def test_the_structure_block_is_the_listing_the_tools_would_give(tmp_path: Path):
+    """Virtual and capped, the subagents' form (`subagents/build.py`). The
+    relative spelling beside `ls`'s `/`-prefixed answer is what invited the
+    check (plan §3.2)."""
+    from rudra.filesystem import as_virtual_paths, project_tree
+    from rudra.filesystem.tree import TREE_MAX_ENTRIES
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1\n")
+    (tmp_path / "README.md").write_text("hi\n")
+
+    prompt = build_planner_prompt("build a web API", tmp_path)
+    listing = as_virtual_paths(project_tree(tmp_path, max_entries=TREE_MAX_ENTRIES))
+
+    assert "## PROJECT STRUCTURE" in prompt
+    assert listing in prompt
+    assert "/src/app.py" in prompt
+    assert "\nsrc/app.py" not in prompt
+
+
+def test_the_structure_block_is_capped_like_the_subagents(tmp_path: Path):
+    from rudra.filesystem.tree import TREE_MAX_ENTRIES
+
+    for i in range(TREE_MAX_ENTRIES + 20):
+        (tmp_path / f"mod_{i:03d}.py").write_text("x = 1\n")
+
+    prompt = build_planner_prompt("build a web API", tmp_path)
+
+    assert f"(cap: {TREE_MAX_ENTRIES})" in prompt
+    assert prompt.count("/mod_") == TREE_MAX_ENTRIES
+
+
+def test_the_structure_block_is_billed(tmp_path: Path):
+    """`CLAUDE.md` §5a: a fixed-prompt block ships with the number that
+    prices it. `roles.planner.tree_chars` was 0 in every usage.json while
+    the block was always there."""
+    from rudra.context.usage import RunUsage
+
+    (tmp_path / "app.py").write_text("x = 1\n")
+    usage = RunUsage()
+
+    prompt = build_planner_prompt("build a web API", tmp_path, usage=usage)
+
+    planner = usage.as_dict()["planner"]
+    assert planner["tree_injections"] == 1
+    assert 0 < planner["tree_chars"] < len(prompt)
+    assert "/app.py" in prompt
+
+
+@pytest.mark.parametrize("stage", STAGES)
+def test_a_stage_without_file_tools_is_told_the_project_is_empty(tmp_path: Path, stage: str):
+    """And names no file tool, because it holds none (OPEN-15)."""
+    (tmp_path / ".mcp.json").write_text("{}\n")
+
+    prompt = build_planner_prompt("build a web API", tmp_path, stage=stage, can_read=False)
+
+    assert "holds no files yet" in prompt
+    assert "/.mcp.json" in prompt
+    for name in ("ls", "read_file", "glob", "grep"):
+        assert f"`{name}`" not in prompt, name
+        assert f"{name}(" not in prompt, name
+
+
+def test_a_stage_without_file_tools_is_not_told_to_read_first(tmp_path: Path):
+    """Clarify's *"Look before you ask. Read what is already here first."* is
+    an order to read, given to a stage with nothing to read and no tool to
+    read it with."""
+    readable = build_planner_prompt("build a web API", tmp_path, stage="clarify")
+    greenfield = build_planner_prompt("build a web API", tmp_path, stage="clarify", can_read=False)
+
+    assert "Read what is already here first" in readable
+    assert "Read what is already here first" not in greenfield

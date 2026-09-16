@@ -214,6 +214,17 @@ class RoleUsage:
     # `a04f89bd2ed6`, before the floor existed, the same attempt downgraded
     # Flask and SQLAlchemy in the machine's own Python and nothing counted it.
     installs_refused: int = 0
+    # `ls`/`read_file`/`glob`/`grep` calls on a planner stage built without
+    # file tools because the project holds nothing to read, answered with the
+    # route rather than langgraph's tool-list echo (OPEN-116,
+    # GreenfieldReadMiddleware). Planner-only, like planner_writes_refused.
+    #
+    # 0 on a greenfield run is the absence working; one per stage is the
+    # habit meeting the route; a number that climbs within a stage is the
+    # route being read and ignored -- counted as tool failures, three in a row
+    # still halt the stage. Before this, run `8f160d92c6da` spent 2191.3 s of
+    # 4088.0 on six such calls, and they succeeded.
+    greenfield_reads_answered: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -490,6 +501,15 @@ class RunUsage:
         """
         self._slot(role).tool_routes_answered += 1
 
+    def record_greenfield_read_answered(self, role: str) -> None:
+        """One file read on a toolless greenfield stage, answered with the route.
+
+        Mirrors record_planner_write_refused: the tool is not registered on
+        that stage, so the counter measures how often the model reached for
+        it anyway (OPEN-116).
+        """
+        self._slot(role).greenfield_reads_answered += 1
+
     def record_completion_file_refused(self, role: str) -> None:
         """One write refused for announcing completion instead of being a file.
 
@@ -588,6 +608,7 @@ class RunUsage:
                 "tool_routes_answered": tally.tool_routes_answered,
                 "completion_files_refused": tally.completion_files_refused,
                 "installs_refused": tally.installs_refused,
+                "greenfield_reads_answered": tally.greenfield_reads_answered,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

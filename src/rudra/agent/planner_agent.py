@@ -8,7 +8,7 @@ only loop/engine.py writes that, and only when the gate passes.
 The three stage prompts below carry methodology adapted from the
 `brainstorming` skill of superpowers (https://github.com/obra/superpowers),
 MIT, Copyright (c) 2025 Jesse Vincent -- its scope assessment and question
-discipline in _CLARIFY_BODY, its approach-weighing, YAGNI and isolation
+discipline in the _CLARIFY_* blocks, its approach-weighing, YAGNI and isolation
 guidance in _ARCHITECT_BODY, and its spec self-review in _BREAKDOWN_BODY,
 retargeted from a design document to the task ledger.
 
@@ -39,13 +39,14 @@ from rudra.context.deadline import span_deadline
 from rudra.context.middleware import UsageMiddleware
 from rudra.context.usage import model_time_of, model_wait_note
 from rudra.facts import facts_block
-from rudra.filesystem import project_tree
+from rudra.filesystem import TREE_MAX_ENTRIES, as_virtual_paths, is_greenfield, project_tree
 from rudra.llm import build_model
 from rudra.loop.tools import create_ledger_tools, render_ledger
 from rudra.middleware import (
     PLANNER_MEMORY_SOURCES,
     DelegationGuardMiddleware,
     FixWriteParamsMiddleware,
+    GreenfieldReadMiddleware,
     MachinePathMiddleware,
     ModelRetryMiddleware,
     PlannerWriteMiddleware,
@@ -72,8 +73,45 @@ inside THIS project, and there is no filesystem outside it. "/home/user",
 "/workspace" and "/tmp" are not special -- they resolve inside the project
 like any other name, and will simply not exist.
 
-To find out what is here, call ls("/") or read the PROJECT STRUCTURE below.
 Never guess a path from what a machine usually looks like.
+"""
+
+# The project listing, in one of two forms (OPEN-116). The header above used
+# to end *"To find out what is here, call ls("/") or read the PROJECT
+# STRUCTURE below"*, and 20 of 25 archived planner stages did the first thing
+# they were told -- 53.6% of run 8f160d92c6da's model time. The order is
+# DELETED, not countered: a sentence telling the model not to call `ls` would
+# be OPEN-17's losing pattern. What replaced it is the listing in the spelling
+# `ls` answers in, which is what the subagents' PROJECT FILES block has done
+# since OPEN-81.
+_STRUCTURE_READABLE = """
+## PROJECT STRUCTURE
+
+The files in this project when this stage began, spelled the way `ls` and
+`glob` answer -- the listing those tools would give, up to {cap} entries (a
+last line starting with "…" counts the rest). `read_file` is for what a file
+contains.
+
+```
+{listing}
+```
+"""
+
+# A stage built WITHOUT file tools, because the project holds nothing but
+# `filesystem/tree.py::NON_CONTENT_NAMES`. Names no file tool: it has none
+# (OPEN-15).
+_STRUCTURE_GREENFIELD = """
+## PROJECT STRUCTURE
+
+This project holds no files yet -- nothing to read, and nothing to build on.
+Its complete listing:
+
+```
+{listing}
+```
+
+This stage has no file tools, because there is nothing for them to find.
+Work from the request.
 """
 
 _CANNOT_FINISH = """
@@ -93,11 +131,18 @@ depends on, before anyone decides how to build it or what to build.
 Record every fact you establish with record_fact(), and say WHY you
 believe it. The architect, the coder, the tester and the reviewer all
 read those facts; one you keep to yourself is one they do not have.
+"""
 
+# Its own block so a stage with nothing to read is not ordered to read it
+# (OPEN-116): an order is what the model acts on first, which is how
+# `ls("/")` in the header became 20 of 25 stages' opening call.
+_CLARIFY_LOOK = """
 **Look before you ask.** Read what is already here first. A question whose
 answer is in the codebase spends the budget and tells the user you did not
 look.
+"""
 
+_CLARIFY_SCOPE = """
 **Settle the size of the request first.** Is this a change to code that
 already exists here, or something new? A change to an existing flow needs
 its own file read, not a design conversation. Something new needs purpose
@@ -230,6 +275,7 @@ def build_planner_prompt(
     memory: Any = None,
     recall_tokens: int | None = None,
     usage: Any = None,
+    can_read: bool = True,
 ) -> str:
     """The system prompt for one planning stage (S10b.1).
 
@@ -237,16 +283,31 @@ def build_planner_prompt(
     Naming a tool the model cannot call buys a dead call and a confused
     retry -- the same reasoning _tools_for follows when it raises on an
     unknown tool rather than dropping it (subagents/build.py:64-70).
+
+    `can_read` False is a stage built without file tools because the project
+    holds nothing to read (OPEN-116); `create_planner_agent` decides it, once,
+    for both the tools and this prompt, so the two cannot disagree.
     """
     if stage not in STAGES:
         known = ", ".join(STAGES)
         msg = f"unknown planner stage {stage!r}; valid stages: {known}"
         raise ValueError(msg)
 
-    prompt = f"""{_COMMON_HEADER}
-## PROJECT STRUCTURE
-{project_tree(project_path)}
-"""
+    # The subagents' form (subagents/build.py): virtual, so the listing is
+    # spelled the way `ls` answers (OPEN-81), and capped by the same constant.
+    listing = as_virtual_paths(project_tree(project_path, max_entries=TREE_MAX_ENTRIES))
+    if can_read:
+        structure = _STRUCTURE_READABLE.format(cap=TREE_MAX_ENTRIES, listing=listing)
+    else:
+        structure = _STRUCTURE_GREENFIELD.format(listing=listing)
+    if usage is not None:
+        # Billed where it is built, as `record_recall` is below. This block
+        # rode every planner call unpriced -- `roles.planner.tree_chars` was 0
+        # in every usage.json -- against CLAUDE.md §5a's rule that a
+        # fixed-prompt block ships with the number that prices it.
+        usage.record_tree("planner", len(structure))
+
+    prompt = f"{_COMMON_HEADER}{structure}"
     block = facts_block(facts)
     if block:
         prompt += f"\n{block}"
@@ -279,6 +340,9 @@ def build_planner_prompt(
 
     if stage == "clarify":
         prompt += _CLARIFY_BODY
+        if can_read:
+            prompt += _CLARIFY_LOOK
+        prompt += _CLARIFY_SCOPE
         prompt += (
             _CLARIFY_CAN_ASK.format(max_questions=max_questions) if can_ask else _CLARIFY_UNATTENDED
         )
@@ -302,6 +366,7 @@ def build_planner_middleware(
     project_path: Any = None,
     stage_tools: tuple[str, ...] = (),
     console: Any = None,
+    can_read: bool = True,
 ) -> list:
     """The planner's middleware stack, with both D4 workarounds gated.
 
@@ -312,6 +377,10 @@ def build_planner_middleware(
     sentence naming one would advertise an absent tool (OPEN-15). Empty is
     safe: the refusal then declines to name any tool rather than naming a
     wrong one.
+
+    `can_read` False builds a stage with no file tools, for a project that
+    holds nothing to read (OPEN-116): the FilesystemMiddleware registers none,
+    and GreenfieldReadMiddleware answers a call to one with the route.
 
     FixWriteParamsMiddleware is first so it cleans tool args before anything
     else sees them. The planner previously got fence-stripping from
@@ -440,6 +509,17 @@ def build_planner_middleware(
         # (U.17), as it is for _tools_for_stage and for `skills=None` below.
         DelegationGuardMiddleware(can_delegate=False),
     ]
+    if not can_read:
+        # OPEN-116. Right after the write answer, so both answers to a tool
+        # this stage lacks sit together, and OUTSIDE the repeat guard for
+        # MachinePathMiddleware's reason: a stray read the guard would dedupe
+        # must still get the route. Registered only here, so no reading stage
+        # can ever be told its project is empty.
+        at = next(i for i, m in enumerate(middleware) if isinstance(m, PlannerWriteMiddleware))
+        middleware.insert(
+            at + 1,
+            GreenfieldReadMiddleware(stage_tools=stage_tools, usage=usage, trace=trace),
+        )
     if backend is not None:
         evict = {} if evict_tokens is None else {"tool_token_limit_before_evict": evict_tokens}
         # Read-only, explicitly. `tools=None` means EVERY filesystem tool --
@@ -452,7 +532,20 @@ def build_planner_middleware(
         # "touches nothing" docstring and _tools_for_stage's "absence is the
         # enforcement". The planner prompt only ever asks it to read
         # (CR-C2).
-        middleware.append(FilesystemMiddleware(backend=backend, tools=PLANNER_FS_TOOLS, **evict))
+        filesystem = FilesystemMiddleware(
+            backend=backend, tools=PLANNER_FS_TOOLS if can_read else ["read_file"], **evict
+        )
+        if not can_read:
+            # No file tools at all (OPEN-116), and not by dropping the
+            # middleware: deepagents would then add its own carrying every
+            # tool (graph.py:215-232). Not `tools=[]` either, which the
+            # constructor refuses -- "read_file must be included in tools"
+            # (filesystem.py:1647). So the smallest list it accepts, then
+            # emptied: `AgentMiddleware.tools` is what registration reads.
+            # Eviction, which is what this instance exists for, is untouched.
+            # Both upstream facts are pinned in test_deepagents_contract.py.
+            filesystem.tools = []
+        middleware.append(filesystem)
         # The same seam, one middleware over (OPEN-70). create_deep_agent
         # builds a MemoryMiddleware from `memory=` carrying upstream's
         # MEMORY_SYSTEM_PROMPT, which spends ~1,268 tokens per call telling
@@ -610,6 +703,14 @@ def create_planner_agent(
         usage=usage,
     )
 
+    # OPEN-116. Decided once, here, and handed to both the middleware (which
+    # tools exist) and the prompt (what it says about them), so the two
+    # cannot disagree -- a prompt naming `ls` to a stage without it is
+    # OPEN-15. Per build, and a stage is built per consult (OPEN-32), so a
+    # breakdown re-consult after the coder has written files reads again.
+    can_read = not is_greenfield(project_path)
+    fs_tools = PLANNER_FS_TOOLS if can_read else []
+
     middleware = build_planner_middleware(
         task,
         compat_task_anchor=cfg.compat.task_anchor,
@@ -625,6 +726,7 @@ def create_planner_agent(
         # _tools_for_stage's own argument.
         stage_tools=tuple(getattr(tool, "name", "") for tool in custom_tools),
         console=console,
+        can_read=can_read,
     )
     if gate is not None:
         # First in the list: a denied call must be stopped before any other
@@ -648,6 +750,7 @@ def create_planner_agent(
         memory=memory,
         recall_tokens=recall_limit(cfg, "planner"),
         usage=usage,
+        can_read=can_read,
     )
     return create_deep_agent(
         model=model,
@@ -669,11 +772,12 @@ def create_planner_agent(
         # the user answered it with `!`, setting SessionGrants.approve_all
         # for the session. Read off `custom_tools` rather than
         # PLANNER_FS_TOOLS alone, for _tools_for_stage's own reason: the tool
-        # list is per stage, and a second spelling of it would drift.
+        # list is per stage, and a second spelling of it would drift. Since
+        # OPEN-116 the file tools are per stage too -- none on a greenfield one.
         interrupt_on=(
             narrow_interrupt_on(
                 gate.interrupt_on,
-                set(PLANNER_FS_TOOLS) | {getattr(tool, "name", "") for tool in custom_tools},
+                set(fs_tools) | {getattr(tool, "name", "") for tool in custom_tools},
             )
             if gate is not None
             else None

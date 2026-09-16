@@ -95,6 +95,9 @@ def test_recording_accumulates_per_role():
         # key that appears only on runs that refused one is a key every
         # reader of usage.json has to guard.
         "installs_refused": 0,
+        # Added by OPEN-116: file reads on a greenfield planner stage, which
+        # holds no file tools, answered with the route instead of the echo.
+        "greenfield_reads_answered": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -402,6 +405,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "tool_routes_answered",
         "completion_files_refused",
         "installs_refused",
+        "greenfield_reads_answered",
         "seconds",
     }
 

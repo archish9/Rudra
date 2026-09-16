@@ -703,3 +703,55 @@ def test_a_tool_call_wrapper_sees_a_call_to_an_unregistered_tool():
     assert seen == [("write_file", True)]
     assert out["messages"][-1].content == "REJECTED: intercepted"
     assert "is not a valid tool" not in out["messages"][-1].content
+
+
+def test_filesystem_middleware_still_refuses_an_empty_tool_list():
+    """OPEN-116 withholds every file tool from a greenfield planner stage, and
+    its plan said to pass `tools=[]`. The installed constructor refuses that
+    (`middleware/filesystem.py:1647`), which is why Rudra builds with
+    `["read_file"]` and empties `.tools` instead.
+
+    **If this starts passing an empty list through**, upstream lifted the
+    restriction: switch `build_planner_middleware` to `tools=[]` and delete
+    the emptying, which is a workaround for exactly this line.
+    """
+    from deepagents.backends.filesystem import FilesystemBackend
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+
+    backend = FilesystemBackend(root_dir="/tmp", virtual_mode=True)
+    with pytest.raises(ValueError, match="read_file must be included"):
+        FilesystemMiddleware(backend=backend, tools=[])
+
+
+def test_an_emptied_filesystem_middleware_registers_no_file_tool(monkeypatch, tmp_path):
+    """The workaround OPEN-116 stands on, driven through a compiled graph.
+
+    Two claims, both load-bearing: `AgentMiddleware.tools` is what
+    registration reads, so emptying it registers no file tool; and the
+    instance still replaces upstream's by name, so deepagents adds no second
+    one carrying every tool. That a call to a withheld name then reaches a
+    tool wrapper -- which is what lets `GreenfieldReadMiddleware` answer it --
+    is `test_a_tool_call_wrapper_sees_a_call_to_an_unregistered_tool`.
+    """
+    import deepagents.graph as graph
+    from deepagents.backends.filesystem import FilesystemBackend
+    from deepagents.middleware.filesystem import FilesystemMiddleware
+
+    captured = {}
+    real_create_agent = graph.create_agent
+
+    def spy(*args, **kwargs):
+        captured["middleware"] = kwargs.get("middleware")
+        return real_create_agent(*args, **kwargs)
+
+    monkeypatch.setattr(graph, "create_agent", spy)
+
+    backend = FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+    ours = FilesystemMiddleware(backend=backend, tools=["read_file"])
+    ours.tools = []
+    agent = graph.create_deep_agent(model=ScriptedToolModel(), backend=backend, middleware=[ours])
+
+    filesystem = [m for m in captured["middleware"] if type(m).__name__ == "FilesystemMiddleware"]
+    assert filesystem == [ours]
+    file_tools = {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep", "execute"}
+    assert _tool_names(agent) & file_tools == set()

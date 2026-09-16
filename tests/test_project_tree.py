@@ -339,3 +339,108 @@ def test_the_completer_and_the_prompt_block_agree_on_what_a_path_is(tmp_path):
         if not line.lstrip().startswith("#")
     ]
     assert "\u2026" not in "\n".join(code), "the completer spells the marker again"
+
+
+# --- OPEN-116: a project that holds nothing to read -------------------------
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        [],
+        [".DS_Store"],
+        [".mcp.json"],
+        [".DS_Store", ".mcp.json"],
+        ["Thumbs.db", "desktop.ini"],
+    ],
+)
+def test_a_project_of_only_litter_holds_no_content(tmp_path: Path, names: list[str]) -> None:
+    """The closed set: OS litter and the `.mcp.json` a Rudra setup leaves.
+    Run `8f160d92c6da`'s project was `.DS_Store` and `.mcp.json`, and its
+    planner spent 2191.3 s listing and reading them."""
+    from rudra.filesystem.tree import holds_project_content, is_greenfield
+
+    for name in names:
+        _write(tmp_path, name)
+
+    assert holds_project_content(project_tree(tmp_path)) is False
+    assert is_greenfield(tmp_path) is True
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        "README.md",
+        ".gitignore",
+        ".env",
+        "main.py",
+        ".github/workflows/ci.yml",
+        # Litter NAMES below the root are not in the set: the set is closed
+        # and root-level, and a false "not greenfield" only keeps the tools.
+        "src/.DS_Store",
+        "sub/.mcp.json",
+    ],
+)
+def test_any_other_file_is_project_content(tmp_path: Path, rel: str) -> None:
+    """The other side, pinned as hard as the first (`.env`, `.gitignore` and
+    `.github/` are project content -- the plan's own "do not" list)."""
+    from rudra.filesystem.tree import holds_project_content, is_greenfield
+
+    _write(tmp_path, ".DS_Store")
+    _write(tmp_path, ".mcp.json")
+    _write(tmp_path, rel, "")
+
+    assert holds_project_content(project_tree(tmp_path)) is True
+    assert is_greenfield(tmp_path) is False
+
+
+def test_rudras_own_state_and_vcs_directories_are_not_content(tmp_path: Path) -> None:
+    """`.rudra` and `.git` are skipped by the listing itself, so a project
+    that `git init` and `rudra init` have both touched is still empty."""
+    from rudra.filesystem.tree import is_greenfield
+
+    _write(tmp_path, ".rudra/config.toml")
+    _write(tmp_path, ".git/HEAD")
+    _write(tmp_path, ".mcp.json")
+
+    assert is_greenfield(tmp_path) is True
+
+
+def test_a_file_deeper_than_the_listing_reaches_is_still_content(tmp_path: Path) -> None:
+    """The listing stops at depth 5, so a project whose only file sits deeper
+    reads as `(empty project)`. Greenfield is the one reading of that string
+    that takes tools away, so it is confirmed without the depth cap."""
+    from rudra.filesystem.tree import EMPTY_PROJECT, is_greenfield
+
+    _write(tmp_path, "a/b/c/d/e/f.py")
+
+    assert project_tree(tmp_path) == EMPTY_PROJECT
+    assert is_greenfield(tmp_path) is False
+
+
+def test_the_predicate_reads_either_spelling_of_a_listing() -> None:
+    """The planner shows the virtual spelling (OPEN-81); the predicate must
+    not care which one it is handed."""
+    from rudra.filesystem.tree import EMPTY_PROJECT, holds_project_content
+
+    assert holds_project_content("/.DS_Store\n/.mcp.json") is False
+    assert holds_project_content(".DS_Store\n.mcp.json") is False
+    assert holds_project_content("/.mcp.json\n/app.py") is True
+    assert holds_project_content(EMPTY_PROJECT) is False
+
+
+def test_a_truncated_listing_holds_content() -> None:
+    """A footer means entries were omitted, and nothing omitted was looked at."""
+    from rudra.filesystem.tree import holds_project_content
+
+    assert holds_project_content("/.DS_Store\n… 3 more entries omitted (cap: 1)") is True
+
+
+def test_the_listing_cap_lives_beside_the_listing() -> None:
+    """One cap, two prompt blocks: the subagents' PROJECT FILES and the
+    planner's PROJECT STRUCTURE (OPEN-116). The name the subagent module
+    exports is the same object, not a second literal."""
+    from rudra.filesystem.tree import TREE_MAX_ENTRIES
+    from rudra.subagents import build
+
+    assert build.TREE_MAX_ENTRIES is TREE_MAX_ENTRIES

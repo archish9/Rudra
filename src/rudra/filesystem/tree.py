@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from wcmatch import glob as wcglob
@@ -27,6 +28,24 @@ from wcmatch import glob as wcglob
 from rudra.stacks import ALL_SKIP_DIRS
 
 EMPTY_PROJECT = "(empty project)"
+
+# How many paths a prompt's project listing may show: the subagents' PROJECT
+# FILES block and the planner's PROJECT STRUCTURE block (OPEN-116). Below
+# project_tree's own 300 default on purpose: 300 paths is roughly 1,800 tokens
+# paid on every call the coder makes -- 133 of them in run8 -- and the cap is
+# the only thing that keeps this block off a large repository's every call.
+# A constant rather than a config key because an inert key is worse than no
+# key (CLAUDE.md 6); `tree_chars` in usage.json is what revises it.
+TREE_MAX_ENTRIES = 150
+
+# What a project may hold and still hold nothing an agent could read to learn
+# about it (OPEN-116): OS litter, and the `.mcp.json` a Rudra setup leaves.
+# CLOSED, and matched at the root only -- `.env`, `.gitignore` and `.github/`
+# are the user's content, and an open rule such as "only dotfiles" would take
+# the planner's read tools away on a project that has them. A name missing
+# from here costs a stage's exploration calls; a name wrongly in here costs a
+# planner that cannot read the code it is planning against.
+NON_CONTENT_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", ".mcp.json"})
 
 # What `project_tree` appends instead of a path when it truncates. Two
 # callers have to tell it apart from a real entry -- the `@` completer, which
@@ -147,6 +166,39 @@ def as_virtual_paths(listing: str) -> str:
         line if is_truncation_footer(line) else f"/{line.lstrip('/')}"
         for line in listing.splitlines()
     )
+
+
+def holds_project_content(listing: str) -> bool:
+    """Does this listing name anything besides `NON_CONTENT_NAMES`?
+
+    Reads either spelling, relative or `as_virtual_paths`'. `EMPTY_PROJECT`
+    holds nothing. A truncation footer answers True: entries were omitted,
+    and nothing omitted was looked at.
+    """
+    if listing == EMPTY_PROJECT:
+        return False
+    for line in listing.splitlines():
+        if not line.strip():
+            continue
+        if is_truncation_footer(line):
+            return True
+        if line.strip().lstrip("/") not in NON_CONTENT_NAMES:
+            return True
+    return False
+
+
+def is_greenfield(root: Path) -> bool:
+    """Does this project hold nothing to read (OPEN-116)?
+
+    A planner stage on such a project is built without file tools, so this
+    is the one reading of a listing that takes something away -- and the
+    listing stops at depth 5, where a project whose only file sits deeper
+    reads as `EMPTY_PROJECT`. That case is confirmed with no depth cap, and
+    the second walk runs only when the first found nothing but litter.
+    """
+    if holds_project_content(project_tree(root)):
+        return False
+    return not holds_project_content(project_tree(root, max_depth=sys.maxsize))
 
 
 def _is_always_skipped(rel_posix: str) -> bool:

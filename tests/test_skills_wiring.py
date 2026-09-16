@@ -186,6 +186,9 @@ def test_clarify_carries_the_merged_methodology(tmp_path: Path) -> None:
     file the model may or may not open -- so it applies to every planning
     run, on every model, instead of when a 550B model chooses to read it.
     """
+    # Something to read: a greenfield clarify is not told to look first,
+    # because it has nothing to look at and no tool to look with (OPEN-116).
+    (tmp_path / "todo.py").write_text("", encoding="utf-8")
     prompt = _planner_call("clarify", tmp_path)["system_prompt"]
 
     # Look before asking, and size the request before refining it.
@@ -244,6 +247,10 @@ def test_each_stage_is_constructed_with_its_own_prompt(stage: str, tmp_path: Pat
     from rudra.agent import planner_agent
 
     cfg = _project(tmp_path)
+    # A project with content, so `can_read` is the default this expectation
+    # is built with. The greenfield side of the same seam is pinned in
+    # tests/test_planner_stages.py (OPEN-116).
+    (tmp_path / "app.py").write_text("", encoding="utf-8")
     expected = planner_agent.build_planner_prompt(
         "x",
         tmp_path,

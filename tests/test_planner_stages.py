@@ -346,3 +346,77 @@ def test_the_planner_repeat_guard_builds_without_a_trace():
 
     guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
     assert guard.trace is None
+
+
+# --- OPEN-116: a greenfield stage holds no file tools ----------------------
+
+_READ_TOOLS = {"ls", "read_file", "glob", "grep"}
+
+
+def _file_tools(captured: dict) -> set[str]:
+    """What the stage's FilesystemMiddleware registers. `tools=` carries only
+    the stage's own tools; the file tools ride in on the middleware."""
+    filesystem = [m for m in captured["middleware"] if type(m).__name__ == "FilesystemMiddleware"]
+    assert len(filesystem) == 1, "never drop it: deepagents would add one with every tool"
+    return {tool.name for tool in filesystem[0].tools}
+
+
+def _greenfield(tmp_path: Path) -> Path:
+    """Run `8f160d92c6da`'s project, as `ls /` answers it since OPEN-117."""
+    (tmp_path / ".DS_Store").write_bytes(b"\0")
+    (tmp_path / ".mcp.json").write_text('{"mcpServers": {}}\n')
+    return tmp_path
+
+
+@pytest.mark.parametrize("stage", STAGES)
+def test_a_greenfield_stage_registers_no_file_tool(monkeypatch, tmp_path: Path, stage: str):
+    """Absence is the enforcement (OPEN-17). On that run all six exploration
+    calls -- 2191.3 of 4088.0 model seconds -- were to these four tools."""
+    captured = _capture(monkeypatch, _greenfield(tmp_path), stage)
+
+    assert _file_tools(captured) == set()
+    assert "holds no files yet" in captured["system_prompt"]
+
+
+@pytest.mark.parametrize("extra", ["README.md", ".gitignore"])
+@pytest.mark.parametrize("stage", STAGES)
+def test_a_project_with_content_keeps_every_read_tool(
+    monkeypatch, tmp_path: Path, stage: str, extra: str
+):
+    """The other side, pinned as hard (OPEN-99's `.json` discipline). An
+    EMPTY `.gitignore` still counts: it is the user's file, not litter."""
+    (_greenfield(tmp_path) / extra).write_text("")
+
+    captured = _capture(monkeypatch, tmp_path, stage)
+
+    assert _file_tools(captured) == _READ_TOOLS
+    assert "holds no files yet" not in captured["system_prompt"]
+
+
+@pytest.mark.parametrize("stage", STAGES)
+def test_a_greenfield_stage_answers_a_stray_read(monkeypatch, tmp_path: Path, stage: str):
+    """The coder, shown a listing and never told to `ls`, still opened with
+    one in 18 of 46 invocations. On a stage without the tool that call gets
+    langgraph's echo unless something answers it -- and three echoes in a row
+    halt a planner stage."""
+    from rudra.middleware import GreenfieldReadMiddleware
+
+    greenfield = _capture(monkeypatch, _greenfield(tmp_path), stage)["middleware"]
+    assert sum(isinstance(m, GreenfieldReadMiddleware) for m in greenfield) == 1
+
+    (tmp_path / "README.md").write_text("hi\n")
+    readable = _capture(monkeypatch, tmp_path, stage)["middleware"]
+    assert not any(isinstance(m, GreenfieldReadMiddleware) for m in readable)
+
+
+def test_the_greenfield_decision_is_made_per_build(monkeypatch, tmp_path: Path):
+    """A stage is built when consulted (OPEN-32), so a breakdown re-consult
+    after the coder has written files gets its read tools back -- which is
+    where run `a04f89bd2ed6`'s re-consults legitimately read `src/models.py`."""
+    first = _capture(monkeypatch, _greenfield(tmp_path), "breakdown")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "models.py").write_text("x = 1\n")
+    second = _capture(monkeypatch, tmp_path, "breakdown")
+
+    assert _file_tools(first) == set()
+    assert _file_tools(second) == _READ_TOOLS

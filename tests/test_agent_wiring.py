@@ -133,6 +133,10 @@ def test_planner_passes_its_built_stack_to_create_deep_agent(monkeypatch, tmp_pa
 
     captured = _record_create_deep_agent(monkeypatch, "rudra.agent.planner_agent")
     backend = object()
+    # Content, so the stage is built readable -- the stack the default
+    # `build_planner_middleware` call below produces. An empty tmp_path is a
+    # greenfield project since OPEN-116, and gains GreenfieldReadMiddleware.
+    (tmp_path / "app.py").write_text("")
     create_planner_agent(
         task="t",
         project_path=tmp_path,
