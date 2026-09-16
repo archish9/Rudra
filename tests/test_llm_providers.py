@@ -131,6 +131,43 @@ def test_unset_optional_settings_emit_no_kwarg() -> None:
     assert "timeout" not in kwargs
 
 
+# --- OPEN-115: one retry layer, and it is Rudra's ---------------------------
+
+
+@pytest.mark.parametrize(
+    ("provider", "none"),
+    [("openai_compatible", 0), ("openai", 0), ("anthropic", 0), ("google", 1)],
+)
+def test_hosted_providers_switch_their_client_retries_off(provider: str, none: int) -> None:
+    """The SDK retried inside every attempt ModelRetryMiddleware made: 12 HTTP
+    attempts per logical call, 24 on google, measured against an always-500
+    server, and only the middleware's 4 logged or counted.
+
+    Google's "none" is 1 because its value counts ATTEMPTS
+    (`HttpRetryOptions(attempts=)`), and langchain_google_genai warns that 0
+    reads as the Google default on some SDK versions.
+    """
+    assert PROVIDERS[provider].build_kwargs(FakeSettings())["max_retries"] == none
+
+
+def test_ollama_has_no_client_retry_kwarg() -> None:
+    """ChatOllama has no retry layer and no `max_retries` field to set."""
+    assert "max_retries" not in PROVIDERS["ollama"].build_kwargs(FakeSettings())
+
+
+def test_client_retries_stay_off_when_every_optional_setting_is_unset() -> None:
+    """Not a setting: a None elsewhere must not turn the SDK's layer back on."""
+    empty = FakeSettings(
+        base_url=None,
+        temperature=None,
+        max_output_tokens=None,
+        context_tokens=None,
+        timeout=None,
+    )
+
+    assert PROVIDERS["anthropic"].build_kwargs(empty)["max_retries"] == 0
+
+
 @pytest.mark.parametrize("provider", ["openai_compatible", "openai", "anthropic", "google"])
 def test_hosted_providers_need_an_api_key(provider: str) -> None:
     assert PROVIDERS[provider].needs_api_key is True

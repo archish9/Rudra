@@ -270,3 +270,68 @@ def test_apply_provider_profile_is_still_available() -> None:
     from rudra.llm.factory import _apply_provider_profile
 
     assert callable(_apply_provider_profile())
+
+
+# --- OPEN-115: what the built client itself will do --------------------------
+#
+# `build_kwargs` emitting the value is not enough: deepagents' provider
+# profile rewrites kwargs on the way to the constructor (A1.37), so the
+# number that matters is the one on the client object that sends requests.
+
+
+@pytest.mark.parametrize(
+    ("provider", "model_id", "base_url"),
+    [
+        ("openai_compatible", "qwen3-coder-30b", "http://localhost:8000/v1"),
+        ("openai", "gpt-4o", None),
+    ],
+)
+def test_the_built_openai_clients_make_no_retries_of_their_own(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model_id: str, base_url: str | None
+) -> None:
+    monkeypatch.setenv("TEST_KEY_VAR", "sk-test-not-a-real-key")
+    model = build_model(
+        "coder",
+        make_config(
+            provider=provider, model=model_id, base_url=base_url, api_key_env="TEST_KEY_VAR"
+        ),
+    )
+
+    assert model.root_client.max_retries == 0
+    assert model.root_async_client.max_retries == 0
+
+
+def test_the_built_anthropic_clients_make_no_retries_of_their_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TEST_KEY_VAR", "sk-test-not-a-real-key")
+    model = build_model(
+        "coder",
+        make_config(
+            provider="anthropic",
+            model="claude-sonnet-4-5",
+            base_url=None,
+            api_key_env="TEST_KEY_VAR",
+        ),
+    )
+
+    assert model._client.max_retries == 0
+    assert model._async_client.max_retries == 0
+
+
+def test_the_built_google_model_asks_for_a_single_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Google builds its retry options per request from this field."""
+    monkeypatch.setenv("TEST_KEY_VAR", "sk-test-not-a-real-key")
+    model = build_model(
+        "coder",
+        make_config(
+            provider="google",
+            model="gemini-2.0-flash",
+            base_url=None,
+            api_key_env="TEST_KEY_VAR",
+        ),
+    )
+
+    assert model.max_retries == 1

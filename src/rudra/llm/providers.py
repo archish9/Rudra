@@ -65,6 +65,22 @@ class ProviderEntry:
     `max_tokens` exceeds every current Anthropic and OpenAI model's cap
     (CR-D2)."""
 
+    no_client_retries: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    """Kwargs that switch the provider client's OWN retries off (OPEN-115).
+
+    `ModelRetryMiddleware` is the retry layer: it logs, counts, and knows
+    whether the endpoint has served this run. The client SDK retried inside
+    each of its attempts, invisibly -- 12 requests per logical call, 24 on
+    google, of which `usage.json` saw 4. `llm/retry.py::is_transient` and
+    `retry_wait` carry what that layer did and the middleware did not: every
+    5xx, `x-should-retry`, and `Retry-After`.
+
+    A mapping rather than a number because the same word means different
+    things: openai's and anthropic's `max_retries` counts RETRIES, so none
+    is 0; google's builds `HttpRetryOptions(attempts=)`, so none is 1, and
+    langchain_google_genai warns that 0 reads as Google's default. Empty for
+    ollama, whose client has no retry layer."""
+
     def build_kwargs(self, settings: ModelConfig) -> dict[str, Any]:
         """Emit exactly the kwargs this provider accepts.
 
@@ -88,6 +104,7 @@ class ProviderEntry:
             kwargs[self.context_kwarg] = settings.context_tokens
         if self.supports_timeout and settings.timeout is not None:
             kwargs["timeout"] = settings.timeout
+        kwargs.update(self.no_client_retries)
         kwargs.update(self.extra_kwargs)
         return kwargs
 
@@ -130,6 +147,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             # vLLM, LM Studio, Groq, Together, and OpenRouter serve
             # /chat/completions, not OpenAI's /responses.
             extra_kwargs=MappingProxyType({"use_responses_api": False}),
+            no_client_retries=MappingProxyType({"max_retries": 0}),
         ),
         "openai": ProviderEntry(
             name="openai",
@@ -137,6 +155,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             max_output_kwarg="max_tokens",
             needs_api_key=True,
             supports_timeout=True,
+            no_client_retries=MappingProxyType({"max_retries": 0}),
         ),
         "anthropic": ProviderEntry(
             name="anthropic",
@@ -144,6 +163,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             max_output_kwarg="max_tokens",
             needs_api_key=True,
             supports_timeout=True,
+            no_client_retries=MappingProxyType({"max_retries": 0}),
         ),
         "google": ProviderEntry(
             name="google",
@@ -151,6 +171,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             max_output_kwarg="max_output_tokens",
             needs_api_key=True,
             supports_timeout=True,
+            no_client_retries=MappingProxyType({"max_retries": 1}),
         ),
     }
 )
