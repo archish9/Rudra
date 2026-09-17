@@ -225,3 +225,51 @@ def test_a_marked_message_that_really_failed_is_still_a_failure():
         additional_kwargs={REFUSAL_KEY: True},
     )
     assert message_is_error(failed) is True
+
+
+# --- prose already streamed (OPEN-124) --------------------------------------
+
+
+def test_prose_already_streamed_in_its_namespace_is_not_emitted_again():
+    """With `--stream` the deltas ARE the prose record; the whole message in
+    the values chunk would print every line a second time."""
+    state = StreamState(role="coder")
+    message = AIMessage(
+        content="reading it now", tool_calls=[{"name": "ls", "args": {}, "id": "1"}]
+    )
+
+    events = consume(_chunk((), [message]), state, streamed={(): "reading it now"})
+
+    assert [event.kind for event in events] == [TraceKind.TOOL_CALL]
+
+
+def test_prose_streamed_in_another_namespace_is_still_emitted():
+    state = StreamState(role="coder")
+    events = consume(
+        _chunk(("task:1",), [AIMessage(content="same words")]),
+        state,
+        streamed={(): "same words"},
+    )
+    assert [event.payload for event in events] == ["same words"]
+
+
+def test_prose_that_was_not_what_streamed_is_still_emitted():
+    """Nothing is skipped on a guess: a message is only dropped when its text
+    is exactly what was already delivered, so the record can never lose it."""
+    state = StreamState(role="coder")
+    events = consume(
+        _chunk((), [AIMessage(content="the full answer")]), state, streamed={(): "the"}
+    )
+    assert [event.payload for event in events] == ["the full answer"]
+
+
+def test_a_retry_that_restreamed_the_message_is_still_recognised():
+    """A model call re-issued mid-stream delivers its text twice in one node;
+    the message in state is the second copy, which ends the streamed text."""
+    state = StreamState(role="coder")
+    events = consume(
+        _chunk((), [AIMessage(content="final words")]),
+        state,
+        streamed={(): "final wofinal words\n"},
+    )
+    assert events == []

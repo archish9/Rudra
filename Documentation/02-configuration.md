@@ -426,7 +426,13 @@ to errors only. The levels are in the
 
 `stream_tokens` is off because it is unmeasured against the 32B models Rudra
 targets. `--stream` turns it on for one run; it changes only what the trace
-shows, never what the agent does.
+shows, never what the agent does. With it on, the model's prose is recorded in
+the debug log and transcript one line at a time, as it was written, rather than
+one entry per message.
+
+> **In a Rudra built before 2026-09-17, `--stream` also stopped every run guard
+> from seeing the agent** (OPEN-124): the trace showed nothing past the start, and
+> the repeat, failure and call-count limits could not fire. Update before using it.
 
 `max_fix_attempts` is an upper bound, not a target. The loop usually stops
 sooner: two attempts that fail *identically* count as no progress and stop

@@ -129,3 +129,34 @@ def test_resolve_level_is_three_state():
     assert resolve_level(False, True) is TraceLevel.QUIET
     assert resolve_level(None, True) is TraceLevel.VERBOSE
     assert resolve_level(None, False) is TraceLevel.NORMAL
+
+
+def test_feed_skips_prose_the_stream_already_delivered_in_that_namespace():
+    """OPEN-124: `permissions/approval.py` notes what it streamed per namespace
+    just before yielding that namespace's values chunk, so the chunk's whole
+    AIMessage is not recorded a second time."""
+    seen = []
+    sink = TraceSink(level=TraceLevel.VERBOSE, consumers=[seen.append])
+    state = StreamState(role="coder")
+
+    sink.note_streamed((), "already said")
+    sink.feed(((), {"messages": [AIMessage(content="already said")]}), state)
+    sink.feed(
+        ((), {"messages": [AIMessage(content="already said"), AIMessage(content="new")]}), state
+    )
+
+    assert [event.payload for event in seen] == ["new"]
+
+
+def test_a_streamed_note_never_outlives_the_chunk_fed_after_it():
+    """A note is about the ONE values chunk yielded right after it. Left in
+    place, a later invocation that did not stream -- same namespace `()`,
+    same closing words -- would lose its prose to it."""
+    seen = []
+    sink = TraceSink(level=TraceLevel.VERBOSE, consumers=[seen.append])
+
+    sink.note_streamed((), "Done.")
+    sink.feed(((), {"messages": [AIMessage(content="Done.")]}), StreamState(role="coder"))
+    sink.feed(((), {"messages": [AIMessage(content="Done.")]}), StreamState(role="tester"))
+
+    assert [(event.role, event.payload) for event in seen] == [("tester", "Done.")]

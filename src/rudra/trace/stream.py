@@ -13,6 +13,7 @@ repeat fails quietly.
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -157,6 +158,7 @@ def _events_for(
     state: StreamState,
     namespace: tuple[str, ...],
     index: int,
+    streamed: str = "",
 ) -> list[TraceEvent]:
     kind = type(message).__name__
     at = time.monotonic() - state.started
@@ -186,7 +188,14 @@ def _events_for(
         # statement of intent the trace ever gets. An empty content field
         # yields nothing: a tool-calling turn usually carries one, and a
         # blank AI line per call is noise.
-        events = [event(TraceKind.AI_TEXT, payload=content)] if content.strip() else []
+        #
+        # Unless the deltas already said it (OPEN-124): with `--stream` on,
+        # `permissions/approval.py` emitted this text line by line while the
+        # model wrote it, and `streamed` is what it delivered in this
+        # namespace since the previous values chunk.
+        said = content.strip()
+        new_prose = bool(said) and not streamed.rstrip().endswith(said)
+        events = [event(TraceKind.AI_TEXT, payload=content)] if new_prose else []
         events.extend(
             event(TraceKind.TOOL_CALL, call.get("name", "?"), str(call.get("args", {})))
             for call in calls
@@ -204,21 +213,41 @@ def _events_for(
     return [event(TraceKind.OTHER, kind, content)]
 
 
-def consume(chunk: Any, state: StreamState) -> list[TraceEvent]:
+def consume(
+    chunk: Any,
+    state: StreamState,
+    streamed: Mapping[tuple[str, ...], str] | None = None,
+) -> list[TraceEvent]:
     """Every message in `chunk` not already seen for its namespace.
 
     Accepts both shapes the stream yields: the `(namespace, event)` tuple
     that `subgraphs=True` produces, and a bare event dict, which is what
     an ungated caller or a test passes.
+
+    `streamed` maps a namespace to the prose token streaming already
+    delivered there since its previous values chunk (OPEN-124). An
+    AIMessage whose text ENDS that string is not emitted as AI_TEXT again;
+    its tool calls still are. A suffix rather than equality, because a
+    model call re-issued mid-stream delivers the failed attempt's text
+    first. **It can never lose prose**: a skipped message's text is, by
+    that test, text already emitted -- so a model that does not stream,
+    which delivers nothing, is recorded whole as it always was. Matched on
+    text and never on message ids, which providers fill in differently
+    between a delta and the message merged from them.
     """
     namespace, event = chunk if isinstance(chunk, tuple) and len(chunk) == 2 else ((), chunk)
     key = tuple(namespace or ())
     messages = event.get("messages", []) if isinstance(event, dict) else []
+    already = (streamed or {}).get(key, "")
 
     seen = state.counters.get(key, 0)
     produced: list[TraceEvent] = []
     while seen < len(messages):
-        produced.extend(_events_for(messages[seen], state=state, namespace=key, index=seen + 1))
+        produced.extend(
+            _events_for(
+                messages[seen], state=state, namespace=key, index=seen + 1, streamed=already
+            )
+        )
         seen += 1
     state.counters[key] = seen
     return produced

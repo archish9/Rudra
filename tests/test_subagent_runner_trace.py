@@ -226,3 +226,61 @@ async def test_a_clean_run_emits_no_notice(monkeypatch):
     await run_subagent("coder", "write a.py", context=context)
 
     assert [event for event in seen if event.kind is TraceKind.NOTICE] == []
+
+
+@pytest.mark.parametrize("stream_tokens", [False, True])
+async def test_the_repeat_guard_halts_a_real_graph_whether_or_not_tokens_stream(
+    monkeypatch, stream_tokens
+):
+    """OPEN-124, at the consumer it blinded. The tests above hand the loop
+    fixed chunks; this one runs a real graph through the real
+    `run_with_approvals`, so the chunk shape is langgraph's. With
+    `stream_tokens` on, every chunk was dropped before this loop saw it, and
+    the agent read the same file as often as it liked."""
+    from types import SimpleNamespace
+
+    from langchain.agents import create_agent
+    from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
+    from langchain_core.tools import tool
+
+    reads: list[str] = []
+
+    @tool
+    def read_file(file_path: str) -> str:
+        """Read a file."""
+        reads.append(file_path)
+        return "contents"
+
+    class Looping(FakeMessagesListChatModel):
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+    # The chunk SHAPE is set by `stream_mode`, not by the model, so a model
+    # that answers whole is enough. Each call needs its own id, or
+    # `create_agent` reads the repeat as already answered.
+    model = Looping(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "read_file", "args": {"file_path": "a.py"}, "id": f"c{n}"}],
+            )
+            for n in range(20)
+        ]
+    )
+    agent = create_agent(model, tools=[read_file])
+    monkeypatch.setattr("rudra.subagents.runner.build_agent", lambda spec, context, task="": agent)
+    context = SubagentContext(
+        project_path=Path("."),
+        backend=None,
+        gate=None,
+        console=Console(quiet=True),
+        cfg=SimpleNamespace(agent=SimpleNamespace(stream_tokens=stream_tokens)),
+        session_id="s1",
+        trace=TraceSink(level=TraceLevel.NORMAL),
+    )
+
+    result = await run_subagent("coder", "read a.py", context=context)
+
+    assert not result.ok
+    assert "repeated 3x" in (result.halted_reason or "")
+    assert len(reads) <= 3

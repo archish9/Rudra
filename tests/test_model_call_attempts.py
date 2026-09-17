@@ -153,23 +153,10 @@ async def test_an_anthropic_overload_is_still_retried_once_the_sdk_is_not(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "stream_tokens",
-    [
-        False,
-        pytest.param(
-            True,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "OPEN-124: with a list stream_mode langgraph yields "
-                    "(namespace, mode, data), `_tagged` drops it, nothing is "
-                    "yielded, and the graph is re-run: 16 model calls"
-                ),
-            ),
-        ),
-    ],
-)
+# Both, because the ordering this pins held for `values` and NOT for a list
+# stream_mode until OPEN-124: `_tagged` dropped every `(namespace, mode, data)`
+# chunk, nothing was yielded, and the graph was re-run -- 16 model calls.
+@pytest.mark.parametrize("stream_tokens", [False, True])
 async def test_the_stream_retry_never_re_runs_a_graph_whose_model_call_failed(
     no_sleeps: None, stream_tokens: bool
 ) -> None:

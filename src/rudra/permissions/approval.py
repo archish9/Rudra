@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from langchain_core.messages import AIMessageChunk
 from langgraph.types import Command
 from rich.console import Console
 from rich.markup import escape
@@ -242,6 +243,14 @@ async def _stream_with_retry(
     the shape the single-mode call produces. Every caller's parse loop is
     untouched, which is the constraint this module's docstring sets out
     and which both parse loops depend on.
+
+    **A values chunk is also the flush point for its namespace's streamed
+    prose (OPEN-124).** It arrives after the node that produced it returned,
+    so any message that namespace was streaming is complete: its held line
+    is emitted, and the text streamed since the namespace's previous values
+    chunk is noted on the sink, which then does not record the same message
+    whole a second time. Both happen before the chunk is yielded, because
+    the caller feeds it to the sink before pulling the next one.
     """
     import asyncio
 
@@ -251,25 +260,36 @@ async def _stream_with_retry(
     last: BaseException | None = None
 
     mode: Any = ["values", "messages"] if stream_tokens else "values"
-    # Partial line per role, so redaction sees whole credentials (CR-G6).
-    held: dict[str, str] = {}
 
     for attempt in range(len(delays) + 1):
         yielded = False
+        # Partial line per NAMESPACE, so redaction sees whole credentials
+        # (CR-G6) and a subagent's text never lands in its parent's line.
+        held: dict[tuple[str, ...], str] = {}
+        # Raw text streamed per namespace since its last values chunk.
+        streamed: dict[tuple[str, ...], str] = {}
         try:
             async for chunk in agent.astream(payload, config, stream_mode=mode, subgraphs=True):
                 if stream_tokens:
-                    tagged = _tagged(chunk)
-                    if tagged is None:
-                        continue
-                    kind, chunk = tagged
+                    kind, namespace, data = _tagged(chunk)
                     if kind == "messages":
-                        _emit_token(chunk, trace=trace, role=role, held=held)
+                        _emit_token(
+                            data,
+                            trace=trace,
+                            role=role,
+                            namespace=namespace or (),
+                            held=held,
+                            streamed=streamed,
+                        )
                         continue
+                    if namespace is not None:
+                        _flush_tokens(
+                            held.pop(namespace, ""), trace=trace, role=role, namespace=namespace
+                        )
+                        _note_streamed(trace, namespace, streamed.pop(namespace, ""))
+                        chunk = (namespace, data)
                 yielded = True
                 yield chunk
-            # Whatever the last line never terminated.
-            _flush_tokens(held.pop(role, ""), trace=trace, role=role)
             return
         except Exception as error:  # noqa: BLE001 -- re-raised below
             if yielded or not is_transient(error) or attempt == len(delays):
@@ -292,25 +312,37 @@ async def _stream_with_retry(
                 raise
             last = error
             await asyncio.sleep(delays[attempt])
+        finally:
+            # Whatever a line never terminated -- at the end, on a failure,
+            # or when the caller stops pulling. Already paid for; a record
+            # that drops it is §8a's failure shape 1.
+            for namespace, text in held.items():
+                _flush_tokens(text, trace=trace, role=role, namespace=namespace)
 
     if last is not None:  # pragma: no cover -- loop always returns or raises
         raise ProviderUnavailable("the model provider", len(delays) + 1, last) from last
 
 
-def _tagged(chunk: Any) -> tuple[str, Any] | None:
-    """Split langgraph's (mode, chunk) pair, or None if it is not one.
+def _tagged(chunk: Any) -> tuple[str, tuple[str, ...] | None, Any]:
+    """Split langgraph's `(namespace, mode, data)` into its three parts.
 
-    A list stream_mode makes every chunk a 2-tuple whose first element is
-    the mode name. `subgraphs=True` adds a namespace in front for some
-    shapes, so the namespace form is passed through as a value chunk --
-    that is what the parse loops already understand.
+    A list `stream_mode` with `subgraphs=True` -- the only way this module
+    streams -- yields a 3-tuple for every chunk, parent graph included
+    (namespace `()`). This used to expect `(mode, data)`, a shape langgraph
+    does not produce with `subgraphs=True`, and returned None for the real
+    one, so every chunk was `continue`d and both parse loops ran blind for
+    as long as `--stream` was on (OPEN-124).
+
+    **Anything else is passed through as a values chunk, never dropped.** A
+    shape this does not recognise reaches the parse loops exactly as the
+    single-mode stream would have yielded it; dropping it is what turned a
+    shape mismatch into guards that saw nothing. The namespace is None then,
+    which tells the caller there is nothing to flush and nothing to unwrap.
     """
-    if not (isinstance(chunk, tuple) and len(chunk) == 2):
-        return None
-    first, rest = chunk
-    if isinstance(first, str):
-        return first, rest
-    return "values", chunk
+    if isinstance(chunk, tuple) and len(chunk) == 3 and isinstance(chunk[1], str):
+        namespace, mode, data = chunk
+        return mode, tuple(namespace or ()), data
+    return "values", None, chunk
 
 
 # A secret never spans a newline, so a line is the smallest unit that can be
@@ -318,12 +350,26 @@ def _tagged(chunk: Any) -> tuple[str, Any] | None:
 _MAX_HELD_CHARS = 4000
 
 
-def _emit_token(chunk: Any, *, trace: Any, role: str, held: dict[str, str] | None = None) -> None:
+def _emit_token(
+    chunk: Any,
+    *,
+    trace: Any,
+    role: str,
+    namespace: tuple[str, ...] = (),
+    held: dict[tuple[str, ...], str] | None = None,
+    streamed: dict[tuple[str, ...], str] | None = None,
+) -> None:
     """Turn streamed message deltas into AI_TEXT events, one line at a time.
 
     Deltas arrive as (message_chunk, metadata). Empty content is dropped:
     a tool-calling turn streams empty deltas, and one blank line each
     would bury the trace this exists to improve.
+
+    **Only a model's `AIMessageChunk` is prose (OPEN-124).** langgraph's
+    `messages` mode also carries each whole message a node returns -- the
+    tools node's `ToolMessage`, and the answer of a model that does not
+    stream -- and those already reach the trace from the values chunk, as
+    what they are. Taken here, every `read_file` body was an AI_TEXT line.
 
     Buffered to a line boundary because redaction happens here, and
     redacting each delta in isolation does not work: the patterns need the
@@ -340,39 +386,59 @@ def _emit_token(chunk: Any, *, trace: Any, role: str, held: dict[str, str] | Non
     if trace is None:
         return
     message = chunk[0] if isinstance(chunk, tuple) and chunk else chunk
-    text = str(getattr(message, "content", "") or "")
+    if not isinstance(message, AIMessageChunk):
+        return
+    text = str(message.content or "")
     if not text:
         return
+    if streamed is not None:
+        streamed[namespace] = streamed.get(namespace, "") + text
 
     if held is None:
-        _flush_tokens(text, trace=trace, role=role)
+        _flush_tokens(text, trace=trace, role=role, namespace=namespace)
         return
 
-    buffered = held.get(role, "") + text
+    buffered = held.get(namespace, "") + text
     # A provider that streams a very long line must not be buffered without
     # bound; flushing early risks a split credential, so the cut is made at
     # the last whitespace, which no pattern's value crosses.
     if "\n" not in buffered and len(buffered) > _MAX_HELD_CHARS:
         cut = buffered.rfind(" ")
         if cut > 0:
-            _flush_tokens(buffered[:cut], trace=trace, role=role)
-            held[role] = buffered[cut:]
+            _flush_tokens(buffered[:cut], trace=trace, role=role, namespace=namespace)
+            held[namespace] = buffered[cut:]
             return
 
     lines = buffered.split("\n")
-    held[role] = lines.pop()
+    held[namespace] = lines.pop()
     if lines:
-        _flush_tokens("\n".join(lines) + "\n", trace=trace, role=role)
+        _flush_tokens("\n".join(lines) + "\n", trace=trace, role=role, namespace=namespace)
 
 
-def _flush_tokens(text: str, *, trace: Any, role: str) -> None:
+def _flush_tokens(text: str, *, trace: Any, role: str, namespace: tuple[str, ...] = ()) -> None:
     """Redact one complete span of streamed text and emit it."""
     if trace is None or not text.strip():
         return
     from rudra.trace.events import TraceEvent, TraceKind
     from rudra.trace.redact import redact
 
-    trace.emit(TraceEvent(kind=TraceKind.AI_TEXT, role=role, payload=redact(text)))
+    trace.emit(
+        TraceEvent(kind=TraceKind.AI_TEXT, role=role, namespace=namespace, payload=redact(text))
+    )
+
+
+def _note_streamed(trace: Any, namespace: tuple[str, ...], text: str) -> None:
+    """Tell the sink what this namespace streamed since its last values chunk.
+
+    Called for every values chunk, just before it is yielded: the sink
+    compares that chunk's whole AIMessages against the note
+    (`trace/stream.py::consume`) and discards it once fed. Tolerates a trace
+    that is not a `TraceSink`, the way the rest of this module treats
+    `trace` as optional.
+    """
+    note = getattr(trace, "note_streamed", None)
+    if note is not None:
+        note(namespace, text)
 
 
 async def run_with_approvals(

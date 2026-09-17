@@ -46,6 +46,9 @@ class TraceSink:
     level: TraceLevel = TraceLevel.NORMAL
     consumers: list[Consumer] = field(default_factory=list)
     recorders: list[Consumer] = field(default_factory=list)
+    # Prose token streaming delivered per namespace since that namespace's
+    # last values chunk -- see `note_streamed`.
+    streamed: dict[tuple[str, ...], str] = field(default_factory=dict)
 
     def add(self, consumer: Consumer) -> None:
         self.consumers.append(consumer)
@@ -53,6 +56,20 @@ class TraceSink:
     def add_recorder(self, consumer: Consumer) -> None:
         """Register a consumer that receives every event, unfiltered."""
         self.recorders.append(consumer)
+
+    def note_streamed(self, namespace: tuple[str, ...], text: str) -> None:
+        """Record what token streaming said in `namespace` (OPEN-124).
+
+        `permissions/approval.py` calls this for every values chunk, just
+        before yielding it, with the prose it emitted there since the
+        namespace's previous one -- so `feed` does not record the chunk's
+        whole AIMessage a second time. A note belongs to the one chunk the
+        caller feeds next, and `feed` clears every note once it has read
+        them: a stale one would skip a message nobody streamed. A caller
+        that never streams never calls this, and `feed` behaves as it
+        always did.
+        """
+        self.streamed[tuple(namespace)] = text
 
     def emit(self, event: TraceEvent) -> None:
         """Feed the recorders, then filter once and fan out. Broken ones skip.
@@ -116,7 +133,9 @@ class TraceSink:
         wants the events for its own bookkeeping does not have to parse
         the chunk a second time.
         """
-        events = consume(chunk, state)
+        events = consume(chunk, state, self.streamed)
+        # A note describes the one chunk yielded right after it (OPEN-124).
+        self.streamed.clear()
         for event in events:
             self.emit(event)
         return events
