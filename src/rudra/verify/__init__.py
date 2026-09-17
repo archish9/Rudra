@@ -65,11 +65,13 @@ def verify_project(
 ) -> VerifyReport:
     """Run the gate and report what it found.
 
-    `changed_files` are project-relative paths and scope the stub scan only
-    (spec S9a.5) -- every other stage is whole-project, because a new file
-    can break an old one's imports and a test suite is whole-project by
-    nature. Step 9c passes the exact paths its coder wrote; `rudra verify`
-    derives them from git.
+    `changed_files` are project-relative paths and scope the syntax stage and
+    the stub scan (spec S9a.5) -- every other stage is whole-project,
+    because a new file can break an old one's imports and a test suite is
+    whole-project by nature. Step 9c passes every path the task has written,
+    across all its attempts (OPEN-123); `rudra verify` derives them from git.
+    Corrected 2026-09-17: this said the stub scan ONLY, and the syntax stage
+    has parsed exactly this list since it was written (Step 9a).
 
     gate, console and cfg are threaded rather than read from module state,
     the same shape run_tests uses (testing/runner.py:111). A1.52 is an open

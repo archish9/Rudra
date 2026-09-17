@@ -42,8 +42,9 @@ class Task:
 
     A task is work, not a filename (spec S9c.2): "write tests for the
     parser" has no filename until it is done. `files_touched` records what
-    it produced, which is exactly the changed-file list 9a's stub scan
-    needs.
+    it produced, across EVERY attempt (OPEN-123) -- it only ever grows --
+    which is exactly the changed-file list 9a's syntax stage and stub scan
+    need.
     """
 
     id: str

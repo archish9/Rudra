@@ -167,3 +167,16 @@ def test_a_deleted_file_is_skipped_not_failed(tmp_path):
 
     assert result.outcome == PASSED
     assert result.findings == ()
+
+
+def test_a_deleted_javascript_file_is_skipped_not_failed(tmp_path):
+    """OPEN-123: CR-E2's rule, for the stage CR-E2 did not reach. `node
+    --check` on a path that is gone exits 1 with `Cannot find module`, which
+    was recorded as a parse failure. It cost one attempt while a gate judged
+    one attempt's diff; once the loop hands the gate every file the task
+    touched, a deleted path stays in scope and would fail every later gate.
+    Needs no node on PATH: there is nothing left to check."""
+    result = syntax_stage(tmp_path, None, ["gone.js"], gate=None, console=None, cfg=FakeCfg())
+
+    assert result.outcome != FAILED
+    assert result.findings == ()

@@ -179,10 +179,11 @@ def tree_snapshot(context: LoopContext) -> dict[str, str]:
 
     A marker file therefore counts as a touch on both paths now. That does
     not weaken the empty-diff guard, because the branch it skips is not
-    where the protection lives: `changed_files` scopes the STUB SCAN only
-    (verify/__init__.py:65-70), so lint, typecheck and test are
+    where the protection lives: `changed_files` scopes the syntax stage and
+    the stub scan (verify/pipeline.py), so lint, typecheck and test are
     whole-project either way, and a gate that judged nothing routes to the
-    tester rather than to DONE.
+    tester rather than to DONE. Corrected 2026-09-17 (OPEN-123): this said
+    the stub scan ONLY, and the syntax stage reads the same list.
 
     It is a whole-tree walk where the git path is a `git status` call, and
     that is the price of the answer: without it there is no answer at all,
@@ -236,6 +237,29 @@ def changed_since(context: LoopContext, before: dict[str, str] | None) -> tuple[
     touched = {path for path, digest in after.items() if before.get(path) != digest}
     touched |= {path for path in before if path not in after}
     return tuple(sorted(touched))
+
+
+def _record_touched(task: Task, touched: tuple[str, ...]) -> tuple[str, ...]:
+    """Add one attempt's diff to what the task has touched; return the diff.
+
+    `task.files_touched` is EVERY attempt's files, never the last one's
+    (OPEN-123). Both call sites used to assign, so each attempt replaced the
+    record: run `a04f89bd2ed6`'s t5 wrote two files on attempt 1, nothing on
+    attempts 2 and 3, and went BLOCKED with `files_touched: []` -- the line
+    CLAUDE.md 8a calls the highest-signal one in the folder, saying the
+    opposite of what happened. That is 8a failure shape 4, one field over.
+
+    The overwrite was also a gate defect, not only a record one: `_verify`
+    hands this field to the gate, whose syntax stage and stub scan read
+    nothing else, so a file attempt 1 broke and attempt 2 did not touch was
+    judged by no stage that could see it. Reproduced: DONE, `def f(:` on disk.
+
+    The diff is returned because the empty-diff guard must keep reading it.
+    "Did THIS attempt write anything" is that guard's question, and the union
+    answers "has any attempt", which after attempt 1 is always yes.
+    """
+    task.files_touched = tuple(sorted({*task.files_touched, *touched}))
+    return touched
 
 
 def _coder_prompt(task: Task, blocker_text: str = "") -> str:
@@ -373,10 +397,26 @@ def _confirms_nothing_to_do(report: Any, verdict: str) -> bool:
     return (verdict is PASSED or verdict is INHERITED) and not tests_produced_no_judgement(report)
 
 
-def _already_satisfied_note(report: Any) -> str:
-    """Why a task that wrote nothing is DONE (OPEN-27)."""
+def _already_satisfied_note(report: Any, *, retry: bool = False) -> str:
+    """Why a task that wrote nothing is DONE (OPEN-27).
+
+    `retry` is whether a gate already declined this task in this run. The
+    OPEN-27 sentence -- "nothing needed writing: this task's work was already
+    in place" -- is true of a FIRST attempt, where an earlier task built the
+    work, and false on a retry, where this task's own previous gate did not
+    accept the same files (OPEN-123). It says what was observed and names no
+    cause: `_sync_project_env` runs before every gate and a test can be
+    flaky, and a note that guessed would send the reader after one of them.
+    """
     tested = next((stage for stage in report.stages if stage.name == "test"), None)
     detail = f" ({tested.detail})" if tested is not None and tested.detail else ""
+    if retry:
+        return (
+            "the coder wrote nothing on a retry, and the gate now passes over the "
+            f"whole project with its tests run{detail}. It did not accept an earlier "
+            "attempt of this task, and the coder has written nothing since: the "
+            "same files drew two verdicts."
+        )
     return (
         "the coder wrote nothing, and nothing needed writing: this task's "
         "work was already in place, and the gate passes over the whole "
@@ -628,6 +668,11 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     """
     tested = False
     blocker_text = ""
+    # Whether a gate has already declined this task in this call, which is
+    # what makes an empty diff that then passes a RETRY rather than work an
+    # earlier task did (OPEN-123). In memory, like `inherited`: a fresh
+    # process has no evidence and says what it said before.
+    rejected = False
     # What was already failing before this task ran (OPEN-23). Captured ONCE,
     # here, and deliberately not refreshed per attempt: a regression attempt 1
     # introduced must still be this task's own on attempt 2, and re-reading
@@ -740,32 +785,38 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             task.note = result.halted_reason
             _record_halt(task, result, context)
 
-        task.files_touched = changed_since(context, before)
+        touched = _record_touched(task, changed_since(context, before))
         # No `before is not None` qualifier any more: `attempt_snapshot`
         # always has one, and the qualifier was what disabled this guard
-        # outside a git repository (OPEN-13).
-        if not task.files_touched:
+        # outside a git repository (OPEN-13). The ATTEMPT's diff, never
+        # `task.files_touched`, which since OPEN-123 holds every attempt's.
+        if not touched:
             # An empty diff is not proof of failure -- it is an absence of
             # evidence. OPEN-27 measured five tasks where the honest reading
             # was "there was nothing to write": an earlier task had already
             # built this one's work, and the coder read the file, said so,
             # and stopped. Ask the gate rather than assuming.
             #
-            # `changed_files` scopes the STUB SCAN only
-            # (verify/__init__.py:68-70), so this is already a whole-project
-            # verdict; the stub scan finds nothing, which is correct, because
-            # nothing was written.
+            # `changed_files` scopes the syntax stage and the stub scan, and
+            # is every file an EARLIER attempt of this task wrote (OPEN-123),
+            # so a retry that wrote nothing still has that work parsed and
+            # scanned. On a first attempt it is empty and those two stages
+            # judge nothing, which is correct, because nothing was written;
+            # every other stage is whole-project either way. Corrected
+            # 2026-09-17: this said the stub scan ONLY, and reasoned from it
+            # that the verdict was already whole-project.
             report = await _verify(task, context)
             verdict = verdict_for(report, inherited=inherited)
             context.failure_baseline = failure_keys(report)
             if _confirms_nothing_to_do(report, verdict):
                 task.status = TaskStatus.DONE
-                task.note = _already_satisfied_note(report)
+                task.note = _already_satisfied_note(report, retry=rejected)
                 outcome = _stop(Outcome.DONE)
                 record_task_in_memory(context.paths, task)
                 record_task_memory(context, task)
                 return outcome
             task.note = _wrote_nothing_note(blocker_text, report, context.project_path)
+            rejected = True
             ledger.save(context.paths.ledger_json)
             continue
 
@@ -823,7 +874,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                 # instead of a reconstruction from 678 lines of JSONL
                 # (CLAUDE.md 8a failure shape 4).
                 _record_incomplete(task, "tester", f"calling {TESTER_TOOL}")
-            task.files_touched = changed_since(context, before)
+            _record_touched(task, changed_since(context, before))
             report = await _verify(task, context)
 
         if report.escalate:
@@ -864,6 +915,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             record_block_memory(context, task)
             return outcome
         task.last_signature = signature
+        rejected = True
 
     task.status = TaskStatus.BLOCKED
     if "wrote nothing" not in task.note and "could not run" not in task.note:

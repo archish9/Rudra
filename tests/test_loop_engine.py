@@ -14,7 +14,7 @@ from rudra.loop.engine import git_snapshot as real_git_snapshot
 from rudra.loop.ledger import Ledger, TaskStatus
 from rudra.state.paths import rudra_paths
 from rudra.subagents import SubagentResult
-from rudra.verify.pipeline import _parse_findings
+from rudra.verify.pipeline import _parse_findings, syntax_stage
 from rudra.verify.result import (
     DENIED,
     FAILED,
@@ -1602,3 +1602,145 @@ async def test_a_sync_that_raises_never_ends_the_run(monkeypatch, context):
 
 def test_the_blocker_gains_nothing_when_no_install_failed(context):
     assert engine._env_sync_note(context) == ""
+
+
+# --- OPEN-123: `files_touched` is every attempt's, and so is the gate's scope --
+
+
+def _real_diff(monkeypatch):
+    """The real snapshot and diff, and a .venv sync that does nothing: what the
+    loop RECORDS is the question, so nothing may answer it for the test."""
+    monkeypatch.setattr(engine, "git_snapshot", real_git_snapshot)
+    monkeypatch.setattr(engine, "changed_since", real_changed_since)
+    monkeypatch.setattr(engine, "ensure_project_env", lambda *a, **k: "ok")
+
+
+def _scripted_subagents(monkeypatch, project, coder_writes, tester_writes=None):
+    """A coder whose Nth dispatch writes `coder_writes[N-1]` -- `{path: text}`
+    -- and nothing once the script runs out; a tester that writes
+    `tester_writes`."""
+    dispatched: list[str] = []
+
+    def write(files):
+        for relative, text in files.items():
+            path = project / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+
+    async def subagent(name, prompt, *, context, thread_id=None):
+        if name == "coder":
+            dispatched.append(prompt)
+            if len(dispatched) <= len(coder_writes):
+                write(coder_writes[len(dispatched) - 1])
+        elif name == "tester":
+            write(tester_writes or {})
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", subagent)
+    return dispatched
+
+
+def _gate_sequence(monkeypatch, *reports):
+    """A gate answering each call with the next report, the last one repeated."""
+    scopes: list[tuple[str, ...]] = []
+
+    def gate(project_path, *, changed_files, **kwargs):
+        scopes.append(tuple(changed_files))
+        return reports[min(len(scopes), len(reports)) - 1]
+
+    monkeypatch.setattr(engine, "verify_project", gate)
+    return scopes
+
+
+async def test_an_earlier_attempt_s_files_survive_the_attempts_that_wrote_nothing(
+    monkeypatch, context
+):
+    """Run `a04f89bd2ed6`'s t5, reproduced: the first attempt wrote two files,
+    attempts 2 and 3 wrote nothing, and the ledger said `files_touched: []`
+    with both files on disk -- the line CLAUDE.md 8a calls the highest-signal
+    one in the folder, reporting the opposite of what happened. Each attempt
+    ASSIGNED the field, so only the last attempt's diff survived."""
+    _real_diff(monkeypatch)
+    _scripted_subagents(
+        monkeypatch,
+        context.project_path,
+        [{"tests/unit/__init__.py": "", "tests/unit/test_todo_model.py": "x = 1\n"}],
+    )
+    _gate_sequence(monkeypatch, failing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.attempts == 3
+    assert task.files_touched == ("tests/unit/__init__.py", "tests/unit/test_todo_model.py")
+    assert "wrote nothing" in task.note, "the empty-diff guard reads the attempt's own diff"
+
+
+async def test_a_retry_s_gate_still_parses_a_file_an_earlier_attempt_broke(monkeypatch, context):
+    """The gate is handed `files_touched`, and `changed_files` scopes the
+    SYNTAX stage, not the stub scan alone. With the field overwritten, a file
+    attempt 1 broke and attempt 2 did not touch was parsed by no stage:
+    reproduced, the task went DONE with `def f(:` on disk."""
+    _real_diff(monkeypatch)
+    _scripted_subagents(
+        monkeypatch,
+        context.project_path,
+        [{"broken.py": "def f(:\n", "ok.py": "x = 1\n"}, {"ok.py": "x = 2\n"}],
+    )
+    scopes: list[tuple[str, ...]] = []
+
+    def gate(project_path, *, changed_files, **kwargs):
+        scopes.append(tuple(changed_files))
+        return VerifyReport.from_stages(
+            [
+                syntax_stage(project_path, None, changed_files, gate=None, console=None, cfg=None),
+                StageResult(name="test", outcome=PASSED, blocking=True),
+                StageResult(name="stubs", outcome=PASSED, blocking=True),
+            ]
+        )
+
+    monkeypatch.setattr(engine, "verify_project", gate)
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.status is not TaskStatus.DONE
+    assert scopes[1] == ("broken.py", "ok.py")
+
+
+async def test_the_tester_s_files_join_the_task_s_rather_than_replace_them(monkeypatch, context):
+    """The second assignment site: the tester's diff used to overwrite the
+    field too, dropping what the coder's earlier attempts wrote."""
+    _real_diff(monkeypatch)
+    _scripted_subagents(
+        monkeypatch,
+        context.project_path,
+        [{"a.py": "x = 1\n"}, {"b.py": "y = 2\n"}],
+        tester_writes={"tests/test_b.py": "def test_b():\n    assert True\n"},
+    )
+    _gate_sequence(monkeypatch, failing_report(), no_test_judgement_report(), passing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.files_touched == ("a.py", "b.py", "tests/test_b.py")
+
+
+async def test_a_retry_that_wrote_nothing_and_passes_does_not_claim_the_work_was_in_place(
+    monkeypatch, context
+):
+    """OPEN-27's note is true of a FIRST attempt that wrote nothing: an earlier
+    task built this one's work. On a retry it is false -- this task's own
+    previous gate did not accept it -- and it hid that."""
+    _real_diff(monkeypatch)
+    _scripted_subagents(monkeypatch, context.project_path, [{"a.py": "x = 1\n"}])
+    _gate_sequence(monkeypatch, failing_report(), passing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.attempts == 2
+    assert task.files_touched == ("a.py",)
+    assert "wrote nothing on a retry" in task.note
+    assert "earlier attempt" in task.note
+    assert "already in place" not in task.note

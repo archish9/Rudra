@@ -450,10 +450,18 @@ def _node_syntax_stage(
     Plain JavaScript has no type checker to subsume the parse step, so this
     is the only place the check can happen.
     """
+    # A deleted file is skipped, not checked: CR-E2's rule for Python
+    # (`_parse_python_files`), which never reached this stage. `node --check`
+    # on a path that is gone exits 1 with `Cannot find module`, recorded as a
+    # parse failure. Before OPEN-123 that cost the one attempt whose diff held
+    # the deletion; since the loop hands the gate every file a task touched,
+    # the path stays in scope and would fail every later gate. Filtered before
+    # the `which` check, so a diff that only deleted needs no node at all.
     javascript = [
         relative
         for relative in changed_files
         if Path(relative).suffix.lower() in {".js", ".jsx", ".mjs", ".cjs"}
+        and (Path(project_path) / relative).is_file()
     ]
     if not javascript:
         return StageResult(
