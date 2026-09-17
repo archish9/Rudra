@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pytest
 from rich.console import Console
 
 from rudra.context.agents_md import section_body
+from rudra.context.middleware import MODEL_CALL_KIND
+from rudra.context.usage import RunUsage
 from rudra.loop.engine import record_task_in_memory, summarise_architecture
 from rudra.loop.ledger import Ledger, TaskStatus
+from rudra.trace.debug import configure_debug_logging
 
 STARTER = """# Project Memory
 
@@ -253,3 +259,93 @@ def test_a_non_transient_summariser_failure_is_not_retried(tmp_path, monkeypatch
     asyncio.run(summarise_architecture(_context(tmp_path, paths, Unauthorised()), ledger))
 
     assert Unauthorised.calls == 1
+
+
+# --- OPEN-127: the summariser's call is in the debug log, not in usage.json --
+#
+# Step 15's run made 131 chat/completions requests and wrote 130 `model_call`
+# records; the missing one was this call. It skips `usage.json` on purpose, and
+# the record was lost with it, because only UsageMiddleware wrote records.
+
+
+@pytest.fixture
+def debug_log(tmp_path):
+    """The real debug-log handler, as tests/test_run_cost_logging.py uses it:
+    what `debug-<id>.jsonl` holds, not whether a logger was called."""
+    path = tmp_path / "debug-test.jsonl"
+    handler = configure_debug_logging(path, enabled=True)
+    assert handler is not None
+
+    def records() -> list[dict]:
+        handler.flush()
+        return [
+            record
+            for record in (json.loads(line) for line in path.read_text().splitlines() if line)
+            if record.get("kind") == MODEL_CALL_KIND
+        ]
+
+    yield records
+    logging.getLogger("rudra").removeHandler(handler)
+    handler.close()
+
+
+def test_the_summariser_call_writes_a_model_call_record(tmp_path, debug_log):
+    paths = _paths(tmp_path)
+    ledger = Ledger()
+    ledger.add("write the parser").status = TaskStatus.DONE
+
+    @dataclass
+    class Reply:
+        content: str
+        usage_metadata: dict
+
+    class Model:
+        async def ainvoke(self, messages):
+            return Reply(
+                content="The parser is hand-rolled.",
+                usage_metadata={"input_tokens": 812, "output_tokens": 95},
+            )
+
+    asyncio.run(summarise_architecture(_context(tmp_path, paths, Model()), ledger))
+
+    (record,) = debug_log()
+    assert record["role"] == "summariser"
+    assert record["ok"] is True
+    assert record["input_tokens"] == 812
+    assert record["output_tokens"] == 95
+    assert record["seconds"] >= 0.0
+
+
+def test_each_summariser_attempt_writes_its_own_record(tmp_path, monkeypatch, debug_log):
+    """One record per ATTEMPT, as every other model_call record is: the retry
+    middleware sits outside UsageMiddleware on both stacks."""
+    _no_sleep(monkeypatch)
+    paths = _paths(tmp_path)
+    ledger = Ledger()
+    ledger.add("write the parser").status = TaskStatus.DONE
+
+    asyncio.run(summarise_architecture(_context(tmp_path, paths, _flaky_model(failures=1)), ledger))
+
+    failed, served = debug_log()
+    assert (failed["role"], failed["ok"], failed["error"]) == ("summariser", False, "_Status")
+    assert "503" in failed["error_detail"]
+    assert (served["role"], served["ok"]) == ("summariser", True)
+
+
+def test_the_summariser_is_still_not_in_usage_json(tmp_path, monkeypatch, debug_log):
+    """Log, not count (owner, 2026-09-17): usage.json keeps its four roles.
+
+    A retry, not a clean call: handing the retry middleware `usage=` records
+    that retry under a `summariser` role, and a clean call would never show it.
+    """
+    _no_sleep(monkeypatch)
+    paths = _paths(tmp_path)
+    ledger = Ledger()
+    ledger.add("write the parser").status = TaskStatus.DONE
+    context = _context(tmp_path, paths, _flaky_model(failures=1))
+    context.usage = RunUsage()
+
+    asyncio.run(summarise_architecture(context, ledger))
+
+    assert "summariser" not in context.usage.as_dict()
+    assert [record["role"] for record in debug_log()] == ["summariser", "summariser"]

@@ -23,6 +23,7 @@ from typing import Any
 from rich.console import Console
 from rich.markup import escape
 
+from rudra.context.middleware import log_model_call
 from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
 from rudra.git.core import is_repo, status
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
@@ -1111,6 +1112,12 @@ def record_plan_memory(store: Any, facts: Any, tasks: Any) -> None:
         )
 
 
+SUMMARISER_ROLE = "summariser"
+"""The summariser's name in every record it leaves: its `retry` notice, its
+telemetry span and its `model_call` records (OPEN-127). Not a `usage.json`
+role, and must not become one -- that file keeps four (OPEN-58)."""
+
+
 async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
     """Fold the run's Session Log into Architecture Notes. One model call.
 
@@ -1162,7 +1169,7 @@ async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
         # accept, and the models here are sometimes doubles.
         def call(request: Any) -> Any:
             if telemetry is not None:
-                return model.ainvoke(request, config=telemetry.config("summariser"))
+                return model.ainvoke(request, config=telemetry.config(SUMMARISER_ROLE))
             return model.ainvoke(request)
 
         # Outside any agent graph, so no ModelRetryMiddleware wraps this
@@ -1174,10 +1181,39 @@ async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
         # retry count with no call count is a rate with no denominator.
         from rudra.middleware.model_retry import ModelRetryMiddleware
 
+        # One `model_call` record per attempt (OPEN-127). `usage` stays
+        # unpassed for the reason above, and that had cost the record too:
+        # only UsageMiddleware wrote one, and this call is in no graph. Step
+        # 15's run made 131 chat/completions requests against 130 records, and
+        # the missing one was this call -- the last a run makes, so the one a
+        # user reporting "it hung at the end" most needs timed. A failure is
+        # recorded and re-raised unchanged: the retry middleware decides.
+        async def timed(request: Any) -> Any:
+            started = time.perf_counter()
+            try:
+                answer = await call(request)
+            except BaseException as exc:
+                log_model_call(
+                    SUMMARISER_ROLE,
+                    time.perf_counter() - started,
+                    ok=False,
+                    error=type(exc).__name__,
+                    exc=exc,
+                )
+                raise
+            metadata = getattr(answer, "usage_metadata", None) or {}
+            log_model_call(
+                SUMMARISER_ROLE,
+                time.perf_counter() - started,
+                input_tokens=metadata.get("input_tokens"),
+                output_tokens=metadata.get("output_tokens"),
+            )
+            return answer
+
         retry = ModelRetryMiddleware(
-            "summariser", trace=getattr(getattr(context, "subagents", None), "trace", None)
+            SUMMARISER_ROLE, trace=getattr(getattr(context, "subagents", None), "trace", None)
         )
-        reply = await retry.awrap_model_call(prompt, call)
+        reply = await retry.awrap_model_call(prompt, timed)
         notes = str(getattr(reply, "content", "")).strip()
         if notes:
             write_agents_md(path, replace_section(text, "Architecture Notes", notes))
@@ -1630,6 +1666,7 @@ __all__ = [
     "LoopContext",
     "Outcome",
     "PREVIOUS_LEDGER",
+    "SUMMARISER_ROLE",
     "attempt_snapshot",
     "changed_since",
     "flush_usage",
