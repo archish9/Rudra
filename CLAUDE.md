@@ -1,13 +1,15 @@
 # CLAUDE.md — Rudra
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **Three are open as of 2026-09-16:
-OPEN-124**, filed offline that day while closing OPEN-115 — `stream_tokens` /
-`--stream` delivers no chunk to either parse loop, so every guard goes blind
-the moment a user opts in — **and OPEN-122 …
+is the live ledger of what is open. **Two are open as of 2026-09-17: OPEN-122 …
 OPEN-123**, filed on 2026-09-15 from live run A `a04f89bd2ed6` — a nudge
 outcome that labels an unfinished agent done, and a `files_touched` that keeps
-only the last attempt. **OPEN-115 closed on 2026-09-16, offline**: every client
+only the last attempt. **OPEN-124 closed on 2026-09-17, offline**: `--stream`
+delivered no chunk to either parse loop, so every guard went blind the moment a
+user opted in, and an exhausted model call re-ran the graph 4×; fixing it exposed
+three defects in the token output, all fixed — §3's `trace/` entry says how, and
+§8a's *What was it actually thinking?* row says what changed for a reader.
+**OPEN-115 closed on 2026-09-16, offline**: every client
 SDK retried inside each attempt Rudra's retry made, so one failing model call
 was 12 HTTP requests (24 on google) of which `usage.json` counted 4; the SDK
 layer is off, and §3's `llm/` entry says what Rudra's took over from it.
@@ -44,8 +46,7 @@ was filed and closed the same day, offline; §3's `filesystem/` entry says how.
 **OPEN-116 closed on 2026-09-16, offline**: every planner stage opened by
 listing the project because its prompt said `call ls("/")`; the order is gone,
 and a stage whose project holds nothing to read is built with no file tools —
-§3's `planner_agent.py` and `middleware/` entries say how. OPEN-124 has no plan
-document yet; its `TODO.md` entry carries the reproduction.
+§3's `planner_agent.py` and `middleware/` entries say how.
 OPEN-99 … OPEN-102 and the whole 2026-09-04 board — OPEN-93 …
 OPEN-98 — closed on 2026-09-09; each has a self-contained document under
 `docs/superpowers/plans/`, carrying a closing section saying what shipped and
@@ -140,7 +141,7 @@ above is about** — they say nothing about how a model behaves.
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **Pending items and the order to work them, and nothing else.** Read it first. It opens with the **Fix next** queue — one order across every board, its `Next:` line naming the item to work and its own rules for keeping itself right — then one summary per `PENDING` item, in queue order, each linking its self-contained plan. **Three open as of 2026-09-16: OPEN-124 and OPEN-122 … OPEN-123.** Cut to that on 2026-09-14 at the owner's request (1062 → 257 lines); everything else it held — census history, run boards, unfiled follow-ups, watch items, rules, and the *Before you start* reference — moved verbatim to `TODO-closed.md`. **Keep it that way:** a closed entry, a board or reference text goes to `TODO-closed.md` in the same edit |
+| `TODO.md` | **Pending items and the order to work them, and nothing else.** Read it first. It opens with the **Fix next** queue — one order across every board, its `Next:` line naming the item to work and its own rules for keeping itself right — then one summary per `PENDING` item, in queue order, each linking its self-contained plan. **Two open as of 2026-09-17: OPEN-122 … OPEN-123.** Cut to that on 2026-09-14 at the owner's request (1062 → 257 lines); everything else it held — census history, run boards, unfiled follow-ups, watch items, rules, and the *Before you start* reference — moved verbatim to `TODO-closed.md`. **Keep it that way:** a closed entry, a board or reference text goes to `TODO-closed.md` in the same edit |
 | `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 102 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Four blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument; and **the 2026-09-06 board**, moved here 2026-09-09, which carries run `5775ba1f9855`'s numbers and its **exercised / not-exercised tables** — the record of what a verification run can and cannot prove. **OPEN-100, OPEN-101 and OPEN-102 sit at the end**, each moved there the day it was filed; OPEN-100's closing carries the per-stage call and seconds table measured across every archived run — the evidence that its own plan's recommended number was wrong. Its index table at the top is the map; read that before scrolling. **Since 2026-09-14 it also ends with *TODO.md's context, moved here 2026-09-14*** — not items: the census history, the 2026-09-14 and both 2026-09-09 run boards with their exercised / not-exercised tables, the unfiled follow-ups, the four watch items, *Rules*, and *Before you start* (test baseline, **the fresh-project recipe**, model availability, where evidence lands, four lessons). That last part is live reference, not history |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
@@ -148,7 +149,7 @@ When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-16 those are OPEN-124, OPEN-122 and OPEN-123 —
+2026-09-17 those are OPEN-122 and OPEN-123 —
 cited in this file only in the paragraphs above and in §2 rule 1; every other
 `OPEN-N` here points at a record. When
 the next item lands, its own document's closing section says which paragraphs
@@ -210,7 +211,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. Three are open as of 2026-09-16 — OPEN-124 and OPEN-122 … OPEN-123; OPEN-115, the client SDKs retrying inside Rudra's own retry, closed offline on 2026-09-16; OPEN-116, the planner prompt that ordered every stage to `ls` the project, closed offline on 2026-09-16; OPEN-114, the time bound that halted on the answer it had just paid for and threw it away, closed offline on 2026-09-16; OPEN-121, the planner guard that counted an earlier consult's tool calls against this one, closed offline the same day; OPEN-120, the agent that pip-installed into the machine's Python, closed offline on 2026-09-15; OPEN-119, the test blocker that listed pytest's frames and dropped the exception, closed offline that day; OPEN-118, the refusals documented as escaping a failure counter that counts them, closed offline that day by correcting the documents; OPEN-105, the checklist row that reported a missing archive for an archived run, closed offline that day; OPEN-103, the run-killer everything else in its run was downstream of, closed offline that day, and OPEN-104 after it, so the next live run is what says whether either fix works on a model. Since 2026-09-14 the file holds only that queue and the `PENDING` entries (owner's request); the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. Two are open as of 2026-09-17 — OPEN-122 … OPEN-123; OPEN-124, `--stream` delivering no chunk to either parse loop, closed offline on 2026-09-17; OPEN-115, the client SDKs retrying inside Rudra's own retry, closed offline on 2026-09-16; OPEN-116, the planner prompt that ordered every stage to `ls` the project, closed offline on 2026-09-16; OPEN-114, the time bound that halted on the answer it had just paid for and threw it away, closed offline on 2026-09-16; OPEN-121, the planner guard that counted an earlier consult's tool calls against this one, closed offline the same day; OPEN-120, the agent that pip-installed into the machine's Python, closed offline on 2026-09-15; OPEN-119, the test blocker that listed pytest's frames and dropped the exception, closed offline that day; OPEN-118, the refusals documented as escaping a failure counter that counts them, closed offline that day by correcting the documents; OPEN-105, the checklist row that reported a missing archive for an archived run, closed offline that day; OPEN-103, the run-killer everything else in its run was downstream of, closed offline that day, and OPEN-104 after it, so the next live run is what says whether either fix works on a model. Since 2026-09-14 the file holds only that queue and the `PENDING` entries (owner's request); the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
@@ -460,7 +461,27 @@ src/rudra/
 │                           the only path that redacts. It renders at VERBOSE and
 │                           reaches the debug log at every level, so anything
 │                           the user must ACT on is printed by the code that
-│                           decided to act, the way loop/engine.py prints a halt
+│                           decided to act, the way loop/engine.py prints a halt.
+│                           **Token streaming (`--stream`) is the one path into
+│                           the sink that is not a values chunk** (OPEN-124):
+│                           `permissions/approval.py` emits the deltas as
+│                           AI_TEXT, one line at a time, keyed by NAMESPACE and
+│                           flushed at that namespace's next values chunk, and
+│                           only from an `AIMessageChunk` — langgraph's
+│                           `messages` mode also carries every ToolMessage.
+│                           Just before yielding a values chunk it tells the
+│                           sink what it streamed there (`note_streamed`), and
+│                           `consume` skips an AIMessage's prose when its text
+│                           ENDS that note, so the message is not recorded
+│                           twice. Text, never message ids: providers fill ids
+│                           differently between a delta and the merged message.
+│                           It cannot lose prose — skipped text was emitted —
+│                           and `feed` clears the note once read. Until this,
+│                           `_tagged` expected `(mode, data)` where langgraph
+│                           yields `(namespace, mode, data)`, dropped every
+│                           chunk, and both parse loops ran blind; the tests
+│                           that passed used a double of a shape langgraph
+│                           never produces, and now drive a real graph
 ├── agent/
 │   ├── main_agent.py       RudraAgent — run setup; run() delegates to run_loop,
 │   │                       build_backend() → CompositeBackend(default=LocalShellBackend)
@@ -1798,7 +1819,7 @@ either.
 | Is the provider healthy? | `usage.json` | `(retries + exhaustions) / calls`. Both, never `retries` alone (OPEN-46). **Exact since OPEN-115** for every provider: the client SDKs no longer retry underneath, so each request the endpoint saw is one of those numbers. Before 2026-09-16 it was a lower bound — up to 12 requests per failing call behind 4 counted, and a stall the SDK retried counted nowhere — and `(retries + exhaustions)` taken from an older `usage.json` must be read that way. Rudra now waits out `Retry-After` itself, so a `retry` notice ending `as the endpoint's Retry-After asked` is a pause the provider chose |
 | Which call was slow? | `debug-<id>.jsonl` | `"kind": "model_call"` |
 | Which invocation was the runaway, and doing what? | `debug-<id>.jsonl` | `"kind": "subagent_done"` — sort by `seconds`, then read `tools` |
-| What was it actually thinking? | `debug-<id>.jsonl` | `"kind": "tool_call"` / `"ai_text"`, uncapped payloads |
+| What was it actually thinking? | `debug-<id>.jsonl` | `"kind": "tool_call"` / `"ai_text"`, uncapped payloads. **With `--stream`, `ai_text` is one record per LINE**, emitted as the model wrote it, and the whole message is not recorded again (OPEN-124) — join consecutive records of one role and namespace to read a message. A log written before 2026-09-17 with `--stream` on holds no subagent or planner record at all past the run's start: nothing reached the parse loops |
 | What did Rudra stop, and why? | `debug-<id>.jsonl` | `"kind": "notice"` — `guard`, `retry`, `suspended` |
 | Which task, how many tries, how long? | `ledger.json` | `seconds`, `attempts`, `halts`, `run_errors`, `files_touched` |
 | Did the gate pass, and on whose interpreter? | `verify.log` | the `command:` line of each stage — OPEN-80 was invisible without it |
