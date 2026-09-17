@@ -565,7 +565,14 @@ async def _verify(task: Task, context: LoopContext) -> Any:
 MAX_CONSECUTIVE_RUN_ERRORS = 3
 
 
-def _record_run_error(task: Task, role: str, error: str) -> str:
+def _record_run_error(
+    task: Task,
+    role: str,
+    error: str,
+    *,
+    tools: Any = None,
+    wrote: tuple[str, ...] | None = None,
+) -> str:
     """Keep a subagent invocation that never happened (OPEN-46).
 
     Returns the sentence, so the coder path can also put it in `note`
@@ -583,7 +590,26 @@ def _record_run_error(task: Task, role: str, error: str) -> str:
     started. And it is recorded WITHOUT classifying the string -- asking
     "was this a retry exhaustion?" of a provider's prose is the guess
     MAX_CONSECUTIVE_RUN_ERRORS exists to avoid making.
+
+    **Unless it did happen** (OPEN-130). `runner.py` reports a failure that
+    struck mid-stream the same way as one before the first call, and run
+    a4196786280d's t9 dispatch 2 made 50 tool calls and edited
+    `tests/conftest.py` before its model call exhausted on 429 -- recorded
+    "could not run", which sends a reader after a provider that never
+    answered. `tools` is the invocation's own histogram, and a tool call is
+    the evidence it ran: every write a coder makes is one. With a call, the
+    sentence says the invocation stopped, how far it got, and what `wrote`
+    -- its diff -- says it changed. `wrote=None` is "not measured", and then
+    the sentence makes no claim about files at all.
     """
+    calls = sum((tools or {}).values())
+    if calls:
+        changed = ""
+        if wrote is not None:
+            changed = f", having changed {', '.join(wrote) if wrote else 'no file'}"
+        sentence = f"the {role} stopped mid-run after {calls} tool call(s){changed}: {error}"
+        task.run_errors = (*task.run_errors, sentence)
+        return sentence
     sentence = f"the {role} could not run: {error}"
     task.run_errors = (*task.run_errors, sentence)
     return sentence
@@ -710,6 +736,13 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     # then repeat, handing the second invocation whatever partial state the
     # first one left in the checkpointer. This counter never goes backwards.
     dispatch = 0
+    # The snapshot a failed invocation's diff started from, carried to the
+    # next dispatch (OPEN-130). An invocation that fails mid-stream has run:
+    # t9's dispatch 2 in run a4196786280d edited tests/conftest.py and then
+    # exhausted on 429. A fresh snapshot for the next dispatch put that edit in
+    # no diff, so a served attempt that wrote nothing itself read as an empty
+    # diff, and the gate never judged the edit as the task's work.
+    carried: dict[str, str] | None = None
 
     while task.attempts < context.cfg.agent.max_fix_attempts:
         dispatch += 1
@@ -723,7 +756,16 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         # `fc543fb2b82f`'s worst task was a single 2,704 s attempt.
         flush_usage(context)
 
-        before = attempt_snapshot(context)
+        # Two starting points, and they differ only after a failed dispatch.
+        # `own` is THIS invocation's: what it changed is what its record may
+        # claim. `before` reaches back to the first of a run of failed
+        # dispatches, so the attempt's diff -- the empty-diff guard's input --
+        # still holds their writes. Measured against `before` alone, t9's
+        # dispatch 3, which only read, would be recorded as having changed
+        # dispatch 2's tests/conftest.py.
+        own = attempt_snapshot(context)
+        before = own if carried is None else carried
+        carried = None
         result = await run_subagent(
             "coder",
             _coder_prompt(task, blocker_text),
@@ -732,11 +774,12 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         )
 
         if result.error:
-            # The coder never produced a turn: a build failure, or an
-            # exception mid-stream. `runner.py` cannot tell those apart --
-            # it catches every Exception and reports `str(exc)` -- so a
-            # provider's HTTP 500 arrives here indistinguishable from a
-            # missing package.
+            # The coder did not finish: a build failure, or an exception
+            # mid-stream. `runner.py` reports both as `str(exc)` -- it catches
+            # every Exception -- so a provider's HTTP 500 arrives here
+            # indistinguishable from a missing package. Only the tool
+            # histogram says whether the invocation got as far as a call, and
+            # a mid-stream failure may have written files first (OPEN-130).
             #
             # This used to end the run outright, on the reasoning that both
             # are "environment-class and would recur on every remaining
@@ -745,9 +788,17 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # (OPEN-33). So: spend the attempt, and stop only once the
             # errors have actually shown they recur.
             context.run_errors += 1
+            # What it changed before failing is the task's work (OPEN-130):
+            # recorded now, because the run may stop on this very error, and
+            # carried, so the next served dispatch is judged on it. Its OWN
+            # diff: an earlier failed dispatch's writes are already recorded.
+            wrote = _record_touched(task, changed_since(context, own))
+            carried = before
             # Durably first, then in `note` -- which does not survive this
             # task finishing (OPEN-46). One sentence, written once.
-            task.note = _record_run_error(task, "coder", result.error)
+            task.note = _record_run_error(
+                task, "coder", result.error, tools=result.tools, wrote=wrote
+            )
             # Give the attempt back (OPEN-46 §6, option C, chosen by the owner
             # 2026-09-01). The retry budget is for a coder that produced a turn
             # and got it wrong; this one never ran, so the task has not had a
@@ -851,7 +902,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                 # passed), `note` is read by a MODEL later (CR-C4), and
                 # counting it toward MAX_CONSECUTIVE_RUN_ERRORS would end
                 # runs over optional work.
-                _record_run_error(task, "tester", tester_result.error)
+                _record_run_error(task, "tester", tester_result.error, tools=tester_result.tools)
             elif tester_result.ok and _called_nothing(tester_result, TESTER_TOOL):
                 # OPEN-98. The same silence one CONDITION over, and this is
                 # the case the run was actually lost to: the tester wrote
@@ -919,7 +970,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         rejected = True
 
     task.status = TaskStatus.BLOCKED
-    if "wrote nothing" not in task.note and "could not run" not in task.note:
+    if not any(kept in task.note for kept in ("wrote nothing", "could not run", "stopped mid-run")):
         # Same reason as above (CR-C4): the count is not a blocker. "could
         # not run" is excluded for the same reason "wrote nothing" is -- it
         # names what actually happened, and "3 attempts exhausted" with an

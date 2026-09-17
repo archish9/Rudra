@@ -1744,3 +1744,147 @@ async def test_a_retry_that_wrote_nothing_and_passes_does_not_claim_the_work_was
     assert "wrote nothing on a retry" in task.note
     assert "earlier attempt" in task.note
     assert "already in place" not in task.note
+
+
+# --- OPEN-130: a coder that fails mid-stream still ran ----------------------
+#
+# Run a4196786280d's t9: dispatch 2 made 50 tool calls, edited
+# tests/conftest.py -- the edit that fixed collection -- and then exhausted on
+# 429. The loop recorded "the coder could not run", took no diff, and the next
+# dispatch re-snapshotted, so the edit reached no `files_touched` and no gate:
+# dispatch 4 then read as "wrote nothing".
+
+
+def _failing_subagents(monkeypatch, project, script):
+    """A coder whose Nth dispatch writes `script[N-1][0]` and then returns
+    `script[N-1][1]` -- an error string, or None for a served turn. An optional
+    third element is the invocation's tool histogram; without it, one
+    `edit_file` per write."""
+    dispatched: list[str] = []
+
+    async def subagent(name, prompt, *, context, thread_id=None):
+        dispatched.append(prompt)
+        entry = script[len(dispatched) - 1] if len(dispatched) <= len(script) else ({}, None)
+        writes, error, *histogram = entry
+        for relative, text in writes.items():
+            path = project / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        calls = histogram[0] if histogram else ({"edit_file": len(writes)} if writes else {})
+        if error:
+            return SubagentResult(name=name, text="", ok=False, error=error, tools=calls)
+        return SubagentResult(name=name, text="done", ok=True, tools=calls)
+
+    monkeypatch.setattr(engine, "run_subagent", subagent)
+    return dispatched
+
+
+_EXHAUSTED = "Provider error from the model provider: ProviderUnavailable (429)."
+
+
+async def test_a_mid_stream_failure_s_writes_reach_files_touched(monkeypatch, context):
+    """Even when the run then stops on it: the folder a user sends must name
+    every file on disk that the task changed (CLAUDE.md 8a shape 4)."""
+    _real_diff(monkeypatch)
+    _failing_subagents(
+        monkeypatch,
+        context.project_path,
+        [({"tests/conftest.py": "import sys\n"}, _EXHAUSTED), ({}, _EXHAUSTED), ({}, _EXHAUSTED)],
+    )
+    _gate_sequence(monkeypatch, passing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.STOP_RUN
+    assert task.files_touched == ("tests/conftest.py",)
+
+
+async def test_the_next_served_attempt_is_judged_on_the_failed_invocation_s_writes(
+    monkeypatch, context
+):
+    """t9's dispatch 4: served, wrote nothing itself, and must NOT read as an
+    empty diff -- the gate has to judge the edit dispatch 2 made."""
+    _real_diff(monkeypatch)
+    _failing_subagents(
+        monkeypatch, context.project_path, [({"a.py": "x = 1\n"}, _EXHAUSTED), ({}, None)]
+    )
+    scopes = _gate_sequence(monkeypatch, passing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.attempts == 1
+    assert scopes == [("a.py",)]
+    assert "wrote nothing" not in task.note
+
+
+async def test_a_failed_invocation_that_did_work_is_not_recorded_as_one_that_never_ran(
+    monkeypatch, context
+):
+    """`could not run` is OPEN-46's sentence for an invocation that never
+    started, and a reader goes hunting a dead provider. t9's ran 293.5 s."""
+    _real_diff(monkeypatch)
+    _failing_subagents(
+        monkeypatch, context.project_path, [({"a.py": "x = 1\n"}, _EXHAUSTED), ({}, None)]
+    )
+    _gate_sequence(monkeypatch, passing_report())
+
+    _, task, _ = await run_one(context)
+
+    (sentence,) = task.run_errors
+    assert "could not run" not in sentence
+    assert sentence.startswith("the coder stopped mid-run after 1 tool call(s)")
+    assert "a.py" in sentence
+    assert _EXHAUSTED in sentence
+
+
+async def test_a_second_failed_invocation_claims_only_what_it_changed(monkeypatch, context):
+    """t9's dispatch 3 read two files and failed, after dispatch 2 had edited
+    tests/conftest.py and failed. The gate is carried back to dispatch 2's
+    snapshot; the sentence is about dispatch 3, and must not claim its edit."""
+    _real_diff(monkeypatch)
+    _failing_subagents(
+        monkeypatch,
+        context.project_path,
+        [
+            ({"a.py": "x = 1\n"}, _EXHAUSTED),
+            ({}, _EXHAUSTED, {"read_file": 2}),
+            ({}, None),
+        ],
+    )
+    scopes = _gate_sequence(monkeypatch, passing_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert scopes == [("a.py",)]
+    assert "wrote nothing" not in task.note, "the carry survives a second failure"
+    first, second = task.run_errors
+    assert first.startswith("the coder stopped mid-run after 1 tool call(s), having changed a.py")
+    assert second.startswith(
+        "the coder stopped mid-run after 2 tool call(s), having changed no file"
+    )
+
+
+async def test_a_failure_before_any_tool_call_keeps_the_never_ran_sentence(monkeypatch, context):
+    """The OPEN-46 wording stays exactly where it is true."""
+    _real_diff(monkeypatch)
+    _failing_subagents(
+        monkeypatch, context.project_path, [({}, "Error code: 500"), ({"a.py": "x\n"}, None)]
+    )
+    _gate_sequence(monkeypatch, passing_report())
+
+    _, task, _ = await run_one(context)
+
+    assert task.run_errors == ("the coder could not run: Error code: 500",)
+
+
+async def test_a_tester_that_failed_mid_run_makes_no_claim_about_files(monkeypatch, context):
+    """The tester's diff is not measured where its error is recorded, so the
+    sentence says how far it got and nothing about what it changed."""
+    ledger = Ledger()
+    task = ledger.add("t")
+
+    sentence = engine._record_run_error(task, "tester", "boom", tools={"write_file": 2})
+
+    assert sentence == "the tester stopped mid-run after 2 tool call(s): boom"
