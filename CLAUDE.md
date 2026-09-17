@@ -10,8 +10,11 @@ run in 15 s, a real fix blocked as "no progress", a failed invocation's edit
 that vanishes, a retry told a stale failure, a finished task blocked by an
 earlier task's unlocated failure, a false "never attempted", and an interpreter
 hunt through deduped reads. **The first, OPEN-128, closed `WONTFIX` the same
-day: hosted-provider rate limits are out of scope** (§1 goal 1). None of the six
-has a plan yet. That run verified OPEN-125,
+day: hosted-provider rate limits are out of scope** (§1 goal 1). **All six have
+self-contained plans** under `docs/superpowers/plans/2026-09-17-open-1{29…34}-*.md`,
+each executed once in a scratch worktree in queue order (together 3487 passed, 2
+skipped, against 3462) and discarded; OPEN-132 follows the owner's option 2, and
+the other five's fix directions await the owner's approval. That run verified OPEN-125,
 OPEN-126 and OPEN-115's retry live; its board is *2026-09-17b* in
 `TODO-closed.md`. **OPEN-127, the last item step 15's live run `1dab3a848252` filed, closed on
 2026-09-17, offline**: the AGENTS.md summariser's model call left no
