@@ -1888,3 +1888,54 @@ async def test_a_tester_that_failed_mid_run_makes_no_claim_about_files(monkeypat
     sentence = engine._record_run_error(task, "tester", "boom", tools={"write_file": 2})
 
     assert sentence == "the tester stopped mid-run after 2 tool call(s): boom"
+
+
+# --- OPEN-131: an attempt that wrote nothing still updates the blocker -------
+#
+# Run a4196786280d: t2's attempts 2 and 3 were sent no failure text at all, and
+# t9's dispatches 5-7 were told to fix `ModuleNotFoundError: No module named
+# 'main'` after the gate had reported 33 `FixtureDef` errors. The empty-diff
+# branch ran the gate and never assigned `blocker_text`.
+
+
+async def test_a_retry_after_an_attempt_that_wrote_nothing_is_told_why(
+    monkeypatch, context, wrote_nothing
+):
+    """t2: nothing written, gate failing -- the retry must say what failed."""
+    prompts = _scripted_subagents(monkeypatch, context.project_path, [])
+    _gate_sequence(monkeypatch, failing_report((Finding("models.py", 4, "gate failure"),)))
+
+    await run_one(context)
+
+    assert len(prompts) == 3
+    assert "did not pass verification" in prompts[1]
+    assert "models.py:4: gate failure" in prompts[1]
+
+
+async def test_a_retry_is_told_the_latest_gate_not_an_older_one(monkeypatch, context):
+    """t9: attempt 1 wrote and failed one way; attempt 2 wrote nothing and
+    the gate failed another way. Attempt 3 must be sent the second.
+
+    Three DISTINCT gates, because `_gate_sequence` repeats its last report:
+    with two, attempts 2 and 3 draw the same gate, and the note below would
+    name it whichever side of the assignment it was computed on."""
+    _real_diff(monkeypatch)
+    prompts = _scripted_subagents(monkeypatch, context.project_path, [{"a.py": "x = 1\n"}])
+    _gate_sequence(
+        monkeypatch,
+        failing_report((Finding("tests/conftest.py", 8, "ModuleNotFoundError"),)),
+        failing_report((Finding("plugin.py", 311, "FixtureDef has no unittest"),)),
+        failing_report((Finding("plugin.py", 402, "a third failure"),)),
+    )
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert "FixtureDef has no unittest" in prompts[2]
+    assert "ModuleNotFoundError" not in prompts[2]
+    # The note of an attempt that wrote nothing names what THAT attempt was
+    # asked to fix -- attempt 3 was sent the second gate -- so it is computed
+    # before the blocker moves on to the third.
+    assert "wrote nothing on a retry" in task.note
+    assert "FixtureDef has no unittest" in task.note
+    assert "a third failure" not in task.note

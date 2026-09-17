@@ -868,6 +868,16 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                 record_task_memory(context, task)
                 return outcome
             task.note = _wrote_nothing_note(blocker_text, report, context.project_path)
+            # Then the blocker moves on to THIS gate (OPEN-131). Only the
+            # branch below used to assign it, so a retry after an attempt that
+            # wrote nothing was sent the last blocker an attempt that DID write
+            # drew, or none: run a4196786280d's t2 retried with no failure
+            # text, and t9 was told `No module named 'main'` two gates after
+            # that failure had gone. After the note, which quotes what this
+            # attempt had been asked to fix. A vacuous gate has no blocker,
+            # and leaves it alone.
+            if report.blocker is not None:
+                blocker_text = _blocker_text(report, context.project_path) + _env_sync_note(context)
             rejected = True
             ledger.save(context.paths.ledger_json)
             continue
