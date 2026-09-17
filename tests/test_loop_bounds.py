@@ -83,6 +83,110 @@ def test_without_findings_the_detail_carries_the_signature():
     )
 
 
+# --- OPEN-129: a finding-less blocker is signed by what failed, too ----------
+#
+# Run a4196786280d's t1: attempt 1 left pytest failing at conftest import
+# (exit 4), attempt 2 fixed that and exposed pytest-asyncio's INTERNALERROR
+# (exit 3). Both reach the gate as "collected nothing" with no findings and
+# the same `detail`, so both signed alike and the task went BLOCKED for "the
+# same failure twice" after a real fix. These tails are the two real ones,
+# trimmed.
+
+_COLLECTED_NOTHING = (
+    "the test command collected nothing, but 2 test file(s) are present: "
+    "tests/test_api.py, tests/test_crud.py. The runner cannot reach them -- "
+    "check for a missing `__init__.py`, a layout the runner does not search, "
+    "or a collection error above."
+)
+
+_CONFTEST_IMPORT = """ImportError while loading conftest '/private/tmp/run-a/tests/conftest.py'.
+tests/conftest.py:8: in <module>
+    from main import app
+E   ModuleNotFoundError: No module named 'main'
+"""
+
+_PLUGIN_CRASH = """collecting ... collected 0 items
+INTERNALERROR> Traceback (most recent call last):
+INTERNALERROR>   File "/private/tmp/run-a/.venv/lib/python3.12/site-packages/_pytest/main.py", line 285, in wrap_session
+INTERNALERROR>     session.exitstatus = doit(config, session) or 0
+INTERNALERROR>   File "/private/tmp/run-a/.venv/lib/python3.12/site-packages/pytest_asyncio/plugin.py", line 626, in pytest_collectstart
+INTERNALERROR>     pyobject = collector.obj
+INTERNALERROR> AttributeError: 'Package' object has no attribute 'obj'
+
+============================= 2 warnings in 0.00s ==============================
+"""
+
+
+def _collected_nothing(tail):
+    return report_with(failing(name="test", detail=_COLLECTED_NOTHING, tail=tail))
+
+
+def test_two_different_collection_failures_are_not_the_same_failure():
+    assert failure_signature(_collected_nothing(_CONFTEST_IMPORT)) != failure_signature(
+        _collected_nothing(_PLUGIN_CRASH)
+    )
+
+
+def test_the_same_collection_failure_elsewhere_is_still_the_same_failure():
+    """Paths, timings and addresses vary between two runs of one failure."""
+    moved = _PLUGIN_CRASH.replace("/private/tmp/run-a", "/Users/someone/proj").replace(
+        "0.00s", "1.37s"
+    )
+    assert failure_signature(_collected_nothing(_PLUGIN_CRASH)) == failure_signature(
+        _collected_nothing(moved)
+    )
+    first = report_with(failing(name="test", tail="E   RuntimeError: <Engine at 0x10cc281a0>"))
+    second = report_with(failing(name="test", tail="E   RuntimeError: <Engine at 0x7f00beef>"))
+    assert failure_signature(first) == failure_signature(second)
+    # By shape, not by host OS (CLAUDE.md §1.8): a drive-letter path is one too.
+    on_c = report_with(failing(name="test", tail="E   OSError: C:\\Users\\a\\proj\\x.db is locked"))
+    on_d = report_with(failing(name="test", tail="E   OSError: D:\\work\\proj\\x.db is locked"))
+    assert failure_signature(on_c) == failure_signature(on_d)
+
+
+def test_a_relative_path_in_an_exception_line_still_counts():
+    """Only an ABSOLUTE path is where the project happens to live. A relative
+    one names what failed: fixing `data/users.json` and meeting
+    `data/orders.json` is progress, and masking it would be this item's false
+    block one step later."""
+    users = report_with(
+        failing(
+            name="test", tail="E   FileNotFoundError: [Errno 2] No such file: 'data/users.json'"
+        )
+    )
+    orders = report_with(
+        failing(
+            name="test", tail="E   FileNotFoundError: [Errno 2] No such file: 'data/orders.json'"
+        )
+    )
+    assert failure_signature(users) != failure_signature(orders)
+
+
+def test_a_finding_less_blocker_without_an_exception_line_signs_as_it_did():
+    """No exception line in the tail -> the pre-OPEN-129 signature, exactly."""
+    from hashlib import sha256
+
+    before = sha256(b"syntax\n3 file(s) do not parse").hexdigest()[:16]
+    assert (
+        failure_signature(report_with(failing(name="syntax", detail="3 file(s) do not parse")))
+        == before
+    )
+    assert (
+        failure_signature(
+            report_with(failing(name="syntax", detail="3 file(s) do not parse", tail="ran in 0.3s"))
+        )
+        == before
+    )
+
+
+def test_findings_still_decide_when_there_are_findings():
+    """The tail stays out of a located blocker's signature (spec S9c.3)."""
+    findings = (Finding("a.py", 3, "bad type"),)
+    assert failure_signature(report_with(failing(findings=findings, tail="E   KeyError: 'x'"))) == (
+        failure_signature(report_with(failing(findings=findings, tail="E   ValueError: 'y'")))
+    )
+
+
 def test_a_passing_report_has_no_signature():
     passed = report_with(StageResult(name="syntax", outcome=PASSED, blocking=True))
     assert failure_signature(passed) is None
