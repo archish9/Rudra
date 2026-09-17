@@ -1924,3 +1924,59 @@ def test_the_identity_behaviour_is_unchanged_by_the_new_wording(tmp_path):
     guard.wrap_tool_call(_request("ls", path="src"), backend)
 
     assert backend.calls == 2
+
+
+# --- OPEN-126: a refused re-send names the route the agent is missing --------
+#
+# Run 1dab3a848252's coder wrote run_tests.sh and re-sent it -- "Now let me run
+# the tests to verify they pass:" -- and was told only "Move on". Across the
+# archive the model re-sent the same bytes after this refusal in 8 of 13 cases.
+
+CODER_GRANTS = ("ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep")
+TESTER_GRANTS = CODER_GRANTS + ("execute", "run_tests")
+
+
+def _refused_resend(guard):
+    backend = _Backend(WROTE)
+    guard.wrap_tool_call(_request("write_file", file_path="/run_tests.sh", content=BODY), backend)
+    result = guard.wrap_tool_call(
+        _request("write_file", file_path="/run_tests.sh", content=BODY), backend
+    )
+    assert backend.calls == 1, "still refused: the decision does not change"
+    return result
+
+
+def test_a_refused_resend_tells_a_coder_the_gate_runs_the_tests():
+    text = _text(_refused_resend(RepeatGuardMiddleware(granted=CODER_GRANTS)))
+
+    assert text.startswith("Already written: '") and "run_tests.sh" in text
+    assert "Writing a file does not run it" in text
+    assert "a verification gate runs" in text
+    assert "call no tool" in text
+    assert "execute" not in text  # OPEN-15: the coder holds no shell
+
+
+def test_a_refused_resend_tells_a_tester_to_use_run_tests():
+    text = _text(_refused_resend(RepeatGuardMiddleware(granted=TESTER_GRANTS)))
+
+    assert "`run_tests`" in text
+    assert "nothing in this agent can run" not in text
+
+
+def test_a_guard_built_without_grants_keeps_today_s_words():
+    """The planner's guard and every bare guard in this file: no grants, no
+    route, and the refusal ends exactly where it always did."""
+    text = _text(_refused_resend(RepeatGuardMiddleware()))
+
+    assert text.endswith("or edit the file if you meant to change it.")
+
+
+def test_the_routed_refusal_is_still_a_refusal_not_a_failure():
+    """OPEN-94/118: classified by REFUSAL_KEY, never by the words, and the words
+    still do not read as an error."""
+    from rudra.trace.stream import is_rudra_refusal, looks_like_error
+
+    result = _refused_resend(RepeatGuardMiddleware(granted=CODER_GRANTS))
+
+    assert is_rudra_refusal(result) is True
+    assert looks_like_error(_text(result)) is False

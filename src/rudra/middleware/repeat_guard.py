@@ -200,6 +200,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from rudra.compat.virtual_paths import virtual_to_host, virtual_to_relative
+from rudra.middleware.tool_route import settled_write_route
 from rudra.trace.stream import REFUSAL_KEY
 
 # Deterministic reads. A repeat of one of these after a failure cannot
@@ -337,6 +338,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
         usage: Any = None,
         trace: Any = None,
         project_path: Any = None,
+        granted: frozenset[str] | tuple[str, ...] = (),
     ) -> None:
         """`role`, `usage` and `trace` are optional and duck-typed, on
         ModelRetryMiddleware's precedent (`subagents/build.py:239-243`):
@@ -357,6 +359,11 @@ class RepeatGuardMiddleware(AgentMiddleware):
         # file before it refuses anything (OPEN-62 6a). None disables that
         # confirmation, and with it every cross-invocation refusal.
         self.project_path = project_path
+        # The tools this agent holds, so the write refusal can name a route
+        # without naming a tool the agent lacks (OPEN-126, OPEN-15). NOT
+        # `self.tools`: `AgentMiddleware.tools` is what a middleware
+        # CONTRIBUTES, and langchain registers every entry of it.
+        self.granted = frozenset(granted)
         self._failures: dict[str, int] = {}
         self._last_error: dict[str, str] = {}
         # How many times each signature has already been answered
@@ -637,12 +644,17 @@ class RepeatGuardMiddleware(AgentMiddleware):
         which call was refused, and the whole saving is one round trip.
         """
         target = self._target(args)
-        return (
+        refusal = (
             f"Already written: '{target}' already contains exactly these bytes, "
             f"so `{name}` was not run again. The file is in the state you asked "
             f"for -- nothing needs writing. Move on to the next piece of work, "
             f"or edit the file if you meant to change it."
         )
+        # The route the re-send was reaching for (OPEN-126): a script written
+        # to run the tests, or the deliverable re-sent to say "done". "Move on"
+        # alone was re-sent against in 8 of 13 archived cases.
+        route = settled_write_route(self.granted)
+        return f"{refusal}\n\n{route}" if route else refusal
 
     def _content_digest(self, args: dict[str, Any]) -> str | None:
         """The payload this write would put on disk, fingerprinted.

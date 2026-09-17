@@ -297,3 +297,43 @@ def test_through_a_real_tool_node_an_unknown_name_keeps_the_echo():
     content = _through_tool_node(_route("coder"), "frobnicate")
 
     assert "is not a valid tool" in content
+
+
+# --- OPEN-126: the writer's route, shared with the repeat guard --------------
+
+
+def test_the_no_shell_writer_route_is_byte_identical_after_the_extraction():
+    """OPEN-126 moves one sentence out so the repeat guard can say it too. The
+    route OPEN-103 shipped must not change by a byte."""
+    from rudra.middleware import tool_route
+
+    assert tool_route._NO_SHELL_WRITER == (
+        "REJECTED: there is no `{name}` tool, and no shell of any kind in this "
+        "agent. {command} was not run, and nothing here can run it.\n\n"
+        "You do not need to. When you stop, a verification gate runs the "
+        "project's linter, type checker and full test suite, and calls you again "
+        "with the exact failure text if anything fails -- stopping IS how you find "
+        "out whether your work is correct.\n\n"
+        "{hands}Do not call `{name}` again, or any other name for a shell."
+    )
+
+
+def test_settled_write_route_names_only_what_the_agent_holds():
+    from rudra.middleware.tool_route import GATE_RUNS_ON_STOP, settled_write_route
+
+    coder = frozenset({"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"})
+    tester = coder | {"execute", "run_tests"}
+
+    for_coder = settled_write_route(coder)
+    assert "Writing a file does not run it" in for_coder
+    assert GATE_RUNS_ON_STOP in for_coder
+    assert "call no tool" in for_coder
+    assert "execute" not in for_coder and "run_tests" not in for_coder  # OPEN-15
+
+    for_tester = settled_write_route(tester)
+    assert "`run_tests`" in for_tester
+    assert "nothing in this agent can run" not in for_tester
+    assert "call no tool" in for_tester
+
+    assert "`execute`" in settled_write_route(coder | {"execute"})
+    assert settled_write_route(frozenset()) == ""

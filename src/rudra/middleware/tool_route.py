@@ -119,13 +119,18 @@ _USE_EXECUTE = (
     "`execute` is this agent's shell -- call it with the same command.{suite}"
 )
 
+GATE_RUNS_ON_STOP = (
+    "When you stop, a verification gate runs the project's linter, type checker "
+    "and full test suite, and calls you again with the exact failure text if "
+    "anything fails -- stopping IS how you find out whether your work is correct."
+)
+"""What a writer with no shell is told about the tests. Shared with the repeat
+guard's write refusal (OPEN-126), so the two answers cannot drift apart."""
+
 _NO_SHELL_WRITER = (
     "REJECTED: there is no `{name}` tool, and no shell of any kind in this "
     "agent. {command} was not run, and nothing here can run it.\n\n"
-    "You do not need to. When you stop, a verification gate runs the "
-    "project's linter, type checker and full test suite, and calls you again "
-    "with the exact failure text if anything fails -- stopping IS how you find "
-    "out whether your work is correct.\n\n"
+    "You do not need to. " + GATE_RUNS_ON_STOP + "\n\n"
     "{hands}Do not call `{name}` again, or any other name for a shell."
 )
 
@@ -146,6 +151,35 @@ _FINISH = (
 
 def _quoted(values: tuple[str, ...]) -> str:
     return ", ".join(f"`{value}`" for value in values)
+
+
+def settled_write_route(granted: frozenset[str]) -> str:
+    """The route for an agent whose write was already on disk (OPEN-126).
+
+    `repeat_guard.py` refuses a byte-identical re-send and used to say only
+    "move on". Across the archive the model sent the same bytes again after
+    reading that in 8 of 13 cases, for two reasons this answers: it had written
+    a script to run the tests (`run_tests.sh`, `run_pytest.py` -- "Now let me run
+    the tests to verify they pass:"), or it was re-sending its deliverable to
+    say it had finished. That is OPEN-103's reflex reaching for a REGISTERED
+    tool, so it gets OPEN-103's route.
+
+    Names only what `granted` holds (OPEN-15). Empty for an empty set, so a
+    guard built without grants -- the planner's, and every bare one in the
+    tests -- keeps its words.
+    """
+    if not granted:
+        return ""
+    if "run_tests" in granted:
+        run = "To run the test suite, call `run_tests`."
+    elif "execute" in granted:
+        run = "To run a command, call `execute`."
+    else:
+        run = (
+            "Writing a file does not run it, and nothing in this agent can run one "
+            "-- nor does anything need to. " + GATE_RUNS_ON_STOP
+        )
+    return f"{run} If your work is finished, reply with one or two lines and call no tool."
 
 
 class ToolRouteMiddleware(AgentMiddleware):
@@ -297,4 +331,11 @@ def _command_of(args: object) -> str:
     return ""
 
 
-__all__ = ["FINISH_NAMES", "SHELL_NAMES", "TOOL_ROUTE_NOTICE", "ToolRouteMiddleware"]
+__all__ = [
+    "FINISH_NAMES",
+    "GATE_RUNS_ON_STOP",
+    "SHELL_NAMES",
+    "TOOL_ROUTE_NOTICE",
+    "ToolRouteMiddleware",
+    "settled_write_route",
+]

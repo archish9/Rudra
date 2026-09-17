@@ -1298,3 +1298,19 @@ def test_the_execute_guard_is_wired_to_the_run(context):
     assert guard.usage is usage
     assert guard.trace is sink
     assert guard.role == spec.role
+
+
+# --- OPEN-126: the repeat guard words its refusal from the spec's own grants --
+
+
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_subagent_repeat_guard_carries_its_spec_s_grants(name, context):
+    """The same set ToolRouteMiddleware is built with, so the two routes cannot
+    name different tools (OPEN-15)."""
+    spec = REGISTRY[name]
+    middleware = _middleware_for(spec, context, _model_for(spec, context.cfg))
+    guard = next(m for m in middleware if type(m).__name__ == "RepeatGuardMiddleware")
+    route = next(m for m in middleware if type(m).__name__ == "ToolRouteMiddleware")
+
+    assert guard.granted == frozenset(spec.fs_tools) | frozenset(spec.rudra_tools)
+    assert guard.granted == route.granted

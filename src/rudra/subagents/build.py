@@ -402,6 +402,11 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             # not make itself refuses nothing until the file on disk agrees,
             # and this is the path that makes that check possible.
             project_path=getattr(context, "project_path", None),
+            # OPEN-126. The grants ToolRouteMiddleware is built with above, so a
+            # refused re-send is answered with a route naming only tools this
+            # agent holds -- the coder that the gate runs the tests, the tester
+            # `run_tests` (OPEN-15).
+            granted=frozenset(spec.fs_tools) | frozenset(spec.rudra_tools),
         ),
         # Before the FilesystemMiddleware that BUILDS the execute tool, which
         # is only where it has to sit in the list -- the description swap
