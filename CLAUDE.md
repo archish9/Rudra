@@ -27,15 +27,15 @@ so its retry was sent an older attempt's failure, or none; §3's *Control flow*
 step 4 says how. **Its plan's ordering test could not fail** — two gates, which the
 test helper repeats — and drew three before shipping. **OPEN-135 was filed while
 closing it**: that same branch never reads `report.escalate`, so a denied gate
-spends the task's attempts instead of stopping the run. It has **no plan and no
-approved direction yet**, and sits above OPEN-132, whose plan would turn it into
-`DONE`. **The three left from that run have
+spends the task's attempts instead of stopping the run. **Its plan and direction
+were approved the same day**, and it sits above OPEN-132, whose plan — applied
+alone — turned it into `DONE`. **The three left from that run have
 self-contained plans** under `docs/superpowers/plans/2026-09-17-open-1{32…34}-*.md`,
 each executed once in a scratch worktree in queue order with OPEN-129's (together
 3487 passed, 2 skipped, against 3462) and discarded; **all their fix directions
 were approved by the owner the same day** (OPEN-132: option 2), so a session
-executes those plans without asking — **but OPEN-135 is Next: and needs a plan and
-the owner's direction first**. **Check each plan against the tree anyway**:
+executes those plans, and OPEN-135's, without asking — **OPEN-135's rebases
+OPEN-132's step (e) by one line when it closes**. **Check each plan against the tree anyway**:
 OPEN-129's path mask, as planned, also masked relative paths, and OPEN-131's
 ordering pin could not fail. That run verified OPEN-125,
 OPEN-126 and OPEN-115's retry live; its board is *2026-09-17b* in
