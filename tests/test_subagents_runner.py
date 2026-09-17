@@ -1156,6 +1156,90 @@ async def test_a_nudge_the_agent_answers_with_words_is_recorded_as_done(monkeypa
     assert result.text == "Sorry -- I was finished. The suite is green."
 
 
+# OPEN-122. The reply run `a04f89bd2ed6`'s t8 coder gave the nudge, verbatim
+# from `debug-a04f89bd2ed6.jsonl`: 138 s and 3,421 output tokens, no tool call,
+# and a last sentence that announces the work a second time.
+MEASURED_REPLY_ANNOUNCING_AGAIN = (
+    "Looking at the issue, the test file imports `Todo` from `src.models` and calls "
+    "`Todo.create()`, `Todo.update()`, `Todo.delete()` as class methods. But currently "
+    "`Todo` is imported from `database.py` as a plain SQLAlchemy model without those "
+    "methods - the CRUD functions exist as module-level functions in `models.py` instead "
+    "of being methods on the `Todo` class.\n\n"
+    "I need to restructure so `Todo` is defined in `models.py` (importing `Base` from "
+    "`database.py`) and includes the CRUD methods as class methods. I'll also update "
+    "`database.py` to remove the duplicate `Todo` class definition.\n"
+)
+
+
+async def test_a_nudge_answered_by_announcing_again_is_not_recorded_as_done(monkeypatch, patched):
+    """OPEN-122. `confirmed_done` is what CLAUDE.md 8a tells a reader to narrow
+    the opener list on, so it must mean the agent said it had finished -- and
+    this agent said, again, what it was about to do. Recorded as done, the one
+    live nudge Rudra has read as a false positive when it was a true one."""
+    records: list[dict] = []
+    monkeypatch.setattr(
+        runner,
+        "log_invocation",
+        lambda name, **kw: records.append({"name": name, **kw}),
+    )
+    monkeypatch.setattr(
+        runner,
+        "run_with_approvals",
+        thread([ai(MEASURED_CONTINUATION)], [ai(MEASURED_REPLY_ANNOUNCING_AGAIN)]),
+    )
+
+    result = await run_subagent("coder", "fix it", context=patched)
+
+    assert records[0]["nudged"] is True
+    assert records[0]["nudge_outcome"] == "announced_again"
+    assert result.text == MEASURED_REPLY_ANNOUNCING_AGAIN.strip()
+
+
+async def test_a_nudge_the_time_bound_ends_before_an_answer_is_unanswered(monkeypatch, patched):
+    """OPEN-122, the second path to the same line. A text-only answer that
+    crosses the limit is not a halt (OPEN-114) and is nudged; the nudge's
+    `before_model` hook then finds the span expired and ends the graph before
+    the model is asked. No tool call was made because no answer was ever
+    given, and that is not the agent confirming anything."""
+    records: list[dict] = []
+    monkeypatch.setattr(
+        runner,
+        "log_invocation",
+        lambda name, **kw: records.append({"name": name, **kw}),
+    )
+    inner = thread([ai(MEASURED_CONTINUATION)], [])
+    turns = 0
+
+    async def nudge_turn_out_of_seconds(agent, inputs, config, gate, console, **kwargs):
+        nonlocal turns
+        turns += 1
+        async for chunk in inner(agent, inputs, config, gate, console, **kwargs):
+            yield chunk
+        if turns == 2:
+            SPAN_DEADLINE.get().trip()
+
+    monkeypatch.setattr(runner, "run_with_approvals", nudge_turn_out_of_seconds)
+
+    result = await run_subagent("coder", "fix it", context=patched)
+
+    assert turns == 2
+    assert result.ok is False, "the bound stopped a turn the agent asked for"
+    assert records[0]["nudge_outcome"] == "unanswered"
+
+
+def test_the_nudge_outcome_is_decided_by_what_the_nudged_turn_did():
+    """The whole vocabulary in one place, so a reader of `subagent_done` has
+    one table to check a label against."""
+    outcome = runner.nudge_outcome_of
+
+    assert outcome(calls=1, reply=None) == "continued"
+    assert outcome(calls=2, reply="Let me run the tests.") == "continued"
+    assert outcome(calls=0, reply="Sorry -- I was finished.") == "confirmed_done"
+    assert outcome(calls=0, reply="") == "confirmed_done"
+    assert outcome(calls=0, reply="I'll fix the import next.") == "announced_again"
+    assert outcome(calls=0, reply=None) == "unanswered"
+
+
 async def test_an_un_nudged_invocation_says_so(monkeypatch, patched):
     records: list[dict] = []
     monkeypatch.setattr(

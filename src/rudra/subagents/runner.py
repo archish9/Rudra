@@ -149,7 +149,10 @@ def log_invocation(
     is the half that says whether the heuristic is any good: mostly
     `continued` means it is earning its keep, mostly `confirmed_done` means
     it is firing on agents that really had finished and the opener list
-    wants narrowing. Both are always written, `""` when there was no nudge,
+    wants narrowing. `announced_again` is a true positive the agent did not
+    act on, and `unanswered` a nudge no model saw -- `nudge_outcome_of` holds
+    the four, and neither of the last two argues for narrowing anything
+    (OPEN-122). Both are always written, `""` when there was no nudge,
     for `halted`'s reason -- a key that appears only on the runs where
     something happened is a key every reader has to guard for.
 
@@ -303,6 +306,40 @@ def announces_continuation(text: str) -> bool:
         rest = last[len(opener) :].split()
         return bool(rest) and rest[0].strip(",:;-") not in _SIGN_OFF_VERBS
     return False
+
+
+def nudge_outcome_of(*, calls: int, reply: str | None) -> str:
+    """What the nudged turn did, as the one word `subagent_done` records.
+
+    `calls` is how many tool calls the nudged turn made; `reply` is the text of
+    its last AIMessage, `""` when that message carried none, and None when the
+    turn produced no message at all.
+
+    - `continued` -- it called a tool. The heuristic caught an unfinished agent
+      and the nudge got the work done.
+    - `confirmed_done` -- it answered in words that are not a hand-off. The
+      only outcome that says the agent HAD finished, so the only one CLAUDE.md
+      8a lets argue for narrowing the opener list.
+    - `announced_again` -- it answered in words that announce the next step a
+      second time (OPEN-122). The heuristic was right and the agent still did
+      not act. Run `a04f89bd2ed6`'s t8 coder, the first live nudge, replied
+      "...I'll also update `database.py` to remove the duplicate `Todo` class
+      definition." and was recorded `confirmed_done`, which reads the one true
+      positive on record as a reason to remove it.
+    - `unanswered` -- no message came back. The time bound ends a nudged turn
+      in its `before_model` hook when the answer that earned the nudge crossed
+      the limit (OPEN-114), and no model was asked anything.
+
+    Before OPEN-122 a tool call was the only thing this looked at, so the last
+    three were all `confirmed_done`.
+    """
+    if calls:
+        return "continued"
+    if reply is None:
+        return "unanswered"
+    if announces_continuation(reply):
+        return "announced_again"
+    return "confirmed_done"
 
 
 # The error markers moved to rudra.trace.stream in Step 15a. Three copies
@@ -618,7 +655,7 @@ async def run_subagent(
     nudged = False
     nudge_outcome: str | None = None
 
-    async def drain(payload: dict) -> None:
+    async def drain(payload: dict) -> str | None:
         """Stream one turn of this invocation, updating every counter.
 
         Called at most twice (OPEN-98), and everything it touches is
@@ -627,8 +664,16 @@ async def run_subagent(
         `total_calls` and `limit` keep running so a nudge cannot buy an
         agent a second call ceiling, and `halted` short-circuits the second
         call entirely.
+
+        Returns the one thing that IS turn-scoped: the text of the last
+        AIMessage this turn produced, or None when it produced none. The
+        nudge's outcome needs it and `last_text` cannot give it -- that is
+        the invocation's last non-empty text, so a nudged turn that said
+        nothing would read as the announcement that earned the nudge
+        (OPEN-122).
         """
         nonlocal halted, last_text, total_calls, consecutive_failures
+        reply: str | None = None
 
         async for chunk in run_with_approvals(
             agent,
@@ -662,6 +707,7 @@ async def run_subagent(
 
                 if kind == "AIMessage":
                     text = str(getattr(message, "content", "") or "").strip()
+                    reply = text
                     if text:
                         last_text = text
                     for tool_call in getattr(message, "tool_calls", []) or []:
@@ -737,6 +783,7 @@ async def run_subagent(
             if wait:
                 halted = f"{halted} {wait}"
             announce(halted, (), 0)
+        return reply
 
     try:
         # ONE deadline for the invocation, nudge included: the second turn
@@ -755,12 +802,14 @@ async def run_subagent(
             if halted is None and announces_continuation(last_text):
                 nudged = True
                 calls_before = total_calls
-                await drain({"messages": [{"role": "user", "content": CONTINUATION_NUDGE}]})
-                # What the number is FOR: mostly `continued` means the
-                # heuristic is earning its keep, mostly `confirmed_done`
-                # means it is firing on finished agents and the opener list
-                # must be narrowed (CLAUDE.md 8a).
-                nudge_outcome = "continued" if total_calls > calls_before else "confirmed_done"
+                reply = await drain({"messages": [{"role": "user", "content": CONTINUATION_NUDGE}]})
+                # What the number is FOR (CLAUDE.md 8a): `continued` and
+                # `announced_again` both say the heuristic caught an unfinished
+                # agent, and only `confirmed_done` says it fired on a finished
+                # one. A tool call alone cannot tell those apart -- run
+                # a04f89bd2ed6's one live nudge announced its next step again
+                # and was recorded done (OPEN-122).
+                nudge_outcome = nudge_outcome_of(calls=total_calls - calls_before, reply=reply)
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         log_invocation(
             name,

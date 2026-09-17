@@ -433,3 +433,71 @@ async def test_a_planner_stage_under_its_limit_is_not_halted(clock, monkeypatch)
     assert ok is True
     assert trace.notices == []
     assert usage.as_dict() == {}
+
+
+# --- through a subagent's own span, nudge included ------------------------
+
+
+class ScriptedTextModel(BaseChatModel):
+    """Answers with the next scripted text and no tool call, taking `seconds`."""
+
+    clock: object = None
+    seconds: float = 0.0
+    script: list = []
+    calls: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "fake-scripted-text-model"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        text = self.script[min(self.calls, len(self.script) - 1)]
+        self.calls += 1
+        self.clock.advance(self.seconds)
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
+async def test_a_nudge_the_bound_ends_is_recorded_unanswered_on_a_real_graph(clock, monkeypatch):
+    """OPEN-122's second path, end to end. The answer that earns the nudge
+    crosses the limit, and a text-only answer ends the graph, so the span is not
+    halted (OPEN-114) and the nudge is sent. Its `before_model` hook then finds
+    the span expired: the model is never asked, and before OPEN-122 zero new
+    tool calls read as the agent confirming it was done."""
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from rudra.subagents import runner
+
+    model = ScriptedTextModel(
+        clock=clock,
+        seconds=5_000.0,
+        script=["I read the files. I need to fix the import.", "Fixed it."],
+    )
+    agent = create_agent(
+        model=model,
+        tools=[record_fact],
+        middleware=[SpanDeadlineMiddleware()],
+        checkpointer=InMemorySaver(),
+    )
+    records: list[dict] = []
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": agent)
+    monkeypatch.setattr(runner, "log_invocation", lambda name, **kw: records.append(kw))
+    context = runner.SubagentContext(
+        project_path=None,
+        backend=object(),
+        gate=None,
+        console=Console(quiet=True),
+        cfg=None,
+        session_id="s1",
+    )
+
+    result = await runner.run_subagent("coder", "fix it", context=context)
+
+    assert model.calls == 1, "the nudge was sent and no model answered it"
+    assert result.ok is False
+    assert "limit" in (result.halted_reason or "")
+    ((record,),) = [records]
+    assert record["nudged"] is True
+    assert record["nudge_outcome"] == "unanswered"
