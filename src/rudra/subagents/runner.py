@@ -26,6 +26,7 @@ from rich.console import Console
 from rudra.compat.virtual_paths import virtual_to_relative
 from rudra.context.deadline import span_deadline
 from rudra.context.usage import model_time_of, model_wait_note
+from rudra.middleware.repeat_guard import NO_PROGRESS_READS
 from rudra.permissions.approval import run_with_approvals
 from rudra.subagents.build import build_agent
 from rudra.subagents.registry import REGISTRY
@@ -723,6 +724,20 @@ async def run_subagent(
                                 f"The last was '{tool_call.get('name', '?')}'."
                             )
                             break
+                        # A call that is not a read may have changed what a
+                        # read returns, so earlier reads stop being repeats
+                        # (OPEN-125). The repeat-guard middleware has always
+                        # applied this rule -- `repeat_guard.py` clears its read
+                        # answers on any non-read call -- and this counter did
+                        # not: run 1dab3a848252's coder read schemas.py, edited
+                        # it, read it back, edited again, and was halted at the
+                        # third read. All four read halts in the archive had a
+                        # write or edit between the reads they counted. Only
+                        # READ counts go: identical writes are content-keyed
+                        # since OPEN-60 and stay bounded here.
+                        if called not in NO_PROGRESS_READS:
+                            for stale in [k for k in repeated if k[0] == "read_file"]:
+                                del repeated[stale]
                         if tool_call.get("name") not in _WATCHED_TOOLS:
                             continue
                         key = _call_key(tool_call, context.project_path)

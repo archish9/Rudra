@@ -1296,3 +1296,95 @@ async def test_a_time_halt_says_how_much_was_model_latency(monkeypatch, tmp_path
     assert result.ok is False
     assert "1200s limit" in (result.halted_reason or "")
     assert "was the coder model answering" in (result.halted_reason or "")
+
+
+# --- OPEN-125: a read that verifies an edit is not a repeat -----------------
+#
+# Run 1dab3a848252's t8 retry read schemas.py, edited it, read it back,
+# edited again, and was halted at the third read -- `'read_file' on
+# 'schemas.py' repeated 3x`. The repeat-guard middleware deduped none of those
+# reads, because any non-read call clears what it knows about reads; the
+# runner's counter never reset. Four archived halts, every one with a write or
+# edit between the counted reads.
+
+
+async def test_reading_a_file_back_after_each_edit_does_not_halt(monkeypatch, patched):
+    """The live sequence, call for call."""
+    messages = [
+        ai("", [call("read_file", file_path="/schemas.py")]),
+        ai("", [call("edit_file", file_path="/schemas.py", old_string="a", new_string="b")]),
+        ai("", [call("read_file", file_path="/schemas.py")]),
+        ai("", [call("edit_file", file_path="/schemas.py", old_string="c", new_string="d")]),
+        ai("", [call("read_file", file_path="/schemas.py")]),
+        ai("Title now requires min_length=1."),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+
+    result = await run_subagent("coder", "fix it", context=patched)
+
+    assert result.halted_reason is None
+    assert result.ok is True
+
+
+async def test_any_non_read_call_resets_the_read_count(monkeypatch, patched):
+    """The middleware's rule, not a per-path one: a write to ANOTHER file and a
+    command both count as something that may have changed the answer."""
+    messages = [
+        ai("", [call("read_file", file_path="/tests/test_app.py")]),
+        ai("", [call("write_file", file_path="/app.py", content="x = 1\n")]),
+        ai("", [call("read_file", file_path="/tests/test_app.py")]),
+        ai("", [call("execute", command="pytest -q")]),
+        ai("", [call("read_file", file_path="/tests/test_app.py")]),
+        ai("Done."),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+
+    result = await run_subagent("tester", "test it", context=patched)
+
+    assert result.halted_reason is None
+
+
+async def test_reads_between_reads_do_not_reset_the_count(monkeypatch, patched):
+    """`ls`, `glob` and `grep` change nothing, so three identical reads with
+    only reads between them are still the identical call made again."""
+    messages = [
+        ai("", [call("read_file", file_path="/a.py")]),
+        ai("", [call("ls", path="/")]),
+        ai("", [call("read_file", file_path="/a.py")]),
+        ai("", [call("grep", pattern="def ", path="/")]),
+        ai("", [call("read_file", file_path="/a.py")]),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+
+    result = await run_subagent("coder", "read it", context=patched)
+
+    assert result.ok is False
+    assert "'read_file' on 'a.py' repeated 3x" in (result.halted_reason or "")
+
+
+async def test_a_non_read_call_does_not_reset_identical_writes(monkeypatch, patched):
+    """Only READ counts reset. A coder re-sending the same bytes between other
+    calls is still halted on the third -- OPEN-126 relies on this bound."""
+    same = call("write_file", file_path="/run_tests.sh", content="pytest -v\n")
+    messages = [
+        ai("", [dict(same, id="w1")]),
+        ai("", [call("read_file", file_path="/run_tests.sh")]),
+        ai("", [dict(same, id="w2")]),
+        ai("", [call("edit_file", file_path="/app.py", old_string="a", new_string="b")]),
+        ai("", [dict(same, id="w3")]),
+    ]
+    monkeypatch.setattr(runner, "run_with_approvals", stream_of({"messages": messages}))
+
+    result = await run_subagent("coder", "write it", context=patched)
+
+    assert result.ok is False
+    assert "'write_file' on 'run_tests.sh' repeated 3x" in (result.halted_reason or "")
+
+
+def test_the_runner_resets_on_exactly_the_middleware_s_reads():
+    """One set, two guards (CLAUDE.md §3: a claim that two things are the same
+    needs a test). If either grows a read tool, both must."""
+    from rudra.middleware.repeat_guard import NO_PROGRESS_READS
+
+    assert runner.NO_PROGRESS_READS is NO_PROGRESS_READS
+    assert NO_PROGRESS_READS == frozenset({"read_file", "ls", "glob", "grep"})

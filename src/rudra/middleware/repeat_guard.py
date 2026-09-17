@@ -207,6 +207,12 @@ from rudra.trace.stream import REFUSAL_KEY
 # excluded on purpose -- see the module docstring.
 _GUARDED_TOOLS = frozenset({"read_file", "ls", "glob", "grep"})
 
+# The same set under a public name, because a second guard reads it (OPEN-125).
+# `subagents/runner.py` resets its `read_file` counts on any call outside it,
+# which is this module's no-progress rule applied to the invocation halt --
+# one definition, so the two guards cannot disagree about which calls are reads.
+NO_PROGRESS_READS = _GUARDED_TOOLS
+
 # Writes whose repeat is refusable, and it is a SEPARATE set on purpose
 # (OPEN-60). `_GUARDED_TOOLS` means "reads whose repeat is refusable" and
 # both read rules iterate it, so adding a write to it would apply the
@@ -904,4 +910,9 @@ class RepeatGuardMiddleware(AgentMiddleware):
         return result
 
 
-__all__ = ["MAX_IDENTICAL_FAILURES", "MAX_IDENTICAL_READS", "RepeatGuardMiddleware"]
+__all__ = [
+    "MAX_IDENTICAL_FAILURES",
+    "MAX_IDENTICAL_READS",
+    "NO_PROGRESS_READS",
+    "RepeatGuardMiddleware",
+]
