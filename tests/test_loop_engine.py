@@ -1939,3 +1939,62 @@ async def test_a_retry_is_told_the_latest_gate_not_an_older_one(monkeypatch, con
     assert "wrote nothing on a retry" in task.note
     assert "FixtureDef has no unittest" in task.note
     assert "a third failure" not in task.note
+
+
+# --- OPEN-135: an escalation stops the run whether or not the coder wrote ----
+#
+# The empty-diff branch ran the gate and asked only whether it passed; the
+# `report.escalate` check lived on the other path alone. So a gate no model
+# can fix -- a denied command, a missing tool, an internal error -- sent a
+# coder that had correctly written nothing back for another try, and the task
+# ended BLOCKED having spent every attempt, where the same gate after an
+# attempt that wrote a file stops the run at once.
+
+
+async def test_an_escalating_gate_stops_the_run_when_the_coder_wrote_nothing(
+    monkeypatch, context, wrote_nothing
+):
+    """The gate `test_an_escalating_gate_stops_the_whole_run` stops on,
+    reached by an attempt that changed no file."""
+    prompts = _scripted_subagents(monkeypatch, context.project_path, [])
+    _gate_sequence(monkeypatch, escalating_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.STOP_RUN
+    assert len(prompts) == 1
+    # PENDING, so `--continue` retries it once the user has fixed what the
+    # gate could not (A1.93) -- the same as the other path.
+    assert task.status is TaskStatus.PENDING
+    assert task.note == "typecheck failed: <auto:shell-not-opted-in>"
+
+
+async def test_an_escalation_on_a_retry_that_wrote_nothing_stops_the_run(monkeypatch, context):
+    """Attempt 1 wrote a file and failed a way a model can fix; attempt 2
+    wrote nothing and the gate could not run. The run stops there, and
+    attempt 1's file is still on the record."""
+    _real_diff(monkeypatch)
+    prompts = _scripted_subagents(monkeypatch, context.project_path, [{"a.py": "x = 1\n"}])
+    _gate_sequence(monkeypatch, failing_report(), escalating_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.STOP_RUN
+    assert len(prompts) == 2
+    assert task.files_touched == ("a.py",)
+
+
+async def test_an_escalation_is_never_read_as_nothing_to_do(monkeypatch, context, wrote_nothing):
+    """The check comes before any verdict is read. OPEN-132's plan reads a
+    red gate as INHERITED in this branch, and an escalated gate has no test
+    stage verdict to veto `_confirms_nothing_to_do` -- so, under that verdict,
+    a task was marked DONE over a gate that never ran (its plan's code,
+    applied alone, 2026-09-17). Forced here by the verdict alone."""
+    monkeypatch.setattr(engine, "verdict_for", lambda report, *, inherited: engine.INHERITED)
+    _scripted_subagents(monkeypatch, context.project_path, [])
+    _gate_sequence(monkeypatch, escalating_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.STOP_RUN
+    assert task.status is not TaskStatus.DONE

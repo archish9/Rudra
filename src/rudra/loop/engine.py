@@ -858,6 +858,17 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # 2026-09-17: this said the stub scan ONLY, and reasoned from it
             # that the verdict was already whole-project.
             report = await _verify(task, context)
+            # An escalation stops the run from this branch too (OPEN-135).
+            # The check lived only on the path below, so a gate no model can
+            # fix -- a denied command, a missing tool, an internal error --
+            # sent a coder that had correctly written nothing back for another
+            # try, and the task ended BLOCKED with every attempt spent; in
+            # `ask` mode, a user who rejected the test command was asked again
+            # on each one. Before any verdict is read, so nothing that reads
+            # one can call a gate that did not run a pass.
+            if report.escalate:
+                task.note = _blocker_text(report, context.project_path)
+                return _stop(Outcome.STOP_RUN)
             verdict = verdict_for(report, inherited=inherited)
             context.failure_baseline = failure_keys(report)
             if _confirms_nothing_to_do(report, verdict):
