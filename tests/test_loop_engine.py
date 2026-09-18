@@ -2061,3 +2061,99 @@ async def test_both_paths_report_an_escalation_the_same_way(monkeypatch, tmp_pat
     assert main_outcome is empty_outcome
     assert main_task.note == empty_task.note
     assert main_task.status is empty_task.status
+
+
+# --- OPEN-132: a task that changed nothing cannot own a failure --------------
+#
+# Run a4196786280d: t1 left pytest crashing before collection -- a failure with
+# no location, so no key, so `verdict_for` can only call it REGRESSED. t2's
+# work already existed; its coder read the model and wrote nothing, three
+# times, and t2 went BLOCKED. Every later task would have. Owner, 2026-09-17,
+# option 2: a task that changed no file cannot have caused the failure, so a
+# gate that was already failing when it began is not its blocker.
+
+
+def collection_crash_report(exception="ModuleNotFoundError: No module named 'main'"):
+    return VerifyReport.from_stages(
+        [
+            StageResult(name="syntax", outcome=PASSED, blocking=True),
+            StageResult(
+                name="test",
+                outcome=FAILED,
+                blocking=True,
+                detail="the test command collected nothing, but 2 test file(s) are present",
+                output_tail=f"E   {exception}\n",
+            ),
+        ]
+    )
+
+
+async def test_a_task_whose_work_exists_passes_over_a_crash_that_predates_it(
+    monkeypatch, context, wrote_nothing
+):
+    """t2, reproduced: nothing changed, the gate was red before the task."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: collection_crash_report())
+    context.baseline_failed = True
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.attempts == 1
+    assert "already failing before this task began" in task.note
+    assert "collected nothing" in task.note
+    assert "gate passes" not in task.note
+
+
+async def test_a_crash_still_blocks_a_task_that_changed_a_file(monkeypatch, context):
+    """The protection `verdict_for` exists for: an unlocated failure a task
+    COULD have caused stays its own, even on a retry that wrote nothing."""
+    _real_diff(monkeypatch)
+    _scripted_subagents(monkeypatch, context.project_path, [{"main.py": "import nope\n"}])
+    _gate_sequence(monkeypatch, collection_crash_report())
+    context.baseline_failed = True
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.files_touched == ("main.py",)
+
+
+async def test_without_evidence_the_gate_was_already_red_a_crash_still_blocks(
+    monkeypatch, context, wrote_nothing
+):
+    """A fresh process, or a gate that passed before this task: the degraded
+    mode is the old blocking one (OPEN-23's rule)."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: collection_crash_report())
+
+    outcome, _, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+
+
+async def test_every_gate_run_records_whether_it_failed(monkeypatch, context):
+    """What the NEXT task reads as `baseline_failed`, set beside
+    `failure_baseline` at both gate sites."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: collection_crash_report())
+    await run_one(context)
+    assert context.baseline_failed is True
+
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    await run_one(context)
+    assert context.baseline_failed is False
+
+
+async def test_an_empty_diff_over_inherited_failures_does_not_say_the_gate_passes(
+    monkeypatch, context, wrote_nothing
+):
+    """Found while planning OPEN-132: the located half of the same branch
+    marked this DONE -- correctly -- with "the gate passes over the whole
+    project with its tests run", while tests/test_cli.py:119 failed."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report(CLI_FINDINGS))
+    context.failure_baseline = frozenset({"tests/test_cli.py:119"})
+    context.baseline_failed = True
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert "gate passes" not in task.note
+    assert "tests/test_cli.py:119" in task.note

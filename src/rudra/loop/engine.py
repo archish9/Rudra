@@ -28,7 +28,7 @@ from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
 from rudra.git.core import is_repo, status
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
 from rudra.loop.ledger import Ledger, Task, TaskStatus
-from rudra.loop.regressions import INHERITED, PASSED, failure_keys, verdict_for
+from rudra.loop.regressions import INHERITED, PASSED, REGRESSED, failure_keys, verdict_for
 from rudra.memory.degrade import last_failure
 from rudra.memory.entry import MemoryEntry
 from rudra.middleware.content_paths import (
@@ -82,6 +82,11 @@ class LoopContext:
     # then reads as new, and the loop behaves exactly as it did before this
     # field existed. The degraded mode is the old blocking one.
     failure_baseline: frozenset[str] = frozenset()
+    # Whether that gate run FAILED (OPEN-132). `failure_baseline` cannot say:
+    # a failure with no location adds no key, so a red gate that could not
+    # place its failure and a green one both leave it empty. In memory for
+    # the same reason, and False in a fresh process -- the blocking direction.
+    baseline_failed: bool = False
     # How many subagent runs in a row never produced a turn (OPEN-33).
     # Mutated by run_task, reset by any run that does produce one. Not
     # persisted, for the reason `failure_baseline` is not: a fresh process
@@ -452,6 +457,32 @@ def _wrote_nothing_note(blocker_text: str, report: Any = None, project_path: Any
     return "the coder wrote nothing"
 
 
+def _inherited_nothing_note(
+    report: Any, inherited: frozenset[str], project_path: Any = None
+) -> str:
+    """Why a task that wrote nothing is DONE while the gate is red (OPEN-132).
+
+    `_already_satisfied_note` says the gate PASSES, which was false here
+    before OPEN-132 too: an empty diff over inherited located failures was
+    marked DONE, correctly, and noted "the gate passes over the whole project
+    with its tests run" while those tests failed. Names the failures when
+    they have locations, as `_inherited_note` does, and quotes the gate when
+    they have none -- a count or a bare "still failing" answers nothing.
+    """
+    still = sorted(failure_keys(report) & inherited)
+    if still:
+        listed = "\n".join(f"  {key}" for key in still)
+        what = f"{len(still)} failure(s) were failing then and still are:\n{listed}"
+    else:
+        what = "The gate cannot say which file it is failing in:\n\n" + _blocker_text(
+            report, project_path
+        )
+    return (
+        "the coder wrote nothing, and the gate is red for a reason this task did "
+        "not cause: it was already failing before this task began.\n\n" + what
+    )
+
+
 def _inherited_note(report: Any, inherited: frozenset[str]) -> str:
     """Why a task passed while the suite is red (OPEN-23).
 
@@ -705,6 +736,9 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     # introduced must still be this task's own on attempt 2, and re-reading
     # the baseline inside the loop would launder it into an inheritance.
     inherited = context.failure_baseline
+    # And whether the gate was red at all when this task began (OPEN-132),
+    # captured once for the same reason.
+    inherited_failing = context.baseline_failed
     # Across every attempt, not per attempt: "how long did this task take"
     # is the question, and a task that failed twice before passing cost
     # the user all three tries (C9.6).
@@ -870,10 +904,30 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                 task.note = _blocker_text(report, context.project_path)
                 return _stop(Outcome.STOP_RUN)
             verdict = verdict_for(report, inherited=inherited)
+            # A task that has changed no file cannot have caused a failure,
+            # and a gate that was already red when it began is not its
+            # blocker (OPEN-132, the owner's option 2). `verdict_for` cannot
+            # see that for a failure with no location -- it has no key to
+            # compare, so it says REGRESSED -- and run a4196786280d's t2,
+            # whose work t1 had built, was BLOCKED three times over t1's
+            # collection crash. `task.files_touched` is every attempt's
+            # files, a failed invocation's included (OPEN-123, OPEN-130).
+            if (
+                verdict is REGRESSED
+                and inherited_failing
+                and not task.files_touched
+                and not report.passed
+            ):
+                verdict = INHERITED
             context.failure_baseline = failure_keys(report)
+            context.baseline_failed = not report.passed
             if _confirms_nothing_to_do(report, verdict):
                 task.status = TaskStatus.DONE
-                task.note = _already_satisfied_note(report, retry=rejected)
+                task.note = (
+                    _already_satisfied_note(report, retry=rejected)
+                    if verdict is PASSED
+                    else _inherited_nothing_note(report, inherited, context.project_path)
+                )
                 outcome = _stop(Outcome.DONE)
                 record_task_in_memory(context.paths, task)
                 record_task_memory(context, task)
@@ -959,6 +1013,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         # below so no early return can skip it.
         verdict = verdict_for(report, inherited=inherited)
         context.failure_baseline = failure_keys(report)
+        context.baseline_failed = not report.passed
 
         if verdict is PASSED or verdict is INHERITED:
             task.status = TaskStatus.DONE
