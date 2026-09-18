@@ -535,7 +535,7 @@ rudra "also write tests/test_parser.py covering the CSV edge cases"
 
 A task marked `done` passed the verification gate: it parsed, type checked, its tests ran, and no placeholders were left in the files that task touched. So this should be rare — and when it happens it usually means one of:
 
-- **The gate could not run.** Under `--auto` without `--allow-shell`, lint, typecheck and tests are all denied and the run stops on the first task. Check the summary for `never attempted`.
+- **The gate could not run.** Under `--auto` without `--allow-shell`, lint, typecheck and tests are all denied and the run stops on the first task. Check the summary for `unfinished` — the task the run stopped on, with the reason under it — and `never attempted` for the tasks after it.
 - **The project has no tests.** The gate reports `not_applicable` rather than failing, so nothing exercised the code. Ask for tests explicitly.
 - **The task was blocked, not done.** Read the summary: anything not `done` says why.
 
