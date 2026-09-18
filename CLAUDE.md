@@ -1370,15 +1370,12 @@ after `!` is a lie printed once per turn.
 6. Two identical failure signatures in a row → `BLOCKED` (C6.5a). A gate `escalate` → the whole run stops. **A blocker with no findings is signed by its `detail` and the exception lines in its output (OPEN-129, `loop/bounds.py::_exception_lines`)** — absolute paths and memory addresses masked, relative paths kept, sorted — because "the test command collected nothing" is the detail of every collection failure: run `a4196786280d`'s t1 fixed a conftest `ImportError`, met a pytest-plugin `INTERNALERROR`, and was blocked for making no progress. A located blocker, and a finding-less one whose output holds no exception line, sign exactly as before.
 
    **An escalation stops the run after an attempt that wrote nothing, too
-   (OPEN-135).** The empty-diff branch runs its own gate, and it asked that gate
+   (OPEN-135, `loop/engine.py::run_task`).** The empty-diff branch runs its own gate, and it asked that gate
    only whether it passed: a denied command, a missing tool or an internal error
    there sent the coder back for every remaining attempt and ended the task
    `BLOCKED` — and in `ask` mode asked a user who had rejected the test command
    again each time. It is checked before any verdict is read, the main path's
-   note and outcome. **In a `ledger.json` written before OPEN-135 landed**, a
-   `BLOCKED` note reading *"the coder wrote nothing, and the gate is failing"*
-   over a `denied`, missing-tool or `internal error` stage is this defect: read
-   it as a stopped run, and the configuration as the cause.
+   note and outcome.
 7. The planner is consulted again **only** on a block or an empty ledger — never after an ordinary success, and only the `breakdown` stage is re-entered (S10b.3). Clarify and architect run once: re-opening the questions after code exists churns decisions the coder already built on.
 
    **Every re-consult is SHOWN the ledger, and that is not politeness
@@ -1964,7 +1961,7 @@ either.
 | Which invocation was the runaway, and doing what? | `debug-<id>.jsonl` | `"kind": "subagent_done"` — sort by `seconds`, then read `tools` |
 | What was it actually thinking? | `debug-<id>.jsonl` | `"kind": "tool_call"` / `"ai_text"`, uncapped payloads. **With `--stream`, `ai_text` is one record per LINE**, emitted as the model wrote it, and the whole message is not recorded again (OPEN-124) — join consecutive records of one role and namespace to read a message. A log written before 2026-09-17 with `--stream` on holds no subagent or planner record at all past the run's start: nothing reached the parse loops |
 | What did Rudra stop, and why? | `debug-<id>.jsonl` | `"kind": "notice"` — `guard`, `retry`, `suspended` |
-| Which task, how many tries, how long? | `ledger.json` | `seconds`, `attempts`, `halts`, `run_errors`, `files_touched`. **`files_touched` is every attempt's files since OPEN-123**; in a `ledger.json` written before 2026-09-17 it names only the LAST attempt's for any task with `attempts > 1`, and that task's retries were gated on the last attempt's files alone. **A `run_errors` sentence reading `stopped mid-run` is an invocation that did work before the provider failed** (OPEN-130), and its `having changed` names that invocation's own diff; in a ledger written before 2026-09-17 every such sentence reads `could not run`, and that invocation's writes are missing from `files_touched` |
+| Which task, how many tries, how long? | `ledger.json` | `seconds`, `attempts`, `halts`, `run_errors`, `files_touched`. **`files_touched` is every attempt's files since OPEN-123**; in a `ledger.json` written before 2026-09-17 it names only the LAST attempt's for any task with `attempts > 1`, and that task's retries were gated on the last attempt's files alone. **A `run_errors` sentence reading `stopped mid-run` is an invocation that did work before the provider failed** (OPEN-130), and its `having changed` names that invocation's own diff; in a ledger written before 2026-09-17 every such sentence reads `could not run`, and that invocation's writes are missing from `files_touched`. **A `BLOCKED` note over a `denied`, missing-tool or `internal error` stage is an unstopped escalation in a ledger written before OPEN-135** (`loop/engine.py::run_task`): the first attempt reads `the coder wrote nothing, and the gate is failing`, and a retry — once OPEN-131 started carrying that gate's text forward — reads `the coder wrote nothing on a retry. It had been asked to fix:` instead; either is a stopped run, not a task the coder could still have fixed with more attempts |
 | Did the gate pass, and on whose interpreter? | `verify.log` | the `command:` line of each stage — OPEN-80 was invisible without it |
 | Was anything denied? | `permissions.jsonl` | one line per gated decision, every mode. **In the archive too since OPEN-107** — it and `verify.log` were the two instruments the archive did not carry, so neither folder could answer a report alone |
 | Which Rudra, which Python, which mode? | `meta.json` | **In `logs/` since OPEN-106**, written at run start. Before that it existed only in the archive, written at run end, and the docs asked the user to gather the same facts by hand — which is the step that gets skipped (OPEN-68's own argument) |
