@@ -1989,8 +1989,24 @@ async def test_an_escalation_is_never_read_as_nothing_to_do(monkeypatch, context
     red gate as INHERITED in this branch, and an escalated gate has no test
     stage verdict to veto `_confirms_nothing_to_do` -- so, under that verdict,
     a task was marked DONE over a gate that never ran (its plan's code,
-    applied alone, 2026-09-17). Forced here by the verdict alone."""
-    monkeypatch.setattr(engine, "verdict_for", lambda report, *, inherited: engine.INHERITED)
+    applied alone, 2026-09-17). Forced here by the verdict alone.
+
+    Two-sided, because placement is a separate claim from outcome: the plan
+    says the check comes before `verdict_for`, and the record says this
+    branch leaves `context.failure_baseline` untouched. `calls` staying
+    empty is what catches the check moved AFTER `verdict_for` is called --
+    the escalate return would happen either way, but `verdict_for` must
+    never run on an escalated gate. The `INHERITED` return is what catches
+    the check moved below `_confirms_nothing_to_do`, which would otherwise
+    read an escalated gate as nothing to do and mark the task DONE.
+    """
+    calls: list[None] = []
+
+    def verdict_for(report, *, inherited):
+        calls.append(None)
+        return engine.INHERITED
+
+    monkeypatch.setattr(engine, "verdict_for", verdict_for)
     _scripted_subagents(monkeypatch, context.project_path, [])
     _gate_sequence(monkeypatch, escalating_report())
 
@@ -1998,3 +2014,50 @@ async def test_an_escalation_is_never_read_as_nothing_to_do(monkeypatch, context
 
     assert outcome is Outcome.STOP_RUN
     assert task.status is not TaskStatus.DONE
+    assert calls == []
+
+
+def _new_context(project_path):
+    """The `context` fixture's own recipe, callable a second time so each
+    path in `test_both_paths_report_an_escalation_the_same_way` gets a
+    LoopContext of its own rather than one that carries the first run's
+    `failure_baseline` and attempt count into the second."""
+    project_path.mkdir(parents=True, exist_ok=True)
+    return LoopContext(
+        subagents=FakeSubagents(),
+        project_path=project_path,
+        console=Console(quiet=True),
+        cfg=FakeCfg(),
+        paths=rudra_paths(project_path),
+    )
+
+
+async def test_both_paths_report_an_escalation_the_same_way(monkeypatch, tmp_path):
+    """CLAUDE.md says the two branches -- the empty-diff path added by
+    OPEN-135 and the main gate path it copied -- handle an escalation the
+    same way, and the code backs that: `engine.py:869-871` and `:953-955`
+    are byte-identical. But nothing pinned the CLAIM, only each branch's own
+    behaviour, so an edit to one branch's note text (or its Outcome) would
+    leave the suite green while the two diverged. This is the house rule at
+    `CLAUDE.md` §3 (OPEN-64): a comment asserting two things are the same
+    needs a test, or it becomes the reason nobody checks.
+
+    The main path is reached with the autouse `default_fakes` coder, which
+    writes `a.py` (as far as `changed_since` is concerned); the empty-diff
+    path is reached by then switching `changed_since` to report nothing
+    written, the same substitution `wrote_nothing` makes.
+    """
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: escalating_report())
+
+    main_context = _new_context(tmp_path / "main")
+    main_outcome, main_task, _ = await run_one(main_context)
+
+    monkeypatch.setattr(engine, "changed_since", lambda ctx, before: ())
+    empty_context = _new_context(tmp_path / "empty")
+    empty_outcome, empty_task, _ = await run_one(empty_context)
+
+    assert main_outcome is Outcome.STOP_RUN
+    assert empty_outcome is Outcome.STOP_RUN
+    assert main_outcome is empty_outcome
+    assert main_task.note == empty_task.note
+    assert main_task.status is empty_task.status
