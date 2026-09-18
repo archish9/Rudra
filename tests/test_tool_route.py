@@ -337,3 +337,24 @@ def test_settled_write_route_names_only_what_the_agent_holds():
 
     assert "`execute`" in settled_write_route(coder | {"execute"})
     assert settled_write_route(frozenset()) == ""
+
+
+def test_settled_write_route_is_byte_identical_after_sharing_its_body():
+    """OPEN-134 moves the route's body into `_settled_route` so a read refusal
+    can say it too. The write route's text must not change by a byte."""
+    from rudra.middleware.tool_route import settled_write_route
+
+    coder = frozenset({"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"})
+
+    assert settled_write_route(coder) == (
+        "Writing a file does not run it, and nothing in this agent can run one -- nor does "
+        "anything need to. When you stop, a verification gate runs the project's linter, type "
+        "checker and full test suite, and calls you again with the exact failure text if "
+        "anything fails -- stopping IS how you find out whether your work is correct. If your "
+        "work is finished, reply with one or two lines and call no tool."
+    )
+    assert settled_write_route(coder | {"execute"}) == (
+        "To run a command, call `execute`. If your work is finished, reply with one or two "
+        "lines and call no tool."
+    )
+    assert settled_write_route(frozenset()) == ""

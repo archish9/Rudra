@@ -1980,3 +1980,74 @@ def test_the_routed_refusal_is_still_a_refusal_not_a_failure():
 
     assert is_rudra_refusal(result) is True
     assert looks_like_error(_text(result)) is False
+
+
+# --- OPEN-134: a refused interpreter hunt names the route ----------------------
+#
+# Run a4196786280d's t9 dispatch 2: after its edit, the coder -- which holds no
+# shell -- sent 40 globs for `.venv/bin/python` and `pytest`, and each repeat
+# was answered only "That earlier result is still current -- use it". Across
+# the archive 53 of 171 dedupe refusals were that shape, from exactly two
+# interpreter hunts; the other 118 were ordinary re-reads, 60 the planner's.
+
+
+def _refused_repeat(guard, name="glob", **args):
+    backend = _Backend("['/.venv/bin/pytest']")
+    guard.wrap_tool_call(_request(name, **args), backend)
+    result = guard.wrap_tool_call(_request(name, **args), backend)
+    assert backend.calls == 1, "still refused: the decision does not change"
+    return _text(result)
+
+
+def test_a_refused_interpreter_search_tells_a_coder_the_gate_runs_the_tests():
+    text = _refused_repeat(
+        RepeatGuardMiddleware(granted=CODER_GRANTS), pattern="**/.venv/bin/pytest"
+    )
+
+    assert text.startswith("Already read: ")
+    assert "Finding an interpreter or a test runner does not run it" in text
+    assert "a verification gate runs" in text
+    assert "call no tool" in text
+    assert "execute" not in text  # OPEN-15
+
+
+def test_a_refused_interpreter_search_tells_a_tester_to_use_run_tests():
+    text = _refused_repeat(RepeatGuardMiddleware(granted=TESTER_GRANTS), pattern="/usr/bin/python*")
+
+    assert "`run_tests`" in text
+    assert "Finding an interpreter" not in text
+
+
+def test_an_ordinary_repeat_read_keeps_today_s_words():
+    """118 of the archive's 171 dedupe refusals: no route there, and a file
+    that merely mentions pytest is not a runner."""
+    for args in ({"file_path": "/models.py"}, {"file_path": "/pytest.ini"}):
+        text = _refused_repeat(RepeatGuardMiddleware(granted=CODER_GRANTS), "read_file", **args)
+        assert text.endswith("to change the file, write or edit it.")
+
+
+def test_a_guard_without_grants_never_routes_a_read():
+    """The planner's guard: no grants, no route, whatever it searched for."""
+    text = _refused_repeat(RepeatGuardMiddleware(), pattern="**/.venv/bin/python")
+
+    assert text.endswith("to change the file, write or edit it.")
+
+
+def test_every_archived_runner_search_is_runner_shaped():
+    """The shapes the archive holds, and one each way that must not match."""
+    from rudra.middleware.repeat_guard import runner_shaped
+
+    for value in (
+        "**/.venv/bin/pytest",
+        "/usr/bin/python*",
+        "**/.venv/bin/python",
+        "/usr/bin/python3",
+        ".venv/bin",
+        "**/.venv/bin/python*",
+        "/usr/bin/python3*",
+        "**/.venv/**/python*",
+        "**/.venv/bin/python3.12",
+    ):
+        assert runner_shaped({"pattern": value}), value
+    for value in ("/pytest.ini", "tests/test_python_utils.py", "/src/app.py", "tests/*.py"):
+        assert not runner_shaped({"pattern": value}), value

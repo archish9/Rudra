@@ -168,6 +168,24 @@ def settled_write_route(granted: frozenset[str]) -> str:
     guard built without grants -- the planner's, and every bare one in the
     tests -- keeps its words.
     """
+    return _settled_route(granted, "Writing a file does not run it")
+
+
+def runner_search_route(granted: frozenset[str]) -> str:
+    """The route for an agent refused a repeated search for a runner (OPEN-134).
+
+    Run a4196786280d's coder, holding no shell, globbed `**/.venv/bin/python`
+    and `pytest` 40 times in one invocation, and each repeat was answered only
+    "use the earlier result". The same reflex as OPEN-126's -- running the
+    tests -- reached through a READ tool, so it gets the same route, with its
+    own first clause. Names only what `granted` holds, and is empty without it.
+    """
+    return _settled_route(granted, "Finding an interpreter or a test runner does not run it")
+
+
+def _settled_route(granted: frozenset[str], lead: str) -> str:
+    """OPEN-103's route for an agent reaching to run something through a tool
+    it holds. One body, so the write and read answers cannot drift apart."""
     if not granted:
         return ""
     if "run_tests" in granted:
@@ -176,7 +194,7 @@ def settled_write_route(granted: frozenset[str]) -> str:
         run = "To run a command, call `execute`."
     else:
         run = (
-            "Writing a file does not run it, and nothing in this agent can run one "
+            f"{lead}, and nothing in this agent can run one "
             "-- nor does anything need to. " + GATE_RUNS_ON_STOP
         )
     return f"{run} If your work is finished, reply with one or two lines and call no tool."
@@ -337,5 +355,6 @@ __all__ = [
     "SHELL_NAMES",
     "TOOL_ROUTE_NOTICE",
     "ToolRouteMiddleware",
+    "runner_search_route",
     "settled_write_route",
 ]

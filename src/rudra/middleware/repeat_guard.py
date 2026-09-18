@@ -193,6 +193,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -200,7 +201,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from rudra.compat.virtual_paths import virtual_to_host, virtual_to_relative
-from rudra.middleware.tool_route import settled_write_route
+from rudra.middleware.tool_route import runner_search_route, settled_write_route
 from rudra.trace.stream import REFUSAL_KEY
 
 # Deterministic reads. A repeat of one of these after a failure cannot
@@ -319,6 +320,25 @@ def _is_error(result: Any) -> bool:
     """
     content = getattr(result, "content", result)
     return isinstance(content, str) and content.lstrip().startswith("Error")
+
+
+# A `bin` directory anywhere in the path, or a last segment naming an
+# interpreter or a test runner. Every shape the archive's interpreter hunts
+# used -- `**/.venv/bin/pytest`, `/usr/bin/python*`, `**/.venv/**/python*` --
+# and not `pytest.ini` or `test_python_utils.py`, which are files to read.
+_RUNNER_SEARCH = re.compile(
+    r"(?:^|[/\\])bin(?:[/\\]|$)|(?:^|[/\\*])(?:python[\d.]*|pytest|py\.test|pip[\d.]*)\*?$",
+    re.IGNORECASE,
+)
+_SEARCH_ARGS = ("pattern", "path", "file_path")
+
+
+def runner_shaped(args: dict[str, Any]) -> bool:
+    """Is this read a search for something to RUN the project with (OPEN-134)?"""
+    return any(
+        isinstance(args.get(key), str) and _RUNNER_SEARCH.search(args[key]) is not None
+        for key in _SEARCH_ARGS
+    )
 
 
 class RepeatGuardMiddleware(AgentMiddleware):
@@ -620,13 +640,19 @@ class RepeatGuardMiddleware(AgentMiddleware):
         refused, and the whole saving is one round trip.
         """
         target = self._target(args)
-        return (
+        refusal = (
             f"Already read: `{name}` on '{target}' was answered earlier in this "
             f"turn and nothing has changed it since, so it was not run again. "
             f"That earlier result is still current -- use it. To see something "
             f"else, call a different path or pattern; to change the file, write "
             f"or edit it."
         )
+        # A repeated search for an interpreter or a test runner is the model
+        # trying to run the tests (OPEN-134), so it gets OPEN-126's route.
+        # Only that shape: 118 of the archive's 171 dedupe refusals were
+        # ordinary re-reads, and a route there is words on the wrong question.
+        route = runner_search_route(self.granted) if runner_shaped(args) else ""
+        return f"{refusal}\n\n{route}" if route else refusal
 
     def _write_refusal(self, name: str, args: dict[str, Any]) -> str:
         """The answer to a write whose bytes are already on disk.
@@ -927,4 +953,5 @@ __all__ = [
     "MAX_IDENTICAL_READS",
     "NO_PROGRESS_READS",
     "RepeatGuardMiddleware",
+    "runner_shaped",
 ]
