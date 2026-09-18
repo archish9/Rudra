@@ -262,3 +262,55 @@ def test_reporting_suspension_never_ends_a_run(tmp_path):
     notice_if_suspended(Sink(), usage)  # must not raise
     notice_if_suspended(None, usage)
     notice_if_suspended(Sink(), None)
+
+
+# --- OPEN-133: "never attempted" only of a task nothing happened to --------
+#
+# Run a4196786280d's last line: "t9 … (926.9s) never attempted — the run
+# stopped", for a task with 2 attempts, a halt and five run errors. `_stop`
+# returns the task a run stops on to PENDING on purpose (A1.93), and the
+# summary read PENDING as "never attempted" -- so the one task a user most
+# needs explained was described falsely, and its note was hidden.
+
+
+def _stopped_on():
+    ledger = Ledger()
+    task = ledger.add("fix the collection error")
+    task.attempts = 2
+    task.seconds = 926.9
+    task.halts = ("'read_file' on 'tests/__init__.py' repeated 3x -- stopping",)
+    task.run_errors = ("the coder could not run: ProviderUnavailable (429)",)
+    task.note = "the coder could not run: ProviderUnavailable (429)"
+    return ledger
+
+
+def test_a_task_the_run_stopped_on_is_not_called_never_attempted():
+    _, text = render(_stopped_on())
+
+    assert "never attempted" not in text
+    assert "not finished — the run stopped after 2 attempt(s)" in text
+    assert "ProviderUnavailable (429)" in text
+
+
+def test_the_headline_counts_unfinished_apart_from_never_attempted():
+    ledger = _stopped_on()
+    ledger.add("write the docs")
+
+    _, text = render(ledger)
+
+    assert "1 unfinished" in text
+    assert "1 never attempted" in text
+
+
+def test_a_task_only_a_failed_invocation_touched_is_unfinished_too():
+    """OPEN-46 gives a failed invocation's attempt back, so `attempts` can be
+    0 for a task the coder was dispatched on; its `run_errors` say so."""
+    ledger = Ledger()
+    task = ledger.add("t")
+    task.run_errors = ("the coder could not run: 500",)
+    task.note = "the coder could not run: 500"
+
+    _, text = render(ledger)
+
+    assert "never attempted" not in text
+    assert "not finished — the run stopped after 0 attempt(s)" in text

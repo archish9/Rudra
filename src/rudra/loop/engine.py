@@ -1066,6 +1066,31 @@ _STATUS_MARK = {
 }
 
 _NOT_ATTEMPTED = "never attempted — the run stopped"
+_UNFINISHED = (TaskStatus.PENDING, TaskStatus.IN_PROGRESS)
+
+
+def _was_started(task: Task) -> bool:
+    """Did anything happen to this task, whatever its status says?
+
+    A task the run stops on is PENDING again on purpose (A1.93, `_stop`), so
+    status cannot answer (OPEN-133). `run_errors` counts because OPEN-46 gives
+    a failed invocation's attempt back: `attempts` can be 0 for a task a coder
+    was dispatched on.
+    """
+    return bool(task.attempts or task.run_errors or task.halts or task.files_touched)
+
+
+def _unfinished_note(task: Task) -> str:
+    """What the summary says of a PENDING task (OPEN-133).
+
+    Run a4196786280d ended "t9 … (926.9s) never attempted — the run stopped"
+    for a task with 2 attempts, a halt and five run errors, and the sentence
+    replaced the note saying why. A started task keeps its note.
+    """
+    if not _was_started(task):
+        return _NOT_ATTEMPTED
+    line = f"not finished — the run stopped after {task.attempts} attempt(s)"
+    return f"{line}\n{task.note}" if task.note else line
 
 
 def _review_prompt(ledger: Ledger) -> str:
@@ -1452,7 +1477,12 @@ def summarise(ledger: Ledger, console: Console, usage: Any = None, cancelled: bo
         f"{counts['blocked']} blocked · {counts['dropped']} dropped"
     )
     if counts["pending"]:
-        headline += f" · {counts['pending']} never attempted"
+        pending = [task for task in ledger.tasks if task.status in _UNFINISHED]
+        started = sum(1 for task in pending if _was_started(task))
+        if started:
+            headline += f" · {started} unfinished"
+        if len(pending) - started:
+            headline += f" · {len(pending) - started} never attempted"
     if cancelled:
         headline = f"Cancelled — {headline}"
     console.print(f"\n[bold]{headline}[/bold]\n")
@@ -1479,8 +1509,8 @@ def summarise(ledger: Ledger, console: Console, usage: Any = None, cancelled: bo
 
     for task in ledger.tasks:
         note = task.note
-        if task.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
-            note = _NOT_ATTEMPTED
+        if task.status in _UNFINISHED:
+            note = _unfinished_note(task)
         # escape(): a task description is model-written and a bracketed
         # word in it would be parsed as a style tag (A1.91's class).
         took = f"  [dim]({task.seconds:.1f}s)[/dim]" if task.seconds >= 0.05 else ""
