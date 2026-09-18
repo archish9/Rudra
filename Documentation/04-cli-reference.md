@@ -407,8 +407,13 @@ planned for, and `--continue` on its own reuses it.
 | `blocked` | Not retried. It failed the same way twice already, so repeating it spends tokens to reach the same place |
 | `done` · `dropped` | Finished. Left alone |
 
-Attempt counts carry across, so `[agent] max_fix_attempts` still means what it
-says either side of the interruption.
+Attempt counts carry across — the ledger keeps what each task has already
+cost — but `[agent] max_fix_attempts` is a budget **per run**, so a resumed
+task gets a full one again. It has to: a run that stopped mid-task usually
+stopped on something outside the task, and the resume exists because you have
+since fixed it. Before this, a task the run stopped on its last attempt came
+back with nothing left, so `--continue` marked it blocked without running the
+coder at all.
 
 **It refuses rather than guessing.** Four cases, each exiting `2` with a
 sentence:

@@ -397,7 +397,7 @@ this.
 |---|---|
 | `verbose` | Add the model's prose and untruncated payloads to the run trace. Default `false` |
 | `stream_tokens` | Stream that prose token by token as it arrives. Default `false` |
-| `max_fix_attempts` | How many times the fix loop retries one task before giving up. Default 3 |
+| `max_fix_attempts` | How many times the fix loop retries one task before giving up, per run. Default 3 |
 | `max_questions` | How many clarifying questions the planner may ask across one whole run. Default 5; `0` never asks |
 | `run_archive` | Copy each run's evidence out of the project when it ends. Default `true` — see below |
 
@@ -438,6 +438,12 @@ one entry per message.
 sooner: two attempts that fail *identically* count as no progress and stop
 immediately, because a third would produce the same result. Raising it helps
 only when attempts are genuinely converging.
+
+It is also a budget **per run**, not per task for ever: `rudra --continue`
+gives a resumed task a fresh one, while the ledger keeps the count of what
+that task has already cost. A run that stops mid-task has usually stopped on
+something the task cannot fix — a denied command, a missing tool — and the
+resume is the user having fixed it.
 
 `max_questions` is the whole run's budget, counted in questions rather than in
 calls, so batching several related questions into one prompt costs what it
