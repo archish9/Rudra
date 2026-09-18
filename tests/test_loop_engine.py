@@ -2157,3 +2157,96 @@ async def test_an_empty_diff_over_inherited_failures_does_not_say_the_gate_passe
     assert outcome is Outcome.DONE
     assert "gate passes" not in task.note
     assert "tests/test_cli.py:119" in task.note
+
+
+# --- OPEN-136: a run that stopped resumes with a fix budget ----------------
+#
+# `_stop` returns a STOP_RUN task to PENDING on purpose (A1.93), with its
+# attempts spent. The loop's bound read those attempts, so `--continue`
+# re-entered run_task, served nothing, and fell to the BLOCKED tail, whose
+# keyword guard does not spare an escalation note: the user fixed the denial,
+# resumed, and was told `3 attempts exhausted`. The budget is this run's now.
+
+
+def _changing_failure(monkeypatch, *, then=None):
+    """A gate whose findings move every call, so nothing blocks on the
+    no-progress signature; `then` answers once the moving ones run out."""
+    lines = iter(range(1, 99))
+
+    def gate(*a, **k):
+        if then is not None and next(lines) > 90:  # pragma: no cover - guard
+            return then
+        return failing_report((Finding("a.py", next(lines), "bad type"),))
+
+    monkeypatch.setattr(engine, "verify_project", gate)
+
+
+async def test_a_task_the_run_stopped_on_is_dispatched_again_on_resume(
+    monkeypatch, context, default_fakes
+):
+    """The filed reproduction: two failing gates, an escalation on the last
+    attempt, then run_task re-entered on the same task."""
+    reports = [
+        failing_report((Finding("a.py", 1, "bad type"),)),
+        failing_report((Finding("a.py", 2, "bad type"),)),
+        escalating_report(),
+    ]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    first = await run_task(task, ledger, context=context)
+
+    assert first is Outcome.STOP_RUN
+    assert task.status is TaskStatus.PENDING, "A1.93 -- --continue must resume it"
+    assert task.attempts == 3
+    assert "<auto:shell-not-opted-in>" in task.note
+    served_before = len(default_fakes)
+
+    # The user grants the shell and resumes. The gate passes now.
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: passing_report())
+    resumed = await run_task(task, ledger, context=context)
+
+    assert len(default_fakes) > served_before, "no coder was dispatched on the resume"
+    assert resumed is Outcome.DONE
+    assert "attempts exhausted" not in task.note
+
+
+async def test_the_fix_budget_is_this_run_s_not_the_task_s_lifetime(monkeypatch, context):
+    """A resumed task gets max_fix_attempts tries of its own. `task.attempts`
+    keeps counting for the ledger, which is what §8a reads."""
+    _changing_failure(monkeypatch)
+
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    await run_task(task, ledger, context=context)
+    assert task.attempts == 3
+
+    task.status = TaskStatus.PENDING  # what _stop leaves behind
+    await run_task(task, ledger, context=context)
+
+    assert task.attempts == 6
+
+
+async def test_a_failed_invocation_costs_the_resumed_run_no_budget_either(monkeypatch, context):
+    """OPEN-46's give-back measured against the new ceiling: a dispatch the
+    provider never served must not eat one of the resumed run's three."""
+    served: list[str] = []
+    results = [SubagentResult(name="coder", text="", ok=False, error="Error code: 500 - internal")]
+
+    async def flaky(name, prompt, *, context, thread_id=None):
+        served.append(name)
+        return results.pop(0) if results else SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", flaky)
+    _changing_failure(monkeypatch)
+
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    task.attempts = 3  # a run stopped on it
+    task.status = TaskStatus.PENDING
+
+    await run_task(task, ledger, context=context)
+
+    assert task.attempts == 6, "the 500 spent one of the resumed run's tries"
+    assert served.count("coder") == 4

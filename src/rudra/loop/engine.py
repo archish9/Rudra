@@ -777,8 +777,22 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     # no diff, so a served attempt that wrote nothing itself read as an empty
     # diff, and the gate never judged the edit as the task's work.
     carried: dict[str, str] | None = None
+    # THIS RUN may serve max_fix_attempts attempts, whatever the task already
+    # spent (OPEN-136). The bound used to read `task.attempts` alone, which
+    # persists in the ledger, and `_stop` returns a STOP_RUN task to PENDING
+    # with its attempts spent (A1.93, above) -- so `--continue` re-entered
+    # here, found the condition already false, dispatched NOTHING, and fell to
+    # the BLOCKED tail, whose keyword guard does not spare an escalation note:
+    # a user who granted the shell and resumed was told `3 attempts exhausted`
+    # instead of what the gate had refused.
+    #
+    # A ceiling and not a second counter, because OPEN-46's give-back
+    # (`task.attempts -= 1` on an invocation the provider never served) has to
+    # apply to whatever the loop is bounded by, and two counters that must
+    # agree are how `_is_build_output` drifted into three spellings (OPEN-64).
+    budget = task.attempts + context.cfg.agent.max_fix_attempts
 
-    while task.attempts < context.cfg.agent.max_fix_attempts:
+    while task.attempts < budget:
         dispatch += 1
         task.attempts += 1
         task.status = TaskStatus.IN_PROGRESS
@@ -850,10 +864,16 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # needs.
             #
             # The decrement happens BEFORE the ceiling returns, so a task the
-            # run stops on reports the tries it actually had. `_stop` leaves it
-            # PENDING (A1.93), so `--continue` resumes it with its budget
-            # intact rather than with three attempts already spent on a dead
-            # provider.
+            # run stops on reports the tries it actually had.
+            #
+            # It used to say `--continue` therefore resumes such a task "with
+            # its budget intact", which was true only of a stop on THIS branch
+            # -- the only one that gives an attempt back. A stop after served
+            # attempts, an escalating gate above all, left the budget spent and
+            # the resume dispatched nothing (OPEN-136). The budget is this
+            # run's now, so the claim holds on every path, and
+            # `test_a_task_the_run_stopped_on_is_dispatched_again_on_resume`
+            # is the test this comment lacked (OPEN-64's rule).
             task.attempts -= 1
             if context.run_errors >= MAX_CONSECUTIVE_RUN_ERRORS:
                 return _stop(Outcome.STOP_RUN)

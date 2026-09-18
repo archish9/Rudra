@@ -88,7 +88,16 @@ def test_resumable_keeps_declaration_order():
 
 
 def test_attempts_survive_the_seam(tmp_path):
-    """max_fix_attempts must still mean what it says across a resume."""
+    """The COUNT survives a resume: `attempts` is what §8a reads as "how many
+    tries", and OPEN-133's summary reads it to tell a task the run stopped on
+    from one nothing touched.
+
+    It is not the fix BUDGET, and this docstring used to say it was --
+    "max_fix_attempts must still mean what it says across a resume". Since
+    OPEN-136 a run may serve max_fix_attempts attempts whatever the task
+    already spent, or a task a run stopped on resumes with none left and is
+    blocked without a dispatch; `tests/test_loop_engine.py` pins that.
+    """
     path = tmp_path / "ledger.json"
     ledger = Ledger()
     task = ledger.add("half-tried")
