@@ -1,8 +1,8 @@
 # CLAUDE.md — Rudra
 
 Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **Four are open as of 2026-09-18: OPEN-132,
-OPEN-133, OPEN-134 and OPEN-136** — the first three of seven filed by *Fix next* row
+is the live ledger of what is open. **Three are open as of 2026-09-18:
+OPEN-133, OPEN-134 and OPEN-136** — two of seven filed by *Fix next* row
 19's live run `a4196786280d`, and OPEN-136 filed offline by OPEN-135's final review: a
 task a run stopped on resumes with its attempts already spent, so `--continue` blocks it
 without dispatching anything and overwrites the reason it stopped.
@@ -34,11 +34,19 @@ closing OPEN-131, closed on 2026-09-18, offline**: that same branch now reads
 or an internal error stops the run there too instead of spending the task's
 attempts and blocking; §3's *Control flow* step 6 says how. It sat above
 OPEN-132, whose plan — applied alone — would have turned it into `DONE`, and was
-rebased by one line to match when OPEN-135 closed. **The three left from that run have
-self-contained plans** under `docs/superpowers/plans/2026-09-17-open-1{32…34}-*.md`,
+rebased by one line to match when OPEN-135 closed. **OPEN-132, the fifth of the
+seven, closed on 2026-09-18, offline**: a failure the gate could not place can
+never be inherited, so a task whose work an earlier task had already built was
+blocked by that earlier task's collection crash — the empty-diff branch now reads
+`REGRESSED` as `INHERITED` when no attempt of the task changed a file and the gate
+was already red when it began; §3's *Control flow* step 5 says how, and **its note
+replaces a false one found while planning** — an empty diff over located inherited
+failures was marked `DONE` saying "the gate passes over the whole project".
+**The two left from that run have
+self-contained plans** under `docs/superpowers/plans/2026-09-17-open-1{33,34}-*.md`,
 each executed once in a scratch worktree in queue order with OPEN-129's (together
 3487 passed, 2 skipped, against 3462) and discarded; **all their fix directions
-were approved by the owner the same day** (OPEN-132: option 2), so a session
+were approved by the owner the same day**, so a session
 executes those plans without asking. **Check each plan against the tree anyway**:
 OPEN-129's path mask, as planned, also masked relative paths, and OPEN-131's
 ordering pin could not fail. That run verified OPEN-125,
@@ -207,7 +215,7 @@ above is about** — they say nothing about how a model behaves.
 
 | File | Owns |
 |---|---|
-| `TODO.md` | **Pending items and the order to work them, and nothing else.** Read it first. It opens with the **Fix next** queue — one order across every board, its `Next:` line naming the item to work and its own rules for keeping itself right — then one summary per `PENDING` item, in queue order, each linking its self-contained plan. **Four open as of 2026-09-18: OPEN-132, OPEN-133, OPEN-134 and OPEN-136.** Cut to that on 2026-09-14 at the owner's request (1062 → 257 lines); everything else it held — census history, run boards, unfiled follow-ups, watch items, rules, and the *Before you start* reference — moved verbatim to `TODO-closed.md`. **Keep it that way:** a closed entry, a board or reference text goes to `TODO-closed.md` in the same edit |
+| `TODO.md` | **Pending items and the order to work them, and nothing else.** Read it first. It opens with the **Fix next** queue — one order across every board, its `Next:` line naming the item to work and its own rules for keeping itself right — then one summary per `PENDING` item, in queue order, each linking its self-contained plan. **Three open as of 2026-09-18: OPEN-133, OPEN-134 and OPEN-136.** Cut to that on 2026-09-14 at the owner's request (1062 → 257 lines); everything else it held — census history, run boards, unfiled follow-ups, watch items, rules, and the *Before you start* reference — moved verbatim to `TODO-closed.md`. **Keep it that way:** a closed entry, a board or reference text goes to `TODO-closed.md` in the same edit |
 | `TODO-closed.md` | Every `DONE` and `WONTFIX` item — **now all 102 of them**, plus the 75 `CR-*` code-review findings of 2026-08-21, each with its reproduction. Split out 2026-08-25 and emptied out of `TODO.md` in rounds since. Four blocks have their own header: the **2026-09-01** one carries all eleven run records and both ordering boards; the **2026-09-03** one carries OPEN-72 … OPEN-83 (two rounds of 2026-09-02) and OPEN-87 … OPEN-92; **the 2026-09-03 board itself**, moved here 2026-09-04, which carries run `fc543fb2b82f`'s final numbers and the correctness-before-cost ordering argument; and **the 2026-09-06 board**, moved here 2026-09-09, which carries run `5775ba1f9855`'s numbers and its **exercised / not-exercised tables** — the record of what a verification run can and cannot prove. **OPEN-100, OPEN-101 and OPEN-102 sit at the end**, each moved there the day it was filed; OPEN-100's closing carries the per-stage call and seconds table measured across every archived run — the evidence that its own plan's recommended number was wrong. Its index table at the top is the map; read that before scrolling. **Since 2026-09-14 it also ends with *TODO.md's context, moved here 2026-09-14*** — not items: the census history, the 2026-09-14 and both 2026-09-09 run boards with their exercised / not-exercised tables, the unfiled follow-ups, the four watch items, *Rules*, and *Before you start* (test baseline, **the fresh-project recipe**, model availability, where evidence lands, four lessons). That last part is live reference, not history |
 | `TODO-old.md` | The Steps 0–16 build ledger: **§0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings)** and every `A*`/`C*`/`S*`/`U*` item this file cites |
 
@@ -215,7 +223,7 @@ When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-18 those are OPEN-132, OPEN-133, OPEN-134 and OPEN-136 — cited in this file only in the
+2026-09-18 those are OPEN-133, OPEN-134 and OPEN-136 — cited in this file only in the
 paragraphs above and in §2 rule 1; every other `OPEN-N` here points at a record. When
 the next item lands, its own document's closing section says which paragraphs
 here it corrects.
@@ -276,7 +284,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. Four are open as of 2026-09-18 — OPEN-132, OPEN-133 and OPEN-134, filed by row 19's live run, which did 0 of 9 tasks and was stopped by a 429, and OPEN-136, the task a stopped run leaves unresumable, filed offline by OPEN-135's final review; OPEN-135, the empty-diff attempt that ignores an escalating gate, filed offline while closing OPEN-131 and closed offline on 2026-09-18; OPEN-131, the retry after an attempt that wrote nothing being sent an older failure or none, closed offline the same day; OPEN-130, the coder invocation that failed mid-stream and lost its edit, closed offline the same day; OPEN-128, that 429 stopping the run, closed `WONTFIX` the same day, hosted rate limits being out of scope; OPEN-129, the real fix that run blocked as no progress because two collection failures signed alike, closed offline the same day; OPEN-127, the AGENTS.md summariser call that left no `model_call` record, closed offline on 2026-09-17; OPEN-126, the coder that re-sent a test-runner script it had written until halted, told only to move on, closed offline on 2026-09-17; OPEN-125, the runner counter that halted a coder reading back its own edit, closed offline on 2026-09-17; OPEN-123, the `files_touched` that kept only the last attempt's files — and a gate that, handed it, judged only the last attempt — closed offline on 2026-09-17; OPEN-122, the nudge outcome that recorded an unfinished agent as done, closed offline on 2026-09-17; OPEN-124, `--stream` delivering no chunk to either parse loop, closed offline on 2026-09-17; OPEN-115, the client SDKs retrying inside Rudra's own retry, closed offline on 2026-09-16; OPEN-116, the planner prompt that ordered every stage to `ls` the project, closed offline on 2026-09-16; OPEN-114, the time bound that halted on the answer it had just paid for and threw it away, closed offline on 2026-09-16; OPEN-121, the planner guard that counted an earlier consult's tool calls against this one, closed offline the same day; OPEN-120, the agent that pip-installed into the machine's Python, closed offline on 2026-09-15; OPEN-119, the test blocker that listed pytest's frames and dropped the exception, closed offline that day; OPEN-118, the refusals documented as escaping a failure counter that counts them, closed offline that day by correcting the documents; OPEN-105, the checklist row that reported a missing archive for an archived run, closed offline that day; OPEN-103, the run-killer everything else in its run was downstream of, closed offline that day, and OPEN-104 after it, so the next live run is what says whether either fix works on a model. Since 2026-09-14 the file holds only that queue and the `PENDING` entries (owner's request); the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. Three are open as of 2026-09-18 — OPEN-133 and OPEN-134, filed by row 19's live run, which did 0 of 9 tasks and was stopped by a 429, and OPEN-136, the task a stopped run leaves unresumable, filed offline by OPEN-135's final review; OPEN-132, the finished task blocked by an earlier task's unlocated failure, closed offline on 2026-09-18; OPEN-135, the empty-diff attempt that ignores an escalating gate, filed offline while closing OPEN-131 and closed offline on 2026-09-18; OPEN-131, the retry after an attempt that wrote nothing being sent an older failure or none, closed offline the same day; OPEN-130, the coder invocation that failed mid-stream and lost its edit, closed offline the same day; OPEN-128, that 429 stopping the run, closed `WONTFIX` the same day, hosted rate limits being out of scope; OPEN-129, the real fix that run blocked as no progress because two collection failures signed alike, closed offline the same day; OPEN-127, the AGENTS.md summariser call that left no `model_call` record, closed offline on 2026-09-17; OPEN-126, the coder that re-sent a test-runner script it had written until halted, told only to move on, closed offline on 2026-09-17; OPEN-125, the runner counter that halted a coder reading back its own edit, closed offline on 2026-09-17; OPEN-123, the `files_touched` that kept only the last attempt's files — and a gate that, handed it, judged only the last attempt — closed offline on 2026-09-17; OPEN-122, the nudge outcome that recorded an unfinished agent as done, closed offline on 2026-09-17; OPEN-124, `--stream` delivering no chunk to either parse loop, closed offline on 2026-09-17; OPEN-115, the client SDKs retrying inside Rudra's own retry, closed offline on 2026-09-16; OPEN-116, the planner prompt that ordered every stage to `ls` the project, closed offline on 2026-09-16; OPEN-114, the time bound that halted on the answer it had just paid for and threw it away, closed offline on 2026-09-16; OPEN-121, the planner guard that counted an earlier consult's tool calls against this one, closed offline the same day; OPEN-120, the agent that pip-installed into the machine's Python, closed offline on 2026-09-15; OPEN-119, the test blocker that listed pytest's frames and dropped the exception, closed offline that day; OPEN-118, the refusals documented as escaping a failure counter that counts them, closed offline that day by correcting the documents; OPEN-105, the checklist row that reported a missing archive for an archived run, closed offline that day; OPEN-103, the run-killer everything else in its run was downstream of, closed offline that day, and OPEN-104 after it, so the next live run is what says whether either fix works on a model. Since 2026-09-14 the file holds only that queue and the `PENDING` entries (owner's request); the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
@@ -1370,6 +1378,16 @@ after `!` is a lie printed once per turn.
    never persisted: a fresh process — the first task, or `--continue` — has
    none, every failure reads as new, and the loop behaves exactly as it did
    before. The degraded mode is the old blocking one, never the passing one.
+
+   **A task that changed no file inherits a red gate it began with, located or
+   not (OPEN-132, the owner's option 2).** `verdict_for` can only call a failure
+   with no location `REGRESSED`, so run `a4196786280d`'s t2 — whose work t1 had
+   built — was blocked three times over t1's pytest collection crash, and every
+   later task would have been. In the empty-diff branch, no file changed by any
+   attempt (`files_touched` empty) plus a gate already failing when the task
+   began (`LoopContext.baseline_failed`, in memory, False in a fresh process)
+   reads as `INHERITED`. A task that changed anything is still judged by
+   locations alone.
 6. Two identical failure signatures in a row → `BLOCKED` (C6.5a). A gate `escalate` → the whole run stops. **A blocker with no findings is signed by its `detail` and the exception lines in its output (OPEN-129, `loop/bounds.py::_exception_lines`)** — absolute paths and memory addresses masked, relative paths kept, sorted — because "the test command collected nothing" is the detail of every collection failure: run `a4196786280d`'s t1 fixed a conftest `ImportError`, met a pytest-plugin `INTERNALERROR`, and was blocked for making no progress. A located blocker, and a finding-less one whose output holds no exception line, sign exactly as before.
 
    **An escalation stops the run after an attempt that wrote nothing, too
@@ -1994,7 +2012,10 @@ that folder.** It means a coder invocation was dispatched, paid for, and wrote
 nothing — six of them in run `fc543fb2b82f`, 4,600 seconds, 63% of the clock.
 Read the plan next, not the loop (OPEN-90). **Since OPEN-123 it means no attempt
 wrote anything**; in a folder written before 2026-09-17, a task with
-`attempts > 1` may read `[]` because only its last attempt wrote nothing.
+`attempts > 1` may read `[]` because only its last attempt wrote nothing. **Since
+OPEN-132 a `DONE` task with `[]` may also be one that passed over a gate already
+red when it began** — its note says *"the gate is red for a reason this task did
+not cause"* and quotes the failure; read the task that caused it, not this one.
 
 ## 9. Repo Hygiene Facts
 
