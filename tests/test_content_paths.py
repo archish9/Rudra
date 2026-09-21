@@ -74,6 +74,10 @@ class _Usage:
 def _project(tmp_path: Path) -> Path:
     (tmp_path / "src").mkdir()
     (tmp_path / "tests").mkdir()
+    # The file the middleware tests' literal names. Since OPEN-141 a literal
+    # is explained only when it names a FILE on disk, which run
+    # 2cde3406f7d6's did: its HTML had been complete for 170 s.
+    (tmp_path / "src" / "index.html").write_text("<html></html>\n", encoding="utf-8")
     return tmp_path
 
 
@@ -402,3 +406,83 @@ def test_mentions_are_reported_once_in_order():
 
     text = "at /src/a\nand /tests/b\nand /src/a again"
     assert find_project_absolute_mentions(text, TOP) == ["/src/a", "/tests/b"]
+
+
+# --------------------------------------------------------------------------
+# OPEN-141: a literal is a project path only if it names a file on disk
+# --------------------------------------------------------------------------
+
+
+def _fastapi_project(tmp_path: Path) -> Path:
+    """Run 19cde7ef0661's layout: an `api/` package serving `/api/...` routes."""
+    (tmp_path / "api" / "routes").mkdir(parents=True)
+    (tmp_path / "api" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "api" / "routes" / "todo.py").write_text("", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    return tmp_path
+
+
+def test_a_url_route_is_not_explained_even_when_the_project_has_that_directory(tmp_path):
+    """The live false positive, six times in one run: `/api/v1/todos` in a
+    test of a FastAPI app whose package is `api/`. The first segment is a real
+    top-level entry; the path it spells is not."""
+    root = _fastapi_project(tmp_path)
+    usage, trace = _Usage(), _Trace()
+    mw = ContentPathMiddleware("coder", project_path=root, usage=usage, trace=trace)
+    content = (
+        'response = client.get("/api/v1/todos")\n'
+        'response = client.get("/api/v1/todos?page=2&page_size=5")\n'
+        'response = client.get("/api/v1/todos/{todo_id}")\n'
+    )
+    out = mw.wrap_tool_call(
+        _request("write_file", file_path="/tests/test_routes_todo.py", content=content),
+        _Handler("Updated file /tests/test_routes_todo.py"),
+    )
+    assert out == "Updated file /tests/test_routes_todo.py"
+    assert usage.flagged == []
+    assert trace.notices == []
+
+
+def test_a_route_prefix_spelling_a_real_directory_is_declined(tmp_path):
+    """The route that DOES spell something on disk: a router prefix beside
+    the package of the same name. `api/` and `api/v1/` both exist, and a
+    prefix is still not a path -- so a directory is not evidence, only a file
+    is (OPEN-141, the owner's choice over "exists")."""
+    root = _fastapi_project(tmp_path)
+    (root / "api" / "v1").mkdir()
+    mw = ContentPathMiddleware("coder", project_path=root)
+    content = (
+        'router = APIRouter(prefix="/api")\n'
+        'app.include_router(router, prefix="/api/v1")\n'
+        'bp = Blueprint("api", __name__, url_prefix="/api")\n'
+    )
+    out = mw.wrap_tool_call(
+        _request("write_file", file_path="/main.py", content=content),
+        _Handler("Updated file /main.py"),
+    )
+    assert out == "Updated file /main.py"
+
+
+def test_a_literal_naming_a_real_file_in_that_directory_is_still_explained(tmp_path):
+    """The same project, and the mistake OPEN-93 exists for: a spelling that
+    names a file this project really holds."""
+    root = _fastapi_project(tmp_path)
+    mw = ContentPathMiddleware("coder", project_path=root)
+    out = mw.wrap_tool_call(
+        _request("write_file", file_path="/tests/test_x.py", content='P = "/api/routes/todo.py"'),
+        _Handler("Updated file /tests/test_x.py"),
+    )
+    assert "api/routes/todo.py" in out
+
+
+def test_a_literal_naming_nothing_yet_is_declined(tmp_path):
+    """The price of OPEN-141, pinned: a test written before the file it
+    names is not explained. The module errs toward declining; the gate's own
+    `_test_path_note` still reports the path once the test fails on it."""
+    root = _project(tmp_path)
+    mw = ContentPathMiddleware("tester", project_path=root)
+    out = mw.wrap_tool_call(
+        _request("write_file", file_path="/tests/test_x.py", content='P = "/src/later.html"'),
+        _Handler("Updated file /tests/test_x.py"),
+    )
+    assert out == "Updated file /tests/test_x.py"

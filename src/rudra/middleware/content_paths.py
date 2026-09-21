@@ -41,9 +41,10 @@ rewrite corrupts the legitimate absolute paths a real config holds. This
 appends a sentence to a SUCCESSFUL result and nothing else.
 
 **Every uncertain case declines**, which is `gutter_indent.py`'s rule. It
-declines when the first segment is not a real top-level entry of this project
-(read from disk, never guessed -- so `/api/v1/users` and `/usr/bin/env` are
-left alone), when the file is not one a process later interprets (not
+declines when the literal does not name a file this project holds on disk
+(read, never guessed -- so `/usr/bin/env` is left alone, and since OPEN-141
+so are the route `/api/v1/users` and the prefix `/api` in a project whose
+package is `api/`), when the file is not one a process later interprets (not
 `.html`, not `.md`, not `.json`), when the line carries a URL, and when the
 literal sits in a comment.
 
@@ -161,11 +162,13 @@ def find_project_absolute_literals(content: str, top_level: Iterable[str]) -> li
     """Every quoted literal naming this project with a leading "/".
 
     `top_level` is what the project ACTUALLY holds, read from disk by
-    `project_top_level`. That is what separates the mistake from the two
-    things it reads like: `/api/v1/users` is a URL route and `/usr/bin/env`
-    is a real machine path, and neither names a directory this project has.
-    An empty set therefore declines everything, which is the right answer for
-    a project we could not read.
+    `project_top_level`. A first segment outside it is never this project --
+    `/usr/bin/env` is a real machine path. A first segment INSIDE it is not
+    enough either: `/api/v1/users` is a URL route in a project whose package
+    is `api/` (OPEN-141). So this is a candidate list, and the middleware
+    keeps only the candidates whose relative spelling is a file. An empty set
+    declines everything, which is the right answer for a project we could
+    not read.
 
     Returned in source order, once each -- the note names one and counts the
     rest, and a list with the same string three times would say "3 paths".
@@ -296,8 +299,8 @@ class ContentPathMiddleware(AgentMiddleware):
     """Append an explanation when a write puts a virtual path into real source.
 
     Fires only on a SUCCESSFUL write to a file something later interprets,
-    and only for a literal whose first segment is a real top-level entry of
-    this project. It appends; it never rewrites the model's bytes.
+    and only for a literal whose relative spelling is a file in this project
+    (OPEN-141). It appends; it never rewrites the model's bytes.
     """
 
     def __init__(
@@ -329,10 +332,32 @@ class ContentPathMiddleware(AgentMiddleware):
             if not isinstance(value, str):
                 continue
             for literal in find_project_absolute_literals(value, top_level):
-                if literal not in seen:
+                if literal not in seen and self._names_a_project_file(literal):
                     seen.add(literal)
                     found.append(literal)
         return found
+
+    def _names_a_project_file(self, literal: str) -> bool:
+        """Is the relative spelling of `literal` a file in this project?
+
+        The first segment alone is not evidence (OPEN-141): an `api/` package
+        serving `/api/v1/todos` is the ordinary FastAPI layout, and run
+        19cde7ef0661's coder was told six times that its routes named the
+        machine's root. A file the project really holds is the mistake this
+        middleware exists for -- run 2cde3406f7d6's `/src/iphone15.html` had
+        been on disk for 170 s. `find_project_absolute_mentions`' caller
+        already asks whether the path exists; the literal scanner's never did.
+
+        A FILE, not merely something that exists: a router prefix spells a
+        directory exactly -- `prefix="/api"` beside `api/`, `"/api/v1"` beside
+        `api/v1/` -- so a directory is the uncertain case, and this module
+        declines those. A directory literal that really is wrong still meets
+        `loop/engine.py::_test_path_note` once a test fails on a file under it.
+
+        `os.path.isfile`, which answers False rather than raising on a string
+        no filesystem accepts: a guard may not end a run (CLAUDE.md 8a).
+        """
+        return os.path.isfile(os.path.join(str(self.project_path), _relative(literal)))
 
     def _announce(self, spelling: str) -> None:
         """Count and say that a result was annotated (TODO.md lesson 5).

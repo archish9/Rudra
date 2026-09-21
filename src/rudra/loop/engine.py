@@ -319,10 +319,12 @@ def _test_path_note(report: Any, project_path: Any) -> str:
     * the TEST stage only -- a lint or typecheck failure quoting a path is a
       different problem;
     * a mention whose first segment names a real top-level entry of this
-      project, so `/usr/bin/env` and `/api/v1/users` are left alone
-      (`find_project_absolute_mentions` -- the prose scanner, not the source
-      one: the run's own pytest tail quotes the path on one line and not on
-      the next, and only one of those two is a string literal);
+      project, so `/usr/bin/env` is left alone, and `/api/v1/users` too
+      unless the project has an `api/` -- there only the last clause
+      declines it (OPEN-141) (`find_project_absolute_mentions` -- the prose
+      scanner, not the source one: the run's own pytest tail quotes the path
+      on one line and not on the next, and only one of those two is a string
+      literal);
     * and the file must ACTUALLY be there under the relative spelling. That
       last one is what makes the claim true rather than plausible: without
       it this would tell a coder its test was wrong about a file that really
