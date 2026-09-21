@@ -134,6 +134,12 @@ def suggest_grant(tool: str, arg: str | None) -> Rule:
             # the grant is the text shown and nothing more. The patternless
             # rule this used to return covered every command.
             return Rule(tool, _literal(command))
+        if len(words) >= 3 and words[1].group() == "-m":
+            # `<interpreter> -m <module>`: the module is the command. The
+            # interpreter alone would also cover `-m pip install` and `-c
+            # <anything>`, which is more than the user was shown -- and since
+            # OPEN-140 the gate's own test command has exactly this shape.
+            return Rule(tool, f"{_literal(command[: words[2].end()])}*")
         return Rule(tool, f"{_literal(command[: words[0].end()])}*")
     return Rule(tool, arg)
 

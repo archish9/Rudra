@@ -466,8 +466,23 @@ def _python_test_command(project_path: Path) -> list[str]:
     that Rudra being a Python project and the target being one must not be
     conflated. Every path here is read from `project_path`.
     """
+    python_bin = _venv_executable(project_path, "python")
     pytest_bin = _venv_executable(project_path, "pytest")
     if pytest_bin is not None:
+        # Through the venv's interpreter, not the `pytest` script (OPEN-140).
+        # `python -m` puts the project root on sys.path; the script puts its
+        # own `bin/` there, and pytest's default `prepend` import mode adds
+        # only the first directory above each test file that has no
+        # `__init__.py` -- so a flat layout's `from models import X` fails
+        # under the script and works under `python -m pytest`. Every gate
+        # before OPEN-120 built the venv ran `python3 -m pytest`; every one
+        # after it ran the script, and run 19cde7ef0661 lost 4 of its 6
+        # blocked tasks to that. Still gated on pytest being INSTALLED here,
+        # which is CR-D6's point below: the question is which launcher, not
+        # whether pytest exists. The script alone stays the answer for a
+        # venv that holds no interpreter.
+        if python_bin is not None:
+            return [str(python_bin), "-m", "pytest"]
         return [str(pytest_bin)]
 
     # Interpreter and runner are two separate questions, and conflating them
@@ -478,7 +493,6 @@ def _python_test_command(project_path: Path) -> list[str]:
     # run, and `manage.py test` was never reached. Same for a stdlib
     # unittest project with a venv. The test stage blocks, so the fix loop
     # saw a permanent non-test failure it could not repair (CR-D6).
-    python_bin = _venv_executable(project_path, "python")
     interpreter = str(python_bin) if python_bin is not None else _system_interpreter()
 
     if (project_path / "manage.py").is_file():

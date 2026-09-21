@@ -256,9 +256,25 @@ def test_python_test_command_is_never_a_bare_executable_name(tmp_path: Path):
     assert command[0] != "pytest"
 
 
-def test_python_prefers_the_project_venv_pytest(tmp_path: Path):
+def test_python_runs_the_project_venv_pytest_through_its_interpreter(tmp_path: Path):
+    """OPEN-140: `python -m pytest`, never the `pytest` script, when both exist.
+
+    The script puts its own `bin/` on sys.path; `python -m` puts the project
+    root there, which is what a flat layout's `from models import X` needs.
+    """
     _python_project(tmp_path)
     _venv_with(tmp_path, "pytest", "python")
+    assert resolve_test_command(tmp_path, _python()) == [
+        str(tmp_path / ".venv" / "bin" / "python"),
+        "-m",
+        "pytest",
+    ]
+
+
+def test_a_venv_pytest_with_no_interpreter_beside_it_is_run_directly(tmp_path: Path):
+    """The script is still the answer when it is all the venv holds."""
+    _python_project(tmp_path)
+    _venv_with(tmp_path, "pytest")
     assert resolve_test_command(tmp_path, _python()) == [str(tmp_path / ".venv" / "bin" / "pytest")]
 
 

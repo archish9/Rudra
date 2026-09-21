@@ -297,3 +297,49 @@ def test_an_import_error_inside_a_test_is_not_a_launch_error(tmp_path: Path, env
     result = run_tests(tmp_path, **env)
     assert result.launch_error is None, "the runner started fine; the project's import failed"
     assert result.passed is False
+
+
+# --- OPEN-140: a flat layout's tests import the project ----------------------
+
+
+def _flat_layout_project(tmp_path: Path) -> None:
+    """Run 19cde7ef0661's shape: a package at the project root, and a
+    `tests/conftest.py` that imports it, with no `tests/__init__.py`.
+
+    The venv is built the way OPEN-120 builds one, so both launchers exist:
+    `python`, an exec shim onto this suite's interpreter (see
+    `_python_project` for why not a symlink), and `pytest`, a copy of what pip
+    writes for pytest's console script -- a Python file run by path, so its
+    `sys.path[0]` is `bin/`, exactly as the real script's is.
+    """
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n", encoding="utf-8")
+    (tmp_path / "models").mkdir()
+    (tmp_path / "models" / "__init__.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "conftest.py").write_text("from models import VALUE\n", encoding="utf-8")
+    (tmp_path / "tests" / "test_models.py").write_text(
+        "from models import VALUE\n\n\ndef test_value():\n    assert VALUE == 1\n",
+        encoding="utf-8",
+    )
+    binaries = tmp_path / ".venv" / "bin"
+    binaries.mkdir(parents=True)
+    python = binaries / "python"
+    python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    python.chmod(0o755)
+    script = binaries / "pytest"
+    script.write_text(
+        f"#!{sys.executable}\nimport sys\nfrom pytest import console_main\n"
+        "sys.exit(console_main())\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+
+def test_a_flat_layout_s_tests_can_import_the_project(tmp_path: Path, env: dict):
+    """The regression pin. Run through the `pytest` script, this conftest
+    raises `ModuleNotFoundError: No module named 'models'` and nothing is
+    collected; through `python -m pytest` the test runs and passes."""
+    _flat_layout_project(tmp_path)
+    result = run_tests(tmp_path, **env)
+    assert result.passed is True, result.output_tail
+    assert result.total == 1

@@ -17,7 +17,7 @@ from rudra.permissions.approval import (
 )
 from rudra.permissions.audit import AuditLog
 from rudra.permissions.grants import SessionGrants
-from rudra.permissions.rules import PermissionEngine, Rule
+from rudra.permissions.rules import PermissionEngine, Rule, rule_matches
 
 
 def scripted(*keys):
@@ -382,3 +382,43 @@ def test_plain_first_words_keep_their_grant():
         "execute", r"C:\p\.venv\Scripts\pytest.exe*"
     )
     assert suggest_grant("execute", "pytest 'tests/x") == Rule("execute", "pytest*")
+
+
+# -- OPEN-140: a grant for `<interpreter> -m <module>` names the module ------
+
+
+def test_a_grant_for_a_module_run_covers_that_module_only():
+    """The gate runs `<venv python> -m pytest` since OPEN-140. The first word
+    is the interpreter, so `{first}*` would also have covered `-m pip install`
+    and `-c <anything>` -- more than the user was shown."""
+    command = "/p/.venv/bin/python -m pytest"
+    grant = suggest_grant("execute", command)
+
+    assert grant == Rule("execute", "/p/.venv/bin/python -m pytest*")
+    assert rule_matches(grant, "execute", (command,), (), permissive=True)
+    assert rule_matches(grant, "execute", (command + " -q tests/x",), (), permissive=True)
+    assert not rule_matches(
+        grant, "execute", ("/p/.venv/bin/python -m pip install x",), (), permissive=True
+    )
+    assert not rule_matches(
+        grant, "execute", ("/p/.venv/bin/python -c 'import os'",), (), permissive=True
+    )
+
+
+def test_a_module_run_grant_holds_for_a_quoted_interpreter():
+    """The gate's own spelling for a project under a path with a space:
+    `shlex.join` quotes the interpreter, and the grant still names the module
+    (OPEN-144's `_written_words` is what makes the quoted path one word)."""
+    python = "/Users/a/My Projects/app/.venv/bin/python"
+    command = shlex.join([python, "-m", "pytest"])
+    grant = suggest_grant("execute", command)
+
+    assert grant == Rule("execute", f"{command}*")
+    assert rule_matches(grant, "execute", (command + " -q",), (), permissive=True)
+    assert not rule_matches(
+        grant, "execute", (shlex.join([python, "-m", "pip", "install", "x"]),), (), permissive=True
+    )
+
+
+def test_a_bare_dash_m_falls_back_to_the_first_word():
+    assert suggest_grant("execute", "python -m") == Rule("execute", "python*")
