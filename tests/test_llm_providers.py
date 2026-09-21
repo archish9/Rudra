@@ -260,3 +260,34 @@ def test_a_hosted_provider_never_inherits_the_ollama_endpoint(tmp_path: Path) ->
     assert "max_tokens" not in kwargs
     # ...while an Ollama role still reaches the local daemon.
     assert PROVIDERS["ollama"].default_base_url == "http://localhost:11434"
+
+
+# --- OPEN-139: a streamed call is bounded by the role's timeout -------------
+
+
+@pytest.mark.parametrize("provider", ["openai_compatible", "openai"])
+def test_openai_prefixed_providers_bound_a_streams_silence_by_the_roles_timeout(
+    provider: str,
+) -> None:
+    """langchain_openai ends an async streamed call after 120 s without a
+    chunk, the first included, and that is not httpx's read timeout -- which
+    `timeout` sets and an SSE keepalive resets. Run 654a00c7f546 hit it at 120 s
+    on a role whose timeout was 300."""
+    kwargs = PROVIDERS[provider].build_kwargs(FakeSettings())
+
+    assert kwargs["stream_chunk_timeout"] == 300
+    assert kwargs["timeout"] == 300
+
+
+@pytest.mark.parametrize("provider", ["ollama", "anthropic", "google"])
+def test_providers_without_a_chunk_bound_are_not_sent_one(provider: str) -> None:
+    """No such field on ChatOllama, ChatAnthropic or ChatGoogleGenerativeAI."""
+    assert "stream_chunk_timeout" not in PROVIDERS[provider].build_kwargs(FakeSettings())
+
+
+def test_a_role_with_no_timeout_leaves_the_chunk_bound_to_the_provider() -> None:
+    """The module's rule: a None setting emits no kwarg at all."""
+    kwargs = PROVIDERS["openai_compatible"].build_kwargs(FakeSettings(timeout=None))
+
+    assert "stream_chunk_timeout" not in kwargs
+    assert "timeout" not in kwargs

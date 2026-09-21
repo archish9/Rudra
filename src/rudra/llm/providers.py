@@ -81,6 +81,21 @@ class ProviderEntry:
     langchain_google_genai warns that 0 reads as Google's default. Empty for
     ollama, whose client has no retry layer."""
 
+    chunk_timeout_kwarg: str | None = None
+    """Provider's name for its bound on a STREAMED call's silence, or None if
+    its client has none (OPEN-139).
+
+    langchain_openai ends an async streamed call after `stream_chunk_timeout`
+    seconds without a parsed chunk -- 120 by default, the wait for the FIRST
+    chunk included -- and that is not httpx's read timeout, which `timeout`
+    sets and which an SSE keepalive resets. So under `--stream` a call's real
+    bound was 120 s, set by nothing here: run 654a00c7f546 hit it where the
+    role said 300, and a local model whose prefill passes 120 s would fail
+    every attempt. It is set to the role's `timeout`, so one number means
+    "seconds a call may go without producing anything" with or without
+    `--stream`. Never 0: on a server that sends keepalives it is the only
+    bound a stalled stream has."""
+
     def build_kwargs(self, settings: ModelConfig) -> dict[str, Any]:
         """Emit exactly the kwargs this provider accepts.
 
@@ -104,6 +119,8 @@ class ProviderEntry:
             kwargs[self.context_kwarg] = settings.context_tokens
         if self.supports_timeout and settings.timeout is not None:
             kwargs["timeout"] = settings.timeout
+            if self.chunk_timeout_kwarg is not None:
+                kwargs[self.chunk_timeout_kwarg] = settings.timeout
         kwargs.update(self.no_client_retries)
         kwargs.update(self.extra_kwargs)
         return kwargs
@@ -142,6 +159,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             max_output_kwarg="max_tokens",
             needs_api_key=True,
             supports_timeout=True,
+            chunk_timeout_kwarg="stream_chunk_timeout",
             # A1.38: this path maps to the `openai` prefix and would otherwise
             # inherit deepagents' ProviderProfile(use_responses_api=True).
             # vLLM, LM Studio, Groq, Together, and OpenRouter serve
@@ -162,6 +180,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             max_output_kwarg="max_tokens",
             needs_api_key=True,
             supports_timeout=True,
+            chunk_timeout_kwarg="stream_chunk_timeout",
             # OPEN-137, for the same reason, and so it does not hang on
             # whether a base_url is set. Inert on today's path: deepagents'
             # profile sends this prefix to /responses, which reports usage

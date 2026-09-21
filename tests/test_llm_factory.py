@@ -335,3 +335,34 @@ def test_the_built_google_model_asks_for_a_single_attempt(
     )
 
     assert model.max_retries == 1
+
+
+# --- OPEN-139 -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("provider", "model_id", "base_url"),
+    [
+        ("openai_compatible", "qwen3-coder-30b", "http://localhost:8000/v1"),
+        ("openai", "gpt-4o", None),
+    ],
+)
+def test_the_built_openai_models_bound_a_streams_silence_by_the_roles_timeout(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model_id: str, base_url: str | None
+) -> None:
+    """And the role's number wins over langchain_openai's env-var default, so
+    `[model.<role>] timeout` is the one knob."""
+    monkeypatch.setenv("TEST_KEY_VAR", "sk-test-not-a-real-key")
+    monkeypatch.setenv("LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S", "7")
+    model = build_model(
+        "coder",
+        make_config(
+            provider=provider,
+            model=model_id,
+            base_url=base_url,
+            api_key_env="TEST_KEY_VAR",
+            timeout=450,
+        ),
+    )
+
+    assert model.stream_chunk_timeout == 450
