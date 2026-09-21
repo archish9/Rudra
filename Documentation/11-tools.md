@@ -489,11 +489,14 @@ Every gated decision, in every mode, lands one line in `.rudra/run/logs/permissi
 
 ```json
 {"ts": "…", "tool": "execute", "arg": "pytest test_add.py", "rule": "<auto:shell-not-opted-in>", "mode": "auto", "decision": "deny", "source": "auto-shell"}
-{"ts": "…", "tool": "run_tests", "arg": "python3 -m pytest", "rule": null, "mode": "auto", "decision": "allow", "source": "wrapped-execute"}
+{"ts": "…", "tool": "run_tests", "arg": null, "rule": null, "mode": "auto", "decision": "allow", "source": "wrapped-execute"}
+{"ts": "…", "tool": "execute", "arg": "/home/you/todo/.venv/bin/python -m pytest", "rule": null, "mode": "auto", "decision": "allow", "source": "mode-default"}
 {"ts": "…", "tool": "write_file", "arg": "wordcount.py", "rule": null, "mode": "ask", "decision": "approve", "source": "prompt"}
 ```
 
-`arg` is the path for a write, or the real command string for anything that shells out.
+`arg` is the path for a write, or the real command string for anything that shells out. `run_tests`
+records no `arg` of its own: the command it runs is judged, and recorded, on the `execute` line after
+it — for a Python project at its full path, as the gate resolved it.
 
 `source` tells you **why** a decision went the way it did — `prompt` means you decided it, `auto-shell` means `--auto` refused a command you had not opted into, `wrapped-execute` means the inner command is what was really judged.
 

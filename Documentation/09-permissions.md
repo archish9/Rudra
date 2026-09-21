@@ -336,7 +336,7 @@ mode:
 ```json
 {"ts":"2026-08-10T14:22:01Z","tool":"execute","arg":"pytest -q",
  "rule":null,"mode":"ask","decision":"approve","source":"prompt"}
-{"ts":"...","tool":"write_file","arg":"/etc/hosts",
+{"ts":"...","tool":"write_file","arg":"../../../etc/hosts",
  "rule":"<floor:outside-root>","mode":"auto","decision":"deny","source":"floor"}
 ```
 
@@ -346,8 +346,11 @@ allowed by default, which would otherwise bury the signal under hundreds of
 `read_file` lines.
 
 The `source` field says *why*: `prompt`, `floor`, `deny`, `allow`,
-`session-grant`, `session-grant-all` (you pressed `!`), `auto-shell`,
-`mode-default`, or `floor-disabled`.
+`session-grant`, `session-grant-all` (you pressed `!`), `auto-shell`, `auto-mcp`,
+`mode-default`, `floor-disabled`, `fail-closed` (a write, edit or delete whose
+path was missing or could not be resolved, refused rather than guessed), or
+`wrapped-execute` (the tool's own call to `run_tests` or `git_diff`, which
+records no `arg`).
 
 It lives under `run/`, which Rudra's own `.gitignore` excludes.
 

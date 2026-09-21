@@ -19,6 +19,8 @@ happens to read it.
 
 from __future__ import annotations
 
+import ast
+import json
 import re
 import shlex
 import sys
@@ -27,7 +29,8 @@ from pathlib import Path
 
 import pytest
 
-from rudra.permissions.rules import PermissionEngine
+import rudra.permissions as permissions_package
+from rudra.permissions.rules import WRAPPED_EXECUTE_TOOLS, PermissionEngine, gated_arg
 from rudra.stacks.detect import PROFILES, resolve_test_command, resolve_typecheck_command
 
 REPO = Path(__file__).resolve().parent.parent
@@ -143,3 +146,111 @@ def test_the_old_advice_really_did_match_nothing(tmp_path, venv):
     project = _project(tmp_path, venv=venv)
 
     assert not _allows(project, ("execute:pytest*",), _test_command(project))
+
+
+# --- OPEN-145: the audit-log examples show what permissions.jsonl holds ---
+
+TOOLS = REPO / "Documentation" / "11-tools.md"
+PERMISSIONS = REPO / "Documentation" / "09-permissions.md"
+AUDIT_EXAMPLES = {
+    "11-tools": (TOOLS, "## Reading the audit log"),
+    "09-permissions": (PERMISSIONS, "## The audit log"),
+}
+# The argument key of each tool an example shows; `gated_arg` reads the same one.
+ARG_KEYS = {
+    "execute": "command",
+    "write_file": "file_path",
+    "edit_file": "file_path",
+    "delete": "file_path",
+}
+
+
+def _audit_section(page: Path, heading: str) -> str:
+    return page.read_text(encoding="utf-8").split(heading, 1)[1].split("\n## ", 1)[0]
+
+
+def _audit_example(page: Path, heading: str) -> list[dict]:
+    """The section's first ```json block, one object at a time -- an object may
+    wrap across lines, as `09-permissions.md`'s do."""
+    match = re.search(r"```json\n(.*?)```", _audit_section(page, heading), flags=re.S)
+    assert match is not None, f"{page.name} lost its audit example"
+    text, decoder, entries, index = match.group(1), json.JSONDecoder(), [], 0
+    while True:
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index == len(text):
+            return entries
+        entry, index = decoder.raw_decode(text, index)
+        entries.append(entry)
+
+
+def test_the_audit_example_records_run_tests_as_the_log_does():
+    """OPEN-145: a wrapped tool's own line carries no arg -- `gated_arg` has no
+    key for it -- and `run_tests`'s command is judged, and recorded, on the
+    `execute` line after it, at the absolute path the gate resolved.
+    `git_diff`'s is not: in-root it runs read-only git, ungated (OPEN-146)."""
+    lines = _audit_example(*AUDIT_EXAMPLES["11-tools"])
+    wrapped = [i for i, entry in enumerate(lines) if entry["tool"] in WRAPPED_EXECUTE_TOOLS]
+    assert wrapped, "the example no longer shows a wrapped tool"
+    for i in wrapped:
+        assert lines[i]["arg"] == gated_arg(lines[i]["tool"], {}), lines[i]
+        if lines[i]["tool"] == "run_tests":
+            after = lines[i + 1] if i + 1 < len(lines) else {}
+            assert after.get("tool") == "execute", after
+            assert after["arg"].startswith("/"), after
+
+
+@pytest.mark.parametrize("name", sorted(AUDIT_EXAMPLES))
+def test_every_audit_example_line_is_a_decision_the_engine_makes(tmp_path, name):
+    """OPEN-145: `09-permissions.md` showed `/etc/hosts` refused by the floor,
+    which since CR-B4 is the project's own `etc/hosts`, allowed. Each line is
+    put to the real engine, with shell opted in and not -- the log is appended
+    across runs, so one file holds both -- and a human's answer is an `ask`
+    that `AuditLog` records as `prompt`."""
+    for entry in _audit_example(*AUDIT_EXAMPLES[name]):
+        tool, arg = entry["tool"], entry["arg"]
+        args = {ARG_KEYS[tool]: arg} if tool in ARG_KEYS and arg is not None else {}
+        decided = set()
+        for shell in (False, True):
+            engine = PermissionEngine(
+                mode=entry["mode"],
+                allow=(),
+                deny=(),
+                floor_disable=(),
+                project_root=tmp_path,
+                shell_in_auto=shell,
+            )
+            decision = engine.decide(tool, args)
+            decided.add((decision.effect, decision.rule, decision.source))
+        if entry["decision"] in ("approve", "reject"):
+            assert entry["source"] == "prompt", entry
+            assert ("ask", entry["rule"], "mode-default") in decided, (entry, decided)
+        else:
+            assert (entry["decision"], entry["rule"], entry["source"]) in decided, (entry, decided)
+
+
+def _recordable_sources() -> set[str]:
+    """Every `source` a `Decision` is built with in `permissions/`, read from the
+    code -- less `control-plane`, which is always an allow of a silent tool, so
+    never recorded -- plus `prompt`, which `AuditLog` writes for a human's answer."""
+    found: set[str] = set()
+    for module in Path(permissions_package.__file__).parent.glob("*.py"):
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and getattr(node.func, "id", None) in {"Decision", "_final"}
+                and len(node.args) == 3
+                and isinstance(node.args[2], ast.Constant)
+                and isinstance(node.args[2].value, str)
+            ):
+                found.add(node.args[2].value)
+    assert {"wrapped-execute", "floor", "mode-default"} <= found, found  # the scan sees the engine
+    return (found - {"control-plane"}) | {"prompt"}
+
+
+def test_the_permissions_page_names_every_source_the_log_records():
+    """OPEN-145: the list omitted `wrapped-execute`, `auto-mcp` and `fail-closed`."""
+    section = _audit_section(PERMISSIONS, "## The audit log")
+    paragraph = section.split("The `source` field says", 1)[1].split("\n\n", 1)[0]
+    listed = set(re.findall(r"`([a-z-]+)`", paragraph))
+    assert _recordable_sources() <= listed, sorted(_recordable_sources() - listed)
