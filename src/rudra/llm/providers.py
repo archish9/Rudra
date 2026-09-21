@@ -146,7 +146,14 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             # inherit deepagents' ProviderProfile(use_responses_api=True).
             # vLLM, LM Studio, Groq, Together, and OpenRouter serve
             # /chat/completions, not OpenAI's /responses.
-            extra_kwargs=MappingProxyType({"use_responses_api": False}),
+            #
+            # OPEN-137: `stream_usage` because langchain_openai leaves it off
+            # whenever a base_url is set -- always, here -- and `--stream`
+            # makes every model call stream, so no call asked for
+            # `stream_options.include_usage` and run e1a57a3e3791 recorded no
+            # token count for any role. Only a streamed request carries it; a
+            # run without `--stream` sends what it always sent.
+            extra_kwargs=MappingProxyType({"use_responses_api": False, "stream_usage": True}),
             no_client_retries=MappingProxyType({"max_retries": 0}),
         ),
         "openai": ProviderEntry(
@@ -155,6 +162,11 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             max_output_kwarg="max_tokens",
             needs_api_key=True,
             supports_timeout=True,
+            # OPEN-137, for the same reason, and so it does not hang on
+            # whether a base_url is set. Inert on today's path: deepagents'
+            # profile sends this prefix to /responses, which reports usage
+            # unasked and never reads `stream_usage`.
+            extra_kwargs=MappingProxyType({"stream_usage": True}),
             no_client_retries=MappingProxyType({"max_retries": 0}),
         ),
         "anthropic": ProviderEntry(

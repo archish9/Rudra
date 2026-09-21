@@ -114,6 +114,23 @@ def test_real_openai_does_not_disable_the_responses_api() -> None:
     assert "use_responses_api" not in PROVIDERS["openai"].build_kwargs(FakeSettings())
 
 
+@pytest.mark.parametrize("provider", ["openai_compatible", "openai"])
+def test_openai_prefixed_providers_ask_a_stream_for_its_usage(provider: str) -> None:
+    """OPEN-137: langchain_openai leaves `stream_usage` off whenever a
+    `base_url` is set -- always, on `openai_compatible` -- so a streamed call
+    sent no `stream_options.include_usage` and `--stream` recorded no tokens
+    for any role. Explicit, so it does not depend on whether a URL is set."""
+    assert PROVIDERS[provider].build_kwargs(FakeSettings())["stream_usage"] is True
+
+
+@pytest.mark.parametrize("provider", ["ollama", "anthropic", "google"])
+def test_providers_that_stream_usage_natively_are_not_sent_the_kwarg(provider: str) -> None:
+    """ChatAnthropic defaults `stream_usage` to True, and ollama and google
+    report usage on a streamed call unasked; langchain_google_genai has no
+    such field to set."""
+    assert "stream_usage" not in PROVIDERS[provider].build_kwargs(FakeSettings())
+
+
 def test_unset_optional_settings_emit_no_kwarg() -> None:
     """A None must mean "let the provider default", not "send None"."""
     empty = FakeSettings(
