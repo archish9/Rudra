@@ -118,6 +118,28 @@ def test_diff_can_be_limited_to_one_path(repo: Path, env: dict):
     assert "b.txt" not in text
 
 
+def test_diff_hides_rudra_state_anywhere_in_the_repository(tmp_path: Path, env: dict):
+    """OPEN-147: the exclusion is anchored at the repository root (`top`), so a
+    project nested in a larger repository hides a sibling's state as well, and
+    `:/` keeps the scope a bare `git diff` has -- the whole repository."""
+    make_repo(tmp_path)
+    project = tmp_path / "proj"
+    configs = [project / ".rudra" / "config.toml", tmp_path / "other" / ".rudra" / "config.toml"]
+    for config in configs:
+        config.parent.mkdir(parents=True)
+        config.write_text("x = 1\n", encoding="utf-8")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "state")
+    for config in configs:
+        config.write_text("x = 1\napi_key = 'k'\n", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("changed\n", encoding="utf-8")
+
+    text = core.diff(project, **env)
+
+    assert "api_key" not in text
+    assert "+changed" in text  # a.txt is outside `proj/`, inside the repository
+
+
 def test_log_returns_commits_newest_first(repo: Path, env: dict):
     (repo / "a.txt").write_text("two\n", encoding="utf-8")
     git(repo, "commit", "-qam", "second: with a colon")

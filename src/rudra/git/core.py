@@ -30,6 +30,15 @@ from rudra.state.paths import RUDRA_DIR_NAME
 # git subcommands that only read. Rudra composes every one of these itself.
 READ_ONLY_SUBCOMMANDS = frozenset({"rev-parse", "status", "log", "diff", "branch"})
 
+# Rudra's own state, as a pathspec git applies to every diff (OPEN-147).
+# `config.toml` may hold an `api_key`, `.rudra/.gitignore` leaves it tracked
+# on purpose, and `diff` runs read_only -- past every rule and mode -- so a
+# changed key line reached the reviewer's model. OPEN-117 hides the same set
+# from every read tool (`state/paths.py::is_rudra_state`: any depth,
+# case-folded); `top` anchors it at the repository root, so a project nested
+# in a larger repository hides a sibling's state too.
+STATE_EXCLUDE = f":(top,exclude,icase,glob)**/{RUDRA_DIR_NAME}/**"
+
 # Generous, but not unbounded: `git log` over a large history is slow, and a
 # hung git is still a hang. Not user-configurable -- [tools] test_timeout is
 # for test suites, whose runtime genuinely varies by project.
@@ -244,8 +253,10 @@ def diff(
     argv = ["diff"]
     if staged:
         argv.append("--staged")
-    if path:
-        argv.extend(["--", path])
+    # Always a positive pathspec beside the exclusion: `:/` is the whole
+    # tree, the scope a bare `git diff` has, and git before 2.13 refused an
+    # exclude-only pathspec.
+    argv.extend(["--", path or ":/", STATE_EXCLUDE])
 
     result = _run(project_path, argv, gate=gate, console=console, cfg=cfg)
     if result.denied:

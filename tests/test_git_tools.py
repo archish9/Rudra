@@ -9,7 +9,14 @@ from rich.console import Console
 
 from rudra.config.loader import build_config
 from rudra.tools.git_tools import create_git_tools
-from tests.conftest_git import AutoGate, RecordingAskGate, StrictAskGate, make_repo
+from tests.conftest_git import (
+    AutoGate,
+    DenyShellGate,
+    RecordingAskGate,
+    StrictAskGate,
+    git,
+    make_repo,
+)
 
 
 @pytest.fixture
@@ -170,3 +177,45 @@ def test_the_untracked_listing_is_capped(repo: Path, tmp_path: Path):
 
     assert len(text.splitlines()) < 80
     assert "more" in text.lower()
+
+
+# --- OPEN-147: Rudra state never reaches the diff ---
+
+KEY = "sk-open147-0123456789abcdef"
+
+
+def _tracked_state_with_a_key(repo: Path) -> None:
+    """A committed Rudra state directory -- `config.toml` is documented as
+    worth committing -- with a literal key then added and not committed."""
+    configs = [repo / ".rudra" / "config.toml", repo / "nested" / ".Rudra" / "config.toml"]
+    for config in configs:
+        config.parent.mkdir(parents=True)
+        config.write_text('[model.default]\nmodel = "m"\n', encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "rudra state")
+    for config in configs:
+        text = config.read_text(encoding="utf-8")
+        config.write_text(f'{text}api_key = "{KEY}"\n', encoding="utf-8")
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("gate", [AutoGate, DenyShellGate], ids=["allow-shell", "bare-auto"])
+@pytest.mark.parametrize(
+    "args",
+    [{}, {"staged": True}, {"path": ".rudra/config.toml"}, {"path": "nested/.Rudra/config.toml"}],
+    ids=["tree", "staged", "state-file", "nested-state-file"],
+)
+def test_git_diff_never_shows_rudra_state(repo: Path, tmp_path: Path, gate, args):
+    """OPEN-147: OPEN-117 took `.rudra/` out of every read tool because
+    `config.toml` may hold an `api_key`. In-root `git_diff` runs read-only git
+    that no rule or mode reaches (`git/core.py:144`), and it showed the key --
+    to the reviewer, whose first step is to call it."""
+    _tracked_state_with_a_key(repo)
+    if args.get("staged"):
+        git(repo, "add", "-A")
+
+    text = _tool(repo, gate(tmp_path)).invoke(args)
+
+    assert KEY not in text
+    if "path" not in args:
+        assert "+changed" in text  # the user's own change is still shown
