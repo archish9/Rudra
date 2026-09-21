@@ -434,6 +434,17 @@ one entry per message.
 > from seeing the agent** (OPEN-124): the trace showed nothing past the start, and
 > the repeat, failure and call-count limits could not fire. Update before using it.
 
+On an `openai_compatible` or `openai` endpoint a streamed call also asks the
+endpoint for its token usage (`stream_options.include_usage`), which is how
+`usage.json` keeps its token counts with `--stream` on. A run without it sends
+exactly what it did before. If your endpoint rejects that option, every call
+fails with a `400` naming it — turn `stream_tokens` off for that endpoint and
+report it as an issue.
+
+> **In a Rudra built before 2026-09-21, `--stream` recorded no token counts** on
+> those endpoints (OPEN-137): `usage.json` and every `model_call` record read
+> `null`, and the `slow model call` line could not say how many tokens it waited for.
+
 `max_fix_attempts` is an upper bound, not a target. The loop usually stops
 sooner: two attempts that fail *identically* count as no progress and stop
 immediately, because a third would produce the same result. Raising it helps
