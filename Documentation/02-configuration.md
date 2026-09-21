@@ -445,6 +445,15 @@ report it as an issue.
 > those endpoints (OPEN-137): `usage.json` and every `model_call` record read
 > `null`, and the `slow model call` line could not say how many tokens it waited for.
 
+`[model.<role>] timeout` (default 300) bounds a streamed call too: with `--stream`
+on, a call that produces nothing for that many seconds — before its first token
+or mid-answer — ends with `StreamChunkTimeoutError` and is retried like any
+other timeout. `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S` has no effect on Rudra.
+If a slow local model needs longer to start answering, raise `timeout`.
+
+> **In a Rudra built before 2026-09-21, `--stream` bounded every call on these
+> endpoints at 120 s** (OPEN-139), whatever `timeout` said.
+
 `max_fix_attempts` is an upper bound, not a target. The loop usually stops
 sooner: two attempts that fail *identically* count as no progress and stop
 immediately, because a third would produce the same result. Raising it helps
