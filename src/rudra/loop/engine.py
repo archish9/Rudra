@@ -894,16 +894,38 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             _record_halt(task, result, context)
 
         touched = _record_touched(task, changed_since(context, before))
+        # One gate for both branches below. Each used to open with this same
+        # call; choosing between them now needs its answer (OPEN-142).
+        report = await _verify(task, context)
+        # The task's OWN work, judged by no gate in this call, over a gate
+        # that is green and ran no tests (OPEN-142). That is a task resumed
+        # after a stop -- run E's t1, whose files E1 wrote before its gate
+        # escalated -- whose coder, finding the work in place, correctly wrote
+        # nothing. The empty-diff branch refuses a vacuous green (OPEN-12/13)
+        # and blocked it for its own work, where the writing branch sends the
+        # tester for the same files, so the attempt goes there. On this
+        # gate's answer, never on "files of its own" alone: `last_signature`
+        # survives a stop and a resumed coder is sent no blocker, so over a
+        # FAILING gate the writing branch would block the first resumed
+        # attempt as no progress, having told it nothing -- the plan's first
+        # condition did. `not rejected` keeps OPEN-123's retry where it was.
+        own_work_untested = (
+            bool(task.files_touched)
+            and not rejected
+            and report.passed
+            and tests_produced_no_judgement(report)
+        )
         # No `before is not None` qualifier any more: `attempt_snapshot`
         # always has one, and the qualifier was what disabled this guard
         # outside a git repository (OPEN-13). The ATTEMPT's diff, never
         # `task.files_touched`, which since OPEN-123 holds every attempt's.
-        if not touched:
+        if not touched and not own_work_untested:
             # An empty diff is not proof of failure -- it is an absence of
             # evidence. OPEN-27 measured five tasks where the honest reading
             # was "there was nothing to write": an earlier task had already
             # built this one's work, and the coder read the file, said so,
-            # and stopped. Ask the gate rather than assuming.
+            # and stopped. Ask the gate rather than assuming -- `report`,
+            # run above.
             #
             # `changed_files` scopes the syntax stage and the stub scan, and
             # is every file an EARLIER attempt of this task wrote (OPEN-123),
@@ -913,7 +935,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # every other stage is whole-project either way. Corrected
             # 2026-09-17: this said the stub scan ONLY, and reasoned from it
             # that the verdict was already whole-project.
-            report = await _verify(task, context)
+            #
             # An escalation stops the run from this branch too (OPEN-135).
             # The check lived only on the path below, so a gate no model can
             # fix -- a denied command, a missing tool, an internal error --
@@ -968,8 +990,6 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             rejected = True
             ledger.save(context.paths.ledger_json)
             continue
-
-        report = await _verify(task, context)
 
         # The tester writes tests; it does not re-do the task. Re-verifying
         # in place rather than looping is deliberate: `continue` here would

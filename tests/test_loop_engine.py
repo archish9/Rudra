@@ -2250,3 +2250,123 @@ async def test_a_failed_invocation_costs_the_resumed_run_no_budget_either(monkey
 
     assert task.attempts == 6, "the 500 spent one of the resumed run's tries"
     assert served.count("coder") == 4
+
+
+# --------------------------------------------------------------------------
+# OPEN-142: a task whose own earlier attempt wrote its work is judged as the
+# writing path judges it, not blocked for writing nothing
+# --------------------------------------------------------------------------
+
+
+def _diffs(monkeypatch, *diffs):
+    """`changed_since` answers these, in order, then () for ever after."""
+    queue = list(diffs)
+    monkeypatch.setattr(engine, "changed_since", lambda ctx, before: queue.pop(0) if queue else ())
+
+
+def _resumed(context):
+    """What `--continue` starts from: the ledger on disk and a new process, so
+    nothing `run_task` or the context held in memory crosses over."""
+    ledger = Ledger.load(context.paths.ledger_json)
+    (task,) = ledger.resumable()
+    fresh = LoopContext(
+        subagents=FakeSubagents(),
+        project_path=context.project_path,
+        console=Console(quiet=True),
+        cfg=FakeCfg(),
+        paths=context.paths,
+    )
+    return task, ledger, fresh
+
+
+async def test_a_resumed_task_whose_own_work_is_in_place_gets_tests_not_a_block(
+    monkeypatch, context, default_fakes
+):
+    """Run E, both invocations. E1's coder wrote t1's files and the gate
+    escalated (no shell), so the run stopped with t1 PENDING. E2 resumed it,
+    the coder correctly wrote nothing, and a green gate with no tests blocked
+    it -- where the same files on the writing path get the tester."""
+    _diffs(monkeypatch, ("config.py", "database.py"))
+    reports = [escalating_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+    ledger = Ledger()
+    task = ledger.add("create the configuration and database setup")
+    assert await run_task(task, ledger, context=context) is Outcome.STOP_RUN
+
+    # --continue with the shell granted: the coder finds its work and writes nothing.
+    task, ledger, fresh = _resumed(context)
+    assert task.files_touched == ("config.py", "database.py")
+    reports[:] = [no_test_judgement_report(), passing_report()]
+    del default_fakes[:]
+    resumed = await run_task(task, ledger, context=fresh)
+
+    assert default_fakes == ["coder", "tester"]
+    assert resumed is Outcome.DONE
+    assert "wrote nothing" not in task.note
+
+
+async def test_work_the_task_never_wrote_still_gets_no_tester_and_blocks(
+    monkeypatch, context, default_fakes, wrote_nothing
+):
+    """OPEN-12/13 and OPEN-27, kept: with no `files_touched` there is no work
+    of this task's to test, and a vacuous green is still not evidence."""
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: vacuous_report())
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert "tester" not in default_fakes
+    assert task.files_touched == ()
+
+
+async def test_a_retry_after_its_own_gate_declined_stays_on_the_empty_diff_path(
+    monkeypatch, context, default_fakes
+):
+    """OPEN-123's case, kept: this call's gate already judged the task's files
+    and failed them, so a retry that writes nothing is not handed the tester."""
+    _diffs(monkeypatch, ("a.py",))
+    reports = [failing_report(), vacuous_report(), vacuous_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert "tester" not in default_fakes
+    assert task.attempts == 3
+
+
+async def test_a_resume_over_a_failing_gate_is_sent_the_failure_not_blocked_on_it(
+    monkeypatch, context, default_fakes
+):
+    """Found re-verifying this item's plan, whose first condition regressed it:
+    a task stopped after a FAILING gate keeps `last_signature` in the ledger,
+    and a resumed coder is sent no blocker. One that writes nothing must stay
+    on the empty-diff path, which hands the next attempt the failure. Sent
+    down the writing path it met the same signature and was BLOCKED as no
+    progress on its first resumed attempt, having been told nothing."""
+    prompts: list[str] = []
+
+    async def coder(name, prompt, *, context, thread_id=None):
+        default_fakes.append(name)
+        prompts.append(prompt)
+        return SubagentResult(name=name, text="wrote it", ok=True)
+
+    monkeypatch.setattr(engine, "run_subagent", coder)
+    # Attempt 1 writes and fails; attempt 2 writes and the gate escalates.
+    _diffs(monkeypatch, ("a.py",), ("a.py",))
+    reports = [failing_report(), escalating_report()]
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: reports.pop(0))
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    assert await run_task(task, ledger, context=context) is Outcome.STOP_RUN
+
+    task, ledger, fresh = _resumed(context)
+    assert task.last_signature is not None
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: failing_report())
+    del default_fakes[:], prompts[:]
+    outcome = await run_task(task, ledger, context=fresh)
+
+    assert outcome is Outcome.BLOCKED
+    assert default_fakes == ["coder"] * 3, "the resumed run's budget went unspent"
+    assert "did not pass verification" in prompts[1]
+    assert not task.note.startswith("no progress")
