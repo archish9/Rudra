@@ -9,6 +9,7 @@ functions carrying A1.20's unfixed counter.
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import replace
 from pathlib import Path
@@ -65,12 +66,52 @@ class ApprovalLoopExceeded(RuntimeError):
     """More approval rounds than any real run needs -- something is wrong."""
 
 
+# The blanks a POSIX shell splits words on -- its default IFS. Not `\s`:
+# a no-break space is part of a word to the shell, and splitting on it
+# would name a shorter first word than the one that runs.
+_BLANKS = " \t\n"
+
+# One word as written: unquoted non-blank characters, '...' spans, "..."
+# spans with their backslash escapes, and backslash escapes, glued together.
+_WRITTEN_WORD = re.compile(r"""(?:[^ \t\n'"\\]|'[^']*'|"(?:[^"\\]|\\.)*"|\\.)+""", re.DOTALL)
+
+
+def _written_words(command: str) -> list[re.Match[str]]:
+    """The leading whole words of `command`, as a shell would split them.
+
+    Spans, not text, and in the command's OWN spelling: a grant is matched
+    against the command as written (`rules.py::_execute_matches`), so the
+    quotes are part of what it must name. Stops at the first word that does
+    not end at a blank -- an open quote, or a lone trailing backslash --
+    because the shell would not read that word where it stops here.
+    """
+    words: list[re.Match[str]] = []
+    position = 0
+    while True:
+        while position < len(command) and command[position] in _BLANKS:
+            position += 1
+        word = _WRITTEN_WORD.match(command, position)
+        if word is None:
+            return words
+        if word.end() < len(command) and command[word.end()] not in _BLANKS:
+            return words
+        words.append(word)
+        position = word.end()
+
+
+def _literal(text: str) -> str:
+    """An `fnmatch` pattern matching exactly `text`: `[*]`, `[?]`, `[[]`."""
+    return re.sub(r"([*?\[])", r"[\1]", text)
+
+
 def suggest_grant(tool: str, arg: str | None) -> Rule:
     """The rule `always` would add for this call.
 
     For a command, the first word plus `*`: approving `pytest -q` once
     should cover `pytest -q tests/x`, which is the case that makes `always`
-    worth having. For a path, the exact path -- widening a write grant by
+    worth having. The first word is read as a shell reads it and matched
+    literally (OPEN-144), so a quoted path is one word and a `*` in it is a
+    character. For a path, the exact path -- widening a write grant by
     guessing a directory would grant more than the user saw.
     """
     if arg is None:
@@ -82,8 +123,18 @@ def suggest_grant(tool: str, arg: str | None) -> Rule:
         # this command's first word plus anything (CR-B1).
         if len(command_segments(arg)) > 1 or any(mark in arg for mark in SUBSTITUTION_MARKS):
             return Rule(tool, arg.strip())
-        first = arg.strip().split()
-        return Rule(tool, f"{first[0]}*") if first else Rule(tool, None)
+        # The first word AS WRITTEN, and literally (OPEN-144). `str.split`
+        # cut the gate's own `shlex.join`ed command inside a quoted path --
+        # `'/Users/a/My Projects/…/pytest'` granted `'/Users/a/My*` -- and a
+        # `*`, `?` or `[` in a path was pasted in as a wildcard.
+        command = arg.strip()
+        words = _written_words(command)
+        if not words:
+            # Empty, or an open quote in the first word: no word to name, so
+            # the grant is the text shown and nothing more. The patternless
+            # rule this used to return covered every command.
+            return Rule(tool, _literal(command))
+        return Rule(tool, f"{_literal(command[: words[0].end()])}*")
     return Rule(tool, arg)
 
 

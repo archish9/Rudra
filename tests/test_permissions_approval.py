@@ -6,6 +6,7 @@ The reader is injected, so every branch is exercised without a TTY.
 from __future__ import annotations
 
 import json
+import shlex
 
 from rich.console import Console
 
@@ -295,3 +296,89 @@ def test_a_denied_call_is_still_refused_after_auto_accept(tmp_path):
         tmp_path, [request(command="curl http://x")], [], grants=grants, engine=engine
     )
     assert decisions[0]["type"] == "reject"
+
+
+# -- OPEN-144: a command grant is a literal prefix of the command as written --
+
+
+def _granted(tmp_path, command):
+    """An ask-mode engine holding exactly the grant `A` would add for `command`."""
+    grants = SessionGrants()
+    grants.add(suggest_grant("execute", command))
+    return PermissionEngine(
+        mode="ask", allow=(), deny=(), floor_disable=(), project_root=tmp_path, grants=grants
+    )
+
+
+def _effect(engine, command):
+    return engine.decide("execute", {"command": command}).effect
+
+
+def test_a_grant_for_a_quoted_path_names_the_whole_path(tmp_path):
+    """The gate's commands are `shlex.join`ed, so a project under a path with
+    a space arrives quoted. Split on whitespace, the first word was
+    `'/Users/a/My`, and `A` covered every command under every `My*` directory
+    -- the project's own `python -c` included."""
+    pytest_bin = "/Users/a/My Projects/app/.venv/bin/pytest"
+    command = shlex.join([pytest_bin])
+    engine = _granted(tmp_path, command)
+
+    assert suggest_grant("execute", command) == Rule("execute", f"{command}*")
+    assert _effect(engine, command) == "allow"
+    assert _effect(engine, shlex.join([pytest_bin, "-q", "tests/x"])) == "allow"
+    for other in (
+        shlex.join(["/Users/a/My Projects/app/.venv/bin/python", "-c", "import os"]),
+        shlex.join(["/Users/a/My Documents/x.sh"]),
+    ):
+        assert _effect(engine, other) == "ask", other
+
+
+def test_a_grant_keeps_the_model_s_own_quoting(tmp_path):
+    """Double quotes, as a model writes them, are kept as written: re-quoting
+    the word would mint a grant that misses the command it was minted for."""
+    command = '"/Users/a/My Projects/app/.venv/bin/pytest" -q'
+    engine = _granted(tmp_path, command)
+    assert suggest_grant("execute", command) == Rule(
+        "execute", '"/Users/a/My Projects/app/.venv/bin/pytest"*'
+    )
+    assert _effect(engine, command) == "allow"
+    assert _effect(engine, '"/Users/a/My Documents/x.sh"') == "ask"
+
+
+def test_glob_characters_in_the_first_word_are_matched_literally(tmp_path):
+    """A `*`, `?` or `[` in a path is part of its name. Unescaped, `a*b`
+    granted a sibling directory and `proj[1]` granted nothing at all -- not
+    even the command it was minted for."""
+    for directory, sibling in (
+        ("/tmp/a*b", "/tmp/a-other-b"),
+        ("/tmp/a?b", "/tmp/axb"),
+        ("/tmp/proj[1]", "/tmp/proj1"),
+    ):
+        command = shlex.join([f"{directory}/.venv/bin/pytest"])
+        engine = _granted(tmp_path, command)
+        assert _effect(engine, command) == "allow", command
+        assert _effect(engine, f"'{sibling}/.venv/bin/pytest'") == "ask", sibling
+
+
+def test_an_empty_command_grants_nothing(tmp_path):
+    """The patternless fallback covered every command for the session."""
+    for command in ("", "   "):
+        grant = suggest_grant("execute", command)
+        assert grant.pattern is not None, repr(command)
+        assert _effect(_granted(tmp_path, command), "pytest -q") == "ask", repr(command)
+
+
+def test_an_open_quote_in_the_first_word_grants_only_the_text_shown(tmp_path):
+    command = "'/Users/a/My Projects/pytest -q"
+    assert suggest_grant("execute", command) == Rule("execute", command)
+    assert _effect(_granted(tmp_path, command), "'/Users/a/My Documents/x.sh'") == "ask"
+
+
+def test_plain_first_words_keep_their_grant():
+    """Pins that hold before and after: the documented shape, a Windows path
+    a model wrote unquoted, and an open quote AFTER the first word."""
+    assert suggest_grant("execute", "pytest -q tests/") == Rule("execute", "pytest*")
+    assert suggest_grant("execute", r"C:\p\.venv\Scripts\pytest.exe -q") == Rule(
+        "execute", r"C:\p\.venv\Scripts\pytest.exe*"
+    )
+    assert suggest_grant("execute", "pytest 'tests/x") == Rule("execute", "pytest*")
