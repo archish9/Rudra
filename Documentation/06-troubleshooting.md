@@ -575,12 +575,40 @@ You're in `--auto` without `--allow-shell`. Tests are a shell command underneath
 rudra --auto --allow-shell "add a parser and make its tests pass"
 ```
 
-Or allow just the test command, which is narrower:
+Or allow the commands themselves, which is narrower. Every command Rudra was
+refused is in `.rudra/run/logs/permissions.jsonl`, spelled exactly as the rule
+is matched against it — the `arg` of each line reading `"decision": "deny"`.
+For a Python project that is an absolute path. Add each one with a trailing
+`*`:
 
 ```toml
 [permissions]
-allow = ["execute:pytest*"]
+allow = [
+  "execute:/home/you/todo/.venv/bin/python -m pytest*",
+  "execute:/home/you/.local/share/pipx/venvs/rudra/bin/python -m mypy*",
+]
 ```
+
+`execute:pytest*` does **not** do this: it matches a command that starts with
+the word `pytest`, which an agent may type, and the gate never runs.
+
+A rule for the tests alone is not enough:
+
+- **The type-check runs first.** For a Python project it is mypy — Rudra's
+  own, the second line above, unless your `.venv` holds one — and a denied
+  type-check stops the run before the tests are reached. A denied lint stops
+  nothing; lint is advisory.
+- **The test command above needs `.venv`, and building it is a command too.**
+  Rudra builds `.venv` with `python3 -m venv .venv` and fills it with
+  `pip install`. While those are denied there is no `.venv`, and the tests run
+  under your machine's `python3` instead. Allowing `pip install*` lets the run
+  install whatever the project declares, which is most of what `--allow-shell`
+  allows. The narrow route is to create `.venv` yourself, with pytest in it:
+  Rudra leaves a virtualenv it did not build alone, and installs nothing into
+  it — the dependencies the code needs are yours to add.
+
+Each run records only the refusals it reached, so completing the list can take
+more than one run. For anything past a quick check, `--allow-shell` is simpler.
 
 ### `run_tests` says "This project declares no test command"
 

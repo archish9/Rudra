@@ -255,7 +255,7 @@ than an opaque tool name, and your existing rules apply to it unchanged:
 
 ```toml
 [permissions]
-allow = ["execute:pytest*"]                    # tests need no approval
+allow = ["execute:pytest*"]                    # pytest, as an agent types it
 deny  = ["execute:git push*"]                  # but never push
 ```
 
@@ -270,7 +270,11 @@ error, which is what these models do. Hence the separate opt-in.
 
 Naming a command explicitly also counts as opting in — with
 `allow = ["execute:pytest*"]`, `pytest` runs under `--auto` without the flag,
-because you named it.
+because you named it. That covers a command an agent types as `pytest …`. For
+a Python project the commands Rudra's own gate runs are absolute paths, so a
+rule for those must name them as `.rudra/run/logs/permissions.jsonl` records
+them (see *"Running tests was not permitted"* in
+[Troubleshooting](06-troubleshooting.md)).
 
 `ask` mode is unaffected by any of this. You read each command before it
 runs.
