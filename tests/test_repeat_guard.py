@@ -2079,3 +2079,20 @@ def test_two_searches_under_one_path_are_refused_in_different_words(tmp_path):
         )
 
     assert texts[0] != texts[1]
+
+
+def test_only_the_dedupe_rule_marks_its_refusal_as_a_dedupe(tmp_path):
+    """OPEN-149: `subagents/runner.py` counts dedupes by field, never by the
+    "Already read:" lead -- the failure and write refusals must not carry it."""
+    from rudra.trace.stream import DEDUPE_KEY, REFUSAL_KEY
+
+    guard = RepeatGuardMiddleware()
+    read = _Backend("['/a.py']")
+    guard.wrap_tool_call(_request("glob", pattern="**/*.py"), read)
+    deduped = guard.wrap_tool_call(_request("glob", pattern="**/*.py"), read)
+    failing = _Backend(NOT_FOUND)
+    for _ in range(3):
+        failed = guard.wrap_tool_call(_request("read_file", file_path="/x"), failing)
+
+    assert deduped.additional_kwargs == {REFUSAL_KEY: True, DEDUPE_KEY: True}
+    assert failed.additional_kwargs == {REFUSAL_KEY: True, DEDUPE_KEY: False}

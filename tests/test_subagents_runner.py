@@ -12,7 +12,7 @@ from rudra.context import deadline as deadline_module
 from rudra.context.deadline import SPAN_DEADLINE
 from rudra.subagents import runner
 from rudra.subagents.runner import SubagentContext, SubagentResult, run_subagent
-from rudra.trace.stream import REFUSAL_KEY
+from rudra.trace.stream import DEDUPE_KEY, REFUSAL_KEY
 
 
 @dataclass
@@ -1388,3 +1388,82 @@ def test_the_runner_resets_on_exactly_the_middleware_s_reads():
 
     assert runner.NO_PROGRESS_READS is NO_PROGRESS_READS
     assert NO_PROGRESS_READS == frozenset({"read_file", "ls", "glob", "grep"})
+
+
+# --- OPEN-149: answered reads after a write --------------------------------
+
+
+def dedupe(call_id, name="glob"):
+    """What `RepeatGuardMiddleware` returns for a read already answered."""
+    return ToolMessage(
+        content="Already read: `glob` on '**/test_*.py' was answered earlier in this turn",
+        tool_call_id=call_id,
+        name=name,
+        additional_kwargs={REFUSAL_KEY: True, DEDUPE_KEY: True},
+    )
+
+
+def written(call_id="w", name="write_file"):
+    return ToolMessage(content="Updated file /crud.py", tool_call_id=call_id, name=name)
+
+
+async def _halt_of(monkeypatch, patched, messages):
+    monkeypatch.setattr(
+        runner, "run_with_approvals", stream_of({"messages": [ai("go"), *messages]})
+    )
+    return (await run_subagent("coder", "write it", context=patched)).halted_reason
+
+
+async def test_answered_reads_after_a_write_stop_the_invocation(monkeypatch, patched):
+    """OPEN-149: run F2's t4 coder wrote its files, then cycled test-file globs
+    through 41 dedupes to the 80-call ceiling -- running the tests, no shell."""
+    n = runner.MAX_DEDUPES_AFTER_WRITE
+    halted = await _halt_of(monkeypatch, patched, [written(), *[dedupe(str(i)) for i in range(n)]])
+    assert halted is not None and "already answered" in halted
+
+
+async def test_answered_reads_before_any_write_never_stop_it(monkeypatch, patched):
+    """Run 2cde3406f7d6's coder ran 12 dedupes, then wrote the deliverable."""
+    n = runner.MAX_DEDUPES_AFTER_WRITE
+    messages = [*[dedupe(str(i)) for i in range(n + 5)], written()]
+    assert await _halt_of(monkeypatch, patched, messages) is None
+
+
+async def test_any_other_result_ends_the_streak(monkeypatch, patched):
+    n = runner.MAX_DEDUPES_AFTER_WRITE
+    real = ToolMessage(content="['/tests/test_a.py']", tool_call_id="g", name="glob")
+    other = ToolMessage(
+        content="Already written",
+        tool_call_id="r",
+        name="write_file",
+        additional_kwargs={REFUSAL_KEY: True},
+    )
+    messages = [
+        written(),
+        *[dedupe(f"a{i}") for i in range(n - 1)],
+        real,
+        *[dedupe(f"b{i}") for i in range(n - 1)],
+        other,
+        *[dedupe(f"c{i}") for i in range(n - 1)],
+    ]
+    assert await _halt_of(monkeypatch, patched, messages) is None
+
+
+async def test_a_refused_write_is_not_a_write(monkeypatch, patched):
+    """A byte-identical re-send is refused, not written: it opens no streak."""
+    n = runner.MAX_DEDUPES_AFTER_WRITE
+    refused = ToolMessage(
+        content="Already written",
+        tool_call_id="r",
+        name="write_file",
+        additional_kwargs={REFUSAL_KEY: True},
+    )
+    messages = [refused, *[dedupe(str(i)) for i in range(n + 2)]]
+    assert await _halt_of(monkeypatch, patched, messages) is None
+
+
+async def test_failure_refusals_after_a_write_are_not_dedupes(monkeypatch, patched):
+    """OPEN-94 still holds: a failure refusal is no event for either counter."""
+    n = runner.MAX_DEDUPES_AFTER_WRITE
+    messages = [written(), *[refusal(call_id=str(i)) for i in range(n + 2)]]
+    assert await _halt_of(monkeypatch, patched, messages) is None

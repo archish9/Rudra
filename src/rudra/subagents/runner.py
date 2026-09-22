@@ -31,6 +31,7 @@ from rudra.permissions.approval import run_with_approvals
 from rudra.subagents.build import build_agent
 from rudra.subagents.registry import REGISTRY
 from rudra.trace.stream import StreamState
+from rudra.trace.stream import is_rudra_dedupe as _is_rudra_dedupe
 from rudra.trace.stream import is_rudra_refusal as _is_rudra_refusal
 from rudra.trace.stream import message_is_error as _message_is_error
 
@@ -40,6 +41,23 @@ from rudra.trace.stream import message_is_error as _message_is_error
 # are C6.5a and belong to the loop, not here.
 MAX_CONSECUTIVE_FAILURES = 3
 MAX_REPEATED_CALLS = 3
+
+MAX_DEDUPES_AFTER_WRITE = 8
+"""Already-answered reads in a row, once this invocation has written, before
+it is stopped (OPEN-149).
+
+A deduped read is one `RepeatGuardMiddleware` refused because the same call
+was answered and nothing has changed since -- no progress by construction.
+Run F2's t4 coder wrote its files, then cycled three test-file globs through
+41 of them to `MAX_TOTAL_CALLS`: running the tests, with no shell. **Only
+after a write**, because the long runs that precede a first write are an
+agent finding its way, and they end in the deliverable: replayed over the
+archive's 128 invocations, a streak bound with no write gate halts run
+2cde3406f7d6's coder -- a 12-long run, then the whole HTML file -- at any
+value up to 12, and this one halts exactly two invocations, both after their
+writes: F2's t4 at call 53 of 80 (294 s of model time saved) and run
+a4196786280d's interpreter hunt at call 29 of 50 (139 s). Any other tool
+result -- a real read, a failure, another refusal -- ends the streak."""
 
 MAX_TOTAL_CALLS = 80
 """Tool calls one subagent invocation may make, of any kind (A1.92).
@@ -616,6 +634,10 @@ async def run_subagent(
     seen: dict[tuple[str, ...], int] = {}
     state = StreamState(role=name)
     consecutive_failures = 0
+    # OPEN-149: whether this invocation has written anything yet, and the
+    # current run of deduped reads since the last other tool result.
+    wrote = False
+    dedupe_streak = 0
     total_calls = 0
     # Counted alongside total_calls rather than derived from it: the count
     # says an invocation was busy and the histogram says what it was busy
@@ -673,7 +695,7 @@ async def run_subagent(
         nothing would read as the announcement that earned the nudge
         (OPEN-122).
         """
-        nonlocal halted, last_text, total_calls, consecutive_failures
+        nonlocal halted, last_text, total_calls, consecutive_failures, wrote, dedupe_streak
         reply: str | None = None
 
         async for chunk in run_with_approvals(
@@ -757,13 +779,28 @@ async def run_subagent(
                         # faster the better the guard worked, and the
                         # refusals are the CHEAPEST calls in a run: run
                         # 2cde3406f7d6's coder reached three in 11.67 s.
-                        pass
+                        #
+                        # A DEDUPE after a write is counted by its own bound
+                        # (OPEN-149); every other refusal ends that streak.
+                        if wrote and _is_rudra_dedupe(message):
+                            dedupe_streak += 1
+                            if dedupe_streak >= MAX_DEDUPES_AFTER_WRITE:
+                                halted = (
+                                    f"{dedupe_streak} reads in a row were already answered, "
+                                    f"after this invocation wrote its files -- stopping"
+                                )
+                        else:
+                            dedupe_streak = 0
                     elif _message_is_error(message):
+                        dedupe_streak = 0
                         consecutive_failures += 1
                         if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
                             halted = f"{consecutive_failures} consecutive tool failures -- stopping"
                     else:
+                        dedupe_streak = 0
                         consecutive_failures = 0
+                        if getattr(message, "name", None) in ("write_file", "edit_file"):
+                            wrote = True
 
                 if halted is not None:
                     announce(halted, where, processed)
@@ -867,6 +904,7 @@ async def run_subagent(
 __all__ = [
     "MAX_INVOCATION_SECONDS",
     "CONTINUATION_NUDGE",
+    "MAX_DEDUPES_AFTER_WRITE",
     "MAX_TOTAL_CALLS",
     "SUBAGENT_KIND",
     "SubagentContext",

@@ -202,7 +202,7 @@ from langchain_core.messages import ToolMessage
 
 from rudra.compat.virtual_paths import virtual_to_host, virtual_to_relative
 from rudra.middleware.tool_route import runner_search_route, settled_write_route
-from rudra.trace.stream import REFUSAL_KEY
+from rudra.trace.stream import DEDUPE_KEY, REFUSAL_KEY
 
 # Deterministic reads. A repeat of one of these after a failure cannot
 # succeed, which is what makes short-circuiting safe. `execute` is
@@ -331,6 +331,15 @@ _RUNNER_SEARCH = re.compile(
     re.IGNORECASE,
 )
 _SEARCH_ARGS = ("pattern", "path", "file_path")
+
+
+class _Dedupe(str):
+    """A dedupe refusal's text, tagged so `_as_message` marks it (OPEN-149).
+
+    `_blocked` returns the text for three rules and `_as_message` builds the
+    message for all three; the tag carries which rule fired across that seam
+    without changing what either returns to anything else.
+    """
 
 
 def runner_shaped(args: dict[str, Any]) -> bool:
@@ -742,7 +751,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
                 f"dedupe: `{name}` on {self._named(args)} was already answered "
                 f"this turn -- not run again"
             )
-            return self._repeat_refusal(name, args)
+            return _Dedupe(self._repeat_refusal(name, args))
         return None
 
     def _blocked_write(self, name: str, args: dict[str, Any]) -> str | None:
@@ -827,7 +836,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
             content=refusal,
             name=str(request.tool_call.get("name") or ""),
             tool_call_id=str(request.tool_call.get("id") or ""),
-            additional_kwargs={REFUSAL_KEY: True},
+            additional_kwargs={REFUSAL_KEY: True, DEDUPE_KEY: isinstance(refusal, _Dedupe)},
         )
 
     def _count_dedupe(self) -> None:

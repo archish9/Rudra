@@ -62,6 +62,16 @@ Set through `RepeatGuardMiddleware._as_message`, the single seam every
 refusal is built at. Nothing that came back from a real handler carries it,
 which is what keeps a gate's "BLOCKED:" counting."""
 
+DEDUPE_KEY = "rudra_dedupe"
+"""The `additional_kwargs` flag saying the refusal was the DEDUPE rule (OPEN-149).
+
+Set beside `REFUSAL_KEY`, never instead of it, by the same seam: a read that
+was already answered, with nothing changed since, and so not run again.
+`subagents/runner.py` counts a streak of these after an invocation has
+written, which is the run-the-tests reflex with no shell -- run F2's t4 coder
+sent 41 in one invocation. A field and not the "Already read:" lead, for
+`REFUSAL_KEY`'s reason: classification never rides on the prose."""
+
 
 ERROR_MARKERS = _FIRST_LINE_MARKERS
 """The union of THREE copies that had drifted apart, counted 2026-08-20:
@@ -110,6 +120,12 @@ def is_rudra_refusal(message: Any) -> bool:
     if not isinstance(kwargs, dict):
         return False
     return bool(kwargs.get(REFUSAL_KEY))
+
+
+def is_rudra_dedupe(message: Any) -> bool:
+    """Was this Rudra's answer to a read already answered (OPEN-149)?"""
+    kwargs = getattr(message, "additional_kwargs", None)
+    return isinstance(kwargs, dict) and bool(kwargs.get(DEDUPE_KEY))
 
 
 def message_is_error(message: Any) -> bool:
@@ -254,10 +270,12 @@ def consume(
 
 
 __all__ = [
+    "DEDUPE_KEY",
     "ERROR_MARKERS",
     "REFUSAL_KEY",
     "StreamState",
     "consume",
+    "is_rudra_dedupe",
     "is_rudra_refusal",
     "looks_like_error",
     "message_is_error",
