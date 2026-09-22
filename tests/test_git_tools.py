@@ -73,11 +73,12 @@ def test_a_relative_escape_reaches_the_gate(repo: Path, tmp_path: Path):
     assert "not permitted" in text.lower()
 
 
-def test_an_absolute_outside_path_reaches_the_gate(repo: Path, tmp_path: Path):
-    gate = RecordingAskGate(tmp_path, answer="reject")
-    text = _tool(repo, gate).invoke({"path": "/etc"})
-    assert gate.prompted
-    assert "not permitted" in text.lower()
+def test_an_absolute_path_is_virtual_and_does_not_reach_the_gate(repo: Path, tmp_path: Path):
+    """OPEN-148: `/etc` is the project's `etc/`, as it is for `read_file` --
+    never the machine's. Only a real escape reaches the gate, and
+    `test_a_relative_escape_reaches_the_gate` pins that."""
+    text = _tool(repo, StrictAskGate(tmp_path)).invoke({"path": "/etc"})
+    assert text == "No changes."
 
 
 def test_an_approved_outside_path_is_allowed_through(repo: Path, tmp_path: Path):
@@ -219,3 +220,32 @@ def test_git_diff_never_shows_rudra_state(repo: Path, tmp_path: Path, gate, args
     assert KEY not in text
     if "path" not in args:
         assert "+changed" in text  # the user's own change is still shown
+
+
+# --- OPEN-148: a path is read as every tool reads it ---
+
+
+@pytest.mark.parametrize(
+    "gate", [AutoGate, DenyShellGate, StrictAskGate], ids=["allow-shell", "bare-auto", "ask"]
+)
+def test_a_virtual_absolute_path_is_the_projects_own_file(repo: Path, tmp_path: Path, gate):
+    """OPEN-148: `/a.txt` is `a.txt` to every tool (CR-B4). Read as the host's,
+    it took the gated branch -- refused under --auto, a prompt under ask, and
+    "No changes." under shell over a file that had changed."""
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+    text = _tool(repo, gate(tmp_path)).invoke({"path": "/a.txt"})
+    assert "+changed" in text
+
+
+def test_the_host_spelling_of_a_project_file_is_that_file(repo: Path, tmp_path: Path):
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+    host = str((repo / "a.txt").resolve())
+    text = _tool(repo, StrictAskGate(tmp_path)).invoke({"path": host})
+    assert "+changed" in text
+
+
+def test_a_git_failure_on_the_gated_branch_is_not_no_changes(repo: Path, tmp_path: Path):
+    """git exits 128 on a path outside the repository; that is not a clean diff."""
+    text = _tool(repo, AutoGate(tmp_path)).invoke({"path": "../outside.txt"})
+    assert text != "No changes."
+    assert "outside repository" in text

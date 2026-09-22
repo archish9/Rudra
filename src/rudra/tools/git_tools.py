@@ -15,6 +15,7 @@ from typing import Any
 from langchain_core.tools import tool
 from rich.console import Console
 
+from rudra.compat.virtual_paths import virtual_to_relative
 from rudra.git import core
 from rudra.permissions.env import scrubbed_env
 from rudra.shell.runner import run_gated
@@ -113,6 +114,14 @@ def create_git_tools(project_path: Path, *, gate: Any, console: Console, cfg: An
             return "This project is not a git repository, so there is no diff to show."
 
         target = path.strip() or None
+        if target is not None:
+            # The file every other tool would name (CR-B4): a leading `/` is
+            # the project root, and the host spelling of a project file is
+            # that file. Read as the host's, `/a.txt` took the gated branch
+            # below -- refused under --auto, and "No changes." under shell
+            # over a file that had changed (OPEN-148). `..` survives this and
+            # is resolved by `_within_root`, so a real escape is still gated.
+            target = virtual_to_relative(target, project_path) or target
 
         if target is not None and not _within_root(project_path, target):
             # The one model-supplied value that could otherwise ride the
@@ -139,6 +148,11 @@ def create_git_tools(project_path: Path, *, gate: Any, console: Console, cfg: An
                     f"Reading a diff outside the project was not permitted: "
                     f"{result.denial_reason}. Do not retry this call."
                 )
+            if not result.ok:
+                # git's own reason -- `outside repository`, a missing path --
+                # never "No changes.", which is a claim about a diff that was
+                # not produced (OPEN-148). `core.diff` reads it the same way.
+                return result.stderr.strip() or "git diff failed."
             # Capped like the in-root branch. This is the whole reason the
             # tool exists rather than the model calling `git diff` through
             # execute (CR-B8).
