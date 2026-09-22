@@ -500,6 +500,21 @@ class RepeatGuardMiddleware(AgentMiddleware):
             return self._resolved(args) or str(raw)
         return str(args.get("pattern") or "")
 
+    def _named(self, args: dict[str, Any]) -> str:
+        """The call as the model sent it, quoted, for refusals and notices (OPEN-150).
+
+        `_target` is the KEY's answer to "aimed at what", and for a `glob` or
+        `grep` carrying both a `pattern` and a `path` it answers with the path --
+        so run F2's `glob('**/test_*.py', path='/')` was refused as "`glob` on
+        '.'", a call the model never made, and two searches under one directory
+        read alike. `_key_args` keeps the pattern; this makes the words match it.
+        """
+        target = self._target(args)
+        pattern = args.get("pattern")
+        if isinstance(pattern, str) and pattern and (args.get("file_path") or args.get("path")):
+            return f"'{pattern}' under '{target}'"
+        return f"'{target}'"
+
     def _resolved(self, args: dict[str, Any]) -> str | None:
         """This call's path as a project-relative spelling, or None.
 
@@ -596,7 +611,7 @@ class RepeatGuardMiddleware(AgentMiddleware):
         """
         seen = self._failures[signature]
         return (
-            f"Error: `{name}` on '{self._target(args)}' has already failed "
+            f"Error: `{name}` on {self._named(args)} has already failed "
             f"{seen} times in this turn, and was not run again. The error "
             f"was: {self._last_error.get(signature, 'unknown')}\n"
             f"{self._spelling_note(args)}Re-sending it will not change that "
@@ -639,9 +654,8 @@ class RepeatGuardMiddleware(AgentMiddleware):
         already" leaves the model to work out WHICH of its calls was
         refused, and the whole saving is one round trip.
         """
-        target = self._target(args)
         refusal = (
-            f"Already read: `{name}` on '{target}' was answered earlier in this "
+            f"Already read: `{name}` on {self._named(args)} was answered earlier in this "
             f"turn and nothing has changed it since, so it was not run again. "
             f"That earlier result is still current -- use it. To see something "
             f"else, call a different path or pattern; to change the file, write "
@@ -718,14 +732,14 @@ class RepeatGuardMiddleware(AgentMiddleware):
         signature = _signature(name, self._key_args(args))
         if self._failures.get(signature, 0) >= self.max_identical_failures:
             self._announce(
-                f"refused: `{name}` on '{self._target(args)}' failed "
+                f"refused: `{name}` on {self._named(args)} failed "
                 f"{self._failures[signature]} times identically -- not run again"
             )
             return self._refusal(signature, name, args)
         if self._answered.get(signature, 0) >= self.max_identical_reads:
             self._count_dedupe()
             self._announce(
-                f"dedupe: `{name}` on '{self._target(args)}' was already answered "
+                f"dedupe: `{name}` on {self._named(args)} was already answered "
                 f"this turn -- not run again"
             )
             return self._repeat_refusal(name, args)

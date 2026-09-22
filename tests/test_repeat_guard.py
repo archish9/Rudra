@@ -2051,3 +2051,31 @@ def test_every_archived_runner_search_is_runner_shaped():
         assert runner_shaped({"pattern": value}), value
     for value in ("/pytest.ini", "tests/test_python_utils.py", "/src/app.py", "tests/*.py"):
         assert not runner_shaped({"pattern": value}), value
+
+
+def test_a_repeated_search_under_a_path_is_refused_naming_its_pattern(tmp_path):
+    """OPEN-150: `_target` answers with the path when a search carries one, so
+    run F2's `glob('**/test_*.py', path='/')` was refused as "`glob` on '.'" --
+    a call the model never made. The key kept the pattern; now the words do."""
+    sink = _Sink()
+    guard = RepeatGuardMiddleware(role="coder", trace=sink, project_path=tmp_path)
+    backend = _Backend("['/tests/test_a.py']")
+
+    for _ in range(2):
+        result = guard.wrap_tool_call(_request("glob", pattern="**/test_*.py", path="/"), backend)
+
+    assert "`glob` on '**/test_*.py' under '.'" in _text(result)
+    assert "'**/test_*.py' under '.'" in sink.notices[-1]["payload"]
+
+
+def test_two_searches_under_one_path_are_refused_in_different_words(tmp_path):
+    guard = RepeatGuardMiddleware(project_path=tmp_path)
+    texts = []
+    for pattern in ("**/test_*.py", "**/*.md"):
+        backend = _Backend("[]")
+        guard.wrap_tool_call(_request("glob", pattern=pattern, path="/"), backend)
+        texts.append(
+            _text(guard.wrap_tool_call(_request("glob", pattern=pattern, path="/"), backend))
+        )
+
+    assert texts[0] != texts[1]
