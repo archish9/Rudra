@@ -254,3 +254,27 @@ def test_the_permissions_page_names_every_source_the_log_records():
     paragraph = section.split("The `source` field says", 1)[1].split("\n\n", 1)[0]
     listed = set(re.findall(r"`([a-z-]+)`", paragraph))
     assert _recordable_sources() <= listed, sorted(_recordable_sources() - listed)
+
+
+# --- OPEN-146: no page says `execute:` rules cover in-root git_diff ---
+
+GIT_DIFF_CLAIMS = {
+    "11-tools.md": ["| Show working-tree changes | **yes**, as the command it runs |"],
+    "05-how-it-works.md": ["`run_tests` and `git_diff` are thin wrappers"],
+    "07-development.md": ["covers the git layer without naming it"],
+}
+
+
+def test_no_page_says_execute_rules_cover_git_diff_inside_the_project():
+    """OPEN-146: in-root `git_diff` runs read-only git that no rule reaches
+    (`tests/test_git_tools.py::test_in_root_git_diff_meets_no_rule`); these
+    were the pages' words for the opposite."""
+    claimed = {
+        page: [
+            phrase
+            for phrase in phrases
+            if phrase in (REPO / "Documentation" / page).read_text(encoding="utf-8")
+        ]
+        for page, phrases in GIT_DIFF_CLAIMS.items()
+    }
+    assert not any(claimed.values()), claimed

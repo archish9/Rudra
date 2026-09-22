@@ -8,6 +8,7 @@ import pytest
 from rich.console import Console
 
 from rudra.config.loader import build_config
+from rudra.permissions.rules import PermissionEngine
 from rudra.tools.git_tools import create_git_tools
 from tests.conftest_git import (
     AutoGate,
@@ -249,3 +250,43 @@ def test_a_git_failure_on_the_gated_branch_is_not_no_changes(repo: Path, tmp_pat
     text = _tool(repo, AutoGate(tmp_path)).invoke({"path": "../outside.txt"})
     assert text != "No changes."
     assert "outside repository" in text
+
+
+# --- OPEN-146: what the docs now say, pinned from the code side ---
+
+
+class _SpyGate(AutoGate):
+    """`AutoGate` with `execute:git*` denied, counting what reaches the engine."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        super().__init__(tmp_path)
+        self.engine = PermissionEngine(
+            mode="auto",
+            allow=(),
+            deny=("execute:git*",),
+            floor_disable=(),
+            project_root=tmp_path,
+            shell_in_auto=True,
+        )
+        self.asked: list[tuple[str, dict]] = []
+        decide = self.engine.decide
+
+        def spy(tool: str, args: dict):
+            self.asked.append((tool, args))
+            return decide(tool, args)
+
+        self.engine.decide = spy
+
+
+def test_in_root_git_diff_meets_no_rule(repo: Path, tmp_path: Path):
+    """OPEN-146: inside the project `git_diff` runs read-only git
+    (`git/core.py:31`, `:144`), so no `execute:` rule reaches it -- what the
+    docs now say. A path outside the project is decided."""
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+    gate = _SpyGate(tmp_path)
+    tool = _tool(repo, gate)
+
+    assert "+changed" in tool.invoke({})
+    assert gate.asked == []
+    assert "not permitted" in tool.invoke({"path": "../outside.txt"}).lower()
+    assert [name for name, _ in gate.asked] == ["execute"]

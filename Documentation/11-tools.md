@@ -25,7 +25,7 @@ You do not call these yourself. You read this page for three reasons: to underst
 | [`list_mcp_tools`](#list_mcp_tools) | See what MCP servers offer | never |
 | [`describe_mcp_tool`](#describe_mcp_tool) | One MCP tool's arguments | never |
 | [`call_mcp_tool`](#call_mcp_tool) | Run an MCP tool | **yes**, by tool id |
-| [`git_diff`](#git_diff) | Show working-tree changes | **yes**, as the command it runs |
+| [`git_diff`](#git_diff) | Show working-tree changes | no inside the project — a read; a path outside it, as `git diff` |
 | [`remember`](#remember) | Record something for future runs | never — control plane |
 | [`search_memory`](#search_memory) | Search what earlier runs recorded | never |
 | [`record_fact`](#record_fact) | Record something established | never — control plane |
@@ -38,7 +38,7 @@ Four groups, and the grouping is the security model rather than a filing convent
 
 - **Reads are never gated.** Prompting for every `read_file` would train you to press `a` without looking, which is worse than not asking. `READ_ONLY_TOOLS` in `permissions/rules.py`.
 - **Writes and commands always are.** `MUTATING_TOOLS` — `write_file`, `edit_file`, `delete`, `execute`.
-- **Two tools are a command wearing another name.** `run_tests` and `git_diff` shell out, so they are decided as the `execute` they actually perform, using the real command string. They are not gated twice.
+- **One tool is a command wearing another name.** `run_tests` shells out, so it is decided as the `execute` it actually performs, using the real command string — not gated twice. `git_diff` shells out too, but inside the project it only reads: `git diff`, `git status` and `git rev-parse`, composed by Rudra, run ungated like `read_file`, and no `execute:` rule reaches them. A `path` outside the project is decided as the `git diff` it runs.
 - **Rudra's own bookkeeping is never gated.** `add_tasks`, `drop_task`, `ask_user`, `record_fact` change nothing outside `.rudra/`, and gating them once broke `--plan` badly enough to earn a ledger row.
 
 ---
@@ -194,6 +194,8 @@ git_diff(staged=True)               # staged instead of unstaged
 ```
 
 Output is capped; a very large diff is truncated with a note. New files that `git diff` cannot show are named separately, so a reviewer is not blind to them.
+
+**Not gated inside the project**: it only reads, like `read_file`, and never shows Rudra's own `.rudra/` — whose `config.toml` may hold an API key. A `path` is read the way every file tool reads it, so `/src/parser.py` is your project's file. Only a path that really leaves the project — `../elsewhere` — is decided, as the `git diff -- ../elsewhere` it runs: refused under bare `--auto`, asked about under `ask`.
 
 **This is the only git tool the model has.** No `git_status`, no `git_log`, no committing, no branching. Rudra's own git work — the `auto_branch` option — happens in Python, outside the model's reach.
 
@@ -498,7 +500,7 @@ Every gated decision, in every mode, lands one line in `.rudra/run/logs/permissi
 records no `arg` of its own: the command it runs is judged, and recorded, on the `execute` line after
 it — for a Python project at its full path, as the gate resolved it.
 
-`source` tells you **why** a decision went the way it did — `prompt` means you decided it, `auto-shell` means `--auto` refused a command you had not opted into, `wrapped-execute` means the inner command is what was really judged.
+`source` tells you **why** a decision went the way it did — `prompt` means you decided it, `auto-shell` means `--auto` refused a command you had not opted into, `wrapped-execute` means the tool's own call was let through so that what it runs is judged instead — `run_tests`'s command, on the `execute` line after it.
 
 `decision` is what actually happened, which is not always what the engine asked for: an engine effect of `ask` with a recorded decision of `reject` is you turning something down, and that gap is the interesting case.
 

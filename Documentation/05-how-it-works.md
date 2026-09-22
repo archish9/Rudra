@@ -283,7 +283,7 @@ Rudra adds a few of its own:
 | `git_diff` | The working-tree diff, capped so a big one can't fill the context window |
 | `remember` / `search_memory` | This project's long-term memory — write one thing worth knowing next run, or search what earlier runs recorded |
 
-`run_tests` and `git_diff` are thin wrappers: underneath, both resolve a real command and hand it to the same permission gate as any other shell call. That's why a rule like `deny = ["execute:git push*"]` covers them without naming them, and why the audit log records the command itself — `/home/you/todo/.venv/bin/python -m pytest`, at its full path — on an `execute` line of its own, after the tool's.
+`run_tests` is a thin wrapper: underneath, it resolves a real command and hands it to the same permission gate as any other shell call. That's why an `execute:` rule covers it without naming it, and why the audit log records the command itself — `/home/you/todo/.venv/bin/python -m pytest`, at its full path — on an `execute` line of its own, after the tool's. `git_diff` shells out too, but inside the project it only reads, so it runs ungated — like `read_file` — and no `execute:` rule reaches it.
 
 ---
 
