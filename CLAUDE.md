@@ -1,370 +1,54 @@
 # CLAUDE.md — Rudra
 
-Context loaded into every fresh Claude Code session. Read `TODO.md` next — it
-is the live ledger of what is open. **One is open as of 2026-09-23, filed by
-live run G — OPEN-151** (a shell command carrying this project's virtual `/`
-spelling fails with only `/bin/sh`'s error: G2's tester spent 2 of its 3
-consecutive failures on `/.venv/bin/python …` and `ls -la /.venv/bin/`, then
-recovered by itself. **Its plan's Step 0 is measured** — 3 hits over 2 archived
-runs, all the tester, against the plan's own *fewer-than-5 means follow-up*
-threshold, and the third is the `cat /src/iphone15.html` that preceded run
-2cde3406f7d6's run-killer — **so the owner's first decision is whether to build
-it at all**, then A, B or C). It has a self-contained plan under
-`docs/superpowers/plans/`, with a replay script beside it.
-**Live run G ran on 2026-09-23**, third-party, in a git repository:
-G1 (`3ab1034a99ed`, no shell) stopped at its first gate as designed, G2
-(`eed59b91daca`) did **6 of 6 tasks in 700.1 s** — and it **verified OPEN-141
-live**, the run's own reason for existing: an `api/` package beside ten
-`"/api/v1/…"` literals drew **zero** `content-path` notices, where run E's
-same shape gave 6 false ones. **OPEN-149, OPEN-150 and OPEN-147 stayed
-vacuous** — no `glob`/`grep` with a path was deduped, no dedupe streak reached
-8 (three near-misses, all reset correctly), and the reviewer never called
-`git_diff` though `.rudra/AGENTS.md` really was a tracked change. Board
-*2026-09-23* in `TODO-closed.md`. **It also ran on a different model than
-planned**: run F's `nemotron-3-ultra-550b-a55b` began answering `404` on
-`/v1/chat/completions` mid-run while still being listed, killing a first G2
-after 3189.5 s and 0 tasks, so both legs were re-run on
-`nemotron-3-super-120b-a12b` (owner). **That dead run is the useful record of
-a provider withdrawing a model**: every call retried and recorded its real
-error, the attempt was given back, and the task stayed resumable.
-**OPEN-149, filed by live run F, closed the
-same day, offline, on the owner's option B′**: F2's t4 coder wrote its pytest
-config and then cycled test-file globs through 41 dedupe refusals to the
-80-call cap, 983 s — running the tests, with no shell. The dedupe refusal
-carries `DEDUPE_KEY` now, and `subagents/runner.py` halts an invocation after
-`MAX_DEDUPES_AFTER_WRITE` = 8 in a row, **counted only after its first real
-write**, because the archive replay showed an ungated bound halts run
-2cde3406f7d6's coder before its whole deliverable at any value up to 12; §3's
-`subagents/` entry says how. **Live run G left it vacuous**: its three dedupe
-streaks were 3 and 4 long and each was reset by real work, and `read_file`'s
-own `MAX_REPEATED_CALLS` halt at 3 fired first — the bound's gap is the
-unwatched `glob`/`ls`, which no run has yet pushed to 8.
-**OPEN-150, filed beside it, closed the same day,
-offline**: a repeated `glob`/`grep` carrying a `path` was refused and noticed
-naming the path alone — `` `glob` on '.' ``, the pattern dropped, a call the
-model never made — and now reads `` on '<pattern>' under '<path>' ``;
-`repeat_guard.py::_named` prints it and `_target` stays the key, and §8a's
-interpreter-hunt row says what an older log reads.
-**Live run F ran on 2026-09-22**, third-party: F1 (`7ad066fcde9f`, no shell)
-stopped at its first gate as designed, F2 (`ea0cafc09997`) did **8 of 9
-tasks** — and it **verified OPEN-140, OPEN-142 and OPEN-143 live**, OPEN-136
-at the default budget; OPEN-141 had no occasion. Board *2026-09-22* in
-`TODO-closed.md`. **That is the paragraph below in action again**: the board
-was empty for one live run. **OPEN-146 closed on 2026-09-22, offline,
-docs-only**: the docs called `git_diff` gated as the command it runs, and
-in-root it meets no gate — by design, reads are never gated; the pages say
-so and a behaviour test pins it. **OPEN-148 closed on 2026-09-22,
-offline, on the owner's option A**: `git_diff` read an absolute `path` as the
-host's, so `/a.txt` — the project's file to every other tool (CR-B4) — was
-refused under `--auto` and answered *"No changes."* under shell; it goes
-through `virtual_to_relative` now. Both were filed offline while
-re-verifying the plan of **OPEN-145, which closed on 2026-09-21, offline,
-docs-only and wider than planned** (owner): the audit-log examples in
-`11-tools.md` and `09-permissions.md` showed lines the log never writes —
-`run_tests` with a command, `/etc/hosts` refused by the floor — and its tests
-now put every example line to the real engine. **OPEN-147, the security item
-the same pass filed, closed first, offline**: in-root `git_diff` runs
-read-only git that no mode or rule reaches, and showed a tracked
-`.rudra/config.toml`'s `api_key` to the reviewer's model, bare `--auto`
-included — past OPEN-117; `core.diff` now hands git an exclude pathspec for
-Rudra state, and §3's `filesystem/` entry says how. **OPEN-143, filed offline while planning OPEN-140,
-closed the same day, offline, docs-only**: the troubleshooting guide's narrow
-allow rule for tests, `execute:pytest*`, matched no command the gate runs. The
-plan's replacement — the venv's `python -m pytest` — **missed the section's own
-case on re-verification**: under `--auto` without shell Rudra's `.venv` build is
-itself denied, so the tests run under the machine's `python3`, and the
-type-check, Rudra's own interpreter, is denied first and stops the run, leaving
-`verify.log` no test line to copy. The section now names the commands as
-`permissions.jsonl` records them, and three other pages making the same claim
-were corrected with it (owner, 2026-09-21); §8's *Unattended shell* paragraph
-says what a narrow rule covers. **OPEN-142, filed by *Fix next* row 34's
-live run E, closed on 2026-09-21, offline, on the owner's option (a′)**: a
-task resumed after a stop, its own work written before it, was blocked for
-writing nothing over a green gate with no tests, where the writing path sends
-the tester; it takes the writing path now, and §3's *Control flow* says how.
-**(a′) and not its plan's (a)**, because re-verifying the plan found (a)
-would have blocked a resume over a FAILING gate on its first attempt, the
-coder never shown the failure. **Unverified on a model** — live run F.
-**OPEN-141, run E's other filing, closed on 2026-09-21, offline**: the
-content-path guard read `"/api/v1/todos"` as a project path because the
-project had an `api/` package (6 of 6 notes false); a literal is explained now
-only when its relative spelling is a FILE on disk — a file and not a
-directory, **the owner's choice over the plan's exists-rule**, because
-re-verifying the plan found `prefix="/api"` beside `api/` would still have
-been flagged. §3's `content_paths.py` paragraph says how. **Unverified on a model**
-— live run F.
-**OPEN-140, run E's third and its run-killer, closed on 2026-09-21, offline,
-on the owner's option A**: since OPEN-120 the gate ran the venv's `pytest`
-script, whose `sys.path[0]` is `bin/`, so a flat layout could not import itself
-(4 of E2's 6 blocks) — it runs `.venv/bin/python -m pytest` now, and an `A` on
-that command grants `<python> -m pytest*`, never `<python>*`; §3's `testing/`
-entry says how. **Unverified on a model** — live run F. **OPEN-144, filed offline on 2026-09-21 while re-verifying
-OPEN-140's plan, closed the same day, offline**: `A` at an approval prompt
-`str.split` a `shlex.join`ed command, so a project under a path with a space
-granted `'/Users/a/My*` — that project's `python -c` included — a `*` in a
-path was a wildcard, and an empty command granted every command; §3's
-*Permission flow* says how. **Run E verified
-OPEN-136 and OPEN-133 live, first time** — built to force them: a denied gate
-stopped E1 at `attempts == max_fix_attempts`, and `--continue` dispatched the
-task again. Its board is *2026-09-21b* in `TODO-closed.md`. **That is the
-paragraph below in action again**: the board was empty for about an hour. **OPEN-139, filed by *Fix next* row 31's live run
-`654a00c7f546`, closed the same day, offline**: under `--stream` an upstream
-120 s content-silence bound (`stream_chunk_timeout`) ended OpenAI-prefixed calls,
-set by nothing in Rudra; both OpenAI-prefixed entries now pass the role's
-`timeout` as that bound, and §3's `llm/` entry says how. **Unverified on a
-model** — only a slow first token or a stall supplies the occasion, which is the
-Vaayu run. **OPEN-138 closed on
-2026-09-21, offline, in a gitignored script** — the run18 checklist divided a
-token count the project documents as optional and died; re-verified first, it
-was two sites where the entry named one, the obvious `None → 0` guard printed a
-false PASS, and 6 of 27 archived runs crashed rather than one; `TODO-closed.md`
-holds the only record. OPEN-138 and
-**OPEN-137** were both filed by *Fix next* row 29's live run
-`e1a57a3e3791` — the first run ever launched with `--stream`, which is how it
-found that **`--stream` switched off every token count a run records**.
-**OPEN-137 closed on 2026-09-21, offline, and was verified live by row 31's whole
-run** — 8 of 8 tasks, every `ok` `model_call` record carrying counts — on that run's
-own endpoint: langchain_openai leaves `stream_usage` off whenever a
-`base_url` is set, so both OpenAI-prefixed provider entries now pass it; §3's
-`llm/` entry says how, and what an endpoint that rejects the option does.
-**That run is the one to read before the next
-live one**: 14 tasks, 4 done, 6 blocked, 4 never attempted, 2474.3 s, stopped by
-`MAX_BLOCKED_CONSULTS`, with a 60 s invocation bound making every task outcome
-meaningless on purpose. It verified three fixes on a model at once — **OPEN-114**
-(25 time halts, every one's last call ran, zero notices saying *"which will not
-run"*), **OPEN-124** (all 25 `subagent_done` records carry tool calls, no prose
-recorded twice, no tool result rendered as prose) and **OPEN-132**'s first firing
-(t6 and t8 `DONE` over an inherited red gate rather than `BLOCKED`) — and left
-OPEN-122, OPEN-134's route and OPEN-120 silent. Its board is *2026-09-18* in
-`TODO-closed.md`. Before that, all
-seven filed by *Fix next* row 19's live run `a4196786280d` were closed —
-**OPEN-134, the last of them, closed the same day, offline**: a coder with no
-shell globbed `.venv/bin/python` and `pytest` 40 times in one invocation, and
-each deduped repeat was answered only *"use the earlier result"*; a runner-shaped
-repeat carries OPEN-126's route now, and §3's `middleware/` entry says how. The
-next unstruck row of *Fix next* was then **live run B**, which ran as row 29 —
-read the paragraph below on what an empty board does and does not mean.
-*Corrected 2026-09-21: this said live run B was next, after it had run.*
-**OPEN-136, filed offline by OPEN-135's final review,
-closed the same day, offline**: a task a run stopped on resumed with its attempts
-already spent, so `--continue` blocked it without dispatching anything and overwrote
-the reason it stopped; the fix loop's budget is per RUN now, and §3's *Control flow*
-step 4 says how. **The comment it corrects had claimed the invariant it broke** — the
-give-back's own note said `--continue` "resumes it with its budget intact", true only
-of the one branch that gives an attempt back.
-That run used step 15's
-prompt, model, provider and settings, **0 of 9 tasks done in 1752 s, stopped by
-a 429**. The model pinned incompatible test dependencies and the provider
-throttled; the seven are what Rudra did with that — a rate limit that stops a
-run in 15 s, a real fix blocked as "no progress", a failed invocation's edit
-that vanishes, a retry told a stale failure, a finished task blocked by an
-earlier task's unlocated failure, a false "never attempted", and an interpreter
-hunt through deduped reads. **The first, OPEN-128, closed `WONTFIX` the same
-day: hosted-provider rate limits are out of scope** (§1 goal 1). **OPEN-129, the
-second, closed the same day, offline**: a finding-less blocker was signed by its
-`detail` alone, which for "collected nothing" names only the test files, so a
-real fix that turned one collection failure into another was blocked as no
-progress; §3's *Control flow* step 6 says how. **OPEN-130, the third, closed the
-same day, offline**: a coder invocation that failed mid-stream was handled as one
-that never ran, so t9's `conftest.py` edit reached neither `files_touched` nor a
-gate, and every such invocation read `could not run`; §3's *Control flow* edges
-and `run/ledger.json` row say how. **Its plan's code contradicted its own spec** —
-a second failed dispatch would have claimed the first one's edit — and was
-corrected before shipping. **OPEN-131, the fourth, closed the same day,
-offline**: an attempt that wrote nothing ran the gate and left the blocker alone,
-so its retry was sent an older attempt's failure, or none; §3's *Control flow*
-step 4 says how. **Its plan's ordering test could not fail** — two gates, which the
-test helper repeats — and drew three before shipping. **OPEN-135, filed while
-closing OPEN-131, closed on 2026-09-18, offline**: that same branch now reads
-`report.escalate` before any verdict is read, so a denied command, a missing tool
-or an internal error stops the run there too instead of spending the task's
-attempts and blocking; §3's *Control flow* step 6 says how. It sat above
-OPEN-132, whose plan — applied alone — would have turned it into `DONE`, and was
-rebased by one line to match when OPEN-135 closed. **OPEN-132, the fifth of the
-seven, closed on 2026-09-18, offline**: a failure the gate could not place can
-never be inherited, so a task whose work an earlier task had already built was
-blocked by that earlier task's collection crash — the empty-diff branch now reads
-`REGRESSED` as `INHERITED` when no attempt of the task changed a file and the gate
-was already red when it began; §3's *Control flow* step 5 says how, and **its note
-replaces a false one found while planning** — an empty diff over located inherited
-failures was marked `DONE` saying "the gate passes over the whole project".
-**OPEN-133, the sixth, closed on 2026-09-18, offline**: `_stop` returns the task a
-run stopped on to `PENDING` on purpose, and the summary read every `PENDING` task as
-untouched, so the one task a user most needs explained was called "never attempted"
-over two attempts and 926.9 s and its note was hidden; it now asks the ledger's own
-fields and says `not finished — the run stopped after N attempt(s)` with that note
-under it, and §8a's `files_touched: []` paragraph and *Which task* row say how.
-**The last of them, OPEN-134, closed on 2026-09-18, offline**, from its
-self-contained plan under `docs/superpowers/plans/2026-09-17-open-134-*.md`:
-a deduped read whose pattern or path is runner-shaped now carries OPEN-126's
-route, with its own first clause, and the archive replay routes exactly the 53
-runner-shaped refusals of 171 and none of the planner's. **That plan applied
-verbatim** — every quoted fragment matched the tree, its predicted 3-failed /
-3-passed first run held, and `settled_write_route`'s byte pin passed both
-sides. **Check each plan against the tree anyway**:
-OPEN-129's path mask, as planned, also masked relative paths, and OPEN-131's
-ordering pin could not fail. That run verified OPEN-125,
-OPEN-126 and OPEN-115's retry live; its board is *2026-09-17b* in
-`TODO-closed.md`. **OPEN-127, the last item step 15's live run `1dab3a848252` filed, closed on
-2026-09-17, offline**: the AGENTS.md summariser's model call left no
-`model_call` record — only `UsageMiddleware` writes one, and that call runs in
-no graph — so each attempt now writes one under role `summariser`, still outside
-`usage.json`; §8a's *Is the provider healthy?* and *Which call was slow?* rows
-say how. **Step 15's run did 8 of 8 tasks in
-840 s** on run `8f160d92c6da`'s prompt, model and provider, where the reference
-did 0 in 4090 s — mostly the provider's hour, which also left OPEN-114's time
-halts silent — and saw OPEN-116, OPEN-117, OPEN-119, OPEN-120, OPEN-121 and
-OPEN-123 act on a model; its board is in `TODO-closed.md`. **OPEN-126, filed by
-that run, closed on 2026-09-17, offline**: a coder with no shell wrote
-`run_tests.sh` to run the suite and re-sent it until halted, because the repeat
-guard's refusal said only "move on"; it now carries OPEN-103's route, and §3's
-`middleware/` entry and §8a's *Was a subagent halted for repeating itself?* row
-say how. **OPEN-125, filed by
-that run, closed on 2026-09-17, offline**: the runner's repeat counter halted a
-coder reading a file back after editing it, because it never reset where the
-repeat-guard middleware does; §3's `subagents/` entry and §8a's *Was a subagent
-halted for repeating itself?* row say how. **OPEN-123, filed on 2026-09-15 from live
-run A `a04f89bd2ed6`, closed on 2026-09-17, offline**: `files_touched` kept only
-the last attempt's files, and the gate — handed that field — never parsed a file
-an earlier attempt broke; §3's *Control flow* edges and §8a's *Which task* row
-say how. **OPEN-122, filed from the same run, closed on
-2026-09-17, offline**: `nudge_outcome` labelled the first live nudge
-`confirmed_done` when the agent had announced its next step again, and so did
-a nudge the time bound ended before any model answered; §3's `subagents/` entry
-and §8a's *Did an agent stop mid-thought?* row say what the four outcomes are.
-**OPEN-124 closed on 2026-09-17, offline**: `--stream`
-delivered no chunk to either parse loop, so every guard went blind the moment a
-user opted in, and an exhausted model call re-ran the graph 4×; fixing it exposed
-three defects in the token output, all fixed — §3's `trace/` entry says how, and
-§8a's *What was it actually thinking?* row says what changed for a reader.
-**OPEN-115 closed on 2026-09-16, offline**: every client
-SDK retried inside each attempt Rudra's retry made, so one failing model call
-was 12 HTTP requests (24 on google) of which `usage.json` counted 4; the SDK
-layer is off, and §3's `llm/` entry says what Rudra's took over from it.
-**OPEN-114 closed on 2026-09-16, offline**: both time
-bounds read the clock as a chunk ARRIVED — right after a model call returned
-and before its tools ran — so a halt discarded the answer it had just paid for,
-and that run's clarify stage ended with zero facts having produced one. The
-bound is a `before_model` hook now; §3's `middleware/` and `context/` entries
-say how, and **a span that overruns but finishes on its own is no longer
-counted as a halt**, which §8a's three time rows now state.
-**OPEN-121, that run's run-killer** — every planner
-re-consult counted the calls earlier consults of the same stage had made, so
-its fourth and fifth breakdown consults halted on 17 and 18 replayed calls
-having made none of their own — **closed on 2026-09-16, offline**; §3's
-`planner_agent.py` entry says how. That run's
-other two **closed on 2026-09-15, offline**: **OPEN-119** — a failing test's
-blocker that dropped the exception; §3's *Control flow* step 4 says how — and
-**OPEN-120** — an agent `pip install`ing into the machine's Python; §3's
-`testing/` entry says how.
-That run did 6 of 10 tasks where the last run A did 0 of 11, and its board is in
-`TODO-closed.md`. **OPEN-118** — four
-`REJECTED:` refusals documented as escaping the failure counter, which counts
-every one — was filed offline on 2026-09-14 while closing OPEN-103 and
-**closed on 2026-09-15, offline**, by correcting the claims and their pins, not
-the code. **OPEN-103, run
-`f845b496a2aa`'s run-killer, closed on 2026-09-14, offline** — §3's
-`tool_route.py` entry says how — **and so did OPEN-104**, its `COMPLETION`
-file; §3's `fix_write_params.py` paragraph says how. **OPEN-105**, that run's
-third item — the run18 checklist reporting `NO ARCHIVE` for a run that was
-archived — **closed on 2026-09-15, offline**, in a gitignored script;
-`TODO-closed.md` holds the only record. **OPEN-117, the security
-item** — any agent could read `.rudra/config.toml` and the `api_key` in it —
-was filed and closed the same day, offline; §3's `filesystem/` entry says how.
-**OPEN-116 closed on 2026-09-16, offline**: every planner stage opened by
-listing the project because its prompt said `call ls("/")`; the order is gone,
-and a stage whose project holds nothing to read is built with no file tools —
-§3's `planner_agent.py` and `middleware/` entries say how.
-OPEN-99 … OPEN-102 and the whole 2026-09-04 board — OPEN-93 …
-OPEN-98 — closed on 2026-09-09; each has a self-contained document under
-`docs/superpowers/plans/`, carrying a closing section saying what shipped and
-where it deviated from the plan. Trust `grep -n PENDING TODO.md` over any
-heading, including this sentence.
+Context loaded into every fresh Claude Code session. **Read `TODO.md` next — it
+is the live ledger of what is open, and its *Fix next* queue at the top is the
+one order to work in.** Trust `grep -n PENDING TODO.md` over any heading,
+including this sentence.
 
-**The board was empty for about an hour**, which is how long it took to run a
-model against the code. That is the pattern, four rounds running, and it is
-the most useful thing this file can tell a fresh session: **offline closure
-empties the board and tells you nothing about the model.**
+**One is open as of 2026-09-23: OPEN-151**, filed by live run G — a shell
+command carrying this project's virtual `/` spelling fails with only
+`/bin/sh`'s error, and nothing explains it. Its plan's Step 0 is measured, so
+the owner's first decision is whether to build it at all. Every other `OPEN-N`
+cited in this file is closed and points at a record in `TODO-closed.md`.
 
-**The verification run the 2026-09-04 board called for happened
-(`5775ba1f9855`, 2026-09-06), and its tables are now on the 2026-09-06 board
-in `TODO-closed.md`.** Read them before believing any of those six is
-verified: the run exercised **two** of nine fixes (OPEN-96 and OPEN-98's
-record), and the other seven produced zeros **because no occasion arose** —
-the model behaved. A run where nothing goes wrong cannot verify a guard, which
-is watch item 2 (now in `TODO-closed.md`'s moved section) in its most expensive form.
+**The history that used to open this file — which item closed when, and the
+five live-run rounds behind them — moved to `TODO-closed.md` on 2026-09-23**,
+section *CLAUDE.md's head and §2 rule 1's recital*. It was 331 lines of
+changelog restating what the ledgers already own. What follows is what it was
+keeping alive: four lessons that change how a session behaves, each paid for.
 
-**Then a second live run happened, `d8f742805b9b` on 2026-09-09, and it is
-the more important one.** Request: *"write a single HTML file for iphone 15"*.
-Result: **zero files, zero tasks, 1092 s, ended by the user pressing Ctrl-C.**
-It found three defects — OPEN-100, OPEN-101, OPEN-102 — **and none of them was
-in the nine fixes it was meant to exercise.** The planner spent 42% of the
-run's model time generating a document for a `write_file` tool it correctly
-does not have, inside a stage with no call cap and no time cap at all — and
-raised an approval panel for that same absent tool, which the user answered
-with `!`, granting `approve_all` for the session.
+**1. Offline closure empties the board and tells you nothing about the model.**
+Four rounds running, every item was closable without a model, and the board was
+empty within the hour each time. Then two runs that actually exercised one —
+`d8f742805b9b` and `f845b496a2aa` — produced seven new items between them,
+**none of them in the fixes those runs were meant to exercise**, and in places
+no closed item covered. A run where nothing goes wrong cannot verify a guard,
+which is the same lesson in its most expensive form: `5775ba1f9855` exercised
+two of nine fixes and left seven silent **because the model behaved**. So an
+empty board is not a finished project; it is the moment a live run is easiest
+to forget. **Offline closure is evidence about the code, never about a model.**
 
-**Read that as the standing answer to "is offline verification enough".** Both
-live runs found defects nobody had predicted, in places no closed item
-covered, and the seven fixes still waiting on a model are still waiting.
+**2. A plan document's recommended number is not evidence either.** OPEN-100's
+own plan said a 40-call cap would halt the runaway planner stage "at roughly
+call 20-25". Measured against the archive afterwards, a healthy stage runs to
+9-22 calls and the runaway one reached 20 — **neither shipped bound would have
+fired before the user did**. These documents are written carefully and still
+written from memory of the log rather than from a re-read of it. **Check a
+plan's arithmetic against the archived run before implementing it.**
 
-**Then a third run, `f845b496a2aa`, the same day, with a prompt built to make
-the model fail — and it found three more.** 11 tasks planned, **0 done**, 1
-blocked, 2737.3 s. The coder called a tool named `bash` fifteen times, was
-answered each time with langgraph's bare tool list, and **3 of its 4
-invocations died on the consecutive-failure guard** (OPEN-103 — OPEN-100's
-finding one agent down, and the coder correctly has no `execute`). It wrote a
-`COMPLETION` file into the project to announce it had finished, which is
-OPEN-42 live again four runs later (OPEN-104). And the run18 checklist reported
-`NO ARCHIVE` for a run that was archived perfectly (OPEN-105). **Two of
-OPEN-100's bounds fired live for the first time**, which is the good news, and
-OPEN-92 is *still* unverified — one `edit_file` call in the whole run, because
-the coder kept dying first.
+**3. Check each plan against the tree anyway, even one that reads as final.**
+OPEN-129's path mask, as planned, also masked relative paths; OPEN-131's
+ordering pin could not fail; OPEN-130's plan contradicted its own spec. Each
+was caught by re-verifying the plan against the code before executing it, and
+each would otherwise have shipped. The counter-example is real too — OPEN-134's
+plan applied verbatim, every quoted fragment matching — so the rule is to check,
+not to distrust.
 
-**Still outstanding, and it is the highest-value thing available:** seven of
-the nine 2026-09-03/04 fixes have never been seen acting on a model. OPEN-92
-is the sharpest — run `5775ba1f9855` made **zero `edit_file` calls**, so the
-gutter repair had nothing to repair, and OPEN-99 was the reason (no
-collectable test → no failing gate → no fix loop). **That blocker is gone**;
-what the next run still needs is a prompt forcing a multi-file plan and a
-failing first attempt. Nine follow-ups the closed items named and did not take
-are recorded in `TODO-closed.md`'s moved section — OPEN-97's Options B and D, OPEN-98's Option B,
-OPEN-100's Options A and B, OPEN-101's three, and OPEN-68's missing
-`verify.log` copy, with OPEN-99's Option D as a tenth — as candidates for
-filing, not as open work. *Corrected 2026-09-09: this said six, and `TODO.md`'s
-own heading said eight over a table of nine.*
-
-Corrected 2026-09-09, four times in one day: this paragraph said *"One is open
-as of 2026-09-06: OPEN-99"*, then *"Nothing is open"*, then *"One is open:
-OPEN-102"*, and now *"Nothing is open"* again. The live-run verification it
-inherited from the 2026-09-06 correction, which inherited it from the
-2026-09-04 one, **is still outstanding after every one of them** — and the
-board being empty again is precisely when that is easiest to forget. For four
-rounds every item was closable offline, and the first two runs that actually
-exercised a model produced four new items between them. **Offline closure is
-not evidence about a model; it is evidence about the code.**
-
-**One more caution, and OPEN-100 is where it was learned:** a plan document's
-recommended *number* is not evidence either. OPEN-100's own plan said a
-40-call cap would halt the runaway stage "at roughly call 20-25"; measured
-against the archive, a healthy planner stage runs to 9-22 calls and the
-runaway one reached 20, so neither shipped bound would have fired before the
-user did. **Check a plan's arithmetic against the archived run before
-implementing it** — these documents are written carefully and are still
-written from memory of the log, not from a re-read of it.
-
-**One more round happened on 2026-09-10, and it is the fifth for five.**
-OPEN-106 … OPEN-110 were filed and closed the same day, from an *audit* rather
-than a run: *can the folder an end-user sends explain their run?* No, five
-ways — `logs/` carried no version/platform/mode record, the archive carried
-neither `verify.log` nor `permissions.jsonl`, a setup-phase crash left no
-debug log at all, a failed model call recorded `type(exc).__name__` and
-nothing else, and a run could only ever be *mailed* rather than *seen*.
-`[telemetry]` is a live config section now, `langfuse` is a dependency, and
-`src/rudra/telemetry/` sends one trace per run when a user configures keys.
-**Every one of those five was closable offline, which is what the paragraph
-above is about** — they say nothing about how a model behaves.
-
+**4. A comment asserting two things are the same needs a test, or it becomes
+the reason nobody checks.** Both copies of the pruning rule that drifted
+(OPEN-63, OPEN-64) carried a docstring claiming they could not; one named a
+test that did not exist. The inverse bites too: OPEN-136's give-back comment
+claimed the very invariant its code broke.
 **Three ledgers, and they are not interchangeable.**
 
 | File | Owns |
@@ -384,10 +68,6 @@ here it corrects.
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
 also why §2 rule 6 can only mean *alongside* the code commit, not in it.
-
-Corrected 2026-08-21 (CR-DOC1): this file used to send every session to
-`TODO.md` §E for "which step to do next", and that section has not been in
-`TODO.md` since the ledger was replaced.
 
 ---
 
@@ -437,7 +117,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. One is open as of 2026-09-23, with a self-contained plan, filed by live run G (`eed59b91daca`, 6 of 6 tasks, which verified OPEN-141 live) — OPEN-151, an `execute` carrying the project's virtual `/` spelling answered only by `/bin/sh`; its Step 0 is measured (3 hits over 2 runs, under the plan's own threshold, one of them before a run-killer), so **ask the owner whether to build it at all, then A, B or C**; OPEN-149, a subagent re-sending already-answered reads after writing, run to the 80-call ceiling, filed by live run F (`ea0cafc09997`, 8 of 9 tasks, which verified OPEN-140, OPEN-142 and OPEN-143 live), closed offline the same day on the owner's option B′ — 8 answered reads in a row, counted only after the invocation's first write, halt it; OPEN-150, a repeated search with a `path` refused naming the path alone, filed by the same run, closed offline the same day, the refusal and notice now naming the pattern under the path; OPEN-146, the docs calling `git_diff` gated, filed offline while re-verifying OPEN-145's plan, closed offline on 2026-09-22, docs-only; OPEN-148, `git_diff`'s `path` ignoring the virtual spelling, filed with it, closed offline on 2026-09-22 on the owner's option A — `/a.txt` is the project's file, and the gated branch reports git's failure; OPEN-145, `11-tools.md`'s audit-log example showing `run_tests` with a command it never records, filed offline while closing OPEN-143, closed offline that day, docs-only and widened by the owner to `05-how-it-works.md:286` and `09-permissions.md`'s example and `source` list; OPEN-147, the security item that pass filed — in-root `git_diff` meeting no gate and showing a tracked `.rudra/config.toml`'s `api_key` to the reviewer — closed offline the same day, ahead of OPEN-145; OPEN-143, the documented narrow allow rule for tests matching nothing, filed offline while planning OPEN-140, closed offline that day, docs-only and wider than planned, because re-verifying found the plan's venv rule missed its own case (under `--auto` without shell there is no `.venv`, and the type-check stops the run first) and three more pages made the same claim; OPEN-142, the empty-diff path blocking a resumed task's own work where the writing path sends the tester, filed by row 34's live run E, third-party while Vaayu is not ready (owner, 2026-09-21), which verified OPEN-136 and OPEN-133 live, closed offline on 2026-09-21 on the owner's option (a′) — its plan's (a) narrowed to a green gate with no tests, because re-verifying found (a) would block a resume over a failing gate on a stale signature; OPEN-141, the content-path guard flagging URL routes, run E's other filing, closed offline on 2026-09-21, a literal now explained only when it names a file on disk — the owner's choice over the plan's exists-rule, which would still have flagged a router prefix beside its package; OPEN-140, the gate's bare `pytest` leaving a flat layout's root off `sys.path`, run E's third and its run-killer, closed offline on 2026-09-21 on the owner's option A, the gate running `.venv/bin/python -m pytest`; OPEN-144, `A` at an approval prompt granting more than the command shown — a quoted path cut at its space — filed offline on 2026-09-21 while re-verifying OPEN-140's plan and closed offline the same day, ahead of it, being a security item; OPEN-139, the upstream 120 s `stream_chunk_timeout` no Rudra setting reached under `--stream`, filed by row 31's live run `654a00c7f546`, which did 8 of 8 tasks and verified OPEN-137 and OPEN-134's route live, closed offline that day, the role's `timeout` now bounding a streamed call; OPEN-138, the run18 checklist dividing by a null token count and dying, filed offline on 2026-09-18 by row 29's live run `e1a57a3e3791`, which verified OPEN-114, OPEN-124 and OPEN-132 on a model, closed offline on 2026-09-21 in a gitignored script, two sites and a false PASS wider than filed; OPEN-137, `--stream` switching off every token count a run records, filed by run `e1a57a3e3791`, closed offline on 2026-09-21 and verified by that run; OPEN-134, the deduped interpreter hunt whose refusal named no route, filed by row 19's live run, which did 0 of 9 tasks and was stopped by a 429, closed offline that day; OPEN-136, the task a stopped run left unresumable, filed offline by OPEN-135's final review and closed offline the same day, the fix budget being per run now; OPEN-133, the task a run stopped on being called "never attempted" over two attempts and 926.9 s, closed offline on 2026-09-18; OPEN-132, the finished task blocked by an earlier task's unlocated failure, closed offline on 2026-09-18; OPEN-135, the empty-diff attempt that ignores an escalating gate, filed offline while closing OPEN-131 and closed offline on 2026-09-18; OPEN-131, the retry after an attempt that wrote nothing being sent an older failure or none, closed offline the same day; OPEN-130, the coder invocation that failed mid-stream and lost its edit, closed offline the same day; OPEN-128, that 429 stopping the run, closed `WONTFIX` the same day, hosted rate limits being out of scope; OPEN-129, the real fix that run blocked as no progress because two collection failures signed alike, closed offline the same day; OPEN-127, the AGENTS.md summariser call that left no `model_call` record, closed offline on 2026-09-17; OPEN-126, the coder that re-sent a test-runner script it had written until halted, told only to move on, closed offline on 2026-09-17; OPEN-125, the runner counter that halted a coder reading back its own edit, closed offline on 2026-09-17; OPEN-123, the `files_touched` that kept only the last attempt's files — and a gate that, handed it, judged only the last attempt — closed offline on 2026-09-17; OPEN-122, the nudge outcome that recorded an unfinished agent as done, closed offline on 2026-09-17; OPEN-124, `--stream` delivering no chunk to either parse loop, closed offline on 2026-09-17; OPEN-115, the client SDKs retrying inside Rudra's own retry, closed offline on 2026-09-16; OPEN-116, the planner prompt that ordered every stage to `ls` the project, closed offline on 2026-09-16; OPEN-114, the time bound that halted on the answer it had just paid for and threw it away, closed offline on 2026-09-16; OPEN-121, the planner guard that counted an earlier consult's tool calls against this one, closed offline the same day; OPEN-120, the agent that pip-installed into the machine's Python, closed offline on 2026-09-15; OPEN-119, the test blocker that listed pytest's frames and dropped the exception, closed offline that day; OPEN-118, the refusals documented as escaping a failure counter that counts them, closed offline that day by correcting the documents; OPEN-105, the checklist row that reported a missing archive for an archived run, closed offline that day; OPEN-103, the run-killer everything else in its run was downstream of, closed offline that day, and OPEN-104 after it, so the next live run is what says whether either fix works on a model. Since 2026-09-14 the file holds only that queue and the `PENDING` entries (owner's request); the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. Run `5775ba1f9855`'s results — which two fixes it exercised and which seven it left silent — moved to `TODO-closed.md` with the 2026-09-06 board. When there is more than one item, **the board's order can be a dependency rather than a preference** — on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For a closed item's reproduction read `TODO-closed.md`; for historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **One is open as of 2026-09-23: OPEN-151**, filed by live run G, with a self-contained plan; the head of this file says what it is. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
