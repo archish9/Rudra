@@ -332,6 +332,10 @@ class RunUsage:
     # answerable from usage.json alone (CLAUDE.md §8a).
     env_syncs: int = 0
     env_sync_seconds: float = 0.0
+    # Gates whose only failures were undeclared packages, each of which gave
+    # its attempt back (OPEN-161). Run-level for `env_syncs`' reason: the
+    # refund is Rudra's decision about the budget, not anything a role did.
+    dependency_gates: int = 0
 
     def beliefs_for(self, role: str) -> dict[str, str]:
         """`role`'s write-belief map, created on first use.
@@ -356,6 +360,10 @@ class RunUsage:
         """One command that built or synced the project's .venv (OPEN-120)."""
         self.env_syncs += 1
         self.env_sync_seconds += max(0.0, float(seconds))
+
+    def record_dependency_gate(self) -> None:
+        """One gate that failed only on undeclared packages (OPEN-161)."""
+        self.dependency_gates += 1
 
     def _slot(self, role: str) -> RoleUsage:
         if role not in self.per_role:
@@ -675,6 +683,7 @@ class RunUsage:
                 ),
                 "env_syncs": self.env_syncs,
                 "env_sync_seconds": round(self.env_sync_seconds, 3),
+                "dependency_gates": self.dependency_gates,
             },
         }
 

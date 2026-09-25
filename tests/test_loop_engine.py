@@ -2501,3 +2501,156 @@ def test_a_blocked_task_s_files_are_still_listed():
     )
 
     assert "- app/half_done.py" in engine._review_prompt(ledger)
+
+
+# --- OPEN-161: a gate that failed only on an undeclared package ------------
+
+_MISSING = """\
+collected 0 items / 1 error
+
+==================================== ERRORS ====================================
+_____________________ ERROR collecting tests/test_main.py ______________________
+{frame}: in <module>
+    import {module}
+E   ModuleNotFoundError: No module named '{module}'
+=========================== short test summary info ============================
+ERROR tests/test_main.py
+=============================== 1 error in 0.13s ===============================
+"""
+
+
+def _missing_package_report(module: str, frame: str = "app/database.py:1"):
+    """`frame` is where the import failed, and it is what C6.5a signs: two
+    packages missing at one import line would read as no progress."""
+    return _gate_blocker("test", _MISSING.format(module=module, frame=frame))
+
+
+class _Notices:
+    def __init__(self):
+        self.seen: list[tuple[str, str]] = []
+
+    def notice(self, payload, *, role, name="", **kwargs):
+        self.seen.append((name, payload))
+
+
+async def test_a_package_behind_a_package_does_not_exhaust_the_task(monkeypatch, context):
+    """Run `4989aefefacb` t1, reproduced: a stub, then `No module named
+    'sqlalchemy'`, then -- once the coder declared it -- `greenlet` behind it.
+    Three gates on a budget of three, two of them spent on packages nobody
+    had declared, and the task ended BLOCKED on the third without the coder
+    ever being shown greenlet. Each gate whose only failure is a missing
+    package gives its attempt back (OPEN-161, the owner's option A)."""
+    from rudra.context.usage import RunUsage
+
+    context.usage = RunUsage()
+    context.subagents.trace = _Notices()
+    _gate_sequence(
+        monkeypatch,
+        failing_report(),
+        _missing_package_report("sqlalchemy"),
+        _missing_package_report(
+            "greenlet", frame=".venv/lib/python3.12/site-packages/sqlalchemy/util/concurrency.py:70"
+        ),
+        passing_report(),
+    )
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.DONE
+    assert task.attempts == 2, "four dispatches, two of them given back"
+    assert task.dependency_gates == ("sqlalchemy", "greenlet")
+    assert context.usage.dependency_gates == 2
+    assert context.usage.as_log()["run"]["dependency_gates"] == 2
+    names = [name for name, _ in context.subagents.trace.seen]
+    assert names == [engine.DEPENDENCY_GATE_NOTICE] * 2
+    assert "greenlet" in context.subagents.trace.seen[1][1]
+
+
+async def test_the_dependency_give_back_is_capped_per_task(monkeypatch, context, default_fakes):
+    """A coder inventing a new missing package on every attempt still ends:
+    at most MAX_DEPENDENCY_GATES are given back, then the budget is spent as
+    before."""
+    lines = iter(range(1, 100))
+
+    def gate(*args, **kwargs):
+        line = next(lines)
+        return _missing_package_report(f"pkg{line}", frame=f"app/database.py:{line}")
+
+    monkeypatch.setattr(engine, "verify_project", gate)
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert len(default_fakes) == context.cfg.agent.max_fix_attempts + engine.MAX_DEPENDENCY_GATES
+    assert len(task.dependency_gates) == engine.MAX_DEPENDENCY_GATES
+    assert task.attempts == context.cfg.agent.max_fix_attempts
+
+
+async def test_a_package_the_coder_did_not_declare_is_still_no_progress(
+    monkeypatch, context, default_fakes
+):
+    """The plan's own guard -- give back only once the next attempt edits a
+    dependency file -- was replaced by the owner, because it can never fire
+    after the exhausting gate. What bounds a coder that ignores the package
+    instead is C6.5a: the same gate twice is BLOCKED."""
+    _gate_sequence(monkeypatch, _missing_package_report("sqlalchemy"))
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.note.startswith("no progress")
+    assert len(default_fakes) == 2
+
+
+async def test_a_module_the_project_holds_is_charged(monkeypatch, context, default_fakes):
+    """OPEN-140's `No module named 'main'` is a path defect, not a package."""
+    (context.project_path / "main.py").write_text("x = 1\n")
+    lines = iter(range(100))
+    monkeypatch.setattr(
+        engine,
+        "verify_project",
+        lambda *a, **k: _missing_package_report("main", frame=f"app/database.py:{next(lines)}"),
+    )
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.dependency_gates == ()
+    assert len(default_fakes) == context.cfg.agent.max_fix_attempts
+
+
+def test_dependency_gates_survive_a_ledger_round_trip(tmp_path):
+    ledger = Ledger()
+    task = ledger.add("one")
+    task.dependency_gates = ("sqlalchemy", "greenlet, sqlalchemy[asyncio]")
+    path = tmp_path / "ledger.json"
+    ledger.save(path)
+
+    assert Ledger.load(path).tasks[0].dependency_gates == task.dependency_gates
+
+
+def test_the_troubleshooting_page_quotes_the_dependency_gate_as_it_is_printed():
+    """`06-troubleshooting.md` tells a user what a refunded gate prints, where
+    it is recorded, and how many are given back. Each is read off the code
+    here rather than restated (lesson 4)."""
+    from pathlib import Path
+
+    page = (Path(__file__).parent.parent / "Documentation" / "06-troubleshooting.md").read_text()
+    task = engine.Task(id="t1", description="x")
+    printed = Console(record=True, width=400)
+    context = LoopContext(
+        subagents=FakeSubagents(),
+        project_path=Path(__file__).parent,
+        console=printed,
+        cfg=FakeCfg(),
+        paths=None,
+    )
+
+    assert engine._refund_dependency_gate(task, _missing_package_report("x"), context, 0)
+
+    assert "the gate failed only on packages the project does not declare (" in page
+    assert "the gate failed only on packages the project does not declare (x)" in (
+        printed.export_text()
+    )
+    assert "`dependency_gates` in `ledger.json`" in page and task.dependency_gates == ("x",)
+    assert engine.MAX_DEPENDENCY_GATES == 3 and "At most three are given back" in page

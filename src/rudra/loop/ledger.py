@@ -75,6 +75,11 @@ class Task:
     # budget, which cost task t8 outright, left nothing on disk anybody
     # could count afterwards. That is OPEN-44's failure one field over.
     run_errors: tuple[str, ...] = ()
+    # Every gate whose only failures were packages nobody declared, one entry
+    # per gate naming them, in order (OPEN-161). Each gave its attempt back,
+    # so `attempts` alone no longer says how many gates the task drew; this
+    # is the rest of that count, and a list for `halts`' reason.
+    dependency_gates: tuple[str, ...] = ()
     # Wall clock this task consumed, in seconds (C9.6, Step 15a). Recorded
     # by loop/engine.py at every exit from run_task, including the failing
     # ones: a task that burned three attempts is the one a user most wants
@@ -204,6 +209,7 @@ class Ledger:
                 note=entry.get("note", ""),
                 halts=tuple(entry.get("halts", ())),
                 run_errors=tuple(entry.get("run_errors", ())),
+                dependency_gates=tuple(entry.get("dependency_gates", ())),
                 # .get, not [...]: a ledger written by an older Rudra is a
                 # volatile file, but a run in flight during an upgrade
                 # must not crash on it.

@@ -545,7 +545,9 @@ A blocked task stays blocked: `rudra --continue` works only `pending` tasks, so 
 max_fix_attempts = 5
 ```
 
-Raising it costs a coder invocation per extra attempt on every task that fails, stuck or not — across Rudra's own measured runs a third attempt passed about one time in twenty — so raise it for the run that needs it rather than for good. If the gates keep naming packages the project does not declare (`No module named ...`), add them to `requirements.txt` or `pyproject.toml` yourself first; that is usually what the extra attempts were spent discovering.
+Raising it costs a coder invocation per extra attempt on every task that fails, stuck or not — across Rudra's own measured runs a third attempt passed about one time in twenty — so raise it for the run that needs it rather than for good.
+
+A gate that failed **only** because a package the project does not declare is missing (`No module named ...`, or a library's own `pip install ...` hint) does not count against the budget: the coder cannot see the next missing package until the one in front of it is installed, and Rudra installs what the project declares before every gate. Each such gate prints `the gate failed only on packages the project does not declare (...)`, and the task's `dependency_gates` in `ledger.json` lists them. At most three are given back per task per run, and a package the coder does not then declare draws the same gate again and ends as `no progress`. So a task that still ends `attempts exhausted` with `dependency_gates` in its record spent its budget on its own code — or, past three, on more missing packages than the allowance: declare them in `requirements.txt` or `pyproject.toml` yourself and run again.
 
 ### The generated code doesn't run
 

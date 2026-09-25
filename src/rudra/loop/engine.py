@@ -27,6 +27,7 @@ from rudra.context.middleware import log_model_call
 from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
 from rudra.git.core import is_repo, status
 from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
+from rudra.loop.dependencies import local_module_names, missing_packages
 from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.loop.regressions import INHERITED, PASSED, REGRESSED, failure_keys, verdict_for
 from rudra.memory.degrade import last_failure
@@ -721,6 +722,59 @@ def _record_halt(task: Task, result: Any, context: LoopContext) -> None:
     )
 
 
+# How many gates per task per run may give their attempt back for failing only
+# on undeclared packages (OPEN-161). The archive's worst task drew two (run
+# `4989aefefacb` t1: sqlalchemy, then greenlet behind it). A cap and not
+# unbounded, so a coder inventing a new missing package every attempt still
+# ends; a coder that ignores the package ends sooner, on C6.5a's identical
+# signature, which is why the plan's second guard was not built.
+MAX_DEPENDENCY_GATES = 3
+
+# The NOTICE a refunded gate is recorded under (CLAUDE.md §8a: the string a
+# maintainer is told to grep for, spelled once).
+DEPENDENCY_GATE_NOTICE = "dependency-gate"
+
+
+def _refund_dependency_gate(task: Task, report: Any, context: LoopContext, spent: int) -> bool:
+    """Give back the attempt a gate cost if its only failures were missing packages.
+
+    OPEN-161, the owner's option A, triggered on the gate itself. The coder
+    has no shell, so a package nobody declared surfaces only as a failed
+    import at the gate, one per gate -- and every coder in the archive that
+    was shown one declared it on its next attempt. What spent the budget was
+    finding them: run `4989aefefacb`'s t1 met greenlet on its third and last
+    gate and was BLOCKED without ever being shown it. The plan wanted the
+    refund judged one attempt LATER, once the next attempt had edited a
+    dependency file; after the exhausting gate there is no next attempt, so
+    that rule could not rescue the one case it was filed on.
+
+    OPEN-46's give-back, applied to a different event: `task.attempts -= 1`
+    under the ceiling `run_task` already holds. Returns whether it did.
+    """
+    if spent >= MAX_DEPENDENCY_GATES:
+        return False
+    packages = missing_packages(report, local_module_names(context.project_path).__contains__)
+    if not packages:
+        return False
+    named = ", ".join(packages)
+    task.attempts -= 1
+    task.dependency_gates = (*task.dependency_gates, named)
+    if context.usage is not None:
+        context.usage.record_dependency_gate()
+    sentence = (
+        f"{task.id}: the gate failed only on packages the project does not declare "
+        f"({named}); that attempt is not charged ({spent + 1} of {MAX_DEPENDENCY_GATES})"
+    )
+    context.console.print(f"[dim]{escape(sentence)}[/dim]")
+    trace = getattr(context.subagents, "trace", None)
+    if trace is not None:
+        try:
+            trace.notice(sentence, role="rudra", name=DEPENDENCY_GATE_NOTICE)
+        except Exception:  # noqa: BLE001 -- observability never ends a run
+            _LOG.debug("could not emit the dependency-gate notice", exc_info=True)
+    return True
+
+
 async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outcome:
     """Write, verify, fix, reverify -- until the gate passes or we stop.
 
@@ -728,6 +782,9 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     """
     tested = False
     blocker_text = ""
+    # Gates this call gave back for failing only on undeclared packages
+    # (OPEN-161). Per call, so per task per run, like the budget (OPEN-136).
+    dependency_refunds = 0
     # Whether a gate has already declined this task in this call, which is
     # what makes an empty diff that then passes a RETRY rather than work an
     # earlier task did (OPEN-123). In memory, like `inherited`: a fresh
@@ -1086,6 +1143,10 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             return outcome
         task.last_signature = signature
         rejected = True
+        # After C6.5a, so a coder that did not declare the package draws the
+        # same gate and is BLOCKED above rather than refunded (OPEN-161).
+        if _refund_dependency_gate(task, report, context, dependency_refunds):
+            dependency_refunds += 1
 
     task.status = TaskStatus.BLOCKED
     if not any(kept in task.note for kept in ("wrote nothing", "could not run", "stopped mid-run")):
