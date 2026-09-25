@@ -35,6 +35,14 @@ root.  The gate's prediction is therefore conservative in the safe
 direction: it can never predict "inside the project" for a write that
 actually escapes it.
 
+The one step they share is NOT mirrored but called: stripping the real
+root, by any spelling of the root or of the path, is `strip_project_root`
+here and step 2a there (OPEN-159).  It was two copies until a symlinked
+spelling of the root was the project's file to the backend and a virtual
+path to the gate, and a comment claiming they agreed was all that held
+them together.  `tests/test_deepagents_path.py::
+test_the_gate_and_the_backend_read_every_spelling_alike` holds them now.
+
 CROSS-PLATFORM
 --------------
 Absolute means three different things, and the model may emit any of them
@@ -113,15 +121,18 @@ def virtual_to_relative(path: str, project_root: Path) -> str | None:
     if not candidate.is_absolute():
         return candidate.as_posix()
 
-    # Absolute POSIX. If the model spelled out the real project root, strip
-    # it; both spellings of the root are tried because on macOS /tmp is a
-    # symlink to /private/tmp, so the obvious spelling and the resolved one
-    # differ for a project people really do work in (A1.58).
-    for root in _posix_root_spellings(project_root):
-        try:
-            return candidate.relative_to(root).as_posix()
-        except ValueError:
-            continue
+    # Absolute POSIX. If the model spelled out the real project root, by any
+    # spelling, strip it -- the backend's own rule, shared (OPEN-159).
+    roots = posix_root_spellings(project_root)
+    try:
+        stripped = strip_project_root(path, roots)
+    except ValueError:
+        # An embedded NUL, which `resolve()` refuses. The backend lets that
+        # raise and the tool answers `Error: ...`; but the gate asks this
+        # BEFORE its own CR-B7 guard, so here the path is read as written.
+        stripped = _relative_to_any(candidate, roots)
+    if stripped is not None:
+        return stripped
 
     # Otherwise it is a VIRTUAL absolute path: deepagents reads the leading
     # `/` as the project root, so `/src/app.py` is `<project>/src/app.py`.
@@ -140,7 +151,55 @@ def virtual_to_host(path: str, project_root: Path) -> Path | None:
     return Path(project_root) / relative
 
 
-def _posix_root_spellings(project_root: Path) -> tuple[str, ...]:
+def strip_project_root(path: str, roots: tuple[str, ...]) -> str | None:
+    """The project-relative spelling of POSIX-absolute `path`, or None.
+
+    ONE implementation with two callers (OPEN-159): `virtual_to_relative`,
+    which the gate, the approval preview and every middleware ask, and
+    `deepagents_path._normalize` step 2a, which is what the file tools hand
+    the backend. They were two copies, and they differed: the backend's tried
+    the path as it RESOLVES as well as written, so a spelling through a link
+    to the root -- on macOS every `/tmp/<project>` and `/var/folders/...`
+    path, the root arriving as `/private/...` -- was the project's own file to
+    the backend and a virtual path to the gate. A deny rule on `.env` let that
+    spelling through, and the backend edited `.env`.
+
+    `roots` is `posix_root_spellings`: the root as given and as resolved,
+    which is A1.58. The path as written is tried against them first, so a
+    `..` the floor must see survives (`<root>/../x` is `../x`); its resolved
+    spelling only after, and never where resolving fails.
+
+    Raises ValueError on an embedded NUL, as `Path.resolve()` does, and it is
+    resolved before anything is matched: the backend has always let that
+    propagate, and deepagents answers it as `Error: ...` at `validate_path`.
+    Matching first would pass a NUL path on to a backend call that raises
+    where nothing catches it.
+    """
+    written = PurePosixPath(path)
+    candidates = [written]
+    try:
+        resolved = PurePosixPath(Path(path).resolve().as_posix())
+    except (OSError, RuntimeError):
+        resolved = written
+    if resolved != written:
+        candidates.append(resolved)
+    for candidate in candidates:
+        relative = _relative_to_any(candidate, roots)
+        if relative is not None:
+            return relative
+    return None
+
+
+def _relative_to_any(path: PurePosixPath, roots: tuple[str, ...]) -> str | None:
+    for root in roots:
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+    return None
+
+
+def posix_root_spellings(project_root: Path) -> tuple[str, ...]:
     """The project root as given and as it resolves, de-duplicated."""
     root = Path(project_root)
     spellings = [root.as_posix()]
@@ -166,4 +225,10 @@ def _windows_root_spellings(project_root: Path) -> tuple[PureWindowsPath, ...]:
     return tuple(spellings)
 
 
-__all__ = ["looks_windows_absolute", "virtual_to_host", "virtual_to_relative"]
+__all__ = [
+    "looks_windows_absolute",
+    "posix_root_spellings",
+    "strip_project_root",
+    "virtual_to_host",
+    "virtual_to_relative",
+]

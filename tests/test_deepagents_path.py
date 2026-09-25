@@ -345,6 +345,69 @@ def test_a_symlinked_root_matches_the_path_the_user_typed(normalizer, tmp_path: 
     assert validate(f"{real}/src/deep/models.py") == "/src/deep/models.py"
 
 
+def test_the_gate_and_the_backend_read_every_spelling_alike(normalizer, tmp_path: Path):
+    """CR-B4's promise, pinned (OPEN-159).
+
+    `virtual_to_relative` is what the gate, the approval preview and every
+    middleware ask; the patched `validate_path` is what the file tools hand
+    the backend. Both modules' docstrings said the two agree, no test held
+    them to it, and for a symlinked spelling of the root they did not: a deny
+    rule on `.env` let that spelling through while the backend edited `.env`.
+
+    The macOS `/private` alias is added where it exists, so on a mac this
+    also covers `/tmp/<project>` and `/var/folders/...` as spelled; the plain
+    symlink covers the same question on every OS.
+    """
+    from pathlib import PurePosixPath
+
+    from rudra.compat.virtual_paths import virtual_to_relative
+
+    real = tmp_path / "real_root"
+    (real / "src").mkdir(parents=True)
+    link = tmp_path / "linked_root"
+    link.symlink_to(real, target_is_directory=True)
+    root = real.resolve()
+    validate = normalizer(root=root)
+
+    spellings = [
+        "src/app.py",
+        "/src/app.py",
+        "/etc/passwd",
+        "/",
+        r"C:\other\x.py",
+        f"{root}/src/app.py",
+        f"{link}/src/app.py",
+    ]
+    alias = str(root).removeprefix("/private")
+    if alias != str(root) and Path(alias).resolve() == root:
+        spellings.append(f"{alias}/src/app.py")
+
+    for spelling in spellings:
+        backend = PurePosixPath(validate(spelling))
+        gate = PurePosixPath("/", virtual_to_relative(spelling, root))
+        assert backend == gate, spelling
+
+    # A traversal is the one place they answer differently on purpose: the
+    # backend refuses it, and the gate keeps the `..` for the floor to catch.
+    for spelling in (f"{root}/../outside/x.py", "/../../etc/hosts"):
+        with pytest.raises(ValueError, match="traversal"):
+            validate(spelling)
+        assert ".." in virtual_to_relative(spelling, root).split("/"), spelling
+
+
+def test_a_nul_byte_spelled_with_the_root_is_still_refused(normalizer, tmp_path: Path):
+    """OPEN-159 moved step 2a into `strip_project_root`, which resolves the
+    path BEFORE matching it, as this step always did. Matching first would
+    strip `<root>/a<NUL>b` to `/a<NUL>b` and hand it to a backend whose every
+    method raises on it uncaught; resolving first keeps it here, where
+    deepagents answers the ValueError as `Error: ...`."""
+    root = tmp_path.resolve()
+    validate = normalizer(root=root)
+
+    with pytest.raises(ValueError, match="null"):
+        validate(f"{root}/a\x00b")
+
+
 def test_the_normalizer_is_wired_to_the_same_flag_as_the_middleware():
     """OPEN-31: the flag existed, the normalizer was never given it.
 

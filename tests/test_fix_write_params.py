@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from rudra.middleware.fix_write_params import (
     FixWriteParamsMiddleware,
     _is_directory_placeholder,
@@ -772,19 +774,51 @@ def test_other_writes_are_untouched_by_the_scratch_rule(tmp_path):
         assert reached == [True], path
 
 
-def test_a_project_under_the_machines_tmp_is_not_scratch():
-    """A1.58: with the root spelled `/tmp/<project>`, both host spellings of
-    the project's own `app.py` resolve to `app.py`, never to `tmp/...`.
+def test_a_project_under_the_machines_tmp_is_not_scratch(tmp_path):
+    """Both host spellings of the project's own `app.py` are `app.py`, never
+    `tmp/...`, whichever spelling the root is given in.
 
-    A root spelled `/private/tmp/<project>` -- what `cli.py` resolves to --
-    does NOT recognise `/tmp/<project>/x`; that is `virtual_to_relative`'s
-    gap, filed separately, and not pinned here."""
+    On macOS the link is `/tmp` -> `/private/tmp`. A1.58 covered a root GIVEN
+    as `/tmp/<project>`; OPEN-159 the root as `cli.py` really hands it over,
+    resolved, with the model writing `/tmp/<project>/app.py` -- which the
+    backend writes to `app.py`, so refusing it as a scratch write was false.
+    A real link, so the question is asked on every OS."""
+    real = tmp_path / "proj"
+    real.mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):  # pragma: no cover - Windows w/o privilege
+        pytest.skip("symlinks not available")
+
+    for given in (real.resolve(), link):
+        for path in (f"{real.resolve()}/app.py", f"{link}/app.py"):
+            _, reached = _scratch_call(path, "print(1)\n", given)
+            assert reached == [True], (str(given), path)
+
+
+def test_a_tmp_spelling_of_a_project_in_private_tmp_is_not_refused():
+    """OPEN-159 as it met OPEN-157's rule, on the machine where it bites.
+
+    The test above reads `tmp/` first only where pytest's own temp dir is
+    under `/tmp`; on macOS it is under `/private/var`, so that test passed
+    before the fix too. Here the project really is in `/private/tmp` and the
+    write is spelled `/tmp/<project>/app.py`, which the backend writes to
+    `app.py` -- and the scratch rule refused it as inventing `tmp/`. Asked of
+    the machine, not of `sys.platform` (CLAUDE.md §1.8): skipped wherever
+    `/tmp` is not a link."""
+    import tempfile
     from pathlib import Path
 
-    root = MEASURED_ROOT.replace("/private", "")
-    for path in (f"{MEASURED_ROOT}/app.py", f"{root}/app.py"):
-        _, reached = _scratch_call(path, "print(1)\n", Path(root))
-        assert reached == [True], path
+    if Path("/tmp").resolve() == Path("/tmp"):
+        pytest.skip("/tmp is not a link on this machine")
+    with tempfile.TemporaryDirectory(dir="/tmp") as spelled:
+        root = Path(spelled).resolve()
+        assert not spelled.startswith(str(root))
+
+        _, reached = _scratch_call(f"{spelled}/app.py", "print(1)\n", root)
+
+        assert reached == [True]
 
 
 def test_without_a_project_root_the_scratch_rule_declines():

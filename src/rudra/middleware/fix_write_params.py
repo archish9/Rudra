@@ -412,10 +412,11 @@ def _is_scratch_write(path: str, project_root: Path | None) -> bool:
 
     `virtual_to_relative` decides where the path lands (CR-B4), so `/tmp/x`,
     `tmp/x` and the host spelling of `<project>/tmp/x` are one question. A
-    `/tmp/<project>/x` spelling is the project's own `x` only where that
-    function recognises the root (A1.58); with a resolved `/private/tmp` root
-    it does not, and this rule then refuses what the backend would misplace
-    (OPEN-159). Declines with no root, and whenever the project already has `tmp/`: the
+    `/tmp/<project>/x` spelling is the project's own `x`, never `tmp/...`,
+    whichever spelling the root arrives in: that function reads a path as it
+    resolves, as the backend does (A1.58, OPEN-159). This said the rule
+    refused what the backend would misplace; the backend never misplaced it,
+    and the rule was refusing a correct write. Declines with no root, and whenever the project already has `tmp/`: the
     refusal is about a directory the run would invent, never one the user has.
     Run `4989aefefacb` is the measure: 3 of 447 archived writes landed under
     `tmp/`, all three completion prose into a directory the run created.

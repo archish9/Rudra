@@ -57,7 +57,7 @@ WHY BOTH SPELLINGS, AND WHY NEVER THE TARGET
 ``_bin_dir_spellings`` reports the directory as ``sys.executable`` gives it
 AND as it resolves, because on macOS a path behind a symlink and its resolved
 form differ, and a miss reads as "not Rudra".  Same idiom and same A1.58 as
-``virtual_paths._posix_root_spellings``.
+``virtual_paths.posix_root_spellings``.
 
 ``is_own_interpreter`` compares a candidate's own PARENT directory and never
 follows the candidate itself.  A virtualenv's ``python3`` is usually a symlink

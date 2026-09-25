@@ -72,6 +72,31 @@ def test_the_resolved_root_is_stripped_too(tmp_path):
     assert virtual_to_relative(str(root / "src" / "app.py"), link) == "src/app.py"
 
 
+def test_a_symlinked_spelling_of_a_resolved_root_is_the_project(tmp_path):
+    """OPEN-159, A1.58's other direction. The root arrives RESOLVED --
+    `cli.py` and `create_main_agent` both resolve it -- and the model writes a
+    spelling through a link: on macOS every `/tmp/<project>` and
+    `/var/folders/...` path, and `pwd` in the agent's shell prints it. The
+    backend reads such a path as it resolves (`deepagents_path._normalize`
+    step 2a), so this must too, or the gate asks about a different file."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(root, target_is_directory=True)
+    except (OSError, NotImplementedError):  # pragma: no cover - Windows w/o privilege
+        pytest.skip("symlinks not available")
+
+    assert virtual_to_relative(str(link / "src" / "app.py"), root.resolve()) == "src/app.py"
+
+
+def test_a_nul_byte_is_read_as_written_not_raised(tmp_path):
+    """`Path.resolve()` refuses an embedded NUL with ValueError, and the gate
+    asks this function BEFORE its own CR-B7 guard (`permissions/rules.py`), so
+    the resolved reading must decline rather than raise."""
+    assert virtual_to_relative("/a\x00b", tmp_path) == "a\x00b"
+
+
 def test_virtual_to_host_lands_inside_the_project(tmp_path):
     host = virtual_to_host("/etc/passwd", tmp_path)
 

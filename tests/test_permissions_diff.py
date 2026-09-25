@@ -6,6 +6,8 @@ confirm. A prompt that shows nothing does not close it.
 
 from __future__ import annotations
 
+import pytest
+
 from rudra.permissions.diff import render
 
 
@@ -34,6 +36,27 @@ def test_an_overwrite_produces_a_unified_diff(tmp_path):
     preview = render("write_file", {"file_path": "app.py", "content": "new line\n"}, tmp_path)
     assert "-old line" in preview.body
     assert "+new line" in preview.body
+
+
+def test_a_symlinked_spelling_previews_the_file_it_will_overwrite(tmp_path):
+    """OPEN-159: CR-B4's own defect, one spelling over. The backend writes
+    `<link>/app.py` to the project's `app.py`; the panel called it a new file,
+    so the user approved a creation and the write replaced existing code."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    (root / "app.py").write_text("old line\n", encoding="utf-8")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(root, target_is_directory=True)
+    except (OSError, NotImplementedError):  # pragma: no cover - Windows w/o privilege
+        pytest.skip("symlinks not available")
+
+    preview = render(
+        "write_file", {"file_path": f"{link}/app.py", "content": "new line\n"}, root.resolve()
+    )
+
+    assert "overwrite" in preview.header
+    assert "-old line" in preview.body
 
 
 def test_an_overwrite_header_carries_the_change_counts(tmp_path):

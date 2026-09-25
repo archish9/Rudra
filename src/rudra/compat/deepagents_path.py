@@ -92,6 +92,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Optional, Sequence
 
 from rudra.compat.path_constants import SANDBOX_PREFIXES
+from rudra.compat.virtual_paths import posix_root_spellings, strip_project_root
 
 _ORIGINAL_KEY = "_rudra_original_validate_path"
 
@@ -164,23 +165,7 @@ def install_path_normalizer(
     # caller actually passed is tried first. They differ whenever the root
     # sits behind a symlink -- /tmp and /home on macOS being the cases that
     # matter, since people really do work there (A1.58).
-    _posix_roots: tuple[str, ...] = tuple(
-        dict.fromkeys((project_root.as_posix(), project_root.resolve().as_posix()))
-    )
-
-    def _root_candidates(pp: PurePosixPath) -> tuple[PurePosixPath, ...]:
-        """The incoming path as written, and as it resolves on disk.
-
-        `resolve()` touches the filesystem, so it is attempted second and
-        only for the root test -- never to rewrite what gets returned. A
-        path that cannot be resolved (a permission error, a dangling
-        symlink) simply contributes no second candidate.
-        """
-        try:
-            resolved = PurePosixPath(Path(pp).resolve().as_posix())
-        except (OSError, RuntimeError):
-            return (pp,)
-        return (pp,) if resolved == pp else (pp, resolved)
+    _posix_roots = posix_root_spellings(project_root)
 
     def _plan_suffix_match(rel_path: str, planned: set[str]) -> str | None:
         """Try progressively shorter suffixes of rel_path against planned files."""
@@ -243,13 +228,15 @@ def install_path_normalizer(
         # path genuinely outside the project still falls through untouched.
         # Same reasoning, and the same /etc -> /private/etc case, as
         # PermissionEngine.rule_matches offering both spellings.
-        for candidate in _root_candidates(pp):
-            for root in _posix_roots:
-                try:
-                    stripped = candidate.relative_to(root).as_posix()
-                except ValueError:
-                    continue
-                return original(stripped, allowed_prefixes=allowed_prefixes)
+        #
+        # `strip_project_root` is the ONE copy of this step, and
+        # `virtual_to_relative` -- the gate's reading -- calls it too. This
+        # step used to be its own copy, and the gate's lacked the resolved
+        # spelling, so the gate asked about a different file than this wrote
+        # (OPEN-159). It raises on an embedded NUL, as this always did.
+        stripped = strip_project_root(path, _posix_roots)
+        if stripped is not None:
+            return original(stripped, allowed_prefixes=allowed_prefixes)
 
         # Step 2b: Not under the real root — now try the known sandbox prefixes,
         # then continue to plan matching. Don't return early on the strip alone:

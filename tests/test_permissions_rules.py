@@ -219,6 +219,28 @@ def test_windows_and_posix_spellings_of_the_same_file_agree(tmp_path):
         assert eng.decide("write_file", {"file_path": spelling}).effect == "deny", spelling
 
 
+def test_a_deny_rule_holds_through_a_symlinked_spelling_of_the_root(tmp_path):
+    """OPEN-159. The backend reads `<link>/.env` as the project's `.env`
+    (it resolves the path before stripping the root), so a rule on `.env`
+    must fire for that spelling too. It did not: the gate read the link's
+    whole host path as a virtual one, `edit_file` and `delete` were allowed,
+    and the backend edited `.env`. On macOS the link is `/tmp` or `/var`."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(root, target_is_directory=True)
+    except (OSError, NotImplementedError):  # pragma: no cover - Windows w/o privilege
+        pytest.skip("symlinks not available")
+    eng = engine(root, mode="auto", deny=("edit_file:.env", "delete:.env", "write_file:.env"))
+
+    for spelling in (f"{root}/.env", f"{link}/.env"):
+        edit = {"file_path": spelling, "old_string": "a", "new_string": "b"}
+        assert eng.decide("edit_file", edit).effect == "deny", spelling
+        assert eng.decide("delete", {"file_path": spelling}).effect == "deny", spelling
+        assert eng.decide("write_file", {"file_path": spelling}).effect == "deny", spelling
+
+
 def test_a_foreign_drive_path_lands_inside_the_project(tmp_path):
     """`C:\\other\\x.py` is not our root, so the backend keeps everything after
     the drive anchor and writes `<project>/other/x.py`. The gate must say the
