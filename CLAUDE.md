@@ -6,13 +6,21 @@ one order to work in.** Trust `grep -n PENDING TODO.md` over any heading,
 including this sentence.
 
 **Nothing is open as of 2026-09-25**, OPEN-151 and OPEN-152 having closed that
-day — every `OPEN-N` cited in this file points at a record in `TODO-closed.md`.
-**Next is live run H** (`TODO.md` row 49), and it is **brownfield on purpose**:
-run G was greenfield, did 6 of 6 in 700.1 s and made **zero `edit_file` calls
-across the whole run** though two of its tasks were retried, so OPEN-92 — which
-fires only when an agent edits what it did not just write — was structurally
-unreachable, as it is on every greenfield run. That is lesson 1 below in its
-sharpest form. Live run D, against Vaayu, stays last and blocked on the owner.
+day and **live run H having run** — every `OPEN-N` cited in this file points at a
+record in `TODO-closed.md`. The only step left, live run D against Vaayu, is
+blocked on the owner.
+
+**Run H was the first BROWNFIELD run, and its verdict is the most useful thing
+on the board** (*2026-09-25* in `TODO-closed.md`). It verified **OPEN-152 and
+OPEN-147 — the security item — live for the first time**, because both need
+tracked files and a real diff, which no greenfield run can supply. It verified
+neither OPEN-92, OPEN-149, OPEN-150 nor OPEN-151, and the reason is one
+measurement: **its coder made 11 `write_file` calls to 1 `edit_file`, and zero
+`execute` calls.** Seeding a project forces an agent to *read* code it did not
+write; it does not force it to *edit* it or to shell out. **So the next run
+should not simply seed a bigger project** — lesson 1 below is about forgetting to
+run at all, and this is its sequel: *a run only tests what the agent is given a
+reason to do.*
 
 **The history that used to open this file — which item closed when, and the
 five live-run rounds behind them — moved to `TODO-closed.md` on 2026-09-23**,
@@ -119,7 +127,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **Nothing is open as of 2026-09-25**; the next step is live run H, brownfield for the reason the head of this file gives. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **Nothing is open as of 2026-09-25**, and live run H has run; the head of this file says what it settled and what it did not. Live run D, against Vaayu, is blocked on the owner. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
