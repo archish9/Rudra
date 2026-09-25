@@ -5,12 +5,15 @@ is the live ledger of what is open, and its *Fix next* queue at the top is the
 one order to work in.** Trust `grep -n PENDING TODO.md` over any heading,
 including this sentence.
 
-**Nothing is open as of 2026-09-25**, OPEN-151 having closed that day — every
-`OPEN-N` cited in this file points at a record in `TODO-closed.md`. **The one
-step left is live run D, and it is blocked on the owner**: Vaayu's `base_url`
-and model are named nowhere in this repo. So read lesson 1 below rather than
-this paragraph: an empty board is when a live run is easiest to forget, and
-the only run left is the one that cannot start.
+**One is open as of 2026-09-25: OPEN-152** — `loop/engine.py::_review_prompt`
+tells the reviewer `git_diff` *"will show nothing"*, which **A1.68's own other
+half made false** (since then it names untracked files) and which is false
+again on a tracked file, where it shows the real diff. Every other `OPEN-N`
+cited in this file is closed and points at a record in `TODO-closed.md`. It is
+first because it is a **dependency**: OPEN-147 is security-shaped and cannot be
+verified on a model until the reviewer will call the tool under test. Then
+**live run H** — brownfield, for the reason lesson 1 gives below. Live run D,
+against Vaayu, stays last and blocked.
 
 **The history that used to open this file — which item closed when, and the
 five live-run rounds behind them — moved to `TODO-closed.md` on 2026-09-23**,
@@ -62,7 +65,7 @@ When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-25 there are none. When the next item lands, its own document's closing
+2026-09-25 that is OPEN-152. When the next item lands, its own document's closing
 section says which paragraphs here it corrects.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
@@ -117,7 +120,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **Nothing is open as of 2026-09-25**; the one remaining step, live run D, is blocked on Vaayu's `base_url` and model. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **One is open as of 2026-09-25: OPEN-152**, with a self-contained plan; the head of this file says what it is, and it is ordered above live run H as a dependency. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
