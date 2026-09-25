@@ -26,7 +26,13 @@ from rich.markup import escape
 from rudra.context.middleware import log_model_call
 from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
 from rudra.git.core import is_repo, status
-from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
+from rudra.loop.bounds import (
+    CONVERGING,
+    UNREADABLE,
+    convergence,
+    failure_signature,
+    tests_produced_no_judgement,
+)
 from rudra.loop.dependencies import local_module_names, missing_packages
 from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.loop.regressions import INHERITED, PASSED, REGRESSED, failure_keys, verdict_for
@@ -735,6 +741,45 @@ MAX_DEPENDENCY_GATES = 3
 DEPENDENCY_GATE_NOTICE = "dependency-gate"
 
 
+# The NOTICE an exhausted fix budget is recorded under, with whether the last
+# attempt was converging (OPEN-160). Spelled once, for 8a's grep.
+FIX_BUDGET_NOTICE = "fix-budget"
+
+
+def _exhaustion_line(task: Task, answered: Any, last: Any, context: LoopContext) -> str:
+    """The sentence under `N attempts exhausted`: was it converging? (OPEN-160)
+
+    The owner's option B': the budget is not extended -- replayed, a
+    converging attempt was followed by a passing one 0 times in 4 -- but a
+    reader of an exhausted task should not have to reconstruct the answer
+    from dispatch records, which is what `06-troubleshooting.md` told them
+    to do. Records `task.convergence`, and emits a notice when there is a
+    verdict. Empty when there is no pair of gates to compare.
+    """
+    read = convergence(answered, last) if last is not None else None
+    if read is None:
+        return ""
+    verdict, reason = read
+    task.convergence = verdict
+    if verdict == CONVERGING:
+        sentence = (
+            f"The last attempt was converging: {reason}. A fresh run with a larger "
+            "[agent] max_fix_attempts may finish it; --continue does not retry a "
+            "BLOCKED task."
+        )
+    elif verdict == UNREADABLE:
+        sentence = f"Whether the last attempt was converging cannot be read: {reason}."
+    else:
+        sentence = f"The last attempt was not converging: {reason}."
+    trace = getattr(context.subagents, "trace", None)
+    if trace is not None:
+        try:
+            trace.notice(f"{task.id}: {sentence}", role="rudra", name=FIX_BUDGET_NOTICE)
+        except Exception:  # noqa: BLE001 -- observability never ends a run
+            _LOG.debug("could not emit the fix-budget notice", exc_info=True)
+    return sentence
+
+
 def _refund_dependency_gate(task: Task, report: Any, context: LoopContext, spent: int) -> bool:
     """Give back the attempt a gate cost if its only failures were missing packages.
 
@@ -790,6 +835,12 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     # earlier task did (OPEN-123). In memory, like `inherited`: a fresh
     # process has no evidence and says what it said before.
     rejected = False
+    # The gate the NEXT attempt is sent, the one THIS attempt answers, and the
+    # last gate a writing attempt drew -- the pair `_exhaustion_line` compares
+    # (OPEN-160). A give-back re-sends the same gate, so `answered` holds.
+    sent: Any = None
+    answered: Any = None
+    last_gate: Any = None
     # What was already failing before this task ran (OPEN-23). Captured ONCE,
     # here, and deliberately not refreshed per attempt: a regression attempt 1
     # introduced must still be this task's own on attempt 2, and re-reading
@@ -853,6 +904,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
 
     while task.attempts < budget:
         dispatch += 1
+        answered = sent
         task.attempts += 1
         task.status = TaskStatus.IN_PROGRESS
         ledger.save(context.paths.ledger_json)
@@ -1044,6 +1096,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # and leaves it alone.
             if report.blocker is not None:
                 blocker_text = _blocker_text(report, context.project_path) + _env_sync_note(context)
+                sent = report
             rejected = True
             ledger.save(context.paths.ledger_json)
             continue
@@ -1128,6 +1181,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
 
         signature = failure_signature(report)
         blocker_text = _blocker_text(report, context.project_path) + _env_sync_note(context)
+        sent = last_gate = report
         if signature is not None and signature == task.last_signature:
             task.status = TaskStatus.BLOCKED
             # The blocker, not just the shape of the failure. `task.note` is
@@ -1154,7 +1208,11 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         # not run" is excluded for the same reason "wrote nothing" is -- it
         # names what actually happened, and "3 attempts exhausted" with an
         # empty blocker names nothing (OPEN-33).
-        task.note = f"{task.attempts} attempts exhausted\n\n{blocker_text}".rstrip()
+        # The first line stays exactly `N attempts exhausted`: readers, the
+        # troubleshooting page and the archive replays key on it.
+        line = _exhaustion_line(task, answered, last_gate, context)
+        head = f"{task.attempts} attempts exhausted" + (f"\n{line}" if line else "")
+        task.note = f"{head}\n\n{blocker_text}".rstrip()
     outcome = _stop(Outcome.BLOCKED)
     record_block_memory(context, task)
     return outcome

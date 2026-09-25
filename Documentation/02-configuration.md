@@ -457,8 +457,9 @@ If a slow local model needs longer to start answering, raise `timeout`.
 `max_fix_attempts` is an upper bound, not a target. The loop usually stops
 sooner: two attempts that fail *identically* count as no progress and stop
 immediately, because a third would produce the same result. Raising it helps
-only when attempts are genuinely converging — *A task says `3 attempts exhausted`* in
-[06-troubleshooting.md](06-troubleshooting.md) says how to tell.
+only when attempts are genuinely converging — an exhausted task's note says
+whether its last attempt was, and *A task says `3 attempts exhausted`* in
+[06-troubleshooting.md](06-troubleshooting.md) says how to read it.
 
 It is also a budget **per run**, not per task for ever: `rudra --continue`
 gives a resumed task a fresh one, while the ledger keeps the count of what

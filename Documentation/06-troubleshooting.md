@@ -535,7 +535,13 @@ rudra "also write tests/test_parser.py covering the CSV edge cases"
 
 The coder had `[agent] max_fix_attempts` tries (default 3) to get the task past the verification gate, and every try failed *differently* — two identical failures would have stopped it sooner, as `no progress`. Different is not always stuck: the coder cannot run anything itself, so each gate shows it only the next layer of a problem — a missing package, then a schema error, then a wrong assertion. A task can run out of attempts while its failures are still shrinking.
 
-To tell which, read the attempts in order. Each retry's instructions in `.rudra/run/logs/debug-<id>.jsonl` are a `"kind": "user"` record for that task containing `Your previous attempt did not pass verification`, followed by the gate it was answering; the last gate is under the note in `ledger.json`. If every gate is a new failure and the counts are falling, the task was converging. If the same count keeps coming back in a different spelling, it was not.
+The line under `3 attempts exhausted` says which, comparing the last gate with the one before it, and the task's `convergence` in `ledger.json` records the same answer:
+
+- `The last attempt was converging: ...` — the gate got further (a syntax error fixed, now a test failing), or none of the previous gate's failures is still there and it fails on new ones. Worth more attempts.
+- `The last attempt was not converging: ...` — some of the previous gate's failures are still there. More attempts are unlikely to help; read the failure yourself.
+- `Whether the last attempt was converging cannot be read: ...` — one of the two gates showed no failure line to compare.
+
+A falling count of failed tests is not the sign: 51 failures becoming 50 on one error is not progress, and 17 tests becoming 1 is usually the suite failing to load. To check by hand, each retry's instructions in `.rudra/run/logs/debug-<id>.jsonl` are a `"kind": "user"` record for that task containing `Your previous attempt did not pass verification`, followed by the gate it was answering; the last gate is under the note in `ledger.json`.
 
 A blocked task stays blocked: `rudra --continue` works only `pending` tasks, so it will not give this one another try. For a converging task, raise the budget and run the request again:
 

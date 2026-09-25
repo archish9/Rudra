@@ -67,6 +67,7 @@ def test_round_trip_preserves_every_field(tmp_path):
     task.files_touched = ("a.py", "b.py")
     task.last_signature = "deadbeef"
     task.note = "no progress: the same failure twice"
+    task.convergence = "converging"
 
     path = tmp_path / "ledger.json"
     ledger.save(path)

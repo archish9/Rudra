@@ -298,6 +298,83 @@ async def test_an_exhausted_task_is_one_continue_will_not_retry(monkeypatch, con
     assert task.note.startswith(f"{context.cfg.agent.max_fix_attempts} attempts exhausted")
     assert task not in ledger.resumable()
     assert "Your previous attempt did not pass verification" in engine._coder_prompt(task, "x")
+    # OPEN-160: the typecheck error only moved line, so the attempt that ran
+    # the budget out was not converging, and the note says so.
+    assert task.convergence == "not converging"
+    assert task.note.splitlines()[1].startswith("The last attempt was not converging")
+
+
+def failing_test_report(*exceptions, counts):
+    tail = "\n".join(f"E   {line}" for line in exceptions)
+    return VerifyReport.from_stages(
+        [
+            StageResult(name="syntax", outcome=PASSED, blocking=True),
+            StageResult(
+                name="test",
+                outcome=FAILED,
+                blocking=True,
+                detail=counts,
+                output_tail=f"{tail}\n{counts}",
+            ),
+        ]
+    )
+
+
+@dataclass
+class RecordingTrace:
+    notices: list = field(default_factory=list)
+
+    def notice(self, text, *, role, name):
+        self.notices.append((name, text))
+
+
+async def test_an_exhausted_task_that_was_converging_says_so(monkeypatch, context):
+    """OPEN-160, the owner's option B': run 4989aefefacb's t12 ran out on
+    2 → 12 → 6 failing, each gate a new failure. Nothing is extended -- the
+    archive gave no reason to think a 4th attempt passes -- but the ledger now
+    answers what `06-troubleshooting.md` sends a reader to reconstruct from
+    dispatch records: was it converging when it ran out?"""
+    reports = iter(
+        [
+            failing_test_report("ImportError: cannot import name 'Todo'", counts="2 run, 2 failed"),
+            failing_test_report(
+                "pydantic.errors.PydanticUserError: set from_attributes=True",
+                counts="39 run, 12 failed",
+            ),
+            failing_test_report("AssertionError: assert 'x' == 'y'", counts="39 run, 6 failed"),
+        ]
+    )
+    monkeypatch.setattr(engine, "verify_project", lambda *a, **k: next(reports))
+    trace = RecordingTrace()
+    context.subagents.trace = trace
+
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.attempts == 3, "B' extends nothing"
+    assert task.convergence == "converging"
+    first, second = task.note.splitlines()[:2]
+    assert first == "3 attempts exhausted", "the first line is what readers and docs key on"
+    assert second.startswith("The last attempt was converging")
+    assert "max_fix_attempts" in second
+    assert [name for name, _ in trace.notices] == [engine.FIX_BUDGET_NOTICE]
+    assert "t1" in trace.notices[0][1]
+
+
+async def test_an_exhausted_task_on_the_same_failure_is_not_converging(monkeypatch, context):
+    """Run 689f0ea263be's t3: 51 → 51 → 50 failing on one error. The counts
+    differ, so C6.5a's signature does, and the budget runs out."""
+    counts = iter(["61 run, 51 failed", "61 run, 51 failed, 1 error", "61 run, 50 failed"])
+    monkeypatch.setattr(
+        engine,
+        "verify_project",
+        lambda *a, **k: failing_test_report("KeyError: 'id'", counts=next(counts)),
+    )
+    outcome, task, _ = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.convergence == "not converging"
+    assert "1 of the previous gate's 1" in task.note.splitlines()[1]
 
 
 async def test_a_coder_that_writes_nothing_is_a_failed_attempt(monkeypatch, context):
@@ -2654,3 +2731,41 @@ def test_the_troubleshooting_page_quotes_the_dependency_gate_as_it_is_printed():
     )
     assert "`dependency_gates` in `ledger.json`" in page and task.dependency_gates == ("x",)
     assert engine.MAX_DEPENDENCY_GATES == 3 and "At most three are given back" in page
+
+
+def test_the_troubleshooting_page_quotes_the_convergence_line_as_it_is_written():
+    """OPEN-160: `06-troubleshooting.md` lists the three sentences an exhausted
+    task's note can carry, and names the ledger field. Each head is produced
+    here by the real function and looked for on the page, so the page cannot
+    drift from the code (lesson 4)."""
+    from pathlib import Path
+
+    page = (Path(__file__).parent.parent / "Documentation" / "06-troubleshooting.md").read_text()
+    context = LoopContext(
+        subagents=FakeSubagents(),
+        project_path=Path(__file__).parent,
+        console=Console(quiet=True),
+        cfg=FakeCfg(),
+        paths=None,
+    )
+    syntax = VerifyReport.from_stages(
+        [
+            StageResult(
+                name="syntax", outcome=FAILED, blocking=True, findings=(Finding("a.py", 1, "x"),)
+            )
+        ]
+    )
+    blind = failing_test_report(counts="1 run, 1 failed")
+    pairs = [
+        (syntax, failing_test_report("KeyError: 'id'", counts="1 run, 1 failed")),
+        (syntax, syntax),
+        (blind, failing_test_report("KeyError: 'id'", counts="1 run, 1 failed")),
+    ]
+    for previous, last in pairs:
+        task = engine.Task(id="t1", description="x")
+        line = engine._exhaustion_line(task, previous, last, context)
+        head = line.split(":", 1)[0]
+        assert f"`{head}: ...`" in page, head
+        assert task.convergence
+
+    assert "`convergence` in `ledger.json`" in page

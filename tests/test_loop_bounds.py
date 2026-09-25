@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
+from rudra.loop.bounds import (
+    CONVERGING,
+    NOT_CONVERGING,
+    UNREADABLE,
+    convergence,
+    failure_signature,
+    tests_produced_no_judgement,
+)
 from rudra.verify.result import (
     FAILED,
     NOT_APPLICABLE,
@@ -288,3 +295,117 @@ def test_the_shipped_default_is_the_one_the_runner_uses(tmp_path):
     from rudra.subagents.runner import MAX_INVOCATION_SECONDS
 
     assert DEFAULTS["agent"]["max_invocation_seconds"] == MAX_INVOCATION_SECONDS
+
+
+# --- convergence (OPEN-160, the owner's option B') ---------------------------
+#
+# Read at exhaustion only, and extends nothing: it says whether the attempt
+# that ran the budget out was making progress. The cases are the archive's.
+
+
+def _pytest(*exceptions, counts="1 run, 1 failed"):
+    tail = "\n".join(f"E   {line}" for line in exceptions)
+    return report_with(failing("test", detail=counts, tail=f"{tail}\n{counts}"))
+
+
+def test_a_new_failure_where_the_old_one_was_is_converging():
+    """Run 4989aefefacb's t12: 12/39 on pydantic's from_attributes, then 6/39
+    on the tests' own assertions -- the failure it was sent is gone."""
+    previous = _pytest("pydantic.errors.PydanticUserError: You must set from_attributes=True")
+    current = _pytest("AssertionError: assert 'x' == 'y'", "ValidationError: 1 validation error")
+
+    verdict, reason = convergence(previous, current)
+
+    assert verdict == CONVERGING
+    assert "none of the previous gate's" in reason
+
+
+def test_a_failure_that_survives_is_not_converging():
+    """Run 689f0ea263be's t3 shape: 51 then 50 failing, on the same error."""
+    previous = _pytest("NameError: name 'app' is not defined", "KeyError: 'id'")
+    current = _pytest("NameError: name 'app' is not defined")
+
+    verdict, reason = convergence(previous, current)
+
+    assert verdict == NOT_CONVERGING
+    assert "1 of the previous gate's 2" in reason
+
+
+def test_paths_and_addresses_do_not_make_a_failure_new():
+    """The signature's own masking: one failure, two temp dirs, two ids."""
+    previous = _pytest("FileNotFoundError: /tmp/a1/x.json at 0x10ab")
+    current = _pytest("FileNotFoundError: /tmp/b2/x.json at 0x99ff")
+
+    assert convergence(previous, current)[0] == NOT_CONVERGING
+
+
+def test_a_gate_that_got_further_is_converging():
+    """Run 4989aefefacb's t8: syntax, syntax, then a test failure."""
+    previous = report_with(failing("syntax", findings=[Finding("a.py", 49, "invalid syntax")]))
+    current = _pytest("AttributeError: module 'app.models' has no attribute 'User'")
+
+    verdict, reason = convergence(previous, current)
+
+    assert verdict == CONVERGING
+    assert "from syntax to test" in reason
+
+
+def test_a_gate_that_stopped_earlier_is_not_converging():
+    previous = _pytest("AssertionError: assert 1 == 2")
+    current = report_with(failing("syntax", findings=[Finding("a.py", 3, "invalid syntax")]))
+
+    verdict, reason = convergence(previous, current)
+
+    assert verdict == NOT_CONVERGING
+    assert "stopped earlier" in reason
+
+
+def test_a_moved_finding_is_the_same_failure():
+    """A typecheck error that moved line is `failure_signature`'s progress, and
+    rightly -- it is not the same signature -- but it is not convergence: the
+    same message in the same file is still there."""
+    previous = report_with(failing(findings=[Finding("a.py", 1, "bad type")]))
+    current = report_with(failing(findings=[Finding("a.py", 2, "bad type")]))
+
+    assert convergence(previous, current)[0] == NOT_CONVERGING
+
+
+def test_a_gate_with_no_exception_line_is_unreadable_not_converging():
+    """Run 566076f2af28's t1: the previous tail held no `E` line, so "the old
+    failure is gone" would be true of an empty set. The replay counted that as
+    converging; said here, it is only unreadable."""
+    previous = report_with(failing("test", detail="13 run, 4 failed", tail="4 failed"))
+    current = _pytest("AssertionError: assert 2 == 1")
+
+    verdict, reason = convergence(previous, current)
+
+    assert verdict == UNREADABLE
+    assert "previous" in reason
+
+
+def test_nothing_to_compare_is_no_verdict():
+    current = _pytest("AssertionError: assert 2 == 1")
+
+    passed = report_with(StageResult(name="test", outcome=PASSED, blocking=True))
+
+    assert convergence(None, current) is None
+    assert convergence(passed, current) is None
+    assert convergence(current, passed) is None
+
+
+def test_a_rewritten_assertion_is_a_failure_line():
+    """Run 566076f2af28's t1: pytest prints a failed bare `assert` as
+    `E       assert 422 == 200`, with no `AssertionError:` in front, so the
+    signature's reading saw nothing and the task read as unreadable. Four
+    422s, then two new assertions, is converging."""
+    previous = report_with(
+        failing(
+            "test",
+            detail="13 run, 4 failed",
+            tail="E       assert 422 == 200\nE        +  where 422 = <Response [422]>.status_code",
+        )
+    )
+    current = _pytest("AssertionError: assert 2 == 1")
+
+    assert convergence(previous, current)[0] == CONVERGING
+    assert convergence(previous, previous)[0] == NOT_CONVERGING

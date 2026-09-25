@@ -80,6 +80,12 @@ class Task:
     # so `attempts` alone no longer says how many gates the task drew; this
     # is the rest of that count, and a list for `halts`' reason.
     dependency_gates: tuple[str, ...] = ()
+    # Whether the attempt that ran the fix budget out was converging, as
+    # loop/bounds.py::convergence reads it: "converging", "not converging",
+    # "unreadable", or "" when the task did not end that way (OPEN-160). A
+    # field beside the note, whose second line says the same, because a note
+    # is rewritten by every branch that finishes a task (CLAUDE.md 8a shape 4).
+    convergence: str = ""
     # Wall clock this task consumed, in seconds (C9.6, Step 15a). Recorded
     # by loop/engine.py at every exit from run_task, including the failing
     # ones: a task that burned three attempts is the one a user most wants
@@ -131,8 +137,11 @@ class Ledger:
         """The tasks a resume would work, in declaration order.
 
         PENDING only. BLOCKED hit two identical failure signatures
-        (C6.5a), so retrying it identically burns a run to reach the same
-        place; DONE and DROPPED are finished. IN_PROGRESS is deliberately
+        (C6.5a) or spent its fix budget, and retrying it identically burns a
+        run to reach the same place -- an exhausted task may have been
+        converging, which its `convergence` field says, and the lever for
+        that is `max_fix_attempts` on a fresh run (OPEN-154, OPEN-160); DONE
+        and DROPPED are finished. IN_PROGRESS is deliberately
         excluded too: it means the process died mid-task, and the coder's
         partial work is already on disk for the next attempt to see.
         """
@@ -210,6 +219,7 @@ class Ledger:
                 halts=tuple(entry.get("halts", ())),
                 run_errors=tuple(entry.get("run_errors", ())),
                 dependency_gates=tuple(entry.get("dependency_gates", ())),
+                convergence=entry.get("convergence", ""),
                 # .get, not [...]: a ledger written by an older Rudra is a
                 # volatile file, but a run in flight during an upgrade
                 # must not crash on it.
