@@ -662,3 +662,195 @@ def test_the_three_content_rules_do_not_shadow_each_other():
     assert _is_prose_not_content("/COMPLETION", measured) is False
     assert _announces("src/iphone15.html", PROSE) is False
     assert _announces("tests", "# placeholder") is False
+
+
+# ---------------------------------------------------------------------------
+# OPEN-157: a completion file written to the MACHINE's `/tmp`, which under
+# `virtual_mode=True` is this project's `tmp/`.
+#
+# Run `4989aefefacb`, t12's third coder attempt, after its deliverable: two
+# writes, both answered `Updated file`, both left in the user's project under
+# a `tmp/` the run itself created. Every rule above declined by design --
+# `tmp/task_t12_complete.txt` is not root-level, `t12` is no marker word, and
+# `.txt` is outside OPEN-97's table. Step 0: of 447 archived write/edit calls,
+# these (and one re-send) are the only three under `tmp/`.
+#
+# The owner's option C: the name rule reads a task id and looks one level
+# under `tmp/` (A), and a write into a `tmp/` the project does not have is
+# refused whatever its name (B).
+
+MEASURED_SCRATCH = (
+    (
+        "/tmp/task_t12_summary.txt",
+        "Task t12: Created tests/unit/test_crud.py with unit tests for CRUD functions "
+        "using an in-memory SQLite database.\nAlso fixed Pydantic v2 deprecation issues "
+        "in schemas by replacing orm_mode with model_config = ConfigDict(from_attributes=True) "
+        "and updating test_schemas.py to use model_validate instead of from_orm.",
+    ),
+    (
+        "/tmp/task_t12_complete.txt",
+        "Task t12 completed: Created tests/unit/test_crud.py with unit tests for CRUD "
+        "functions using an in-memory SQLite database. Fixed Pydantic v2 compatibility "
+        "issues in schemas and tests.",
+    ),
+)
+
+
+def _scratch_call(path: str, content: str, root, **kwargs):
+    reached: list[bool] = []
+    request = SimpleNamespace(
+        tool_call={
+            "name": "write_file",
+            "args": {"file_path": path, "content": content},
+            "id": "c1",
+        }
+    )
+    middleware = FixWriteParamsMiddleware(project_path=root, **kwargs)
+    result = middleware.wrap_tool_call(request, lambda _req: reached.append(True) or "Updated file")
+    return result, reached
+
+
+def test_run_4989s_scratch_writes_are_refused(tmp_path):
+    """The regression pin: lines 1739 and 1743, verbatim, in a project with no tmp/."""
+    for path, content in MEASURED_SCRATCH:
+        result, reached = _scratch_call(path, content, tmp_path)
+
+        assert reached == [], path
+        assert result.status == "error"
+        assert result.content.startswith("REJECTED:")
+        # The correction the model lacked: `/tmp` here is the project's.
+        assert "tmp/" in result.content
+        assert "call no tool" in result.content
+    assert not (tmp_path / "tmp").exists()
+
+
+def test_every_spelling_of_the_projects_tmp_is_refused(tmp_path):
+    sentence = "Scratch notes."
+    for path in ("tmp/notes.txt", "./tmp/notes.txt", "/tmp/a/b.py", f"{tmp_path}/tmp/x.json"):
+        result, reached = _scratch_call(path, sentence, tmp_path)
+        assert reached == [], path
+
+
+def test_a_project_that_has_tmp_keeps_it(tmp_path):
+    """A real project may use tmp/. Once it exists, B declines."""
+    (tmp_path / "tmp").mkdir()
+    for path in ("/tmp/fixtures/data.txt", "tmp/cache.json", "/tmp/task_t12_summary.txt"):
+        _, reached = _scratch_call(path, '{"a": 1}', tmp_path)
+        assert reached == [True], path
+
+
+def test_a_task_that_asks_for_tmp_is_not_refused(tmp_path):
+    """The brief names tmp/, so the write is what the user asked for."""
+    _, reached = _scratch_call(
+        "/tmp/fixtures/data.txt", "id,name\n1,a\n", tmp_path, tmp_requested=True
+    )
+    assert reached == [True]
+
+
+def test_the_task_brief_decides_whether_tmp_was_asked_for():
+    from rudra.middleware.fix_write_params import task_names_tmp
+
+    assert task_names_tmp("Write fixtures to tmp/fixtures/data.txt")
+    assert task_names_tmp("Store the cache under /tmp/cache")
+    assert task_names_tmp("Put scratch files in tmp\\work on Windows")
+    assert not task_names_tmp("Create tests/unit/test_crud.py")
+    assert not task_names_tmp("Use tempfile.mkdtemp for temporary files")
+    assert not task_names_tmp("")
+
+
+def test_other_writes_are_untouched_by_the_scratch_rule(tmp_path):
+    sentence = "Build the project before running the tests."
+    for path in (
+        "Makefile",
+        "STATUS.md",
+        "build/DONE",
+        "src/tmp/x.py",
+        "tmpl/page.html",
+        "/tests/unit/test_crud.py",
+    ):
+        _, reached = _scratch_call(path, sentence, tmp_path)
+        assert reached == [True], path
+
+
+def test_a_project_under_the_machines_tmp_is_not_scratch():
+    """A1.58: with the root spelled `/tmp/<project>`, both host spellings of
+    the project's own `app.py` resolve to `app.py`, never to `tmp/...`.
+
+    A root spelled `/private/tmp/<project>` -- what `cli.py` resolves to --
+    does NOT recognise `/tmp/<project>/x`; that is `virtual_to_relative`'s
+    gap, filed separately, and not pinned here."""
+    from pathlib import Path
+
+    root = MEASURED_ROOT.replace("/private", "")
+    for path in (f"{MEASURED_ROOT}/app.py", f"{root}/app.py"):
+        _, reached = _scratch_call(path, "print(1)\n", Path(root))
+        assert reached == [True], path
+
+
+def test_without_a_project_root_the_scratch_rule_declines():
+    """No root, no way to ask whether tmp/ exists: the old accepting mode."""
+    _, reached = _scratch_call("/tmp/notes.txt", "Scratch notes.", None)
+    assert reached == [True]
+
+
+def test_a_refused_scratch_write_is_counted_and_announced(tmp_path):
+    from rudra.middleware.fix_write_params import SCRATCH_WRITE_NOTICE
+    from rudra.trace.stream import message_is_error
+
+    counted: list[str] = []
+    notices: list[dict] = []
+    result, _ = _scratch_call(
+        *MEASURED_SCRATCH[0],
+        tmp_path,
+        role="coder",
+        usage=SimpleNamespace(record_scratch_write_refused=counted.append),
+        trace=SimpleNamespace(
+            notice=lambda message, role=None, name=None: notices.append(
+                {"message": message, "role": role, "name": name}
+            )
+        ),
+    )
+
+    assert message_is_error(result) is True
+    assert SCRATCH_WRITE_NOTICE == "scratch-write"
+    assert counted == ["coder"]
+    assert [n["name"] for n in notices] == [SCRATCH_WRITE_NOTICE]
+    assert "task_t12_summary.txt" in notices[0]["message"]
+
+
+def test_a_scratch_bookkeeping_failure_never_reaches_the_caller(tmp_path):
+    def boom(*_a, **_k):
+        raise RuntimeError("no")
+
+    result, reached = _scratch_call(
+        *MEASURED_SCRATCH[1],
+        tmp_path,
+        role="coder",
+        usage=SimpleNamespace(record_scratch_write_refused=boom),
+        trace=SimpleNamespace(notice=boom),
+    )
+    assert reached == []
+    assert result.content.startswith("REJECTED:")
+
+
+def test_a_task_id_is_a_marker_word():
+    """Option A: `task_t12_complete.txt` is built of marker words once `t12` is one."""
+    from rudra.middleware.fix_write_params import _is_completion_name
+
+    assert _is_completion_name("task_t12_complete.txt")
+    assert _is_completion_name("T3_DONE")
+    assert not _is_completion_name("t12.txt")
+    assert not _is_completion_name("task_t12_summary.txt")
+    assert not _is_completion_name("t12")
+
+
+def test_a_completion_file_one_level_under_tmp_is_refused(tmp_path):
+    """Option A, where B declines: the project already has tmp/."""
+    (tmp_path / "tmp").mkdir()
+    path, content = MEASURED_SCRATCH[1]
+    assert _announces(path, content, str(tmp_path))
+    assert _announces("tmp/DONE", "All tasks complete.", str(tmp_path))
+    # The measured miss, stated: `summary` is no completion word.
+    assert not _announces(MEASURED_SCRATCH[0][0], MEASURED_SCRATCH[0][1], str(tmp_path))
+    # Only tmp/, only one level.
+    assert not _announces("tmp/a/DONE", "All tasks complete.", str(tmp_path))

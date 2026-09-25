@@ -42,6 +42,7 @@ from rudra.middleware import (
     TestExtensionMiddleware,
     ToolRouteMiddleware,
 )
+from rudra.middleware.fix_write_params import task_names_tmp
 from rudra.permissions.interrupts import narrow_interrupt_on
 from rudra.subagents.registry import PROJECT_PATH_TOKEN
 from rudra.subagents.spec import FS_TOOL_NAMES, RudraSubagent
@@ -222,7 +223,7 @@ def _prompt_for(spec: RudraSubagent, context: Any, task: str = "") -> str:
     return "\n\n".join(parts)
 
 
-def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
+def _middleware_for(spec: RudraSubagent, context: Any, model: Any, task: str = "") -> list:
     """The middleware stack: gate first, then argument repair, then filesystem.
 
     The FilesystemMiddleware is constructed here rather than inherited so
@@ -259,6 +260,9 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             trace=getattr(context, "trace", None),
             # OPEN-104: places a host-spelled completion file at the root.
             project_path=getattr(context, "project_path", None),
+            # OPEN-157: a write into a tmp/ the project lacks is refused
+            # unless this brief asked for one, and only the brief can say.
+            tmp_requested=task_names_tmp(task),
         ),
         # OPEN-114, and it takes no arguments at all: the deadline reaches it
         # through a ContextVar the SPAN sets (`context/deadline.py`), because
@@ -629,7 +633,7 @@ def build_agent(spec: RudraSubagent, context: Any, task: str = "") -> Any:
         system_prompt=_prompt_for(spec, context, task),
         backend=context.backend,
         checkpointer=context.checkpointer or InMemorySaver(),
-        middleware=_middleware_for(spec, context, model),
+        middleware=_middleware_for(spec, context, model, task),
         interrupt_on=_interrupt_on_for(spec, context, tools),
         skills=_skills_for(spec, context),
         # Not "delegation Rudra wants" -- suppression of delegation Rudra

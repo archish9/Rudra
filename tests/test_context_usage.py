@@ -90,6 +90,9 @@ def test_recording_accumulates_per_role():
         # Added by OPEN-104: writes refused for being a file whose only
         # content announces the work is finished.
         "completion_files_refused": 0,
+        # Added by OPEN-157: writes refused for creating a tmp/ the project
+        # does not have.
+        "scratch_writes_refused": 0,
         # Added by OPEN-120: pip installs refused for running outside a
         # virtualenv. Zero here for the reason every refusal above is -- a
         # key that appears only on runs that refused one is a key every
@@ -405,6 +408,7 @@ def test_seconds_per_call_is_never_stored() -> None:
         "planner_writes_refused",
         "tool_routes_answered",
         "completion_files_refused",
+        "scratch_writes_refused",
         "installs_refused",
         "commands_explained",
         "greenfield_reads_answered",

@@ -205,6 +205,13 @@ class RoleUsage:
     # In run `f845b496a2aa` the unrefused file reached the user's project
     # root twice and nothing counted it.
     completion_files_refused: int = 0
+    # Writes refused for creating `tmp/` in a project that has none -- the
+    # model's `/tmp/...`, which under virtual_mode=True is the project's
+    # (OPEN-157, FixWriteParamsMiddleware). Writer roles only. In run
+    # `4989aefefacb` two such completion files reached the user's project.
+    # A false positive is a REFUSED REAL WRITE: the `scratch-write` notice
+    # names the path.
+    scratch_writes_refused: int = 0
     # `execute` results in which pip refused to install outside a virtualenv,
     # explained in-band by ExecuteGuardMiddleware (OPEN-120). The tester in
     # practice -- the one role holding `execute`.
@@ -531,6 +538,10 @@ class RunUsage:
         """
         self._slot(role).completion_files_refused += 1
 
+    def record_scratch_write_refused(self, role: str) -> None:
+        """One write refused for creating a `tmp/` the project lacks (OPEN-157)."""
+        self._slot(role).scratch_writes_refused += 1
+
     def record_install_refused(self, role: str) -> None:
         """One `pip install` refused for running outside a virtualenv (OPEN-120)."""
         self._slot(role).installs_refused += 1
@@ -626,6 +637,7 @@ class RunUsage:
                 "planner_writes_refused": tally.planner_writes_refused,
                 "tool_routes_answered": tally.tool_routes_answered,
                 "completion_files_refused": tally.completion_files_refused,
+                "scratch_writes_refused": tally.scratch_writes_refused,
                 "installs_refused": tally.installs_refused,
                 "commands_explained": tally.commands_explained,
                 "greenfield_reads_answered": tally.greenfield_reads_answered,

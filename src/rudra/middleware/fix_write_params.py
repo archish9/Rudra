@@ -7,8 +7,9 @@ Fixes applied (in order):
 4. Sandbox prefix stripping: removes known LLM-hallucinated path prefixes
    (/testbed/, /workspace/, /home/user/, etc.) from all file tool paths
 
-It also REFUSES three calls rather than repairing them, the first two on the
-SHAPE of the content rather than on the path, and the third on both:
+It also REFUSES four calls rather than repairing them, the first two on the
+SHAPE of the content rather than on the path, the third on both, and the
+fourth on the path alone:
 
 * a write whose only purpose is to bring a directory into being (OPEN-22).
   There is nothing to repair there -- the model wants a directory and
@@ -22,6 +23,9 @@ SHAPE of the content rather than on the path, and the third on both:
   both say "finished" -- `COMPLETION`, `DONE`, `task_complete.txt`
   (OPEN-104). OPEN-42's reflex, measured again four runs later, and out of
   the second rule's reach because that rule needs a known suffix.
+* a write that would create `tmp/` in a project that has none (OPEN-157):
+  the model meant the machine's `/tmp`, and under `virtual_mode=True` got
+  the project's. Declines when the task brief itself names `tmp/`.
 
 Neither rewrites content. Both are held to `_is_directory_placeholder`'s
 bar: a content rule must not be able to fire on something a person would
@@ -266,11 +270,19 @@ _COMPLETION_WORDS = frozenset(
     {"done", "complete", "completed", "completion", "finish", "finished", "success", "succeeded"}
 )
 _MARKER_WORDS = _COMPLETION_WORDS | {"task", "tasks", "all", "work", "job"}
+# A task id is a marker word too (OPEN-157): the model names the marker after
+# the task it just finished -- run `4989aefefacb`'s `task_t12_complete.txt`.
+# It never makes a name a marker on its own; a completion word is still needed.
+_TASK_ID_WORD = re.compile(r"t\d+")
 
 # The suffixes a marker has been written with: none (`DONE`, `COMPLETION`) and
 # the two a model reaches for when it wants a "text file" (`task_complete.txt`).
 # Anything else declines -- `done.py` and `completion.sh` are code.
 _MARKER_SUFFIXES = frozenset({"", ".txt", ".md"})
+
+# OPEN-157. The project directory a model's `/tmp/...` lands in under
+# `virtual_mode=True`, read by the marker rule and the scratch rule both.
+_SCRATCH_DIR = "tmp"
 
 _CAMEL_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z])")
 _NAME_WORD_SEPARATORS = re.compile(r"[_\-.\s]+")
@@ -294,11 +306,17 @@ def _is_completion_name(name: str) -> bool:
         return False
     stem = _CAMEL_BOUNDARY.sub("_", pure.stem if pure.suffix else name)
     words = {word for word in _NAME_WORD_SEPARATORS.split(stem.lower()) if word}
+    words = {word for word in words if not _TASK_ID_WORD.fullmatch(word)}
     return bool(words) and words <= _MARKER_WORDS and bool(words & _COMPLETION_WORDS)
 
 
-def _root_level_name(path: str, project_root: Path | None) -> str | None:
-    """The file name `path` writes, when that file is at the project root.
+def _marker_level_name(path: str, project_root: Path | None) -> str | None:
+    """The file name `path` writes, when that file is where markers are left.
+
+    That is the project root, or one level under `tmp/` (OPEN-157): a model
+    that spells `/tmp/DONE` means the machine's scratch directory, and under
+    `virtual_mode=True` it gets the project's. `build/COMPLETE` and
+    `tmp/a/DONE` stay somebody's artefact.
 
     With a root, the answer is `virtual_to_relative`'s -- the one authority on
     which real file a spelling names (CR-B4) -- so the host spelling run
@@ -313,10 +331,12 @@ def _root_level_name(path: str, project_root: Path | None) -> str | None:
         relative = path.replace("\\", "/").lstrip("/")
     if not relative:
         return None
-    relative = relative.rstrip("/")
-    if not relative or "/" in relative:
+    parts = relative.rstrip("/").split("/")
+    if len(parts) == 2 and parts[0].lower() == _SCRATCH_DIR:
+        return parts[1] or None
+    if len(parts) != 1 or not parts[0]:
         return None
-    return relative
+    return parts[0]
 
 
 def _is_completion_announcement(path: str, content: object, project_root: Path | None) -> bool:
@@ -329,7 +349,8 @@ def _is_completion_announcement(path: str, content: object, project_root: Path |
       `_MARKER_WORDS`, at least one a completion word, suffix none, `.txt` or
       `.md`, not a dotfile. `Makefile`, `LICENSE`, `NOTICE`, `CHANGELOG` and
       `.gitignore` carry no such word; `STATUS.md` and `TODO.md` neither.
-    * **It is at the project root.** `build/COMPLETE` is somebody's artefact.
+    * **It is at the project root**, or directly under `tmp/` (OPEN-157).
+      `build/COMPLETE` is somebody's artefact.
     * **The content is one short sentence-shaped announcement** -- at most
       1,000 characters and three lines, two or more words, opening with a
       capital and closing on ".", "!" or "?", no template marker. A build
@@ -347,7 +368,7 @@ def _is_completion_announcement(path: str, content: object, project_root: Path |
     """
     if not isinstance(content, str) or not isinstance(path, str):
         return False
-    name = _root_level_name(path, project_root)
+    name = _marker_level_name(path, project_root)
     if name is None or not _is_completion_name(name):
         return False
     body = content.strip()
@@ -358,6 +379,56 @@ def _is_completion_announcement(path: str, content: object, project_root: Path |
     if any(marker in body for marker in _TEMPLATE_MARKERS):
         return False
     return len(body.split()) >= 2 and body[0].isupper() and body[-1] in ".!?"
+
+
+SCRATCH_WRITE_NOTICE = "scratch-write"
+"""The `name` on the NOTICE for a refused write into the project's `tmp/`."""
+
+_TASK_NAMES_TMP = re.compile(r"(?<![\w.-])tmp[/\\]", re.IGNORECASE)
+
+_SCRATCH_WRITE = (
+    "REJECTED: `{path}` would create `tmp/` inside the user's project, which "
+    "has no such directory. Nothing was written.\n\n"
+    'A leading "/" in a file tool means THIS project, so `/tmp` is not the '
+    "machine's scratch directory: it is a new `tmp/` folder the user never "
+    "asked for, and no file tool here can reach the machine's. Nothing needs "
+    "a scratch file -- if you are finished, reply with one or two lines "
+    "saying what you did and call no tool; that is what ends your turn. If "
+    "the work itself needs this file, write it where the task says."
+)
+
+
+def task_names_tmp(task: str) -> bool:
+    """Does this task brief itself ask for something under `tmp/`?
+
+    Only the brief can say a `tmp/` write is wanted, so `build.py` asks it
+    once per invocation and the scratch rule declines when it does.
+    """
+    return bool(task) and _TASK_NAMES_TMP.search(task) is not None
+
+
+def _is_scratch_write(path: str, project_root: Path | None) -> bool:
+    """Would this write create the project's `tmp/` directory? (OPEN-157)
+
+    `virtual_to_relative` decides where the path lands (CR-B4), so `/tmp/x`,
+    `tmp/x` and the host spelling of `<project>/tmp/x` are one question. A
+    `/tmp/<project>/x` spelling is the project's own `x` only where that
+    function recognises the root (A1.58); with a resolved `/private/tmp` root
+    it does not, and this rule then refuses what the backend would misplace
+    (OPEN-159). Declines with no root, and whenever the project already has `tmp/`: the
+    refusal is about a directory the run would invent, never one the user has.
+    Run `4989aefefacb` is the measure: 3 of 447 archived writes landed under
+    `tmp/`, all three completion prose into a directory the run created.
+    """
+    if project_root is None:
+        return False
+    relative = virtual_to_relative(path, project_root)
+    if not relative:
+        return False
+    parts = relative.split("/")
+    if len(parts) < 2 or parts[0].lower() != _SCRATCH_DIR:
+        return False
+    return not (Path(project_root) / parts[0]).exists()
 
 
 class FixWriteParamsMiddleware(AgentMiddleware):
@@ -388,6 +459,7 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         usage: Any = None,
         trace: Any = None,
         project_path: Path | None = None,
+        tmp_requested: bool = False,
     ) -> None:
         super().__init__()
         self.strip_sandbox_prefixes = strip_sandbox_prefixes
@@ -402,6 +474,8 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         # Only the OPEN-104 refusal reads it, to place a host-spelled path at
         # the project root. None narrows that rule; it never widens it.
         self.project_path = project_path
+        # OPEN-157: the task brief named tmp/, so a write there is wanted.
+        self.tmp_requested = tmp_requested
 
     def _fix_args(self, request):
         name = request.tool_call.get("name")
@@ -498,13 +572,37 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         except Exception:  # noqa: BLE001 - same rule
             logger.debug("completion file refusal not announced", exc_info=True)
 
+    def _announce_scratch(self, path: str) -> None:
+        """Say that a write into an invented `tmp/` was refused (CLAUDE.md 8a).
+
+        `_announce_completion`'s reason: the file never reaches disk.
+        """
+        role = self.role or "agent"
+        try:
+            if self.usage is not None:
+                self.usage.record_scratch_write_refused(role)
+        except Exception:  # noqa: BLE001 - bookkeeping may never end a run
+            logger.debug("scratch write refusal not counted", exc_info=True)
+        try:
+            if self.trace is not None:
+                self.trace.notice(
+                    f"refused a write to {path}: it would create a tmp/ directory "
+                    "the project does not have, so nothing was written",
+                    role=role,
+                    name=SCRATCH_WRITE_NOTICE,
+                )
+        except Exception:  # noqa: BLE001 - same rule
+            logger.debug("scratch write refusal not announced", exc_info=True)
+
     def _refusal(self, request):
         """A ToolMessage refusing this write on the shape of its content, or None.
 
-        THREE independent rules, none of which can fire on another's shape:
+        FOUR independent rules. The first three, on the content's shape, and
+        none of which can fire on another's:
         `_is_directory_placeholder` wants `#` comments, `_is_prose_not_content`
         wants a suffix in its closed table, and `_is_completion_announcement`
         wants a sentence under a marker name with no suffix, `.txt` or `.md`.
+        The fourth, `_is_scratch_write`, is on the path alone (OPEN-157).
 
         All three lead with `REJECTED:` and set `status="error"`, and the
         status is what the failure counters read: `trace/stream.py::message_is_error`
@@ -529,6 +627,11 @@ class FixWriteParamsMiddleware(AgentMiddleware):
         elif _is_prose_not_content(path, content):
             text = _PROSE_NOT_CONTENT.format(path=path, suffix=_suffix_of(path))
             self._announce_prose(path)
+        elif not self.tmp_requested and _is_scratch_write(path, self.project_path):
+            # Before the completion rule: its route is the same, and this one
+            # also names the path confusion that put the file here.
+            text = _SCRATCH_WRITE.format(path=path)
+            self._announce_scratch(path)
         elif _is_completion_announcement(path, content, self.project_path):
             text = _COMPLETION_FILE.format(path=path)
             self._announce_completion(path)

@@ -90,6 +90,9 @@ def test_sync_hook_records_the_reported_counts():
         # Added by OPEN-104, zero for that reason again: a refused completion
         # file is a TOOL call FixWriteParamsMiddleware answered.
         "completion_files_refused": 0,
+        # Added by OPEN-157: writes refused for creating a tmp/ the project
+        # does not have.
+        "scratch_writes_refused": 0,
         # Added by OPEN-120: pip installs refused for running outside a
         # virtualenv. Zero here for the reason every refusal above is -- a
         # key that appears only on runs that refused one is a key every

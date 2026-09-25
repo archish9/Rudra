@@ -1316,3 +1316,21 @@ def test_every_subagent_repeat_guard_carries_its_spec_s_grants(name, context):
 
     assert guard.granted == frozenset(spec.fs_tools) | frozenset(spec.rudra_tools)
     assert guard.granted == route.granted
+
+
+def test_the_task_brief_reaches_the_scratch_rule(context):
+    # OPEN-157: a write into a tmp/ the project lacks is refused unless the
+    # task itself asked for tmp/, which only the brief can say.
+    spec = REGISTRY["coder"]
+    model = _model_for(spec, context.cfg)
+
+    def fixer(task: str):
+        return next(
+            m
+            for m in _middleware_for(spec, context, model, task=task)
+            if type(m).__name__ == "FixWriteParamsMiddleware"
+        )
+
+    assert fixer("Write fixtures to tmp/data.csv").tmp_requested is True
+    assert fixer("Create app/main.py").tmp_requested is False
+    assert fixer("").tmp_requested is False
