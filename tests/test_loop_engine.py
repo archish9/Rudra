@@ -276,6 +276,30 @@ async def test_a_changing_failure_uses_the_whole_budget(monkeypatch, context):
     assert "attempts exhausted" in task.note
 
 
+async def test_an_exhausted_task_is_one_continue_will_not_retry(monkeypatch, context):
+    """OPEN-154 closed docs-only: `06-troubleshooting.md` tells a user that a
+    task ending `N attempts exhausted` may have been converging, that
+    `--continue` will not give it another attempt, and that the lever is
+    `max_fix_attempts` on a fresh run. Every clause is pinned here, because a
+    page restating code is how OPEN-152's sentence drifted (lesson 4).
+
+    It also pins the phrase the page tells a reader to grep the debug log for:
+    each retry's dispatch carries the gate it is answering."""
+    lines = iter([1, 2, 3, 4, 5])
+    monkeypatch.setattr(
+        engine,
+        "verify_project",
+        lambda *a, **k: failing_report((Finding("a.py", next(lines), "bad type"),)),
+    )
+    outcome, task, ledger = await run_one(context)
+
+    assert outcome is Outcome.BLOCKED
+    assert task.status is TaskStatus.BLOCKED
+    assert task.note.startswith(f"{context.cfg.agent.max_fix_attempts} attempts exhausted")
+    assert task not in ledger.resumable()
+    assert "Your previous attempt did not pass verification" in engine._coder_prompt(task, "x")
+
+
 async def test_a_coder_that_writes_nothing_is_a_failed_attempt(monkeypatch, context):
     """Spec §5, narrowed by OPEN-27 to what it always actually meant.
 

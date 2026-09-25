@@ -404,7 +404,7 @@ planned for, and `--continue` on its own reuses it.
 |---|---|
 | `pending` | Worked. This is the point of the flag |
 | `in_progress` | Not resumed — the process died mid-task, and the coder's partial work is already on disk for the next attempt to see |
-| `blocked` | Not retried. It failed the same way twice already, so repeating it spends tokens to reach the same place |
+| `blocked` | Not retried. It failed the same way twice, or used its whole fix budget, so repeating it as it was spends tokens to reach the same place. To give a task that was still converging more attempts, raise `[agent] max_fix_attempts` and run the request again — see *A task says `3 attempts exhausted`* in [06-troubleshooting.md](06-troubleshooting.md) |
 | `done` · `dropped` | Finished. Left alone |
 
 Attempt counts carry across — the ledger keeps what each task has already

@@ -523,13 +523,29 @@ what you want if the request itself has changed.
 
 ### The summary says every task is done, but a file I asked for is missing
 
-Every task the planner declared appears in the summary with a status, and anything not `done` says why. If a task is `blocked`, read its reason: `no progress: the same failure twice` means two attempts failed identically, and `attempts exhausted` means it never converged.
+Every task the planner declared appears in the summary with a status, and anything not `done` says why. If a task is `blocked`, read its reason: `no progress: the same failure twice` means two attempts failed identically, and `attempts exhausted` means the fix budget ran out — which is not the same as never converging; see the next section.
 
 Check the plan, then ask again naming the file explicitly:
 
 ```bash
 rudra "also write tests/test_parser.py covering the CSV edge cases"
 ```
+
+### A task says `3 attempts exhausted`
+
+The coder had `[agent] max_fix_attempts` tries (default 3) to get the task past the verification gate, and every try failed *differently* — two identical failures would have stopped it sooner, as `no progress`. Different is not always stuck: the coder cannot run anything itself, so each gate shows it only the next layer of a problem — a missing package, then a schema error, then a wrong assertion. A task can run out of attempts while its failures are still shrinking.
+
+To tell which, read the attempts in order. Each retry's instructions in `.rudra/run/logs/debug-<id>.jsonl` are a `"kind": "user"` record for that task containing `Your previous attempt did not pass verification`, followed by the gate it was answering; the last gate is under the note in `ledger.json`. If every gate is a new failure and the counts are falling, the task was converging. If the same count keeps coming back in a different spelling, it was not.
+
+A blocked task stays blocked: `rudra --continue` works only `pending` tasks, so it will not give this one another try. For a converging task, raise the budget and run the request again:
+
+```toml
+# .rudra/config.toml
+[agent]
+max_fix_attempts = 5
+```
+
+Raising it costs a coder invocation per extra attempt on every task that fails, stuck or not — across Rudra's own measured runs a third attempt passed about one time in twenty — so raise it for the run that needs it rather than for good. If the gates keep naming packages the project does not declare (`No module named ...`), add them to `requirements.txt` or `pyproject.toml` yourself first; that is usually what the extra attempts were spent discovering.
 
 ### The generated code doesn't run
 
