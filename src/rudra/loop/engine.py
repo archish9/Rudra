@@ -1148,6 +1148,26 @@ def _review_prompt(ledger: Ledger) -> str:
     loop already recorded them per task, and since A1.66 that record is
     file-level and correct. Blocked tasks are included deliberately --
     half-finished work is what most deserves a second opinion.
+
+    **What this says about `git_diff` is a statement about the TOOL, and it
+    took OPEN-152 to make it a true one.** A1.68 shipped two halves the same
+    day, and the other one -- `tools/git_tools.py::_untracked_note` -- made a
+    broad `git_diff` NAME untracked files rather than answer "No changes in
+    the working tree". This sentence went on denying that for a year: it said
+    `git_diff` "will show nothing" on a new project, which stopped being true
+    the moment its sibling shipped, and was never true of a file the run
+    EDITED rather than created. Measured on run G2 (`eed59b91daca`): the
+    reviewer read it and called `ls` plus seven `read_file`s, no `git_diff`,
+    in a repository where `main.py` and `.rudra/AGENTS.md` were both tracked
+    and modified -- so it re-read whole files instead of reading the two-line
+    change, and OPEN-147's guard got no occasion to be verified on.
+
+    Still no git call here: which files are tracked is a question this
+    function deliberately does not ask (A1.68 chose the ledger over a second
+    git call), and it does not need to -- what each tool SHOWS is a fixed
+    fact, so the reviewer can be told both and pick. `tests/test_loop_engine.py`
+    pins the claim against `_untracked_note` itself, so the two cannot drift
+    apart again silently, which is what they did the first time.
     """
     seen: dict[str, None] = {}
     for task in ledger.tasks:
@@ -1159,9 +1179,11 @@ def _review_prompt(ledger: Ledger) -> str:
         listed = "\n".join(f"- {path}" for path in seen)
         prompt += (
             f"\n\nThese files were written or changed:\n{listed}\n\n"
-            "Read them with read_file. git_diff shows changes to files git "
-            "already tracks, so on a new project it will show nothing even "
-            "though the files above exist."
+            "git_diff is the shorter read for a file that existed before this "
+            "run: it shows what changed rather than the whole file. For a file "
+            "this run created, git does not track it yet, so git_diff lists it "
+            "as untracked without a diff and read_file is what shows you its "
+            "contents."
         )
     return prompt
 

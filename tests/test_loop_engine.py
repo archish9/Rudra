@@ -2370,3 +2370,110 @@ async def test_a_resume_over_a_failing_gate_is_sent_the_failure_not_blocked_on_i
     assert default_fakes == ["coder"] * 3, "the resumed run's budget went unspent"
     assert "did not pass verification" in prompts[1]
     assert not task.note.startswith("no progress")
+
+
+# --------------------------------------------------------------------------
+# OPEN-152: what the reviewer is told about `git_diff`
+#
+# A1.68 shipped TWO halves the same day: `_review_prompt` names the files the
+# run touched, and `git_tools._untracked_note` makes `git_diff` NAME untracked
+# files instead of answering "No changes in the working tree". The prompt kept
+# describing the behaviour its own sibling had just removed -- and nothing
+# tested that the two agreed, which is CLAUDE.md lesson 4.
+#
+# Measured live: run G2 `eed59b91daca`'s reviewer read the sentence and called
+# ls + read_file x7 -- zero `git_diff` -- in a repository where `main.py` (2
+# insertions, 2 deletions) and `.rudra/AGENTS.md` were both tracked and
+# modified. `git_diff` was the right tool and the prompt said it would show
+# nothing.
+# --------------------------------------------------------------------------
+
+
+def _ledger_touching(*paths: str) -> Ledger:
+    ledger = Ledger()
+    for index, path in enumerate(paths, start=1):
+        ledger.tasks.append(
+            engine.Task(id=f"t{index}", description=f"task {index}", files_touched=(path,))
+        )
+    return ledger
+
+
+def test_the_prompt_does_not_claim_git_diff_shows_nothing():
+    """The sentence OPEN-152 was filed on. `git_diff` on a fresh repository
+    lists the untracked files; it does not show nothing."""
+    prompt = engine._review_prompt(_ledger_touching("app/service.py"))
+
+    assert "will show nothing" not in prompt
+    assert "show nothing" not in prompt
+
+
+def test_the_prompt_names_both_tools_with_the_case_each_suits():
+    prompt = engine._review_prompt(_ledger_touching("app/service.py"))
+
+    assert "git_diff" in prompt, "the reviewer must still know the tool exists"
+    assert "read_file" in prompt
+
+
+def test_the_claim_about_git_diff_agrees_with_what_git_diff_does():
+    """The pin lesson 4 asks for: the prompt's claim is checked against the
+    real `_untracked_note`, not against a restatement of it. If upstream of
+    this ever goes back to answering nothing for an all-untracked tree, this
+    fails rather than the prompt silently becoming wrong again."""
+    import inspect
+
+    from rudra.tools import git_tools
+
+    source = inspect.getsource(git_tools._untracked_note)
+    assert "Untracked files (new, so no diff exists yet)" in source, (
+        "git_diff no longer names untracked files -- re-read _review_prompt's claim"
+    )
+
+    prompt = engine._review_prompt(_ledger_touching("app/service.py"))
+    assert "untracked" in prompt.lower(), (
+        "the prompt must say what git_diff does with an untracked file, "
+        "because that is the half A1.68 fixed and the prompt denied"
+    )
+
+
+def test_a_run_that_touched_nothing_gets_no_tool_guidance_at_all():
+    """A1.68 half 1: the guidance hangs off the file list, and with no files
+    there is nothing to guide. Unchanged by OPEN-152."""
+    prompt = engine._review_prompt(Ledger())
+
+    assert prompt == "Review the changes this run made and report any problems."
+    assert "git_diff" not in prompt
+
+
+def test_the_file_list_is_still_deduplicated_and_ordered(tmp_path):
+    """A1.68 half 1, pinned while its sibling sentence changes."""
+    ledger = Ledger()
+    ledger.tasks.append(
+        engine.Task(id="t1", description="one", files_touched=("app/service.py", "main.py"))
+    )
+    ledger.tasks.append(
+        engine.Task(id="t2", description="two", files_touched=("main.py", "tests/test_x.py"))
+    )
+
+    prompt = engine._review_prompt(ledger)
+
+    assert prompt.count("- main.py\n") == 1, "listed once, though two tasks touched it"
+    assert (
+        prompt.index("- app/service.py")
+        < prompt.index("- main.py")
+        < prompt.index("- tests/test_x.py")
+    ), "first-touched order, not sorted"
+
+
+def test_a_blocked_task_s_files_are_still_listed():
+    """A1.68: half-finished work is what most deserves a second opinion."""
+    ledger = Ledger()
+    ledger.tasks.append(
+        engine.Task(
+            id="t1",
+            description="one",
+            status=TaskStatus.BLOCKED,
+            files_touched=("app/half_done.py",),
+        )
+    )
+
+    assert "- app/half_done.py" in engine._review_prompt(ledger)
