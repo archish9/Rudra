@@ -95,6 +95,7 @@ def test_sync_hook_records_the_reported_counts():
         # key that appears only on runs that refused one is a key every
         # reader of usage.json has to guard.
         "installs_refused": 0,
+        "commands_explained": 0,
         # Added by OPEN-116, zero for the reason OPEN-103's line gives: a
         # greenfield read is a TOOL call GreenfieldReadMiddleware answered.
         "greenfield_reads_answered": 0,

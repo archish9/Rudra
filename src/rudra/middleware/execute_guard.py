@@ -61,13 +61,16 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
+from pathlib import Path
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.tools import BaseTool
 
 from rudra.compat.path_constants import SANDBOX_PREFIXES
-from rudra.compat.virtual_paths import looks_windows_absolute
+from rudra.compat.virtual_paths import looks_windows_absolute, virtual_to_host
+from rudra.middleware.machine_paths import MACHINE_DIRS
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +127,19 @@ _PIP_NOTE = (
 )
 
 
+# OPEN-151. The virtual spelling typed into a shell command.
+COMMAND_PATH_NOTICE = "command-path"
+
+_COMMAND_PATH_NOTE = (
+    "\n\n[Rudra] `{token}` is this project's `{relative}` written the way the "
+    'FILE TOOLS spell it -- to them a leading "/" means this project\'s root. '
+    "`execute` is a real shell, so it looked for `{token}` at the root of the "
+    "MACHINE, where nothing of this project exists. `execute` already runs in "
+    "this project's root directory: run it again naming `{relative}` relative "
+    'to that root, with no leading "/".'
+)
+
+
 def _is_absolute(path: str) -> bool:
     """Absolute by SHAPE, on any host (CLAUDE.md §1.8).
 
@@ -139,6 +155,62 @@ def _absolute_cd_target(command: str) -> str | None:
         target = next((group for group in match.groups() if group is not None), "")
         if target and _is_absolute(target):
             return target
+    return None
+
+
+def _command_tokens(command: str) -> list[str]:
+    """The command's words, quotes resolved the way a shell resolves them.
+
+    `shlex.split` because the token is rarely the first word -- run G2's
+    second call is `ls -la /.venv/bin/ | grep python` -- and because a quoted
+    path with a space in it is one token, not two. It raises on an
+    unterminated quote, which a model emits; a whitespace split answers that
+    case well enough to find a bare path and never raises.
+    """
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def _virtual_path_token(
+    command: str, project_root: Path, skip: str | None
+) -> tuple[str, str] | None:
+    """The first token that is this project's path written with a leading "/".
+
+    Six conditions, every one of them declining rather than guessing. The
+    SEVENTH is at the call site and not here, because it is about the shell's
+    answer rather than about the command: the token must be one the shell
+    itself named. Two of the six were measured rather than reasoned:
+
+    * `virtual_to_host` resolves both a bare "/" and a UNC "//server/share"
+      to the project ROOT, which always exists -- so a resolution equal to the
+      root is not evidence of anything.
+    * a first segment in `MACHINE_DIRS` declines even when the project happens
+      to hold that name, because `/etc/hosts` in a shell command is ordinary
+      and correct. That frozenset is `machine_paths.py`'s, imported rather
+      than respelled (CLAUDE.md 3: do not add a fourth copy).
+    """
+    root = Path(project_root)
+    for token in _command_tokens(command):
+        if token == skip:
+            continue
+        if not token.startswith("/") or token.startswith("//") or token.strip("/") == "":
+            continue
+        candidate = token.rstrip(";,")
+        first = candidate.lstrip("/").split("/", 1)[0]
+        if first in MACHINE_DIRS:
+            continue
+        try:
+            if Path(candidate).exists():
+                continue
+            host = virtual_to_host(candidate, root)
+            if host is None or host == root or not host.exists():
+                continue
+            relative = host.relative_to(root).as_posix()
+        except (OSError, ValueError):
+            continue
+        return candidate, relative
     return None
 
 
@@ -208,11 +280,22 @@ class ExecuteGuardMiddleware(AgentMiddleware):
     still builds with no run at all -- which every test above does.
     """
 
-    def __init__(self, *, role: str | None = None, usage: Any = None, trace: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        role: str | None = None,
+        usage: Any = None,
+        trace: Any = None,
+        project_path: Any = None,
+    ) -> None:
         super().__init__()
         self.role = role
         self.usage = usage
         self.trace = trace
+        # OPEN-151. None is the honest answer with no run: there is nowhere to
+        # resolve a virtual spelling against, so nothing about one can be
+        # claimed -- `machine_paths.py`'s own rule at the same boundary.
+        self.project_path = project_path
 
     def _request(self, request):
         tools = _rewrite_execute_description(getattr(request, "tools", None))
@@ -236,6 +319,30 @@ class ExecuteGuardMiddleware(AgentMiddleware):
         except Exception:  # noqa: BLE001 - same rule
             logger.debug("pip refusal not announced", exc_info=True)
 
+    def _announce_command_path(self, token: str, relative: str) -> None:
+        """Count and name a command that used the virtual spelling (OPEN-151).
+
+        What this guard prevents is a tool failure that never happens, and a
+        failure that never happens leaves no mark on `calls`, `seconds` or
+        tokens -- so it has to be counted here or nowhere (CLAUDE.md 8a).
+        Swallows its own failure, like every writer on this path.
+        """
+        role = self.role or "agent"
+        try:
+            if self.usage is not None:
+                self.usage.record_command_path_explained(role)
+        except Exception:  # noqa: BLE001 - bookkeeping may never end a run
+            logger.debug("command path not counted", exc_info=True)
+        try:
+            if self.trace is not None:
+                self.trace.notice(
+                    f"a command named {token}, which is this project's {relative}",
+                    role=role,
+                    name=COMMAND_PATH_NOTICE,
+                )
+        except Exception:  # noqa: BLE001 - same rule
+            logger.debug("command path not announced", exc_info=True)
+
     def _annotated(self, request, result):
         """The result with every note that applies appended, or the result itself."""
         if (request.tool_call or {}).get("name") != EXECUTE:
@@ -250,6 +357,23 @@ class ExecuteGuardMiddleware(AgentMiddleware):
         target = _absolute_cd_target(command)
         if target is not None:
             note += _note(target)
+        # OPEN-151, and AFTER the `cd` note so that `target` can stand it down:
+        # `cd /app` with an `app/` in the project satisfies both rules and both
+        # would say the same sentence, so the more specific one -- which names
+        # the `cd` itself -- wins.
+        #
+        # Keyed on a path the SHELL ITSELF NAMED in its answer, which every one
+        # of the three archived hits is (`/bin/sh: /.venv/bin/python: No such
+        # file or directory`). A command that merely CONTAINS such a token and
+        # failed for its own reason -- `pytest --cov=/src` on an assertion --
+        # is not this defect, and a note there would be a wrong answer to a
+        # real failure.
+        if self.project_path is not None:
+            named = _virtual_path_token(command, self.project_path, target)
+            if named is not None and named[0] in content:
+                token, relative = named
+                note += _COMMAND_PATH_NOTE.format(token=token, relative=relative)
+                self._announce_command_path(token, relative)
         if PIP_REFUSAL in content:
             note += _PIP_NOTE
             self._announce_pip_refusal(command)
@@ -273,6 +397,7 @@ class ExecuteGuardMiddleware(AgentMiddleware):
 
 
 __all__ = [
+    "COMMAND_PATH_NOTICE",
     "PIP_REFUSAL",
     "PIP_REFUSED_NOTICE",
     "RUDRA_EXECUTE_DESCRIPTION",

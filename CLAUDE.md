@@ -5,11 +5,12 @@ is the live ledger of what is open, and its *Fix next* queue at the top is the
 one order to work in.** Trust `grep -n PENDING TODO.md` over any heading,
 including this sentence.
 
-**One is open as of 2026-09-23: OPEN-151**, filed by live run G — a shell
-command carrying this project's virtual `/` spelling fails with only
-`/bin/sh`'s error, and nothing explains it. Its plan's Step 0 is measured, so
-the owner's first decision is whether to build it at all. Every other `OPEN-N`
-cited in this file is closed and points at a record in `TODO-closed.md`.
+**Nothing is open as of 2026-09-25**, OPEN-151 having closed that day — every
+`OPEN-N` cited in this file points at a record in `TODO-closed.md`. **The one
+step left is live run D, and it is blocked on the owner**: Vaayu's `base_url`
+and model are named nowhere in this repo. So read lesson 1 below rather than
+this paragraph: an empty board is when a live run is easiest to forget, and
+the only run left is the one that cannot start.
 
 **The history that used to open this file — which item closed when, and the
 five live-run rounds behind them — moved to `TODO-closed.md` on 2026-09-23**,
@@ -61,9 +62,8 @@ When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
 than to work outstanding. **`TODO.md` is where the open ones are**, and as of
-2026-09-23 that is OPEN-151; every other `OPEN-N` here points at a record. When
-the next item lands, its own document's closing section says which paragraphs
-here it corrects.
+2026-09-25 there are none. When the next item lands, its own document's closing
+section says which paragraphs here it corrects.
 
 **All three are gitignored** (`.gitignore` ignores `TODO*`), so git holds no
 copy of any of them. Move content between them; never delete it. That is
@@ -117,7 +117,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **One is open as of 2026-09-23: OPEN-151**, filed by live run G, with a self-contained plan; the head of this file says what it is. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **Nothing is open as of 2026-09-25**; the one remaining step, live run D, is blocked on Vaayu's `base_url` and model. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
@@ -990,7 +990,50 @@ src/rudra/
 │                           like its siblings (OPEN-118). Registered only there, so
 │                           no reading stage can be told its project is empty;
 │                           right after PlannerWriteMiddleware, outside the repeat
-│                           guard
+│                           guard,
+│                           plus execute_guard.py's THIRD note (OPEN-151): a
+│                           FAILED `execute` whose command named this project's
+│                           path with the FILE TOOLS' leading `/` is told the
+│                           relative spelling. **The inverse of
+│                           machine_paths.py** — that one explains a FILE TOOL
+│                           sent to the machine, this an `execute` sent to the
+│                           project's virtual spelling, which is why `execute`
+│                           is in neither `_PATH_ARGS` nor a new module: the
+│                           two halves of one confusion, and this half belongs
+│                           beside the `cd` and pip notes that already own
+│                           "what the model is told when its belief about the
+│                           shell has just cost it a turn". `_COMMAND_RULES`
+│                           (`subagents/registry.py:201-223`) states the rule
+│                           in three bullets and a Right/Wrong pair and lost
+│                           (OPEN-17, again): run G2's tester had read them and
+│                           sent `/.venv/bin/python -m pytest …`, then `ls -la
+│                           /.venv/bin/`, spending two thirds of
+│                           `MAX_CONSECUTIVE_FAILURES` before recovering on its
+│                           own. **Annotate, never repair** — `rm /tests`
+│                           rewritten deletes the project's tests, and no static
+│                           reading of a shell string is certain, so
+│                           `gutter_indent.py`'s "only ever turns a certain
+│                           failure into a success" cannot be built here. SIX
+│                           conditions, each declining rather than guessing, and
+│                           two are measured: `virtual_to_host` resolves a bare
+│                           `/` AND a UNC `//server/share` to the project ROOT,
+│                           which always exists, so a resolution equal to the
+│                           root is evidence of nothing; and a first segment in
+│                           `MACHINE_DIRS` declines even where the project holds
+│                           that name, because `/etc/hosts` in a command is
+│                           ordinary — that frozenset is machine_paths.py's,
+│                           imported. The seventh is PRECISION: the token must
+│                           be one the SHELL ITSELF NAMED in its answer, which
+│                           all three archived hits are, so a command that
+│                           merely carries such a token and failed for its own
+│                           reason (`pytest --cov=/src` on an assertion) is not
+│                           answered. Replayed over the archive it fires on 2 of
+│                           27 failed `execute` calls — exactly run G2's two,
+│                           zero false positives. The `cd` note stands it down
+│                           when both apply, being the more specific. Ungated
+│                           like the rest of the middleware: the check keys on
+│                           the tool CALL, so a spec without `execute` pays
+│                           nothing
 ├── tools/                  EVERY tool the model can call, and nothing else:
 │                           interaction (record_fact · ask_user) · git_tools ·
 │                           testing_tools · memory_tools (remember ·
@@ -1947,6 +1990,7 @@ either.
 | Was the time the provider's? | console · `debug-<id>.jsonl` | **Since OPEN-113 the run says so.** Every call over 120 s prints `slow model call: the <role> model took <N>s for <in> input / <out> output tokens` (in the debug log as `"kind": "console"`), and a time halt ends `<N>s of it (<P>%) was the <role> model answering <K> calls … -- the time went to model latency, not to tool work.` **The token counts separate the causes**: thousands of output tokens is a model writing, tens is a request queueing. Then `"logger": "rudra.llm.transport"` — one `httpx: HTTP Request: … "HTTP/1.1 <status>"` per attempt and one `openai._base_client: Retrying request …` per re-issue the **SDK** made, which `usage.json`'s `retries` did not count — **absent since OPEN-115**, which switched the SDK's retries off, so a `Retrying request` line in a log written after 2026-09-16 means a client that setting did not reach. **A halt no longer names calls it discards, because it no longer discards any** (OPEN-114): the bound moved into a `before_model` hook, so it fires before the NEXT call rather than on the answer to the last one. A notice still saying `asked for <tool>, which will not run` came from a log written before 2026-09-16, and that run lost that call. **A `model_call` with `ok: false` reading `StreamChunkTimeoutError('No streaming chunk received for <N>s … chunks_received=<K>')` is a streamed call that produced nothing for `<N>` seconds** — `<K>` of 0 is a first token that never came (a long prefill, or a queue), more is a stall mid-answer. Since OPEN-139 `<N>` is the role's `timeout`; a log written before then reads `120.0s`, langchain_openai's own default, whatever the role said |
 | Did Rudra build or sync the project's `.venv`, and what did it cost? | `usage.json` · `debug-<id>.jsonl` | `run.env_syncs` and `run.env_sync_seconds`, then `"kind": "project_env"` — one line per command with `step` (`create`/`pytest`/`deps`), `outcome`, `seconds`, `command` and pip's `tail`, and one `step: "check"` line per skip reason (OPEN-120). A `deps` line with `outcome: "failed"` means the next blocker carried pip's output. **A Python project with no `project_env` line at all** means the loop never reached a gate run |
 | Did an agent try to install into the machine's Python? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.installs_refused`, and a `"kind": "notice"`, `name: "pip-refused"` line quoting the command. Non-zero is `PIP_REQUIRE_VIRTUALENV` working — before OPEN-120, run `a04f89bd2ed6`'s tester downgraded the user's Flask and SQLAlchemy. **A climbing count is the note being read and ignored.** A `Successfully installed` in a `tool_result` for a path outside the project's `.venv` means an installer pip's switch does not cover |
+| Did an agent type this project's virtual path into a command? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.commands_explained`, and a `"kind": "notice"`, `name: "command-path"` line naming the token and the relative spelling. Non-zero means OPEN-151's defect fired and was answered in the tool result instead of costing a second failure — **each such command is a tool failure at `MAX_CONSECUTIVE_FAILURES = 3`**, so read it beside `halts`: run G2's tester spent two of three on `/.venv/bin/python …` and `ls -la /.venv/bin/`. **One or two per invocation is the note being read; a climbing count is it being ignored**, which is OPEN-17's evidence rather than an argument. In a log written before 2026-09-25 the same commands appear as `tool_result` records carrying only `/bin/sh`'s error, with nothing naming them. **The inverse reading is `machine-path`** — that one is a FILE TOOL sent to the machine, this an `execute` sent to the project's spelling; a run with both is a model that has the two roots swapped in general |
 
 **`files_touched: []` on a `DONE` task is the single highest-signal line in
 that folder.** It means a coder invocation was dispatched, paid for, and wrote

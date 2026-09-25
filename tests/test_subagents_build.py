@@ -1298,6 +1298,8 @@ def test_the_execute_guard_is_wired_to_the_run(context):
     assert guard.usage is usage
     assert guard.trace is sink
     assert guard.role == spec.role
+    # OPEN-151: and the root a "/"-prefixed command path is resolved against.
+    assert guard.project_path == wired.project_path
 
 
 # --- OPEN-126: the repeat guard words its refusal from the spec's own grants --

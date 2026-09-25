@@ -22,6 +22,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 
 from rudra.middleware.execute_guard import (
+    COMMAND_PATH_NOTICE,
     PIP_REFUSAL,
     PIP_REFUSED_NOTICE,
     RUDRA_EXECUTE_DESCRIPTION,
@@ -541,3 +542,327 @@ def test_pip_itself_refuses_with_the_text_this_guard_keys_on(tmp_path):
 
     assert result.returncode == 3, result.stdout + result.stderr
     assert PIP_REFUSAL in result.stdout + result.stderr
+
+
+# --------------------------------------------------------------------------
+# 5. A command that used this project's VIRTUAL "/" spelling (OPEN-151)
+#
+# The inverse of MachinePathMiddleware. That one explains a FILE TOOL sent to
+# the machine; this explains an `execute` sent to the project's virtual
+# spelling -- the one place where "/x" means two different things, which
+# `_COMMAND_RULES` (subagents/registry.py:201-223) states in three bullets and
+# a Right/Wrong pair and lost anyway.
+#
+# Live run G2 (`eed59b91daca`), the tester, working t1:
+#   execute {'command': '/.venv/bin/python -m pytest tests/test_main.py -v'}
+#     -> [stderr] /bin/sh: /.venv/bin/python: No such file or directory
+#        Exit code: 127
+#   execute {'command': 'ls -la /.venv/bin/ | grep python'}
+#     -> [stderr] ls: /.venv/bin/: No such file or directory  Exit code: 1
+# Both ALLOWED by the gate (`permissions.jsonl`, mode-default), and each is a
+# tool failure at `subagents/runner.py`'s MAX_CONSECUTIVE_FAILURES = 3 (:42):
+# two in a row spent two thirds of that budget before the tester recovered by
+# itself with the relative spelling.
+# --------------------------------------------------------------------------
+
+
+def _shell_error(message: str, exit_code: int = 1) -> ToolMessage:
+    """What the shell actually answers: deepagents renders stderr with a
+    `[stderr] ` prefix (backends/local_shell.py:320-336) and the status line
+    from `_format_execute_output` (middleware/filesystem.py:2765)."""
+    return ToolMessage(
+        content=f"[stderr] {message}\n[Command failed with exit code {exit_code}]",
+        name="execute",
+        tool_call_id="c1",
+        artifact={"exit_code": exit_code},
+        status="success",
+    )
+
+
+def test_a_command_that_used_the_virtual_spelling_is_explained(tmp_path):
+    """Run G2's first call, verbatim."""
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").write_text("#!/bin/sh\n")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "/.venv/bin/python -m pytest tests/test_main.py -v")
+    answer = _shell_error("/bin/sh: /.venv/bin/python: No such file or directory", 127)
+
+    result = guard.wrap_tool_call(request, _Handler(answer))
+
+    assert "[Command failed with exit code 127]" in result.content, "the original result survives"
+    assert ".venv/bin/python" in result.content
+    assert "already runs in this project's root directory" in result.content
+
+
+def test_the_explanation_names_the_relative_spelling_to_use(tmp_path):
+    """OPEN-95's rule: a refusal carrying no correction is one the model
+    answers by retrying. The note has to say what to type instead."""
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").write_text("")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "/.venv/bin/python -m pytest tests/test_main.py -v")
+    answer = _shell_error("/bin/sh: /.venv/bin/python: No such file or directory", 127)
+
+    note = guard.wrap_tool_call(request, _Handler(answer)).content
+
+    assert "`.venv/bin/python`" in note, "the spelling that works, quoted"
+    assert "`/.venv/bin/python`" in note, "and the one the shell looked for"
+
+
+def test_run_g2_s_second_command_is_explained_through_the_pipe(tmp_path):
+    """`ls -la /.venv/bin/ | grep python` -- the token is not the first word,
+    and the command holds a pipe, so the scan cannot be a `startswith`."""
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "ls -la /.venv/bin/ | grep python")
+    answer = _shell_error("ls: /.venv/bin/: No such file or directory", 1)
+
+    result = guard.wrap_tool_call(request, _Handler(answer))
+
+    assert ".venv/bin" in result.content
+    assert "already runs in this project's root directory" in result.content
+
+
+def test_the_third_archived_hit_is_explained(tmp_path):
+    """Run 2cde3406f7d6: `cat /src/iphone15.html` failed, and 170 s later that
+    same tester wrote the same literal into a test file -- 8 of 8 tests failing
+    forever against 480 lines of correct HTML, the run 0 of 2 in 2,132 s.
+    OPEN-93 fixed the WRITE; nothing answered this call, which is this item."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "iphone15.html").write_text("<!doctype html>")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "cat /src/iphone15.html")
+    answer = _shell_error("cat: /src/iphone15.html: No such file or directory")
+
+    result = guard.wrap_tool_call(request, _Handler(answer))
+
+    assert "src/iphone15.html" in result.content
+
+
+def test_a_command_that_succeeded_is_never_explained(tmp_path):
+    """machine_paths.py's rule one tool over: a project that really answers
+    must be answered with its own behaviour, never with this."""
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").write_text("")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "/.venv/bin/python -m pytest")
+    answer = _succeeded()
+
+    assert guard.wrap_tool_call(request, _Handler(answer)) is answer
+
+
+def test_a_machine_path_the_project_does_not_hold_is_left_alone(tmp_path):
+    """`execute` may legitimately ask for the machine's interpreter."""
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "/usr/local/bin/python3.99 -V")
+    answer = _shell_error("/bin/sh: /usr/local/bin/python3.99: No such file or directory", 127)
+
+    assert guard.wrap_tool_call(request, _Handler(answer)) is answer
+
+
+def test_a_first_segment_in_machine_dirs_declines_even_when_the_project_has_one(tmp_path):
+    """`/etc/hosts` in a shell command is ordinary and correct, and the model
+    may have meant the machine. MACHINE_DIRS is the same frozenset
+    machine_paths.py reads -- one definition, two consumers."""
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "etc" / "hosts").write_text("127.0.0.1 localhost\n")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "cat /etc/hosts")
+    answer = _shell_error("cat: /etc/hosts: No such file or directory")
+
+    assert guard.wrap_tool_call(request, _Handler(answer)) is answer
+
+
+def test_a_path_that_really_exists_on_the_machine_is_left_alone(tmp_path):
+    """`/bin/sh` exists here. Whatever failed, it was not the spelling."""
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "sh").write_text("")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "/bin/sh run.sh")
+    answer = _shell_error("run.sh: No such file or directory", 127)
+
+    assert guard.wrap_tool_call(request, _Handler(answer)) is answer
+
+
+def test_a_failure_with_no_slash_token_is_left_alone(tmp_path):
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "python -m pytest tests/test_x.py -v")
+    answer = _shell_error("ModuleNotFoundError: No module named 'main'")
+
+    assert guard.wrap_tool_call(request, _Handler(answer)) is answer
+
+
+def test_a_bare_slash_and_a_unc_spelling_are_left_alone(tmp_path):
+    """Probed: `virtual_to_host` resolves both `/` and `//server/share` to the
+    project ROOT itself, which exists, so a naive existence check would
+    annotate every failing command that happens to hold one."""
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    for command in ("ls / //server/share", "du -sh /"):
+        answer = _shell_error("ls: //server/share: No such file or directory")
+        assert guard.wrap_tool_call(_tool_request("execute", command), _Handler(answer)) is answer
+
+
+def test_a_token_the_shell_never_named_is_left_alone(tmp_path):
+    """The precision rule, and the reason the note cannot fire on a command
+    that merely CONTAINS such a token: every one of the three archived hits is
+    a path the shell itself quoted back. A test that failed on an assertion is
+    not this defect, whatever `--cov=/src` resolves to."""
+    (tmp_path / "src").mkdir()
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "python -m pytest --cov=/src tests/")
+    answer = _shell_error("AssertionError: assert 1 == 2")
+
+    assert guard.wrap_tool_call(request, _Handler(answer)) is answer
+
+
+def test_no_project_path_declines(tmp_path):
+    """Nowhere to resolve against, so nothing can be claimed
+    (machine_paths.py's own rule)."""
+    guard = ExecuteGuardMiddleware(project_path=None)
+    request = _tool_request("execute", "/.venv/bin/python -m pytest")
+    answer = _shell_error("/bin/sh: /.venv/bin/python: No such file or directory", 127)
+
+    assert guard.wrap_tool_call(request, _Handler(answer)) is answer
+
+
+def test_a_cd_into_a_path_the_project_holds_gets_one_note_not_two(tmp_path):
+    """`cd /app` with an `app/` in the project satisfies both rules, and both
+    would say the same thing. The `cd` note is the more specific -- it names
+    the `cd` itself -- so it wins and this one stands down."""
+    (tmp_path / "app").mkdir()
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "cd /app && python -m pytest")
+    answer = _shell_error("sh: line 0: cd: /app: No such file or directory")
+
+    content = guard.wrap_tool_call(request, _Handler(answer)).content
+
+    assert content.count("already runs in this project's root directory") == 1
+
+
+def test_a_virtual_path_and_a_pip_refusal_in_one_command_get_both_notes(tmp_path):
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "pip").write_text("")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    request = _tool_request("execute", "/.venv/bin/pip install -r requirements.txt")
+    answer = ToolMessage(
+        content=(
+            "[stderr] /bin/sh: /.venv/bin/pip: No such file or directory\n"
+            f"ERROR: {PIP_REFUSAL}\n[Command failed with exit code 3]"
+        ),
+        name="execute",
+        tool_call_id="c1",
+        artifact={"exit_code": 3},
+        status="success",
+    )
+
+    content = guard.wrap_tool_call(request, _Handler(answer)).content
+
+    assert ".venv/bin/pip" in content
+    assert "requirements.txt or pyproject.toml" in content
+
+
+def test_a_virtual_path_command_is_counted_and_named(tmp_path):
+    """CLAUDE.md 8a: a number that would answer a user's complaint must be
+    WRITTEN. What this guard prevents is a tool failure that never happens."""
+    from rudra.context.usage import RunUsage
+
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").write_text("")
+    usage, trace = RunUsage(), _Trace()
+    guard = ExecuteGuardMiddleware(role="tester", usage=usage, trace=trace, project_path=tmp_path)
+    command = "/.venv/bin/python -m pytest tests/test_main.py -v"
+    answer = _shell_error("/bin/sh: /.venv/bin/python: No such file or directory", 127)
+
+    guard.wrap_tool_call(_tool_request("execute", command), _Handler(answer))
+
+    assert usage.as_dict()["tester"]["commands_explained"] == 1
+    assert [(n["name"], n["role"]) for n in trace.notices] == [(COMMAND_PATH_NOTICE, "tester")]
+    assert "/.venv/bin/python" in trace.notices[0]["payload"]
+
+
+def test_the_explanation_never_rewrites_the_command(tmp_path):
+    """Option C, rejected in the plan and pinned here: `rm /tests` rewritten is
+    the project's tests deleted. Nothing in this module rewrites a command."""
+    (tmp_path / "tests").mkdir()
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    handler = _Handler(_shell_error("rm: /tests: No such file or directory"))
+
+    guard.wrap_tool_call(_tool_request("execute", "rm -rf /tests"), handler)
+
+    assert handler.seen.tool_call["args"]["command"] == "rm -rf /tests"
+
+
+def test_the_result_still_reads_as_a_failure(tmp_path):
+    """OPEN-94: this appends to an existing failure, so `runner.py`'s
+    consecutive-failure counter sees exactly what it saw before."""
+    from rudra.trace.stream import message_is_error
+
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").write_text("")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    answer = _shell_error("/bin/sh: /.venv/bin/python: No such file or directory", 127)
+    before = message_is_error(answer)
+
+    result = guard.wrap_tool_call(
+        _tool_request("execute", "/.venv/bin/python -m pytest"), _Handler(answer)
+    )
+
+    assert message_is_error(result) == before
+    assert result.artifact == {"exit_code": 127}
+
+
+def test_a_bare_string_result_is_handled(tmp_path):
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").write_text("")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    answer = (
+        "[stderr] /bin/sh: /.venv/bin/python: No such file or directory\n"
+        "[Command failed with exit code 127]"
+    )
+
+    result = guard.wrap_tool_call(
+        _tool_request("execute", "/.venv/bin/python -m pytest"), _Handler(answer)
+    )
+
+    assert isinstance(result, str)
+    assert ".venv/bin/python" in result
+
+
+def test_an_unbalanced_quote_does_not_raise(tmp_path):
+    """`shlex.split` raises on an unterminated quote, and a model emits one.
+    Bookkeeping may never end a run (CLAUDE.md 8a)."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "a.py").write_text("")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    answer = _shell_error("sh: unexpected EOF while looking for matching `\"'")
+
+    result = guard.wrap_tool_call(
+        _tool_request("execute", 'python -c "print(open(/src/a.py'), _Handler(answer)
+    )
+
+    assert result is not None
+
+
+def test_a_non_execute_tool_is_never_explained(tmp_path):
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    answer = _shell_error("/bin/sh: /.venv/bin/python: No such file or directory", 127)
+    request = SimpleNamespace(
+        tool_call={"name": "read_file", "args": {"command": "/.venv/bin/python"}, "id": "c1"}
+    )
+
+    assert guard.wrap_tool_call(request, _Handler(answer)) is answer
+
+
+@pytest.mark.asyncio
+async def test_the_virtual_path_note_also_runs_on_the_async_path(tmp_path):
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    (tmp_path / ".venv" / "bin" / "python").write_text("")
+    guard = ExecuteGuardMiddleware(project_path=tmp_path)
+    answer = _shell_error("/bin/sh: /.venv/bin/python: No such file or directory", 127)
+
+    result = await guard.awrap_tool_call(
+        _tool_request("execute", "/.venv/bin/python -m pytest"), _Handler(answer).acall
+    )
+
+    assert ".venv/bin/python" in result.content

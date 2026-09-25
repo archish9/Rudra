@@ -420,6 +420,13 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any) -> list:
             role=spec.role,
             usage=getattr(context, "usage", None),
             trace=getattr(context, "trace", None),
+            # OPEN-151: and a command that named this project's path with the
+            # FILE TOOLS' leading "/" is answered with the relative spelling.
+            # Ungated, like the rest of this middleware and for its reason
+            # (`test_every_subagent_carries_the_execute_guard`): the check keys
+            # on the tool CALL, so a spec without `execute` never reaches it and
+            # pays nothing, and one that gains shell later needs no edit here.
+            project_path=getattr(context, "project_path", None),
         ),
         # The gated general-purpose spec below stays passed to
         # create_deep_agent -- it is what suppresses deepagents' ungated one

@@ -214,6 +214,17 @@ class RoleUsage:
     # `a04f89bd2ed6`, before the floor existed, the same attempt downgraded
     # Flask and SQLAlchemy in the machine's own Python and nothing counted it.
     installs_refused: int = 0
+    # `execute` commands that named this project's path with a leading "/" --
+    # the virtual spelling the FILE TOOLS use -- and were answered with the
+    # relative one instead of only `/bin/sh`'s error (OPEN-151,
+    # ExecuteGuardMiddleware). The tester's in practice: all three archived
+    # hits are its.
+    #
+    # Counted because what this prevents is a tool FAILURE that never happens,
+    # and each of run G2's two cost a third of `MAX_CONSECUTIVE_FAILURES`. One
+    # or two per invocation is the note being read; a number that climbs is the
+    # note being ignored, which is OPEN-17's evidence rather than an argument.
+    commands_explained: int = 0
     # `ls`/`read_file`/`glob`/`grep` calls on a planner stage built without
     # file tools because the project holds nothing to read, answered with the
     # route rather than langgraph's tool-list echo (OPEN-116,
@@ -524,6 +535,14 @@ class RunUsage:
         """One `pip install` refused for running outside a virtualenv (OPEN-120)."""
         self._slot(role).installs_refused += 1
 
+    def record_command_path_explained(self, role: str) -> None:
+        """One failed command whose `/`-path was this project's, explained (OPEN-151).
+
+        The inverse of `content_paths_flagged`: that one is a virtual path
+        written INTO a file, this one is a virtual path typed into a shell.
+        """
+        self._slot(role).commands_explained += 1
+
     def record_compaction(self, role: str) -> None:
         """One `compact_conversation` call by `role`.
 
@@ -608,6 +627,7 @@ class RunUsage:
                 "tool_routes_answered": tally.tool_routes_answered,
                 "completion_files_refused": tally.completion_files_refused,
                 "installs_refused": tally.installs_refused,
+                "commands_explained": tally.commands_explained,
                 "greenfield_reads_answered": tally.greenfield_reads_answered,
                 "seconds": round(tally.seconds, 3),
             }
