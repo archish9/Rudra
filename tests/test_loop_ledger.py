@@ -236,3 +236,104 @@ def test_a_ledger_written_before_run_errors_existed_still_loads(tmp_path):
         encoding="utf-8",
     )
     assert Ledger.load(path).tasks[0].run_errors == ()
+
+
+# --------------------------------------------------------------------------
+# OPEN-158: a task added to unblock the run is worked NEXT
+# --------------------------------------------------------------------------
+
+
+def _blocked_at_t1_with_pending(count: int) -> Ledger:
+    """Run 4989aefefacb's shape: t1 blocked, everything after it still pending."""
+    ledger = Ledger()
+    for index in range(count + 1):
+        ledger.add(f"task {index + 1}")
+    ledger.get("t1").status = TaskStatus.BLOCKED
+    return ledger
+
+
+def test_a_task_added_while_unblocking_is_the_next_pending():
+    # t18's shape: 16 pending when the blocked consult added it, 17th in line.
+    ledger = _blocked_at_t1_with_pending(16)
+    with ledger.unblocking("t1"):
+        fix = ledger.add("declare greenlet in requirements.txt")
+    assert fix.id == "t18"
+    assert ledger.next_pending() is fix
+    assert ledger.resumable()[0] is fix
+
+
+def test_tasks_added_while_unblocking_keep_their_own_order():
+    # Across separate add calls in ONE consult too: the planner often adds,
+    # reads, and adds again (run 4989aefefacb added t18, then t19).
+    ledger = _blocked_at_t1_with_pending(3)
+    with ledger.unblocking("t1"):
+        first = ledger.add("fix the cause")
+        second = ledger.add("then this")
+    assert [task.id for task in ledger.resumable()] == [first.id, second.id, "t2", "t3", "t4"]
+
+
+def test_a_task_added_while_unblocking_records_which_block_it_answers():
+    # CLAUDE.md 8a: the order a run worked in must be readable from ledger.json.
+    ledger = _blocked_at_t1_with_pending(1)
+    with ledger.unblocking("t1"):
+        fix = ledger.add("fix it")
+    plain = ledger.add("later work")
+    assert fix.unblocks == "t1"
+    assert plain.unblocks == ""
+
+
+def test_outside_a_blocked_consult_add_still_appends():
+    ledger = _blocked_at_t1_with_pending(2)
+    with ledger.unblocking("t1"):
+        ledger.add("fix it")
+    appended = ledger.add("an ordinary addition")
+    assert ledger.tasks[-1] is appended
+    assert ledger.resumable()[-1] is appended
+
+
+def test_unblocking_is_cleared_even_when_the_consult_raises():
+    ledger = _blocked_at_t1_with_pending(1)
+    try:
+        with ledger.unblocking("t1"):
+            raise RuntimeError("provider down")
+    except RuntimeError:
+        pass
+    appended = ledger.add("after the failed consult")
+    assert ledger.tasks[-1] is appended
+    assert appended.unblocks == ""
+
+
+def test_ids_stay_unique_when_a_task_is_inserted_mid_list():
+    ledger = _blocked_at_t1_with_pending(2)
+    with ledger.unblocking("t1"):
+        ledger.add("fix it")
+    ledger.add("more")
+    ids = [task.id for task in ledger.tasks]
+    assert len(ids) == len(set(ids))
+    assert ledger.get("t4").description == "fix it"
+
+
+def test_with_nothing_pending_an_unblocking_task_is_appended():
+    ledger = Ledger()
+    ledger.add("only")
+    ledger.get("t1").status = TaskStatus.BLOCKED
+    with ledger.unblocking("t1"):
+        fix = ledger.add("fix it")
+    assert ledger.tasks[-1] is fix
+    assert ledger.next_pending() is fix
+
+
+def test_unblocks_round_trips_and_is_optional(tmp_path):
+    path = tmp_path / "ledger.json"
+    ledger = _blocked_at_t1_with_pending(1)
+    with ledger.unblocking("t1"):
+        ledger.add("fix it")
+    ledger.save(path)
+    reloaded = Ledger.load(path)
+    assert [task.id for task in reloaded.tasks] == ["t1", "t3", "t2"]
+    assert reloaded.get("t3").unblocks == "t1"
+    path.write_text(
+        json.dumps({"tasks": [{"id": "t1", "description": "x", "status": "pending"}]}),
+        encoding="utf-8",
+    )
+    assert Ledger.load(path).tasks[0].unblocks == ""

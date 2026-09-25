@@ -1959,7 +1959,10 @@ async def work(
                 )
                 break
             consulted_on_empty = False
-            await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
+            # What this consult adds is worked next, not after every pending
+            # task the block may be starving (OPEN-158).
+            with ledger.unblocking(task.id):
+                await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
 
     run_usage = getattr(context, "usage", None)
 

@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -86,6 +88,10 @@ class Task:
     # field beside the note, whose second line says the same, because a note
     # is rewritten by every branch that finishes a task (CLAUDE.md 8a shape 4).
     convergence: str = ""
+    # The blocked task whose consult added this one, or "" (OPEN-158). Such a
+    # task is queued NEXT rather than last, so ledger.json's order is no
+    # longer the order tasks were declared in; this field is what says why.
+    unblocks: str = ""
     # Wall clock this task consumed, in seconds (C9.6, Step 15a). Recorded
     # by loop/engine.py at every exit from run_task, including the failing
     # ones: a task that burned three attempts is the one a user most wants
@@ -95,7 +101,11 @@ class Task:
 
 @dataclass
 class Ledger:
-    """Every task this run declared, in declaration order."""
+    """Every task this run declared, in the order they will be worked.
+
+    Declaration order, except that a blocked consult's tasks are inserted
+    ahead of the pending ones (OPEN-158, `Task.unblocks`).
+    """
 
     tasks: list[Task] = field(default_factory=list)
     # The request this plan was built for (C7.2). Resume compares against
@@ -116,16 +126,58 @@ class Ledger:
     # a bad plan into a run with no plan at all, which is worse than the
     # plan it refused.
     decomposition_refused: bool = False
+    # Set only inside `unblocking`, and never persisted, for
+    # `decomposition_refused`'s reason: it describes one consult, not the
+    # plan. `_front_at` is where the consult's next task goes.
+    _unblocking: str = field(default="", repr=False)
+    _front_at: int | None = field(default=None, repr=False)
 
     def add(self, description: str) -> Task:
-        """Append a task and return it.
+        """Add a task and return it -- appended, or next if unblocking.
 
         Ids are `t1`, `t2`, ... -- short enough to quote in a prompt and
-        stable for the run's lifetime.
+        stable for the run's lifetime. An id is the count plus one whatever
+        the position, and the list only grows, so an inserted task cannot
+        reuse one.
+
+        Inside `unblocking` the task goes ahead of every pending task, after
+        any this same consult already added (OPEN-158). A blocked consult
+        asks for a task that fixes the cause of the block; appended, it was
+        worked after every task that cause could block -- run 19cde7ef0661
+        hit MAX_BLOCKED_CONSULTS with its fix still queued, and run
+        4989aefefacb's t18 was 17th in line.
         """
         task = Task(id=f"t{len(self.tasks) + 1}", description=description)
-        self.tasks.append(task)
+        if not self._unblocking:
+            self.tasks.append(task)
+            return task
+        if self._front_at is None:
+            self._front_at = next(
+                (
+                    index
+                    for index, queued in enumerate(self.tasks)
+                    if queued.status is TaskStatus.PENDING
+                ),
+                len(self.tasks),
+            )
+        task.unblocks = self._unblocking
+        self.tasks.insert(self._front_at, task)
+        self._front_at += 1
         return task
+
+    @contextmanager
+    def unblocking(self, task_id: str) -> Iterator[None]:
+        """Every task added inside this block is worked before the pending ones.
+
+        loop/engine.py opens it around the consult that follows a BLOCKED
+        task, and only that one: a task added when the ledger is empty, or
+        for failures nothing owns, has nothing to jump.
+        """
+        self._unblocking, self._front_at = task_id, None
+        try:
+            yield
+        finally:
+            self._unblocking, self._front_at = "", None
 
     def get(self, task_id: str) -> Task | None:
         return next((task for task in self.tasks if task.id == task_id), None)
@@ -134,7 +186,7 @@ class Ledger:
         return next((task for task in self.tasks if task.status is TaskStatus.PENDING), None)
 
     def resumable(self) -> tuple[Task, ...]:
-        """The tasks a resume would work, in declaration order.
+        """The tasks a resume would work, in the order they will be worked.
 
         PENDING only. BLOCKED hit two identical failure signatures
         (C6.5a) or spent its fix budget, and retrying it identically burns a
@@ -220,6 +272,7 @@ class Ledger:
                 run_errors=tuple(entry.get("run_errors", ())),
                 dependency_gates=tuple(entry.get("dependency_gates", ())),
                 convergence=entry.get("convergence", ""),
+                unblocks=entry.get("unblocks", ""),
                 # .get, not [...]: a ledger written by an older Rudra is a
                 # volatile file, but a run in flight during an upgrade
                 # must not crash on it.

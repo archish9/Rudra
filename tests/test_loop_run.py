@@ -438,3 +438,64 @@ async def test_plan_alone_never_syncs_the_project_env(monkeypatch, context):
     await engine.plan("build it", context=context, planner=FakePlanner([["a"]]))
 
     assert calls == []
+
+
+# --------------------------------------------------------------------------
+# OPEN-158: the blocked consult's task runs next, not last
+# --------------------------------------------------------------------------
+
+
+async def test_a_task_the_blocked_consult_adds_is_worked_next(monkeypatch, context):
+    """Run 19cde7ef0661 ended at MAX_BLOCKED_CONSULTS with its fix (a pyproject
+    making the package importable) queued behind the very tasks that blocked
+    for want of it. The consult asks for a task that fixes the CAUSE; working
+    it after everything the cause is starving defeats the asking."""
+    ran: list[str] = []
+
+    async def planner(ledger, request, *, stage, reason="initial", task=None, feedback=""):
+        if stage != "breakdown":
+            return
+        if reason == "initial":
+            for description in ("a", "b", "c"):
+                ledger.add(description)
+        elif reason == "blocked":
+            ledger.add("fix the cause")
+
+    async def fake_run_task(task, ledger, *, context):
+        ran.append(task.id)
+        task.status = TaskStatus.BLOCKED if task.id == "t1" else TaskStatus.DONE
+        return Outcome.BLOCKED if task.id == "t1" else Outcome.DONE
+
+    monkeypatch.setattr(engine, "run_task", fake_run_task)
+    monkeypatch.setattr(engine, "review_once", _noop)
+
+    await run_loop("build it", context=context, planner=planner)
+
+    assert ran == ["t1", "t4", "t2", "t3"]
+
+
+async def test_other_consults_still_append(monkeypatch, context):
+    ran: list[str] = []
+    consults = {"ledger_empty": 0}
+
+    async def planner(ledger, request, *, stage, reason="initial", task=None, feedback=""):
+        if stage != "breakdown":
+            return
+        if reason == "initial":
+            ledger.add("a")
+        elif reason == "ledger_empty" and consults["ledger_empty"] == 0:
+            consults["ledger_empty"] += 1
+            added = ledger.add("missing piece")
+            assert added.unblocks == ""
+
+    async def fake_run_task(task, ledger, *, context):
+        ran.append(task.id)
+        task.status = TaskStatus.DONE
+        return Outcome.DONE
+
+    monkeypatch.setattr(engine, "run_task", fake_run_task)
+    monkeypatch.setattr(engine, "review_once", _noop)
+
+    await run_loop("build it", context=context, planner=planner)
+
+    assert ran == ["t1", "t2"]
