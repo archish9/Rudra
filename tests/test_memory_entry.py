@@ -50,3 +50,37 @@ def test_the_entry_is_frozen() -> None:
     entry = MemoryEntry(content="x", room="tasks", added_by="rudra")
     with pytest.raises(Exception):
         entry.content = "y"  # type: ignore[misc]
+
+
+# --- OPEN-153: content that must fit, made to fit ----------------------------
+
+
+def test_fit_content_leaves_short_text_alone() -> None:
+    from rudra.memory.entry import fit_content
+
+    assert fit_content("Blocked: t1. Reason: x.") == "Blocked: t1. Reason: x."
+    assert fit_content("y" * MAX_CONTENT) == "y" * MAX_CONTENT
+
+
+def test_fit_content_keeps_both_ends_and_says_what_it_dropped() -> None:
+    """The head names the task and the stage; the tail is the runner's own
+    summary. The middle is what goes, and the count says how much."""
+    from rudra.memory.entry import fit_content
+
+    text = "HEAD-MARK " + "m" * 20_000 + " TAIL-MARK"
+    fitted = fit_content(text)
+    assert len(fitted) <= MAX_CONTENT
+    assert fitted.startswith("HEAD-MARK")
+    assert fitted.endswith("TAIL-MARK")
+    marker = fitted.split("\n")[1]
+    kept = len(fitted) - len(marker) - 2
+    assert marker == f"[... {len(text) - kept} characters omitted ...]"
+    MemoryEntry(content=fitted, room="blockers", added_by="rudra")
+
+
+def test_fit_content_honours_a_small_limit() -> None:
+    from rudra.memory.entry import fit_content
+
+    fitted = fit_content("a" * 500 + "b" * 500, limit=100)
+    assert len(fitted) <= 100
+    assert fitted.startswith("a") and fitted.endswith("b")

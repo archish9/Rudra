@@ -30,7 +30,7 @@ from rudra.loop.bounds import failure_signature, tests_produced_no_judgement
 from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.loop.regressions import INHERITED, PASSED, REGRESSED, failure_keys, verdict_for
 from rudra.memory.degrade import last_failure
-from rudra.memory.entry import MemoryEntry
+from rudra.memory.entry import MemoryEntry, fit_content
 from rudra.middleware.content_paths import (
     find_project_absolute_mentions,
     project_top_level,
@@ -1283,7 +1283,7 @@ def record_task_memory(context: Any, task: Task) -> None:
     files = ", ".join(task.files_touched) if task.files_touched else "no files changed"
     store.write(
         MemoryEntry(
-            content=f"Completed: {task.description}. Files: {files}.",
+            content=fit_content(f"Completed: {task.description}. Files: {files}."),
             room="tasks",
             added_by="rudra",
         )
@@ -1296,13 +1296,18 @@ def record_block_memory(context: Any, task: Task) -> None:
     Bug-to-fix pairs are what make this worth storing: the next run's
     planner sees what stopped the last one before it plans the same thing
     again.
+
+    `fit_content`, because the note quotes a test tail capped at the same
+    8000 characters as a memory, plus a prefix -- run `4989aefefacb` ended
+    on the difference (OPEN-153). Only the palace's copy is cut; the note
+    itself stays verbatim for the ledger and the planner.
     """
     store = getattr(context, "memory", None)
     if store is None:
         return
     store.write(
         MemoryEntry(
-            content=f"Blocked: {task.description}. Reason: {task.note or 'unknown'}.",
+            content=fit_content(f"Blocked: {task.description}. Reason: {task.note or 'unknown'}."),
             room="blockers",
             added_by="rudra",
         )

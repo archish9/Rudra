@@ -60,4 +60,34 @@ class MemoryEntry:
             raise EntryRejected(msg)
 
 
-__all__ = ["MAX_CONTENT", "ROOM_NAMES", "VALID_ADDED_BY", "EntryRejected", "MemoryEntry"]
+def fit_content(text: str, limit: int = MAX_CONTENT) -> str:
+    """`text`, stripped, cut to at most `limit` characters from the middle.
+
+    For content Rudra composes itself from something unbounded -- a blocker
+    quoting a test tail, a task's file list (OPEN-153). The validation above
+    stays a refusal, because for an agent's `remember` a refusal is the right
+    answer; for Rudra's own spine it is a crash, and run `4989aefefacb` ended
+    on one. The head keeps what the entry is about and the tail keeps what
+    every runner ends with, its own summary, so no runner's output is parsed
+    (OPEN-119 removed that from this path).
+    """
+    stripped = text.strip()
+    if len(stripped) <= limit:
+        return stripped
+    # Reserve the marker at its widest: the omitted count is never more
+    # digits than the text's own length.
+    reserved = len(f"\n[... {len(stripped)} characters omitted ...]\n")
+    keep = max(limit - reserved, 0)
+    head, tail = keep - keep // 2, keep // 2
+    marker = f"\n[... {len(stripped) - keep} characters omitted ...]\n"
+    return (stripped[:head] + marker + (stripped[-tail:] if tail else "")).strip()
+
+
+__all__ = [
+    "MAX_CONTENT",
+    "ROOM_NAMES",
+    "VALID_ADDED_BY",
+    "EntryRejected",
+    "MemoryEntry",
+    "fit_content",
+]
