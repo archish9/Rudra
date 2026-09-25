@@ -5,10 +5,11 @@ is the live ledger of what is open, and its *Fix next* queue at the top is the
 one order to work in.** Trust `grep -n PENDING TODO.md` over any heading,
 including this sentence.
 
-**Six items are open as of 2026-09-25 — OPEN-155, OPEN-156, OPEN-158,
-OPEN-159, OPEN-160 and OPEN-161.** The first three were filed that day from the owner's run
+**Five items are open as of 2026-09-25 — OPEN-155, OPEN-156, OPEN-158,
+OPEN-159 and OPEN-160.** The first three were filed that day from the owner's run
 `4989aefefacb` beside OPEN-153, a run-killer, and OPEN-154 and OPEN-157, all three closed the same
-day; OPEN-159 was filed offline while closing OPEN-157, and OPEN-160 and OPEN-161 while closing OPEN-154. Every `OPEN-N` cited in this file points at a record in
+day; OPEN-159 was filed offline while closing OPEN-157, and OPEN-160 and OPEN-161 while closing OPEN-154 —
+OPEN-161 closed the same day, offline, on the owner's option A. Every `OPEN-N` cited in this file points at a record in
 `TODO-closed.md`. Live run D, against Vaayu, is still blocked on the owner.
 
 **Run H was the first BROWNFIELD run, and its verdict is the most useful thing
@@ -72,7 +73,7 @@ claimed the very invariant its code broke.
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
-than to work outstanding. **`TODO.md` is where the open ones are**: six, as of
+than to work outstanding. **`TODO.md` is where the open ones are**: five, as of
 2026-09-25. When the next item lands, its own document's closing
 section says which paragraphs here it corrects.
 
@@ -128,7 +129,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **OPEN-155, OPEN-156 and OPEN-158 … OPEN-161 are open as of 2026-09-25**, and live run H has run; the head of this file says what it settled and what it did not. Live run D, against Vaayu, is blocked on the owner. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **OPEN-155, OPEN-156 and OPEN-158 … OPEN-160 are open as of 2026-09-25**, and live run H has run; the head of this file says what it settled and what it did not. Live run D, against Vaayu, is blocked on the owner. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
@@ -370,10 +371,12 @@ src/rudra/
 │                           `_stage_time_limit` and `_invocation_limit`
 │                           already spell a disabled one
 ├── loop/                   The agentic loop (Step 9c). ledger · bounds ·
-│                           regressions · decomposition · tools · engine.
+│                           regressions · decomposition · dependencies ·
+│                           tools · engine.
 │                           ledger.py, bounds.py, regressions.py and
 │                           decomposition.py import nothing from
-│                           Rudra. regressions.py answers the loop's hardest
+│                           Rudra; dependencies.py (OPEN-161) only the
+│                           report types and `verify/stubs.py`'s walk. regressions.py answers the loop's hardest
 │                           question — which failures a task answers for
 │                           (OPEN-23) — and is worth reading without a graph. No agent-facing tool can write DONE — only
 │                           engine.py, and only on VerifyReport.passed or a
@@ -1301,8 +1304,21 @@ after `!` is a lie printed once per turn.
    `--continue` never retries. Measured over 38 runs: 5–6 of 9 exhaustions were converging, yet a third
    attempt passed 1 time in 20, and *failed count fell* is the wrong detector (it extends flat tasks and
    misses layer-by-layer ones). Closed docs-only: `max_fix_attempts` is documented as the lever
-   (`Documentation/06-troubleshooting.md`); OPEN-160 owns finding a signal that is right, and OPEN-161 the
-   missing-dependency layers that are most of those gates.
+   (`Documentation/06-troubleshooting.md`); OPEN-160 owns finding a signal that is right.
+
+   **A gate that failed ONLY on packages nobody declared gives its attempt back (OPEN-161, the owner's option
+   A).** The coder has no shell, so a missing package surfaces one import layer per gate — run `4989aefefacb`'s
+   t1 met `sqlalchemy`, declared it, then met `greenlet` behind it on its last gate and went `BLOCKED` never
+   having been shown it. Every coder in the archive shown a missing package declared it on the next attempt,
+   4 of 4; the gates were the cost. `loop/dependencies.py::missing_packages` reads pytest's `E` column and
+   answers only when EVERY exception is one — `No module named` for a name that is neither the project's
+   (`local_module_names`; OPEN-140's `main` stays charged) nor stdlib, a `pip install <x>` hint (FastAPI's
+   `python-multipart` is a `RuntimeError`), or an `ImportError` saying something is not installed — and never
+   on a truncated tail. Judged on the gate itself, after C6.5a: the plan wanted it judged once the NEXT attempt
+   edited a dependency file, which cannot happen after the exhausting gate. So what bounds a coder that ignores
+   the package is C6.5a (the same gate twice), and `MAX_DEPENDENCY_GATES` (3 per task per run) bounds one
+   that meets a new package every time. OPEN-46's `task.attempts -= 1` under OPEN-136's ceiling; recorded in
+   `task.dependency_gates`, `usage.json` `run.dependency_gates` and a `dependency-gate` NOTICE.
 
    **For the test stage, verbatim means the runner's own output, never the
    findings parsed out of it (OPEN-119, `loop/engine.py::_blocker_text`).**
@@ -2020,6 +2036,7 @@ either.
 | Did a greenfield planner stage reach for a file tool? | `usage.json` · `debug-<id>.jsonl` | `roles.planner.greenfield_reads_answered`, and a `"kind": "notice"`, `name: "greenfield-read"` line naming the call. A planner stage whose project holds only `NON_CONTENT_NAMES` is built with no file tool (OPEN-116), so **0 is the absence working, 1 per stage is habit meeting the route, and a number that climbs is the route being read and ignored** — counted as a failure, three in a row halt the stage. **A planner `tool_call` to `ls` with this at 0** means that stage was built readable: the project held something besides litter, which is correct and is where §7.3 of OPEN-116's plan still wants the rate measured. `roles.planner.tree_chars` is non-zero on every run since then |
 | Was the plan itself the problem? | `usage.json` · `ledger.json` | `roles.planner.plans_refused` is 1 when OPEN-90's guard made the planner re-plan, with a `"kind": "notice"`, `name: "plan-shape"` line saying so. Read it against `files_touched: []`: a run with `plans_refused: 1` and no empty-`files_touched` `DONE` task is that guard working; empty `files_touched` with `plans_refused: 0` is the defect firing in a shape the guard did not see |
 | Was the time the provider's? | console · `debug-<id>.jsonl` | **Since OPEN-113 the run says so.** Every call over 120 s prints `slow model call: the <role> model took <N>s for <in> input / <out> output tokens` (in the debug log as `"kind": "console"`), and a time halt ends `<N>s of it (<P>%) was the <role> model answering <K> calls … -- the time went to model latency, not to tool work.` **The token counts separate the causes**: thousands of output tokens is a model writing, tens is a request queueing. Then `"logger": "rudra.llm.transport"` — one `httpx: HTTP Request: … "HTTP/1.1 <status>"` per attempt and one `openai._base_client: Retrying request …` per re-issue the **SDK** made, which `usage.json`'s `retries` did not count — **absent since OPEN-115**, which switched the SDK's retries off, so a `Retrying request` line in a log written after 2026-09-16 means a client that setting did not reach. **A halt no longer names calls it discards, because it no longer discards any** (OPEN-114): the bound moved into a `before_model` hook, so it fires before the NEXT call rather than on the answer to the last one. A notice still saying `asked for <tool>, which will not run` came from a log written before 2026-09-16, and that run lost that call. **A `model_call` with `ok: false` reading `StreamChunkTimeoutError('No streaming chunk received for <N>s … chunks_received=<K>')` is a streamed call that produced nothing for `<N>` seconds** — `<K>` of 0 is a first token that never came (a long prefill, or a queue), more is a stall mid-answer. Since OPEN-139 `<N>` is the role's `timeout`; a log written before then reads `120.0s`, langchain_openai's own default, whatever the role said |
+| Was an attempt given back for a missing package? | `ledger.json` · `usage.json` · `debug-<id>.jsonl` | a task's `dependency_gates` — one entry per gate, naming the packages — `run.dependency_gates`, and a `"kind": "notice"`, `name: "dependency-gate"` line per refund (OPEN-161). **So `attempts` is no longer every gate a task drew since 2026-09-25**: add `len(dependency_gates)`. A refund only happens when EVERY failure in the gate was a missing package, so a task with `dependency_gates` that still exhausted spent its charged attempts on its own code. **A name here that is the project's own module** means `local_module_names` could not see it — the file did not exist yet — and that attempt was refunded wrongly; the next gate shows it. Three entries is the cap: more packages than that are the user's to declare |
 | Did Rudra build or sync the project's `.venv`, and what did it cost? | `usage.json` · `debug-<id>.jsonl` | `run.env_syncs` and `run.env_sync_seconds`, then `"kind": "project_env"` — one line per command with `step` (`create`/`pytest`/`deps`), `outcome`, `seconds`, `command` and pip's `tail`, and one `step: "check"` line per skip reason (OPEN-120). A `deps` line with `outcome: "failed"` means the next blocker carried pip's output. **A Python project with no `project_env` line at all** means the loop never reached a gate run |
 | Did an agent try to install into the machine's Python? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.installs_refused`, and a `"kind": "notice"`, `name: "pip-refused"` line quoting the command. Non-zero is `PIP_REQUIRE_VIRTUALENV` working — before OPEN-120, run `a04f89bd2ed6`'s tester downgraded the user's Flask and SQLAlchemy. **A climbing count is the note being read and ignored.** A `Successfully installed` in a `tool_result` for a path outside the project's `.venv` means an installer pip's switch does not cover |
 | Did an agent type this project's virtual path into a command? | `usage.json` · `debug-<id>.jsonl` | `roles.<role>.commands_explained`, and a `"kind": "notice"`, `name: "command-path"` line naming the token and the relative spelling. Non-zero means OPEN-151's defect fired and was answered in the tool result instead of costing a second failure — **each such command is a tool failure at `MAX_CONSECUTIVE_FAILURES = 3`**, so read it beside `halts`: run G2's tester spent two of three on `/.venv/bin/python …` and `ls -la /.venv/bin/`. **One or two per invocation is the note being read; a climbing count is it being ignored**, which is OPEN-17's evidence rather than an argument. In a log written before 2026-09-25 the same commands appear as `tool_result` records carrying only `/bin/sh`'s error, with nothing naming them. **The inverse reading is `machine-path`** — that one is a FILE TOOL sent to the machine, this an `execute` sent to the project's spelling; a run with both is a model that has the two roots swapped in general |
