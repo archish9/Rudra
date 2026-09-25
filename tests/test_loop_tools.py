@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from rudra.loop.ledger import Ledger, TaskStatus
-from rudra.loop.tools import create_ledger_tools
+from rudra.loop.tools import BLOCKED_RECOVERY, create_ledger_tools
 
 
 def tools_for(tmp_path, ledger=None):
@@ -236,6 +236,63 @@ def test_a_duplicate_of_a_blocked_task_is_rejected(tmp_path):
     assert "REJECTED" in result
     assert "blocked" in result
     assert len(ledger.tasks) == 1
+
+
+def test_a_blocked_duplicate_is_told_to_fix_the_cause_not_to_reword(tmp_path):
+    """OPEN-156. The shared refusal ends "add a task with a different
+    description", and run 4989aefefacb's planner, refused on t1 [blocked],
+    re-declared it one consult later as `Write/app/main.py: ...` -- the
+    rewording it was asked for. A BLOCKED clash gets the recovery sentence
+    instead: the work is still on disk, fix the cause.
+    """
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+    ledger.get("t1").status = TaskStatus.BLOCKED
+
+    refusal = tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    assert "REJECTED" in refusal
+    assert BLOCKED_RECOVERY in refusal
+    assert "different description" not in refusal
+
+
+def test_a_pending_duplicate_keeps_the_different_description_route(tmp_path):
+    # OPEN-156 is about BLOCKED work only. A duplicate of PENDING work may be
+    # a genuinely different task spelled too close, and the route stands.
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    refusal = tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+
+    assert "different description" in refusal
+    assert BLOCKED_RECOVERY not in refusal
+
+
+def test_dropping_a_blocked_task_is_told_to_fix_the_cause(tmp_path):
+    """OPEN-156. Run 4989aefefacb's planner tried `drop_task t1` on a blocked
+    t1 and was told "To take a different approach, call add_tasks" -- one of
+    the three places that invited the rewording."""
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+    ledger.get("t1").status = TaskStatus.BLOCKED
+
+    refusal = tools["drop_task"].invoke({"task_id": "t1", "reason": "retry it"})
+
+    assert "REJECTED" in refusal
+    assert BLOCKED_RECOVERY in refusal
+    assert "different approach" not in refusal
+    assert ledger.get("t1").status is TaskStatus.BLOCKED
+
+
+def test_dropping_a_done_task_keeps_its_route(tmp_path):
+    tools, ledger, _ = tools_for(tmp_path)
+    tools["add_tasks"].invoke({"descriptions": [DUPLICATE]})
+    ledger.get("t1").status = TaskStatus.DONE
+
+    refusal = tools["drop_task"].invoke({"task_id": "t1", "reason": "x"})
+
+    assert "call add_tasks" in refusal
+    assert BLOCKED_RECOVERY not in refusal
 
 
 def test_a_duplicate_of_a_dropped_task_is_rejected(tmp_path):

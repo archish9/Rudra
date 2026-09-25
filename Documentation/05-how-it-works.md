@@ -53,7 +53,7 @@ t1  implement a CSV parser that handles quoted commas
 t2  write tests for the parser
 ```
 
-One task may touch several files. The planner is consulted again when a task is given up on — so it can propose a different approach — and once when the list empties, in case something is missing. It is **not** consulted after an ordinary success, which is what keeps a run from spending a model call per task on bookkeeping.
+One task may touch several files. The planner is consulted again when a task is given up on — so it can add a task that fixes the cause, since the given-up task's files stay on disk and are re-tested by every later gate — and once when the list empties, in case something is missing. It is **not** consulted after an ordinary success, which is what keeps a run from spending a model call per task on bookkeeping.
 
 ---
 

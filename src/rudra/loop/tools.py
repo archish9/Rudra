@@ -63,6 +63,22 @@ def _normalised(text: str) -> str:
     return " ".join(text.split()).casefold()
 
 
+# OPEN-156. What a planner is told about a BLOCKED task wherever it meets
+# one: the consult that reports it (planner_agent.consult_planner), a
+# duplicate of it, and a drop_task on it. All three used to ask for "a
+# different description" or "a DIFFERENT approach", and two runs answered by
+# re-declaring the blocked work -- reworded, split per file, or with
+# "(write ... directly)" appended -- because nothing said the work was still
+# there. One sentence, three readers, pinned by the tests that import it.
+BLOCKED_RECOVERY = (
+    "Whatever a blocked task wrote is still on disk, and the project's tests "
+    "run again after every later task, so its work is not lost and must not "
+    "be declared again -- not reworded, and not split into smaller tasks. "
+    "Read its failure for the CAUSE, and call add_tasks with a task that "
+    "fixes that cause, naming the file, package or dependency to change."
+)
+
+
 def _duplicate_refusal(text: str, clash: Task) -> str:
     """Name the collision and a move that works, or this is OPEN-24 again.
 
@@ -70,12 +86,17 @@ def _duplicate_refusal(text: str, clash: Task) -> str:
     the task, the status it is in, and the one action that will succeed.
     """
     quoted = text if len(text) <= 60 else f"{text[:57]}..."
-    return (
+    head = (
         f'REJECTED: "{quoted}" duplicates {clash.id}, which is already '
         f"{clash.status.value}. That task exists and will not be worked "
-        f"twice, so an identical add_tasks will be refused identically. If "
-        f"work is genuinely still outstanding, add a task with a different "
-        f"description saying what is still wrong."
+        f"twice, so an identical add_tasks will be refused identically."
+    )
+    if clash.status is TaskStatus.BLOCKED:
+        # OPEN-156: "a different description" is what got the rewording.
+        return f"{head} {BLOCKED_RECOVERY}"
+    return (
+        f"{head} If work is genuinely still outstanding, add a task with a "
+        f"different description saying what is still wrong."
     )
 
 
@@ -256,12 +277,16 @@ def create_ledger_tools(
             # settled status is terminal -- nothing in engine.py moves a
             # task out of one -- so a model told only "no" re-issues the
             # identical call, which is what a planner did three times.
+            route = (
+                BLOCKED_RECOVERY  # OPEN-156
+                if task.status is TaskStatus.BLOCKED
+                else "To take a different approach, call add_tasks."
+            )
             return (
                 f"REJECTED: {task_id} is already {task.status.value}. A settled "
                 f"task stays settled and no more work will be spent on it, so an "
-                f"identical drop_task will be refused identically. To take a "
-                f"different approach, call add_tasks. drop_task only works on a "
-                f"task that is still pending."
+                f"identical drop_task will be refused identically. {route} "
+                f"drop_task only works on a task that is still pending."
             )
         task.status = TaskStatus.DROPPED
         task.note = f"dropped: {reason.strip()}"

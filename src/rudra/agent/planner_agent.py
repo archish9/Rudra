@@ -41,7 +41,7 @@ from rudra.context.usage import model_time_of, model_wait_note
 from rudra.facts import facts_block
 from rudra.filesystem import TREE_MAX_ENTRIES, as_virtual_paths, is_greenfield, project_tree
 from rudra.llm import build_model
-from rudra.loop.tools import create_ledger_tools, render_ledger
+from rudra.loop.tools import BLOCKED_RECOVERY, create_ledger_tools, render_ledger
 from rudra.middleware import (
     PLANNER_MEMORY_SOURCES,
     DelegationGuardMiddleware,
@@ -258,9 +258,10 @@ any one of them hide three tasks inside it? Is anything on it a placeholder
 rather than work? Fix those before calling add_tasks -- the coder gets what
 you wrote, not what you meant.
 
-You will be consulted again if a task fails or if the work runs out. When
-that happens, add a task taking a DIFFERENT approach, or drop_task() one
-that turned out to be unnecessary.
+You will be consulted again if a task fails or if the work runs out. A
+failed task's work stays on disk, so never declare it again in other words:
+add a task that fixes the cause of its failure, or drop_task() one that
+turned out to be unnecessary.
 """
 
 
@@ -1279,9 +1280,9 @@ async def consult_planner(
             f"Task {task.id} ({task.description}) failed and was given up on:\n\n"
             f"{task.note}\n\n"
             f"{task.id} is already recorded as blocked; it cannot be dropped or "
-            "retried. Call add_tasks with a task taking a DIFFERENT approach. If "
-            "this blocker also makes other tasks pointless, drop_task those -- "
-            "they must still be pending. If neither applies, reply DONE and stop."
+            f"retried. {BLOCKED_RECOVERY} If this blocker also makes other tasks "
+            "pointless, drop_task those -- they must still be pending. If neither "
+            "applies, reply DONE and stop."
         )
     elif reason == "stale_failures":
         # OPEN-23's second half. Every task is finished and the gate is still

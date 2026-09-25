@@ -8,6 +8,7 @@ from rich.console import Console
 from rudra.agent import planner_agent
 from rudra.agent.planner_agent import consult_planner
 from rudra.loop.ledger import Ledger, TaskStatus
+from rudra.loop.tools import BLOCKED_RECOVERY
 
 
 @pytest.fixture
@@ -118,6 +119,46 @@ async def test_a_block_never_tells_the_planner_to_drop_the_blocked_task(captured
     # The legal use of drop_task survives: a blocker can make a task that is
     # still PENDING pointless, and retracting those is the planner's job.
     assert "pending" in message.lower()
+
+
+async def test_a_block_says_the_work_stays_and_asks_for_the_cause(captured):
+    """OPEN-156. "it cannot be retried. Call add_tasks with a task taking a
+    DIFFERENT approach" was answered, in two runs, by re-declaring the
+    blocked work: reworded (4989aefefacb t22), split per file (t23, t24),
+    or with "(write ... directly)" appended (e1a57a3e3791 t9-t13) -- two of
+    those dispatched, 417.8 s, both blocked again on the unchanged cause.
+    e1a's planner never saw a duplicate refusal, so this message is the
+    common cause. It now says what the model was missing: the work is on
+    disk and re-tested, so the move is a task that fixes the cause.
+    """
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    task.status = TaskStatus.BLOCKED
+    task.note = "ModuleNotFoundError: No module named 'greenlet'"
+
+    await consult_planner(
+        object(),
+        ledger,
+        "build it",
+        stage="breakdown",
+        reason="blocked",
+        task=task,
+        gate=None,
+        console=Console(quiet=True),
+        session_id="sess",
+    )
+
+    message = captured[0]["message"]
+    assert BLOCKED_RECOVERY in message
+    assert "DIFFERENT approach" not in message
+
+
+async def test_the_breakdown_prompt_does_not_ask_for_a_different_approach():
+    """OPEN-156: the stage body told every consult the same thing up front."""
+    prompt = planner_agent.build_planner_prompt("build it", tmp_ledger_path().parent)
+
+    assert "DIFFERENT approach" not in prompt
+    assert "cause" in prompt
 
 
 async def test_an_empty_ledger_re_enters_breakdown(captured):
