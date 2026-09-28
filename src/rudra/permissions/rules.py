@@ -191,25 +191,34 @@ def parse_rule(text: str) -> Rule:
     return Rule(tool=tool, pattern=pattern if separator else None)
 
 
+def gated_arg_names(tool: str) -> tuple[str, ...]:
+    """Every argument name `gated_arg` reads for `tool`, canonical name first.
+
+    Empty for a tool with no gated argument. The denial text names the first
+    (OPEN-163), so the model is told the name its tool schema uses.
+    """
+    key = _ARG_KEYS.get(tool)
+    if key is None:
+        return ()
+    return (key, *_ARG_ALIASES.get(tool, ()))
+
+
 def gated_arg(tool: str, args: dict[str, Any]) -> str | None:
     """The argument a pattern matches against, or None if absent.
 
     The file tools are checked under every spelling
     `FixWriteParamsMiddleware` will accept, in the order it tries them
-    (`middleware/fix_write_params.py:77-80`). This is not defensive
+    (`middleware/fix_write_params.py:489-493`). This is not defensive
     programming: the gate is installed as the OUTERMOST middleware
-    (`subagents/build.py:219`, `agent/planner_agent.py:386`, both
+    (`subagents/build.py:486`, `agent/planner_agent.py:735`, both
     `insert(0, ...)`), so it decides on the model's raw spelling and the
     rename happens *afterwards*, on the way to the tool. Reading only
     `file_path` here meant `write_file(path=".git/config")` resolved to no
     path at all, so the floor short-circuited on `path is not None`
-    (`floor.py:67`) and every patterned deny rule matched nothing -- while
+    (`floor.py:69`) and every patterned deny rule matched nothing -- while
     the middleware renamed the key and the write went through (CR-B2).
     """
-    key = _ARG_KEYS.get(tool)
-    if key is None:
-        return None
-    for candidate in (key, *_ARG_ALIASES.get(tool, ())):
+    for candidate in gated_arg_names(tool):
         value = args.get(candidate)
         if isinstance(value, str):
             return value
@@ -693,6 +702,7 @@ __all__ = [
     "Rule",
     "command_segments",
     "gated_arg",
+    "gated_arg_names",
     "parse_rule",
     "rule_matches",
 ]

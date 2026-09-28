@@ -18,11 +18,74 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from rudra.permissions.audit import AuditLog
-from rudra.permissions.rules import PermissionEngine, gated_arg
+from rudra.permissions.rules import PermissionEngine, gated_arg, gated_arg_names
+
+# What a refused call did NOT do, and how to re-send it, per tool that can
+# reach the fail-closed branch (`rules.py`, MUTATING_TOOLS with a path).
+_NOT_DONE = {"write_file": "written", "edit_file": "changed", "delete": "deleted"}
+_RESEND = {
+    "write_file": "the file to write, and the same content",
+    "edit_file": "the file to edit",
+    "delete": "the file to delete",
+}
 
 
-def _denial_text(tool: str, arg: str | None, rule: str | None) -> str:
+def _unresolvable_text(tool: str, arg: str | None, args: dict[str, Any], registered: bool) -> str:
+    """Why `decide` could not judge this call, and the correction (OPEN-163).
+
+    Denying is right (CR-B2, CR-B7); blaming a rule was not. The marker
+    `<unresolvable-path>` used to reach the user-rule branch below, so run
+    1808f56c8329's coder, having sent `write_file` with `content` and no
+    `file_path`, was told it matched a deny rule "in this project's
+    configuration" -- whose `deny` was empty -- and not to retry, where
+    re-sending WITH the path is the whole correction. Every hit in the
+    archive threw a generated body away; a refusal without the correction is
+    answered by regenerating it (OPEN-95, OPEN-100).
+
+    `registered` is False when the agent does not hold `tool` at all: one gate
+    sits on every stack, and the planner, the reviewer and general-purpose
+    hold no write tool. Telling them to send it again would name a route
+    through a tool they lack (OPEN-15), so they are told only what happened.
+    """
+    names = gated_arg_names(tool)
+    name = names[0] if names else "path"
+    if arg is not None:
+        fact = f"the path {arg!r} given to {tool} could not be resolved"
+        resend = "Send the call again with a plain project path."
+    else:
+        # gated_arg answers None for a missing path and for one that is not a
+        # string; only the first is "called without". A null reads as missing.
+        wrong = next(
+            ((key, args[key]) for key in names if args.get(key) is not None),
+            None,
+        )
+        if wrong is not None:
+            fact = (
+                f"{tool} was called with a {wrong[0]} that is not a string "
+                f"(it was {type(wrong[1]).__name__})"
+            )
+        else:
+            received = sorted(key for key, value in args.items() if value is not None)
+            got = f"it received: {', '.join(received)}" if received else "it received no arguments"
+            fact = f"{tool} was called without a {name} argument ({got})"
+        resend = f"Send the call again with {name} set to {_RESEND.get(tool, 'a project path')}."
+    not_done = f"Nothing was {_NOT_DONE.get(tool, 'done')}."
+    if not registered:
+        return f"Permission denied: {fact}, and {tool} is not one of this agent's tools. {not_done}"
+    return f"Permission denied: {fact}. {not_done} {resend}"
+
+
+def _denial_text(
+    tool: str,
+    arg: str | None,
+    rule: str | None,
+    *,
+    args: dict[str, Any] | None = None,
+    registered: bool = True,
+) -> str:
     target = f" on {arg!r}" if arg else ""
+    if rule == "<unresolvable-path>":
+        return _unresolvable_text(tool, arg, args or {}, registered)
     if rule == "<auto:shell-not-opted-in>":
         return (
             "Permission denied: running commands is disabled in unattended "
@@ -122,7 +185,15 @@ class RudraPermissionMiddleware(AgentMiddleware):
 
         self.audit.record(tool, arg, decision, mode=self.mode, outcome="deny")
         return ToolMessage(
-            content=_denial_text(tool, arg, decision.rule),
+            content=_denial_text(
+                tool,
+                arg,
+                decision.rule,
+                args=args,
+                # langgraph hands over a call to a tool this agent does not
+                # hold with `request.tool` None (tool_route.py reads it too).
+                registered=getattr(request, "tool", None) is not None,
+            ),
             tool_call_id=call.get("id", ""),
             name=tool,
             status="error",

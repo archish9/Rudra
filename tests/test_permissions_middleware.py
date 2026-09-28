@@ -6,6 +6,8 @@ not written, not merely that a function returned something.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from deepagents import create_deep_agent
 from deepagents.backends.filesystem import FilesystemBackend
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -84,6 +86,146 @@ def test_the_denial_message_names_the_rule_that_fired(tmp_path):
         args={"file_path": "secret.txt", "content": "x"},
     )
     assert "write_file:secret.txt" in message.content
+    assert "in this project's configuration" in message.content
+
+
+# --- OPEN-163: a call the gate cannot judge is told why, not blamed on a rule --
+#
+# `decide` fails closed on a mutating call with no usable path (CR-B2, CR-B7),
+# and that is right. What it SAID was not: `<unresolvable-path>` reached the
+# user-rule branch, so run 1808f56c8329's coder -- which had sent `write_file`
+# with `content` and no `file_path`, 159 s of generated body -- was told it
+# "matches the deny rule '<unresolvable-path>' in this project's
+# configuration. Do not retry this call." The project's `deny` was empty, the
+# missing argument was never named, and re-sending WITH it is the correction.
+
+
+def _audit(tmp_path):
+    import json
+
+    lines = (tmp_path / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(line) for line in lines if line]
+
+
+def _assert_not_blamed_on_a_rule(text):
+    assert "configuration" not in text
+    assert "Do not retry" not in text
+    assert "<unresolvable-path>" not in text
+
+
+def test_a_write_with_no_path_is_told_the_argument_is_missing(tmp_path):
+    (message,) = build(tmp_path, tool="write_file", args={"content": "x"})
+    assert message.status == "error"
+    assert "without a file_path argument (it received: content)" in message.content
+    assert "Nothing was written." in message.content
+    assert "Send the call again with file_path set" in message.content
+    assert "the same content" in message.content
+    _assert_not_blamed_on_a_rule(message.content)
+    # The record is unchanged: still a fail-closed denial, as the docs say.
+    (entry,) = _audit(tmp_path)
+    assert (entry["decision"], entry["source"], entry["rule"]) == (
+        "deny",
+        "fail-closed",
+        "<unresolvable-path>",
+    )
+
+
+def test_a_write_with_no_arguments_says_so(tmp_path):
+    (message,) = build(tmp_path, tool="write_file", args={})
+    assert "without a file_path argument (it received no arguments)" in message.content
+    _assert_not_blamed_on_a_rule(message.content)
+
+
+def test_a_null_path_reads_as_a_missing_one(tmp_path):
+    (message,) = build(tmp_path, tool="write_file", args={"file_path": None, "content": "x"})
+    assert "without a file_path argument (it received: content)" in message.content
+
+
+def test_a_path_that_is_not_a_string_is_not_called_missing(tmp_path):
+    """`gated_arg` answers None for a non-string too (CR-B2's fail-closed case,
+    `test_permissions_rules.py`), and "called without a file_path" would be false."""
+    (message,) = build(tmp_path, tool="write_file", args={"file_path": 123, "content": "x"})
+    assert message.status == "error"
+    assert "file_path that is not a string (it was int)" in message.content
+    assert "without" not in message.content
+    assert "Send the call again with file_path set" in message.content
+    _assert_not_blamed_on_a_rule(message.content)
+
+
+def test_an_edit_and_a_delete_with_no_path_name_their_own_outcome(tmp_path):
+    (edit,) = build(tmp_path, tool="edit_file", args={"old_string": "a", "new_string": "b"})
+    assert "edit_file was called without a file_path argument" in edit.content
+    assert "(it received: new_string, old_string)" in edit.content
+    assert "Nothing was changed." in edit.content
+    assert "the same content" not in edit.content
+    _assert_not_blamed_on_a_rule(edit.content)
+
+    (delete,) = build(tmp_path, tool="delete", args={})
+    assert "Nothing was deleted." in delete.content
+    _assert_not_blamed_on_a_rule(delete.content)
+
+
+def test_a_path_that_cannot_be_resolved_is_told_so(tmp_path):
+    """CR-B7's branch: the argument is there, but a NUL byte cannot be resolved."""
+    (message,) = build(tmp_path, tool="write_file", args={"file_path": "a\x00b", "content": "x"})
+    assert message.status == "error"
+    assert "could not be resolved" in message.content
+    assert "Send the call again with a plain project path." in message.content
+    assert "without" not in message.content
+    _assert_not_blamed_on_a_rule(message.content)
+    assert not list(tmp_path.glob("a*b"))
+
+
+def _unregistered_denial(tmp_path, tool, args):
+    """The gate on a stack whose agent does NOT hold `tool`.
+
+    One gate middleware is inserted on every stack (`subagents/build.py:486`,
+    `agent/planner_agent.py:735`), and the planner stages, the reviewer and
+    general-purpose hold no write tool. langgraph hands such a call over with
+    `request.tool` None -- pinned in `tests/test_deepagents_contract.py`, and
+    read the same way by `middleware/tool_route.py`.
+    """
+    engine = PermissionEngine(
+        mode="auto", allow=(), deny=(), floor_disable=(), project_root=tmp_path
+    )
+    middleware = RudraPermissionMiddleware(
+        engine, AuditLog(tmp_path / "audit.jsonl"), "auto", interrupt_tools=MUTATING_TOOLS
+    )
+
+    request = SimpleNamespace(tool_call={"name": tool, "args": args, "id": "c"}, tool=None)
+    reached = []
+    result = middleware.wrap_tool_call(request, lambda request: reached.append(request))
+    assert not reached, "a call with no path must still be denied (CR-B2)"
+    return result
+
+
+def test_an_agent_without_the_tool_is_not_told_to_send_it_again(tmp_path):
+    """OPEN-15: naming a route through a tool the agent lacks is a false answer,
+    and on the planner it invites generating the body again (OPEN-100)."""
+    message = _unregistered_denial(tmp_path, "write_file", {"content": "x"})
+    assert message.status == "error"
+    assert "without a file_path argument" in message.content
+    assert "write_file is not one of this agent's tools" in message.content
+    assert "Nothing was written." in message.content
+    assert "Send the call again" not in message.content
+    _assert_not_blamed_on_a_rule(message.content)
+
+
+def test_an_agent_with_the_tool_is_told_to_send_it_again(tmp_path):
+    """The same call through the direct seam, with `request.tool` set."""
+    engine = PermissionEngine(
+        mode="auto", allow=(), deny=(), floor_disable=(), project_root=tmp_path
+    )
+    middleware = RudraPermissionMiddleware(
+        engine, AuditLog(tmp_path / "audit.jsonl"), "auto", interrupt_tools=MUTATING_TOOLS
+    )
+
+    request = SimpleNamespace(
+        tool_call={"name": "write_file", "args": {"content": "x"}, "id": "c"}, tool=object()
+    )
+    message = middleware.wrap_tool_call(request, lambda request: None)
+    assert "Send the call again with file_path set" in message.content
+    assert "not one of this agent's tools" not in message.content
 
 
 def test_an_allowed_write_reaches_the_disk(tmp_path):
