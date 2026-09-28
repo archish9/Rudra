@@ -5,12 +5,14 @@ is the live ledger of what is open, and its *Fix next* queue at the top is the
 one order to work in.** Trust `grep -n PENDING TODO.md` over any heading,
 including this sentence.
 
-**No item is open as of 2026-09-28** — which is lesson 1's moment below. All three filed that day offline from
-the owner's REPL run `1808f56c8329` are closed. OPEN-164, the last, closed the same day on the owner's option B′:
+**One item is open as of 2026-09-28** — OPEN-165, `TODO.md` names it: `rudra continue`, no dashes, is planned as
+a request, because OPEN-162 taught the REPL its resume words and not the command line. Filed that day, offline,
+at the owner's request, from OPEN-164's Step 0; not seen in any run. All three filed that day offline from the
+owner's REPL run `1808f56c8329` are closed. OPEN-164, the last, closed the same day on the owner's option B′:
 the planner's `Run the test suite … to verify` passed a checking rule that read only the first word, and a
-dispatched copy spent 788.1 s writing nothing; its Step 0 found the plan's writing-verb set held `build`, which
-the gate-target set already reads as the thing checked, and a second miss in the same rule — a trailing full
-stop. OPEN-163 closed the same day on the owner's option A′: a write
+dispatched copy spent 788.1 s writing nothing; its Step 0 found a second miss in the same rule — a trailing full
+stop — and writing the code found the plan's writing-verb set held `build`, which the gate-target set already
+reads as the thing checked. OPEN-163 closed the same day on the owner's option A′: a write
 with no path argument was told it matched a deny rule "in this project's configuration", whose `deny` was
 empty; its Step 0 found the plan's text would have named a route through a tool the planner and reviewer do
 not hold, since one gate sits on every stack (OPEN-15). OPEN-162, the third, closed the same day on the owner's option C: `continue`
@@ -86,7 +88,7 @@ claimed the very invariant its code broke.
 When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
 When it names an `OPEN-N`, it means `TODO-closed.md` — every `OPEN-N` cited
 in *this* file is closed, so a citation here is a pointer to a record rather
-than to work outstanding. **`TODO.md` is where the open ones are**: none, as of
+than to work outstanding. **`TODO.md` is where the open ones are**: one, as of
 2026-09-28. When the next item lands, its own document's closing
 section says which paragraphs here it corrects.
 
@@ -142,7 +144,7 @@ Rudra (रुद्र) is an **autonomous coding agent CLI** — a local-first 
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **No item is open as of 2026-09-28** (`TODO.md`) — the moment lesson 1 says a live run is easiest to forget — and live run H has run; the head of this file says what it settled and what it did not. Live run D, against Vaayu, is blocked on the owner. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open, and opens with the order to work it in: **the *Fix next* queue at its very top is the one order across every board, and its `Next:` line names the item to work. Update that queue in the same edit as any filing, closing or live run** (owner's request, 2026-09-14); if a board or anything in this file disagrees with it, the queue wins. **One item is open as of 2026-09-28** (`TODO.md`) — offline work, so once it closes the board is empty, the moment lesson 1 says a live run is easiest to forget — and live run H has run; the head of this file says what it settled and what it did not. Live run D, against Vaayu, is blocked on the owner. Every closed item's reproduction and closing section is in `TODO-closed.md` — its index table at the top is the map — and the narrative of which item closed when is there too, in *CLAUDE.md's head and §2 rule 1's recital, moved here 2026-09-23*. Since 2026-09-14 `TODO.md` holds only the *Fix next* queue and the `PENDING` entries; the census history, run boards, unfiled follow-ups, watch items, rules and the *Before you start* reference — test baseline and fresh-project recipe included — are in `TODO-closed.md`, section *TODO.md's context, moved here 2026-09-14*. When more than one item is open, **the queue's order can be a dependency rather than a preference**: on the 2026-09-03 board OPEN-90's fix would have destroyed OPEN-92's live reproduction, which is why OPEN-92 went first. For historical decisions and step order read `TODO-old.md` (§0 = locked decisions, §E = execution order, §F = deepagents 0.7.4 findings). See the table at the top of this file about which ledger owns what.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. This ordering is non-negotiable — the owner asked for it explicitly.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions, no guessing. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
