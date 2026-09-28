@@ -23,10 +23,21 @@ from rich.table import Table
 from typer.core import TyperGroup
 
 from rudra import __version__
-from rudra.cli_repl import REPL_COMMANDS, build_session, expand_mentions
+from rudra.cli_repl import (
+    REPL_COMMANDS,
+    ReplaceChoice,
+    ReplIntent,
+    ask_replace,
+    asks_before_replacing,
+    build_session,
+    classify_input,
+    expand_mentions,
+    unfinished_ledger,
+)
 from rudra.config import committed_api_key_notice, get_config, reset_config
 from rudra.context.usage import render_usage
 from rudra.filesystem import project_tree
+from rudra.ui.prompt import ask_off_loop
 
 if TYPE_CHECKING:  # pragma: no cover -- annotations only
     from rudra.agent import AgentResult
@@ -1687,28 +1698,29 @@ def main(
             while True:
                 try:
                     user_input = await _prompt_input(pt_session, "rudra ❯")
-                    cmd = user_input.strip().lower()
+                    # One reading of the line, testable without a terminal
+                    # (cli_repl.classify_input, OPEN-162).
+                    intent = classify_input(user_input)
 
-                    if cmd in ("/exit", "/quit", "exit", "quit"):
+                    if intent is ReplIntent.EXIT:
                         console.print("\n[dim]  Goodbye — happy coding! 👋[/dim]\n")
                         break
-                    elif cmd == "/help":
+                    elif intent is ReplIntent.HELP:
                         _print_help()
                         continue
-                    elif cmd == "/tree":
+                    elif intent is ReplIntent.TREE:
                         # markup=False: filenames are data, not Rich markup.
                         # A file named `[draft].md` would otherwise be parsed
                         # as a style tag and vanish from the listing.
                         console.print(project_tree(project_path), markup=False)
                         continue
-                    elif cmd.startswith("/"):
+                    elif intent is ReplIntent.UNKNOWN:
                         console.print(
-                            f"  [yellow]Unknown command:[/yellow] {escape(cmd)}  "
-                            f"[dim](type /help)[/dim]"
+                            f"  [yellow]Unknown command:[/yellow] "
+                            f"{escape(user_input.strip().lower())}  [dim](type /help)[/dim]"
                         )
                         continue
-
-                    if not user_input.strip():
+                    elif intent is ReplIntent.EMPTY:
                         continue
 
                     # Re-read config.toml for every task turn (not /help,
@@ -1728,8 +1740,41 @@ def main(
                         allow_mcp=True if allow_mcp else None,
                     )
 
-                    # Before the Panel, so what is shown is what is sent.
-                    user_input = expand_mentions(user_input, project_path)
+                    # A new request over pending work asks first (OPEN-162).
+                    # plan() would set that work aside before a new plan
+                    # exists, and the REPL is where a user types a reply to
+                    # a prompt that has gone -- `yes` (OPEN-74), `continue`.
+                    if intent is ReplIntent.REQUEST and asks_before_replacing(
+                        cfg.permissions.mode, interactive=stdin_is_interactive()
+                    ):
+                        unfinished = unfinished_ledger(project_path)
+                        if unfinished is not None:
+                            choice = await ask_off_loop(
+                                lambda: ask_replace(unfinished, console),
+                                name="rudra-replace-question",
+                            )
+                            if choice is ReplaceChoice.CANCEL:
+                                continue
+                            if choice is ReplaceChoice.CONTINUE:
+                                intent = ReplIntent.CONTINUE
+
+                    resume = intent is ReplIntent.CONTINUE
+                    if resume:
+                        # The single-shot `--continue` path, with the
+                        # session's grants: the same refusals, and the
+                        # recorded request is the run's task.
+                        from rudra.agent.main_agent import ResumeRefused, check_resumable
+                        from rudra.state.paths import rudra_paths
+
+                        try:
+                            resumed = check_resumable(rudra_paths(project_path).ledger_json, None)
+                        except ResumeRefused as refusal:
+                            console.print(f"  [red]Cannot continue:[/red] {escape(str(refusal))}")
+                            continue
+                        user_input = resumed.request
+                    else:
+                        # Before the Panel, so what is shown is what is sent.
+                        user_input = expand_mentions(user_input, project_path)
 
                     console.print(
                         Panel(
@@ -1750,6 +1795,7 @@ def main(
                         console=console,
                         verbose=verbose,
                         debug=debug,
+                        resume=resume,
                         grants=session_grants,
                     )
                     turn = asyncio.create_task(agent.run())
@@ -1786,7 +1832,7 @@ def main(
                 except asyncio.CancelledError:
                     console.print(
                         "\n  [yellow]Cancelled.[/yellow] "
-                        "[dim]The ledger is intact — `rudra --continue` picks it up.[/dim]"
+                        "[dim]The ledger is intact — type continue to pick it up.[/dim]"
                     )
                 except KeyboardInterrupt:
                     console.print("\n  [dim]Interrupted — type /exit to quit[/dim]")

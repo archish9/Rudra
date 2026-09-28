@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -26,6 +24,7 @@ from rudra.loop.plan_view import (
 from rudra.state import ensure_layout
 from rudra.state.archive import env_facts, model_facts, project_slug, write_run_meta
 from rudra.telemetry import build_telemetry
+from rudra.ui.prompt import ask_off_loop
 
 if TYPE_CHECKING:  # pragma: no cover - the import is lazy at runtime
     from rudra.permissions.grants import SessionGrants
@@ -467,43 +466,13 @@ class RudraAgent:
     async def _approve_off_loop(self) -> PlanAnswer:
         """Run the (blocking, synchronous) approval prompt off the loop thread.
 
-        `_approve` blocks on a terminal, and `_cancel_on_sigint` installs its
-        handler with `loop.add_signal_handler`, whose callback only runs when
-        the loop regains control. Blocking here is what made Ctrl-C at the
-        plan prompt print nothing until after the user answered, and deferred
-        the second, force-exit press just as long (TODO.md OPEN-2).
-
-        A dedicated **daemon** thread rather than `asyncio.to_thread`, which
-        was measured to trade the prompt hang for an exit hang: `asyncio.run`
-        closes the loop through `shutdown_default_executor`, which JOINS its
-        workers, so a cancelled run whose prompt thread still sits in
-        `input()` waits `THREAD_JOIN_TIMEOUT` -- 300 seconds -- before the
-        process leaves. A private ThreadPoolExecutor does not help either;
-        `concurrent.futures` registers its own atexit join. A daemon thread
-        is joined by nobody and dies with the interpreter.
-
-        The cancelled prompt keeps the terminal until then. That is fine and
-        deliberate: the only thing that cancels it is the user leaving.
+        `_approve` blocks on a terminal, and blocking the loop is what made
+        Ctrl-C at the plan prompt print nothing until after the user
+        answered (TODO.md OPEN-2). The daemon thread, and why it is not
+        `asyncio.to_thread`, are `ui/prompt.py::ask_off_loop`'s -- ONE copy,
+        shared with the REPL's replace question since OPEN-162.
         """
-        loop = asyncio.get_running_loop()
-        answered: asyncio.Future[PlanAnswer] = loop.create_future()
-
-        def settle(setter, value) -> None:
-            # The future is already cancelled if Ctrl-C landed first; setting
-            # a cancelled future raises, and there is nobody left to tell.
-            if not answered.done():
-                setter(value)
-
-        def ask() -> None:
-            try:
-                answer = self._approve(self.console)
-            except BaseException as exc:  # noqa: BLE001 - re-raised on the loop
-                loop.call_soon_threadsafe(settle, answered.set_exception, exc)
-            else:
-                loop.call_soon_threadsafe(settle, answered.set_result, answer)
-
-        threading.Thread(target=ask, name="rudra-plan-approval", daemon=True).start()
-        return await answered
+        return await ask_off_loop(lambda: self._approve(self.console), name="rudra-plan-approval")
 
     def _record_plan_decision(self, decision: PlanDecision, source: str) -> None:
         """Say, in the run's own record, what the gate decided (OPEN-73).
@@ -611,6 +580,11 @@ def _provider_failure_message(error: Any, ledger: Any) -> str:
     that into `run_errors` and the OPEN-33 budget. So nothing that leaves a
     task IN_PROGRESS can reach this handler, and `resumable()`'s deliberate
     exclusion of that status (A1.93) cannot swallow the task the user lost.
+
+    Both spellings, because this cannot tell where it is running and the
+    REPL cannot run a shell command: run `4567ee4c5984` printed only
+    `rudra --continue` inside the REPL, and its user typed `continue`
+    there -- which, before OPEN-162, was planned as a request.
     """
     text = str(error)
     pending = len(ledger.resumable()) if ledger is not None else 0
@@ -619,7 +593,7 @@ def _provider_failure_message(error: Any, ledger: Any) -> str:
     plural = "" if pending == 1 else "s"
     return (
         f"{text} {pending} task{plural} still pending and the ledger is saved. "
-        f"Resume with: rudra --continue"
+        f"Resume with: rudra --continue (or `continue` in the REPL)"
     )
 
 

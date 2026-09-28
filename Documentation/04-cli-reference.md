@@ -69,9 +69,30 @@ rudra> /exit
 |---|---|
 | `/help` | List available commands |
 | `/tree` | Print the project file tree |
+| `/continue` or `/resume` | Work the tasks the last run left pending — the REPL's [`--continue`](#--continue) |
 | `/exit` or `/quit` | Leave |
 
-`exit` and `quit` work without the slash. Pressing `Esc` three times also quits.
+`exit` and `quit` work without the slash, and so do `continue` and `resume` —
+the whole line, so `continue the auth work` is still a request. Pressing `Esc`
+three times also quits.
+
+**A new request over unfinished work asks first.** When the last run left
+tasks `pending` and you type a new request, the REPL asks before planning
+anything:
+
+```
+2 unfinished tasks from build a JSON parser
+Continue them, or replace them with this request?
+  ❯ Continue (c) work the unfinished tasks; this request does not run
+    Replace (r) plan this request; the unfinished tasks are set aside
+    Cancel (x) do neither
+```
+
+`Esc`, Ctrl-C and a closed input are **cancel**, never replace. Replacing keeps
+a copy of the old tasks in `.rudra/run/ledger.previous.json`. The question is
+not asked in plan mode (`--plan`), which leaves every plan pending by design,
+or when stdin is not a terminal — there the request is planned and the old
+tasks are set aside with a warning, as a single-shot run does.
 
 ### Typing in the REPL
 
@@ -437,6 +458,11 @@ so a mistaken `--continue` costs nothing.
 
 `--resume` is an alias. There is only one thing to resume, so there is only one
 behaviour behind both spellings.
+
+**In the REPL, type `continue`** (or `/continue`). It is the same resume with
+the same refusals, and a refusal returns you to the prompt. Before v0.2.1 the
+REPL had no resume: `continue` was planned as a new request, and the pending
+tasks it was meant to resume were set aside.
 
 > **What is resumed is the task list, not the conversation.** Rudra deliberately
 > does not replay the previous transcript: a stable per-project thread would

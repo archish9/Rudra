@@ -7,9 +7,11 @@ drawn.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, TypeVar
 
 from rudra.ui.render import frame
 from rudra.ui.select import Cancelled, Chosen, SelectState, press
@@ -207,4 +209,53 @@ def _stdin_reader() -> str:
     return input()
 
 
-__all__ = ["MAX_ATTEMPTS", "ask", "run_inline", "run_numbered"]
+T = TypeVar("T")
+
+
+async def ask_off_loop(question: Callable[[], T], *, name: str) -> T:
+    """Run a blocking question on its own thread and await the answer.
+
+    Every question here blocks on a terminal, and two callers ask one from
+    inside a running loop: the plan gate (`RudraAgent._approve_off_loop`)
+    and the REPL's replace question (OPEN-162). On the loop thread it
+    fails both ways. `_cancel_on_sigint` installs its handler with
+    `loop.add_signal_handler`, whose callback only runs when the loop
+    regains control -- blocking is what made Ctrl-C at the plan prompt
+    print nothing until after the user answered (OPEN-2). And
+    `run_inline`'s `Application.run()` cannot start inside a running loop,
+    so the arrow-key driver would silently fall back to the numbered one.
+
+    A dedicated **daemon** thread rather than `asyncio.to_thread`, which
+    was measured to trade the prompt hang for an exit hang: `asyncio.run`
+    closes the loop through `shutdown_default_executor`, which JOINS its
+    workers, so a cancelled run whose prompt thread still sits in
+    `input()` waits `THREAD_JOIN_TIMEOUT` -- 300 seconds -- before the
+    process leaves. A private ThreadPoolExecutor does not help either;
+    `concurrent.futures` registers its own atexit join. A daemon thread
+    is joined by nobody and dies with the interpreter.
+
+    The cancelled prompt keeps the terminal until then. That is fine and
+    deliberate: the only thing that cancels it is the user leaving.
+    """
+    loop = asyncio.get_running_loop()
+    answered: asyncio.Future[T] = loop.create_future()
+
+    def settle(setter: Callable[[Any], None], value: Any) -> None:
+        # The future is already cancelled if Ctrl-C landed first; setting
+        # a cancelled future raises, and there is nobody left to tell.
+        if not answered.done():
+            setter(value)
+
+    def run() -> None:
+        try:
+            answer = question()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the loop
+            loop.call_soon_threadsafe(settle, answered.set_exception, exc)
+        else:
+            loop.call_soon_threadsafe(settle, answered.set_result, answer)
+
+    threading.Thread(target=run, name=name, daemon=True).start()
+    return await answered
+
+
+__all__ = ["MAX_ATTEMPTS", "ask", "ask_off_loop", "run_inline", "run_numbered"]

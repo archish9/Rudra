@@ -307,9 +307,11 @@ rudra> /exit
 |---|---|
 | `/help` | List the available commands |
 | `/tree` | Print the project file tree |
+| `/continue` | Work the tasks the last run left pending (`continue` works too) |
 | `/exit`, `/quit` | Leave |
 
-`Esc` three times also exits.
+`Esc` three times also exits. If the last run left tasks unfinished and you
+type a new request, the REPL asks whether to continue them or replace them.
 
 ---
 

@@ -517,6 +517,8 @@ Then pick up where it stopped:
 rudra --continue
 ```
 
+In the REPL, type `continue` instead — `rudra --continue` is a shell command.
+
 That works the remaining tasks without re-planning and without retyping the
 request. Running it *without* `--continue` starts a fresh plan instead, which is
 what you want if the request itself has changed.

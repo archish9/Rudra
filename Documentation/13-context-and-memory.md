@@ -206,6 +206,8 @@ The practical consequence: if you explained something in a run that died, and th
 rudra --continue
 ```
 
+In the REPL, type `continue`.
+
 Full behaviour, the refusals, and what does and doesn't resume: **[CLI Reference](04-cli-reference.md#--continue)**.
 
 The short version: it works the remaining tasks, reuses the original request so you don't retype it, skips planning entirely, and refuses rather than guessing if you hand it a different request or there's nothing pending.
