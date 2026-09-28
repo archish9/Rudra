@@ -226,6 +226,103 @@ def test_ordinary_work_is_never_refused():
     assert forbidden_shape_refusal("write a CSV parser that handles quoted commas") is None
 
 
+# --- OPEN-164: the checking rule read only the first word ---
+
+# Run 1808f56c8329's two run-the-tests tasks, verbatim from its debug log. The
+# first word is "run", no checking verb, and "test"/"suite" are no gate
+# target, so both passed -- obeying the prompt's letter, which forbids a
+# description that IS "verify". The second was dispatched: 788.1 s, BLOCKED.
+RUN_THE_TESTS_TASKS = [
+    "Run the test suite to verify that the import fix in app/routers/todo.py resolves the "
+    "error and all tests pass.",
+    "Run the test suite with pytest to verify the current state of the project after the "
+    "import fix in app/routers/todo.py.",
+]
+
+# Run 2cde3406f7d6, refused at 1968.2 s as "only checks what the gate already
+# checks" -- first word "ensure", and "structure" is a gate target. It writes
+# a file; the planner re-added it reworded 18.1 s later.
+ENSURE_AND_CREATE = (
+    "ensure /src directory exists and create /src/iphone15.html with basic HTML5 structure "
+    "and viewport meta tag for iPhone 15 marketing page"
+)
+
+
+def test_a_task_that_only_runs_the_tests_is_refused():
+    for description in RUN_THE_TESTS_TASKS:
+        refusal = forbidden_shape_refusal(description)
+        assert refusal is not None, description
+        assert refusal.startswith("REJECTED:")
+        # What the model must be told: the gate already runs the suite, the
+        # coder cannot, and a failing test needs a task that CHANGES something.
+        assert "gate" in refusal
+        assert "no shell" in refusal
+        assert "CHANGE" in refusal
+
+
+def test_run_the_tests_is_refused_whatever_else_the_task_mentions():
+    # "fix" is a NOUN in both of the run's tasks ("after the import fix"), so
+    # the writing-verb decline must never reach this rule -- or it re-opens
+    # the very miss it was written for.
+    assert forbidden_shape_refusal("Rerun the tests after the fix") is not None
+    assert forbidden_shape_refusal("Execute pytest to confirm the build") is not None
+
+
+def test_running_something_that_is_not_the_tests_is_work():
+    # The plan's must-nots: no test word, or a first word that produces a file.
+    assert forbidden_shape_refusal("Run database migrations on startup") is None
+    assert forbidden_shape_refusal("Write a script that runs the tests") is None
+    assert forbidden_shape_refusal("Add a Makefile target to run the tests") is None
+
+
+def test_a_checking_task_that_also_writes_a_file_is_kept():
+    assert forbidden_shape_refusal(ENSURE_AND_CREATE) is None
+    assert forbidden_shape_refusal("Check the HTML structure and fix the broken tags") is None
+
+
+def test_a_checking_task_that_writes_nothing_is_still_refused():
+    # Both of the archive's true checking-rule refusals.
+    assert forbidden_shape_refusal(
+        "Validate HTML structure and verify responsive behavior at all breakpoints"
+    )
+    assert forbidden_shape_refusal(
+        "Validate HTML structure meets all requirements (doctype, tags, viewport)"
+    )
+
+
+def test_build_is_a_gate_target_not_a_writing_verb():
+    # The plan's writing set named `build`, which _GATE_TARGETS already reads
+    # as the thing a checking task aims at -- so the decline would have kept
+    # the canonical gate-only task.
+    assert forbidden_shape_refusal("Verify the build passes") is not None
+
+
+def test_a_trailing_full_stop_does_not_hide_a_gate_target():
+    # `text.split()` kept punctuation on each word, so "passes." was not
+    # "passes" and the full stop alone decided the verdict.
+    assert forbidden_shape_refusal("Verify the test suite passes") is not None
+    assert forbidden_shape_refusal("Verify the test suite passes.") is not None
+    assert forbidden_shape_refusal("Validate the HTML.") is not None
+    assert forbidden_shape_refusal("Run pytest.") is not None
+
+
+def test_a_filename_is_one_word_not_a_gate_target():
+    # Only EDGE punctuation goes: splitting on every dot would read
+    # `iphone15.html` as the gate target `html` and refuse real work.
+    assert forbidden_shape_refusal("Ensure index.html links app.js") is None
+
+
+def test_add_tasks_refuses_the_run_s_test_run_and_keeps_its_real_task(tmp_path):
+    tools, ledger, _ = _tools(tmp_path)
+    real = (
+        "Modify app/security.py to truncate passwords to 72 bytes in get_password_hash "
+        "and verify_password"
+    )
+    answer = tools["add_tasks"].invoke({"descriptions": [RUN_THE_TESTS_TASKS[1], real]})
+    assert "REJECTED:" in answer
+    assert [task.description for task in ledger.tasks] == [real]
+
+
 # --- add_tasks itself: the guard where the model actually meets it ---
 
 

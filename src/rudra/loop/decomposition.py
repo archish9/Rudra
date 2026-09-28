@@ -119,6 +119,22 @@ _GATE_TARGETS = frozenset(
     }
 )
 
+# A task that only runs the tests, spelled the way run 1808f56c8329 spelled
+# it: "Run the test suite ... to verify". Its first word is no checking verb,
+# so the checking rule never saw it (OPEN-164).
+_RUN_VERBS = frozenset({"run", "rerun", "execute"})
+
+# Words that give a checking task something to produce -- "ensure /src
+# exists and create /src/iphone15.html ..." writes a file, and was refused.
+# Read by the checking rule ONLY, and after the run-the-tests rule: both of
+# run 1808f56c8329's tasks carry `fix` as a noun ("after the import fix").
+# Without `build`, which _GATE_TARGETS reads as the thing checked.
+_WRITING_VERBS = frozenset({"create", "write", "add", "implement", "generate", "update", "fix"})
+
+# Stripped from each end of a word, never from inside it: "passes." is
+# `passes`, and `iphone15.html` stays one word rather than yielding `html`.
+_EDGE_PUNCTUATION = ".,;:!?()[]{}\"'`"
+
 # Deliberately without `add` and `generate`: "Add a directory structure
 # diagram to the README" and "Generate a folder structure diagram" are real
 # work that names the same words. A false positive here is work that never
@@ -270,22 +286,42 @@ def _first_word(description: str) -> str:
 def forbidden_shape_refusal(description: str) -> str | None:
     """Refuse a task `_BREAKDOWN_BODY` already names as BAD, or None.
 
-    Two shapes, both quoted in that prompt and both emitted anyway by run
-    `fc543fb2b82f`:
+    Three shapes. Two are quoted in that prompt and were emitted anyway by
+    run `fc543fb2b82f`:
 
     * a task whose whole job is to check what the gate already checks
-      ("Validate HTML structure and verify responsive behavior");
+      ("Validate HTML structure and verify responsive behavior") -- kept
+      when it also carries a writing verb, since then it has a file to
+      write (OPEN-164);
     * "create the project structure".
+
+    The third obeys the prompt's letter and not its point: a task that
+    only runs the tests ("Run the test suite with pytest to verify ...",
+    run `1808f56c8329`, OPEN-164). The gate runs them after every task and
+    the coder has no shell, so the one that was dispatched spent 788.1 s
+    and wrote nothing it was asked for.
 
     Narrow on purpose. "Validate user input in the signup form" changes a
     file and is kept -- the failure mode of a false positive here is work
     that never happens, which is strictly worse than the turn a miss costs
     (loop/tools.py::_normalised makes the same argument for duplicates).
+    Every word each rule reads is a closed set, never a pattern.
     """
     text = _phrase_text(description)
-    words = set(text.split())
+    words = {word.strip(_EDGE_PUNCTUATION) for word in text.split()}
+    first = _first_word(description)
 
-    if _first_word(description) in _CHECKING_VERBS and words & _GATE_TARGETS:
+    # Before the checking rule and its writing-verb decline, never after:
+    # "after the import fix" would decline it.
+    if first in _RUN_VERBS and (_TEST_TASK_WORD.search(text) or "pytest" in words):
+        return (
+            f'REJECTED: "{_quoted(description.strip())}" only runs the tests. The gate '
+            f"runs the whole test suite on its own after every task, and the coder has "
+            f"no shell, so a coder given this has nothing to write. If a test is failing, "
+            f"add a task saying what to CHANGE to make it pass."
+        )
+
+    if first in _CHECKING_VERBS and words & _GATE_TARGETS and not words & _WRITING_VERBS:
         return (
             f'REJECTED: "{_quoted(description.strip())}" only checks what the gate '
             f"already checks on its own after every task -- syntax, lint, types, tests "
@@ -295,9 +331,7 @@ def forbidden_shape_refusal(description: str) -> str | None:
         )
 
     opening = " ".join(text.split()[:_SCAFFOLD_WINDOW])
-    if _first_word(description) in _SCAFFOLD_VERBS and any(
-        target in opening for target in _SCAFFOLD_TARGETS
-    ):
+    if first in _SCAFFOLD_VERBS and any(target in opening for target in _SCAFFOLD_TARGETS):
         return (
             f'REJECTED: "{_quoted(description.strip())}" is scaffolding, not work. '
             f"Directories are created implicitly by the files written into them, so this "
