@@ -189,7 +189,11 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             supports_timeout=True,
             chunk_timeout_kwarg="stream_chunk_timeout",
             default_base_url="http://localhost:8000/v1",
-            extra_kwargs=MappingProxyType({"use_responses_api": False, "stream_usage": True}),
+            # Placeholder: ChatOpenAI refuses to construct without a key, and a
+            # local Vaayu server needs none.
+            extra_kwargs=MappingProxyType(
+                {"use_responses_api": False, "stream_usage": True, "api_key": "vaayu-local"}
+            ),
             no_client_retries=MappingProxyType({"max_retries": 0}),
         ),
         "openai": ProviderEntry(

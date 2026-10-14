@@ -32,3 +32,21 @@ def test_session_id_ignored_on_ollama() -> None:
 def test_no_session_id_leaves_model_unchanged() -> None:
     model = build_model("coder", _cfg("vaayu"))
     assert getattr(model, "extra_body", None) in (None, {})
+
+
+def test_vaayu_constructs_without_any_api_key_in_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    build_model("coder", _cfg("vaayu"))
+
+
+def test_session_id_merges_into_existing_extra_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    from rudra.llm import factory
+
+    real = factory.init_chat_model
+
+    def with_extra_body(spec, **kwargs):
+        return real(spec, **kwargs).model_copy(update={"extra_body": {"foo": "bar"}})
+
+    monkeypatch.setattr(factory, "init_chat_model", with_extra_body)
+    model = build_model("coder", _cfg("vaayu"), session_id="s1")
+    assert model.extra_body == {"foo": "bar", "session_id": "s1"}
