@@ -985,7 +985,12 @@ async def create_main_agent(
         checkpointer = AsyncSqliteSaver(conn=db_conn)
         await checkpointer.setup()
 
-        from rudra.agent.planner_agent import STAGES, consult_planner, create_planner_agent
+        from rudra.agent.planner_agent import (
+            STAGES,
+            consult_planner,
+            create_planner_agent,
+            stage_thread_id,
+        )
         from rudra.context.usage import RunUsage
         from rudra.loop import Ledger, LoopContext
         from rudra.subagents import SubagentContext
@@ -1131,8 +1136,9 @@ async def create_main_agent(
                 # than the stream: ModelRetryMiddleware fires between
                 # chunks, so `trace.feed` cannot see it (OPEN-45).
                 trace=trace,
-                # The same id consult_planner uses as the stage thread.
-                session_id=f"{session_id}-{stage}",
+                # The same id consult_planner uses as the stage thread --
+                # one spelling, from planner_agent.stage_thread_id.
+                session_id=stage_thread_id(session_id, stage),
             )
 
         async def planner_callback(

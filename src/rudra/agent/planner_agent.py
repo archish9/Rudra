@@ -570,6 +570,19 @@ def build_planner_middleware(
 STAGES: tuple[str, ...] = ("clarify", "architect", "breakdown")
 
 
+def stage_thread_id(session_id: str, stage: str) -> str:
+    """The thread id a planner stage's consults share.
+
+    ONE spelling, two consumers: build_planner (main_agent.py) hands it to
+    create_planner_agent as session_id, and consult_planner uses it as
+    _stream_planner_turn's thread_id. The two were independent f-strings in
+    two files; a drift between them silently disables Vaayu prefix reuse while
+    the suite stays green (CLAUDE.md lesson 4). This is the single definition,
+    pinned by test_stage_thread_id_is_the_one_spelling.
+    """
+    return f"{session_id}-{stage}"
+
+
 def _tools_for_stage(
     stage: str,
     *,
@@ -1354,7 +1367,7 @@ async def consult_planner(
     await _stream_planner_turn(
         agent,
         message,
-        thread_id=f"{session_id}-{stage}",
+        thread_id=stage_thread_id(session_id, stage),
         gate=gate,
         console=console,
         trace=trace,
