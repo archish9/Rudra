@@ -174,6 +174,17 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             extra_kwargs=MappingProxyType({"use_responses_api": False, "stream_usage": True}),
             no_client_retries=MappingProxyType({"max_retries": 0}),
         ),
+        "vaayu": ProviderEntry(
+            name="vaayu",
+            lc_prefix="openai",
+            max_output_kwarg="max_tokens",
+            needs_api_key=False,
+            supports_timeout=True,
+            chunk_timeout_kwarg="stream_chunk_timeout",
+            default_base_url="http://localhost:8000/v1",
+            extra_kwargs=MappingProxyType({"use_responses_api": False, "stream_usage": True}),
+            no_client_retries=MappingProxyType({"max_retries": 0}),
+        ),
         "openai": ProviderEntry(
             name="openai",
             lc_prefix="openai",
