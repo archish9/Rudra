@@ -21,7 +21,9 @@ BUILTIN_ROLES = ("default", "planner", "coder", "tester", "reviewer")
 # factory, which imports rudra.config. The two are kept in agreement by
 # tests/test_config_schema.py::test_every_provider_the_factory_supports_is_valid_here,
 # which fails the moment a provider is added to one and not the other.
-VALID_PROVIDERS = frozenset({"ollama", "openai_compatible", "openai", "anthropic", "google"})
+VALID_PROVIDERS = frozenset(
+    {"ollama", "openai_compatible", "openai", "anthropic", "google", "vaayu"}
+)
 VALID_MODES = ("ask", "auto", "plan")
 
 # Declared literally rather than imported from `rudra.permissions.floor`,
