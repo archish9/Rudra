@@ -17,6 +17,8 @@ from pathlib import Path
 
 
 def _wall(usage: dict) -> float:
+    if usage.get("_failed"):
+        return 0.0
     return float(usage.get("run", {}).get("wall_seconds", 0.0))
 
 
@@ -59,12 +61,18 @@ def _run_one(task: str, project: Path) -> dict:
     )
     if proc.returncode != 0:
         print(f"WARNING: rudra exited {proc.returncode} in {project}", file=sys.stderr)
+        failed = True
+    else:
+        failed = False
     usage = project / ".rudra" / "run" / "logs" / "usage.json"
     try:
-        return json.loads(usage.read_text(encoding="utf-8"))
+        data = json.loads(usage.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         print(f"WARNING: no readable usage.json in {project}", file=sys.stderr)
-        return {}
+        return {"_failed": True}
+    if failed:
+        data["_failed"] = True  # non-zero exit: counts as failed whatever usage says
+    return data
 
 
 def run_serial(task: str, n: int, root: Path) -> list[dict]:

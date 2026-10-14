@@ -41,3 +41,15 @@ def test_empty_concurrent_is_invalid_not_a_crash():
     report = aggregate_report(serial, [], {"batches_run": 5})
     assert report["batching_helped"] is False
     assert report["valid"] is False
+
+
+def test_nonzero_exit_with_positive_wall_counts_as_failed():
+    serial = [{"run": {"wall_seconds": 10.0}}, {"run": {"wall_seconds": 10.0}}]
+    concurrent = [
+        {"run": {"wall_seconds": 11.0}},
+        {"run": {"wall_seconds": 11.0}, "_failed": True},
+    ]
+    report = aggregate_report(serial, concurrent, {"batches_run": 5})
+    assert report["n_failed"] >= 1
+    assert report["valid"] is False
+    assert report["batching_helped"] is False
