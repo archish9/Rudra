@@ -107,7 +107,7 @@ class FakeModel(BaseChatModel):
 def fake_models(monkeypatch):
     import rudra.subagents.build as build
 
-    monkeypatch.setattr(build, "build_model", lambda role, cfg=None: FakeModel(role=role))
+    monkeypatch.setattr(build, "build_model", lambda role, cfg=None, **kw: FakeModel(role=role))
 
 
 @pytest.fixture

@@ -482,7 +482,7 @@ async def test_a_nudge_the_bound_ends_is_recorded_unanswered_on_a_real_graph(clo
         checkpointer=InMemorySaver(),
     )
     records: list[dict] = []
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": agent)
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: agent)
     monkeypatch.setattr(runner, "log_invocation", lambda name, **kw: records.append(kw))
     context = runner.SubagentContext(
         project_path=None,

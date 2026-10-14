@@ -1131,6 +1131,8 @@ async def create_main_agent(
                 # than the stream: ModelRetryMiddleware fires between
                 # chunks, so `trace.feed` cannot see it (OPEN-45).
                 trace=trace,
+                # The same id consult_planner uses as the stage thread.
+                session_id=f"{session_id}-{stage}",
             )
 
         async def planner_callback(
