@@ -32,3 +32,18 @@ run's `usage.json` (`run.wall_seconds`). Output goes to
   nothing (or no batch formed), so do not build on it.
 - `gate1_refused` / `gate2_refused`: admission refusals; high values explain a
   false result.
+
+## Applying the sdpa-tax margin (you, not the script)
+
+`batching_helped` is a BARE improvement — any win at all, including one too
+small to pay for the `sdpa` attention tax. The spec (§4.4) requires the batched
+decode to beat serial by **more than the 2.3–4.1% `sdpa` tax**, or the parallel
+work is not worth building. The script deliberately does not bake that threshold
+in — it reports the raw numbers so a human reads the margin against the tax Vaayu
+actually measured on this hardware:
+
+    margin = (serial_wall_sum - concurrent_wall_max) / serial_wall_sum
+
+Decision for the F3-B/C gate: resume the parallel-dispatch work only if `margin`
+clears the top of the tax band (> ~4.1%) with `batches_run > 0`. A margin inside
+the tax band is noise, not a win.
