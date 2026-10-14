@@ -15,8 +15,8 @@ def _openai_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test")
 
 
-def _cfg(provider: str):
-    return make_config(provider=provider, model="m", base_url="http://localhost:8000/v1")
+def _cfg(provider: str, **kw):
+    return make_config(provider=provider, model="m", base_url="http://localhost:8000/v1", **kw)
 
 
 def test_session_id_sets_extra_body_on_vaayu() -> None:
@@ -50,3 +50,14 @@ def test_session_id_merges_into_existing_extra_body(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(factory, "init_chat_model", with_extra_body)
     model = build_model("coder", _cfg("vaayu"), session_id="s1")
     assert model.extra_body == {"foo": "bar", "session_id": "s1"}
+
+
+def test_session_id_not_sent_to_canonical_openai() -> None:
+    # Hosted OpenAI rejects unknown body params; it caches prefixes itself.
+    model = build_model("coder", _cfg("openai", api_key="k"), session_id="x")
+    assert getattr(model, "extra_body", None) in (None, {})
+
+
+def test_session_id_sets_extra_body_on_openai_compatible() -> None:
+    model = build_model("coder", _cfg("openai_compatible", api_key="k"), session_id="x")
+    assert model.extra_body == {"session_id": "x"}

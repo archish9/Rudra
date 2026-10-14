@@ -198,7 +198,6 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "openai": ProviderEntry(
             name="openai",
-            accepts_session_id=True,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
             needs_api_key=True,
