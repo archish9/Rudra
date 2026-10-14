@@ -109,7 +109,13 @@ def probe_role(role: str, cfg: Any = None) -> ProbeResult:
     skipped = "skipped"
 
     try:
-        model = build_model(role, config)
+        # A probe runs outside any graph, so it must supply its own session_id
+        # or a provider that requires one (vaayu: Vaayu's REQUIRE_SESSION_ID
+        # rejects a session-less request with HTTP 400) reports a red row for a
+        # config that is actually fine. Ignored by providers without
+        # accepts_session_id. One stable id per role keeps the probe's two
+        # calls on one prefix-pool entry.
+        model = build_model(role, config, session_id=f"rudra-probe-{role}")
     except Exception as error:  # noqa: BLE001 — every failure is a reportable row
         return ProbeResult(
             role=role,

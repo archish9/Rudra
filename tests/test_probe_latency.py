@@ -88,7 +88,7 @@ def probe_with(monkeypatch, tmp_path):
     """Probe `planner` against a stub model, with no network anywhere."""
 
     def run(model: Any = None, construct_error: Exception | None = None):
-        def build(_role: str, _config: Any = None) -> Any:
+        def build(_role: str, _config: Any = None, *, session_id: Any = None) -> Any:
             if construct_error is not None:
                 raise construct_error
             return model
@@ -97,6 +97,22 @@ def probe_with(monkeypatch, tmp_path):
         return probe_role("planner", config_for(tmp_path))
 
     return run
+
+
+def test_probe_supplies_a_session_id_to_build_model(monkeypatch, tmp_path) -> None:
+    """A probe runs outside any graph, so it must pass its own session_id or a
+    provider that requires one (vaayu: Vaayu's REQUIRE_SESSION_ID 400s a
+    session-less request) reports a red row for a config that is fine. Pins the
+    kwarg so the probe path cannot silently drop it again."""
+    seen: dict[str, Any] = {}
+
+    def build(role: str, _config: Any = None, *, session_id: Any = None) -> Any:
+        seen["session_id"] = session_id
+        return StubModel()
+
+    monkeypatch.setattr("rudra.llm.probe.build_model", build)
+    probe_role("planner", config_for(tmp_path))
+    assert seen["session_id"] == "rudra-probe-planner"
 
 
 def test_the_tool_call_is_timed(probe_with) -> None:
