@@ -570,6 +570,19 @@ def build_planner_middleware(
 STAGES: tuple[str, ...] = ("clarify", "architect", "breakdown")
 
 
+def stage_thread_id(session_id: str, stage: str) -> str:
+    """The thread id a planner stage's consults share.
+
+    ONE spelling, two consumers: build_planner (main_agent.py) hands it to
+    create_planner_agent as session_id, and consult_planner uses it as
+    _stream_planner_turn's thread_id. The two were independent f-strings in
+    two files; a drift between them silently disables Vaayu prefix reuse while
+    the suite stays green (CLAUDE.md lesson 4). This is the single definition,
+    pinned by test_stage_thread_id_is_the_one_spelling.
+    """
+    return f"{session_id}-{stage}"
+
+
 def _tools_for_stage(
     stage: str,
     *,
@@ -653,6 +666,7 @@ def create_planner_agent(
     usage: Any = None,
     memory: Any = None,
     trace: Any = None,
+    session_id: str | None = None,
 ):
     """Create one stage of the planner (S10b.1).
 
@@ -676,12 +690,15 @@ def create_planner_agent(
     one is passed per turn. Both are the SAME sink in a real run
     (agent/main_agent.py), which is what keeps one run to one record.
     Added by OPEN-45, so ModelRetryMiddleware has somewhere to report.
+
+    `session_id` is the stage's thread id (`f"{run}-{stage}"`), handed to the
+    model so each stage keys its own prefix-cache pool.
     """
     from rudra.facts import FactStore
     from rudra.loop.ledger import Ledger
     from rudra.state.paths import rudra_paths
 
-    model = build_model("planner")
+    model = build_model("planner", session_id=session_id)
     cfg = get_config()
     ledger = ledger if ledger is not None else Ledger()
     facts = facts if facts is not None else FactStore()
@@ -1350,7 +1367,7 @@ async def consult_planner(
     await _stream_planner_turn(
         agent,
         message,
-        thread_id=f"{session_id}-{stage}",
+        thread_id=stage_thread_id(session_id, stage),
         gate=gate,
         console=console,
         trace=trace,

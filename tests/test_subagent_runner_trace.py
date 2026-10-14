@@ -31,7 +31,7 @@ def _context(sink, monkeypatch, chunks):
 
     monkeypatch.setattr("rudra.subagents.runner.run_with_approvals", fake_stream)
     monkeypatch.setattr(
-        "rudra.subagents.runner.build_agent", lambda spec, context, task="": object()
+        "rudra.subagents.runner.build_agent", lambda spec, context, task="", **kw: object()
     )
 
     return SubagentContext(
@@ -268,7 +268,9 @@ async def test_the_repeat_guard_halts_a_real_graph_whether_or_not_tokens_stream(
         ]
     )
     agent = create_agent(model, tools=[read_file])
-    monkeypatch.setattr("rudra.subagents.runner.build_agent", lambda spec, context, task="": agent)
+    monkeypatch.setattr(
+        "rudra.subagents.runner.build_agent", lambda spec, context, task="", **kw: agent
+    )
     context = SubagentContext(
         project_path=Path("."),
         backend=None,

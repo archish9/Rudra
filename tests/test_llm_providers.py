@@ -46,6 +46,7 @@ def test_every_documented_provider_is_registered() -> None:
         "openai",
         "anthropic",
         "google",
+        "vaayu",
     }
 
 

@@ -53,7 +53,7 @@ def _fake_models(monkeypatch):
     import rudra.subagents.build as build
     from tests.test_subagents_build import FakeModel
 
-    monkeypatch.setattr(build, "build_model", lambda role, cfg=None: FakeModel(role=role))
+    monkeypatch.setattr(build, "build_model", lambda role, cfg=None, **kw: FakeModel(role=role))
 
 
 def test_only_the_opted_in_subagents_get_the_middleware(tmp_path):

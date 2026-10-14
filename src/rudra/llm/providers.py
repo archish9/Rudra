@@ -96,6 +96,11 @@ class ProviderEntry:
     `--stream`. Never 0: on a server that sends keepalives it is the only
     bound a stalled stream has."""
 
+    accepts_session_id: bool = False
+    """Whether this provider accepts an `extra_body={"session_id": ...}` on the
+    request (OpenAI-wire providers do; ollama/anthropic/google do not). Vaayu
+    keys its prefix cache on it."""
+
     def build_kwargs(self, settings: ModelConfig) -> dict[str, Any]:
         """Emit exactly the kwargs this provider accepts.
 
@@ -155,6 +160,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "openai_compatible": ProviderEntry(
             name="openai_compatible",
+            accepts_session_id=True,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
             needs_api_key=True,
@@ -172,6 +178,22 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
             # token count for any role. Only a streamed request carries it; a
             # run without `--stream` sends what it always sent.
             extra_kwargs=MappingProxyType({"use_responses_api": False, "stream_usage": True}),
+            no_client_retries=MappingProxyType({"max_retries": 0}),
+        ),
+        "vaayu": ProviderEntry(
+            name="vaayu",
+            accepts_session_id=True,
+            lc_prefix="openai",
+            max_output_kwarg="max_tokens",
+            needs_api_key=False,
+            supports_timeout=True,
+            chunk_timeout_kwarg="stream_chunk_timeout",
+            default_base_url="http://localhost:8000/v1",
+            # Placeholder: ChatOpenAI refuses to construct without a key, and a
+            # local Vaayu server needs none.
+            extra_kwargs=MappingProxyType(
+                {"use_responses_api": False, "stream_usage": True, "api_key": "vaayu-local"}
+            ),
             no_client_retries=MappingProxyType({"max_retries": 0}),
         ),
         "openai": ProviderEntry(

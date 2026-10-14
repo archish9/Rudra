@@ -108,7 +108,7 @@ def test_task_anchor_is_absent_from_the_subagents(tmp_path: Path, monkeypatch) -
 
     # The coder wants compaction, whose middleware type-checks its model
     # (summarization.py:1663), so a resolvable one is required here.
-    monkeypatch.setattr(build, "build_model", lambda role, cfg=None: FakeModel(role=role))
+    monkeypatch.setattr(build, "build_model", lambda role, cfg=None, **kw: FakeModel(role=role))
 
     @dataclass
     class Compat:

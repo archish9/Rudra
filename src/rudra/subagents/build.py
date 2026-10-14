@@ -56,14 +56,14 @@ from rudra.tools.testing_tools import create_testing_tools
 _TOOL_FACTORIES = (create_git_tools, create_testing_tools, create_memory_tools)
 
 
-def _model_for(spec: RudraSubagent, cfg: Any = None) -> Any:
+def _model_for(spec: RudraSubagent, cfg: Any = None, *, session_id: str | None = None) -> Any:
     """The chat model for this subagent's role.
 
     build_model falls back to `default` for an unknown role
     (llm/factory.py:71), so a spec naming a role the user has not
     configured still runs rather than failing the build.
     """
-    return build_model(spec.role, cfg)
+    return build_model(spec.role, cfg, session_id=session_id)
 
 
 def _tools_for(spec: RudraSubagent, context: Any) -> list:
@@ -602,7 +602,9 @@ def _nested_subagents(context: Any, *, can_delegate: bool) -> list[dict]:
     return [to_subagent_spec(GENERAL_PURPOSE, context, render_prompt=can_delegate)]
 
 
-def build_agent(spec: RudraSubagent, context: Any, task: str = "") -> Any:
+def build_agent(
+    spec: RudraSubagent, context: Any, task: str = "", *, session_id: str | None = None
+) -> Any:
     """A compiled deep agent for this spec, ready to invoke directly.
 
     Goes through create_deep_agent so the subagent inherits upstream's
@@ -625,7 +627,7 @@ def build_agent(spec: RudraSubagent, context: Any, task: str = "") -> Any:
     """
     from langgraph.checkpoint.memory import InMemorySaver
 
-    model = _model_for(spec, context.cfg)
+    model = _model_for(spec, context.cfg, session_id=session_id)
     tools = _tools_for(spec, context)
     return create_deep_agent(
         model=model,

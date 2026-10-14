@@ -600,11 +600,13 @@ async def run_subagent(
     # What this role's model had cost before the invocation, so a time halt
     # can say how much of it was waiting on the model (OPEN-113).
     model_before = model_time_of(getattr(context, "usage", None), spec.role)
+    # One id, two uses: the checkpointer thread and the prefix-cache key.
+    thread = thread_id or f"{context.session_id}-{name}-{uuid.uuid4().hex[:8]}"
     try:
         # The prompt IS the task: passing it through is what makes the
         # subagent's memory recall about the work rather than about its own
         # name (CR-C3).
-        agent = build_agent(spec, context, prompt)
+        agent = build_agent(spec, context, prompt, session_id=thread)
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         log_invocation(
             name,
@@ -616,7 +618,6 @@ async def run_subagent(
         )
         return SubagentResult(name=name, text="", ok=False, error=str(exc), tools={})
 
-    thread = thread_id or f"{context.session_id}-{name}-{uuid.uuid4().hex[:8]}"
     config: dict[str, Any] = {"configurable": {"thread_id": thread}}
     telemetry = getattr(context, "telemetry", None)
     if telemetry is not None:

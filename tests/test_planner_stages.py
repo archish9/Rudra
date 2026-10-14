@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from rudra.agent.planner_agent import STAGES, create_planner_agent
+from rudra.agent.planner_agent import STAGES, create_planner_agent, stage_thread_id
 from rudra.facts import FactStore
 
 
@@ -420,3 +420,31 @@ def test_the_greenfield_decision_is_made_per_build(monkeypatch, tmp_path: Path):
 
     assert _file_tools(first) == set()
     assert _file_tools(second) == _READ_TOOLS
+
+
+def test_stage_thread_id_is_the_one_spelling():
+    """build_planner (main_agent) hands the stage thread id to
+    create_planner_agent as session_id; consult_planner uses the same id as
+    _stream_planner_turn's thread_id. They were independent f-strings in two
+    files, and a drift silently disables Vaayu prefix reuse while the suite
+    stays green (CLAUDE.md lesson 4). stage_thread_id is now the single
+    definition; this pins its format and forbids a second inline copy."""
+    for stage in STAGES:
+        assert stage_thread_id("run-abc", stage) == f"run-abc-{stage}"
+
+    # No caller may reintroduce the raw f-string -- that is exactly the drift
+    # this helper exists to remove. The ONE allowed occurrence is the helper's
+    # own return in planner_agent; main_agent must hold none.
+    import rudra.agent.main_agent as main_agent
+    import rudra.agent.planner_agent as planner_agent
+
+    needle = "{session_id}-{stage}"
+    planner_src = Path(planner_agent.__file__).read_text()
+    main_src = Path(main_agent.__file__).read_text()
+    assert planner_src.count(needle) == 1, (
+        "the stage thread id must be built in exactly one place "
+        "(stage_thread_id); a second copy is the lesson-4 drift"
+    )
+    assert needle not in main_src, (
+        "main_agent rebuilds the stage thread id inline; call stage_thread_id"
+    )

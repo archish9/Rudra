@@ -332,7 +332,7 @@ async def test_run_subagent_logs_what_the_invocation_spent(monkeypatch, invocati
     dropped at `return` and the per-invocation table existed in no file."""
     from tests.test_subagents_runner import ai, call, make_context, stream_of
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner_module, "build_agent", lambda spec, context, task="", **kw: object())
     messages = [
         ai("looking", [call("glob", pattern="/usr/bin/python*")]),
         ai("still looking", [call("glob", pattern="/usr/bin/python3")]),
@@ -358,7 +358,7 @@ async def test_a_build_failure_is_logged_too(monkeypatch, invocations, tmp_path)
     the log is the shape this item was filed on."""
     from tests.test_subagents_runner import make_context
 
-    def boom(spec, context, task=""):
+    def boom(spec, context, task="", **kw):
         raise RuntimeError("no model")
 
     monkeypatch.setattr(runner_module, "build_agent", boom)
@@ -377,7 +377,7 @@ async def test_a_halted_invocation_names_the_guard_that_stopped_it(
 ):
     from tests.test_subagents_runner import ai, call, make_context, stream_of
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner_module, "build_agent", lambda spec, context, task="", **kw: object())
     repeated = [ai("x", [call("write_file", file_path="/a.py", content="same")]) for _ in range(3)]
     monkeypatch.setattr(runner_module, "run_with_approvals", stream_of({"messages": repeated}))
 
@@ -413,7 +413,7 @@ async def test_a_time_halt_reaches_the_invocation_log_too(monkeypatch, invocatio
         stream_of,
     )
 
-    monkeypatch.setattr(runner_module, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner_module, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner_module, "time", FakeClock(step=500.0))
     monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
     messages = [ai("looking", [call("glob", pattern=f"/usr/bin/python{n}*")]) for n in range(6)]

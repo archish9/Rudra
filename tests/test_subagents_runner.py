@@ -76,7 +76,7 @@ def call(name, **args):
 
 @pytest.fixture
 def patched(monkeypatch, tmp_path):
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     return make_context(tmp_path)
 
 
@@ -111,7 +111,7 @@ async def test_the_last_non_empty_message_wins(monkeypatch, patched):
 
 
 async def test_a_build_failure_is_reported_not_raised(monkeypatch, patched):
-    def boom(spec, context, task=""):
+    def boom(spec, context, task="", **kw):
         raise RuntimeError("no provider package installed")
 
     monkeypatch.setattr(runner, "build_agent", boom)
@@ -639,7 +639,7 @@ async def test_a_subagent_stops_after_the_wall_clock_bound(monkeypatch, tmp_path
     MAX_TOTAL_CALLS = 80 never fired: at 46 s/call that ceiling is 61 minutes
     of sanctioned runaway. The user complains in seconds, so a bound has to
     be denominated in them."""
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
     monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
     monkeypatch.setattr(runner, "run_with_approvals", _out_of_seconds(_glob_stream(8)))
@@ -653,7 +653,7 @@ async def test_a_subagent_stops_after_the_wall_clock_bound(monkeypatch, tmp_path
 async def test_the_two_bounds_name_themselves_differently(monkeypatch, tmp_path):
     """ "80 tool calls" is a loop; "20 minutes" is a slow provider or a loop.
     A reader of `ledger.json` has to be able to tell them apart."""
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "time", FakeClock(step=0.0))
     monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(runner.MAX_TOTAL_CALLS + 5))
 
@@ -672,7 +672,7 @@ async def test_the_wall_clock_bound_is_configurable(monkeypatch, tmp_path):
     by, so "the configured number reached the deadline" is the whole claim. A
     stub that tripped anyway would prove nothing about the number.
     """
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
     seen: list[object] = []
 
@@ -693,7 +693,7 @@ async def test_zero_turns_the_wall_clock_bound_off(monkeypatch, tmp_path):
     `SpanDeadline(0.0).expired()` is always False, which is where "no bound"
     now lives; `tests/test_span_deadline.py` runs that case on a real graph.
     """
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "time", FakeClock(step=5_000.0))
     monkeypatch.setattr(deadline_module, "time", FakeClock(step=5_000.0))
     seen: list[object] = []
@@ -713,7 +713,7 @@ async def test_the_span_is_closed_when_the_invocation_ends(monkeypatch, tmp_path
     """The variable must not outlive the invocation. `run_subagent` reports a
     raised exception rather than raising it, so a leaked deadline would bound
     the NEXT invocation from this one's start."""
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "run_with_approvals", _glob_stream(2))
 
     await run_subagent("coder", "write it", context=make_context(tmp_path))
@@ -727,7 +727,7 @@ async def test_a_context_with_no_agent_config_still_gets_the_bound(monkeypatch, 
     is read defensively for the same reason)."""
     from rich.console import Console as _Console
 
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
     monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
     monkeypatch.setattr(runner, "run_with_approvals", _out_of_seconds(_glob_stream(8)))
@@ -750,7 +750,7 @@ async def test_the_time_halt_says_it_fired(monkeypatch, tmp_path):
     """TODO.md lesson 5: a new guard is a new silence unless it is wired to
     something. All three guards funnel through `TraceSink.notice`."""
     trace = FakeTrace()
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
     monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
     monkeypatch.setattr(runner, "run_with_approvals", _out_of_seconds(_glob_stream(8)))
@@ -768,7 +768,7 @@ async def test_an_ordinary_invocation_is_nowhere_near_the_time_bound(monkeypatch
     ~15 minutes."""
     assert runner.MAX_INVOCATION_SECONDS >= 900
 
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "time", FakeClock(step=46.0))
     messages = [ai("", [call("read_file", file_path=f"{n}.py")]) for n in range(20)]
     monkeypatch.setattr(
@@ -1285,7 +1285,7 @@ async def test_a_time_halt_says_how_much_was_model_latency(monkeypatch, tmp_path
             usage.record("coder", input_tokens=None, output_tokens=None, seconds=499.0)
             yield chunk
 
-    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="": object())
+    monkeypatch.setattr(runner, "build_agent", lambda spec, context, task="", **kw: object())
     monkeypatch.setattr(runner, "time", FakeClock(step=500.0))
     monkeypatch.setattr(deadline_module, "time", FakeClock(step=500.0))
     monkeypatch.setattr(runner, "run_with_approvals", _out_of_seconds(billing_stream))
