@@ -96,6 +96,11 @@ class ProviderEntry:
     `--stream`. Never 0: on a server that sends keepalives it is the only
     bound a stalled stream has."""
 
+    accepts_session_id: bool = False
+    """Whether this provider accepts an `extra_body={"session_id": ...}` on the
+    request (OpenAI-wire providers do; ollama/anthropic/google do not). Vaayu
+    keys its prefix cache on it."""
+
     def build_kwargs(self, settings: ModelConfig) -> dict[str, Any]:
         """Emit exactly the kwargs this provider accepts.
 
@@ -155,6 +160,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "openai_compatible": ProviderEntry(
             name="openai_compatible",
+            accepts_session_id=True,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
             needs_api_key=True,
@@ -176,6 +182,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "vaayu": ProviderEntry(
             name="vaayu",
+            accepts_session_id=True,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
             needs_api_key=False,
@@ -187,6 +194,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "openai": ProviderEntry(
             name="openai",
+            accepts_session_id=True,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
             needs_api_key=True,

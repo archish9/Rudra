@@ -69,7 +69,9 @@ def _resolve_api_key(role: str, settings: ModelConfig) -> str:
     return value
 
 
-def build_model(role: str, cfg: Config | None = None) -> BaseChatModel:
+def build_model(
+    role: str, cfg: Config | None = None, *, session_id: str | None = None
+) -> BaseChatModel:
     """Construct the chat model for `role`.
 
     Makes no network call — LangChain chat model constructors do no I/O.
@@ -79,6 +81,8 @@ def build_model(role: str, cfg: Config | None = None) -> BaseChatModel:
         role: `planner`, `coder`, or any name; unknown roles use `default`.
         cfg: Config to read from. Defaults to the process-wide one; tests
             pass an explicit Config instead of monkeypatching os.environ.
+        session_id: Per-stream id sent as `extra_body={"session_id": ...}` to
+            providers with `accepts_session_id`; silently ignored by others.
 
     Returns:
         A resolved BaseChatModel.
@@ -119,6 +123,19 @@ def build_model(role: str, cfg: Config | None = None) -> BaseChatModel:
                 "profile": {
                     **(model.profile or {}),
                     "max_input_tokens": settings.context_tokens,
+                }
+            }
+        )
+
+    # Vaayu keys its cross-turn prefix cache on session_id, read off the
+    # request body. Only OpenAI-wire providers accept extra_body; the rest
+    # ignore the id, keeping Rudra provider-agnostic.
+    if session_id is not None and entry.accepts_session_id:
+        model = model.model_copy(
+            update={
+                "extra_body": {
+                    **(getattr(model, "extra_body", None) or {}),
+                    "session_id": session_id,
                 }
             }
         )
