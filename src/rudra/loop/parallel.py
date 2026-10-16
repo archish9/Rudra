@@ -204,10 +204,6 @@ async def run_parallel_batch(
     usage = _usage(context)
     session = getattr(context.subagents, "session_id", "") or ""
 
-    if usage is not None:
-        usage.record_worktrees_created(len(frontier))
-        usage.record_parallel_batch(len(frontier))
-
     # 1. One isolated checkout per task, each on a unique branch.
     handles: list[_Handle] = []
     for task in frontier:
@@ -228,6 +224,13 @@ async def run_parallel_batch(
         handles.append(handle)
 
     live = [h for h in handles if h.dispatched]
+
+    # Recorded from the actually-live set AFTER the add loop, not len(frontier)
+    # before it: a worktree_add that failed created nothing, and over-reporting
+    # worktrees/peak would lie to usage.json (§8a -- a diagnostic must be true).
+    if usage is not None:
+        usage.record_worktrees_created(len(live))
+        usage.record_parallel_batch(len(live))
 
     try:
         # 2. Dispatch every live task concurrently; join on the group's exit.
@@ -288,7 +291,11 @@ async def run_parallel_batch(
                     cfg=cfg,
                 )
             # A non-DONE task (BLOCKED / PENDING) keeps its status, unmerged.
-            _remove(git_ops, main, main_gate, handle, console, cfg)
+            # Only a dispatched task has a worktree on disk to remove -- a
+            # failed worktree_add created nothing, so skip it (as `finally`
+            # does) rather than issue a spurious gated `git worktree remove`.
+            if handle.dispatched:
+                _remove(git_ops, main, main_gate, handle, console, cfg)
 
         return BatchResult(results=tuple((h.task, _outcome(h)) for h in ordered))
     finally:
@@ -334,6 +341,14 @@ def _merge_back(
 ) -> None:
     """Commit the worktree, merge it, and keep or undo the result.
 
+    A failed `commit_all` is a failed merge-back, NOT a no-op: if the worktree
+    holds real work a repo pre-commit hook rejected (or git errored), the
+    branch stays at base HEAD, `merge` reports "already up to date" (ok=True),
+    `after_merge_check` passes on a main tree that does NOT contain the work,
+    and the task would stay DONE with its code silently discarded alongside the
+    worktree -- the exact silent-wrong-result the merge+check net must exclude.
+    So an uncommittable DONE task returns to PENDING without merging.
+
     On a merge that is `not ok` -- conflict OR any other failure -- ALWAYS
     abort (Task 7 review: an unreadable status reports conflicted=False, and
     skipping the abort would leave a half-merged tree). On a clean merge whose
@@ -343,8 +358,16 @@ def _merge_back(
     task = handle.task
     common = {"gate": main_gate, "console": console, "cfg": cfg}
 
+    if not git_ops.commit_all(handle.path, f"rudra task {task.id}", **common):
+        task.status = TaskStatus.PENDING
+        _append_note(
+            task,
+            f"redo: the work for {task.id} could not be committed in its "
+            f"worktree; re-run against the merged tree",
+        )
+        return
+
     pre = git_ops.head(main, **common)
-    git_ops.commit_all(handle.path, f"rudra task {task.id}", **common)
     result = git_ops.merge(main, handle.branch, **common)
 
     if not result.ok:

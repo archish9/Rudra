@@ -38,6 +38,7 @@ class FakeGit:
         self,
         *,
         merge_results: dict[str, MergeResult] | None = None,
+        commit_fail_ids: set[str] | None = None,
     ) -> None:
         self.worktree_adds: list[tuple[Path, str | None, str]] = []
         self.worktree_removes: list[Path] = []
@@ -47,6 +48,10 @@ class FakeGit:
         self.resets: list[str] = []
         self.heads: list[str] = []
         self._merge_results = merge_results or {}
+        # Task ids whose worktree HAS work but whose commit_all fails (a repo
+        # pre-commit hook rejection or a git error). Keyed by worktree name,
+        # which make_worktree sets to the task id.
+        self._commit_fail_ids = commit_fail_ids or set()
         self._head_counter = 0
 
     def worktree_add(
@@ -66,7 +71,7 @@ class FakeGit:
 
     def commit_all(self, worktree_path, message, *, gate, console, cfg) -> bool:
         self.commits.append((Path(worktree_path), message))
-        return True
+        return Path(worktree_path).name not in self._commit_fail_ids
 
     def merge(self, project_path, ref, *, gate, console, cfg) -> MergeResult:
         self.merges.append(ref)
@@ -421,6 +426,40 @@ async def test_non_done_task_not_merged(harness: Harness):
     # Only t1 (DONE) merged.
     assert len(git.merges) == 1
     assert frontier[1].status is TaskStatus.BLOCKED
+    assert len(git.worktree_removes) == 2
+
+
+async def test_commit_all_failure_redoes_not_discards(harness: Harness):
+    """A DONE task whose commit fails goes PENDING -- never silently discarded.
+
+    If commit_all fails while the worktree holds real work (a repo pre-commit
+    hook rejection, a git error), the branch stays at base HEAD, merge would
+    report "already up to date" (ok=True), after_merge_check would pass on a
+    tree WITHOUT the work, and the task would stay DONE with its code discarded
+    alongside the worktree. That is the silent-wrong-result the net excludes.
+    """
+    frontier = frontier_of("t1", "t2")
+    git = FakeGit(commit_fail_ids={"t2"})
+    await _run(
+        harness,
+        frontier,
+        git=git,
+        run_task=make_run_task(harness.recorder),
+        after_merge_check=lambda task: True,
+    )
+
+    t1, t2 = frontier
+    assert t1.status is TaskStatus.DONE
+    assert t2.status is TaskStatus.PENDING  # redo, not DONE
+    # t2's branch was NEVER merged -- no "already up to date" silent pass.
+    t2_branch = next(b for _, b, _ in git.worktree_adds if b and b.startswith("rudra-wt/sess-t2-"))
+    assert t2_branch not in git.merges
+    assert len(git.merges) == 1  # only t1
+    assert "could not be committed" in t2.note
+    # An uncommittable worktree is not a merge conflict.
+    assert harness.base.usage.merge_conflicts == 0
+    assert git.merge_aborts == 0
+    # Both worktrees still cleaned up.
     assert len(git.worktree_removes) == 2
 
 
