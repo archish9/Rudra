@@ -50,7 +50,13 @@ def make_config(**overrides) -> Config:
         agent=AgentConfig(verbose=False),
         permissions=PermissionsConfig(mode="ask", allow=(), deny=(), floor_disable=()),
         compat=CompatConfig(task_anchor=False, sandbox_paths=False),
-        tools=ToolsConfig(shell=True, shell_in_auto=False, auto_branch=False, test_timeout=600),
+        tools=ToolsConfig(
+            shell=True,
+            shell_in_auto=False,
+            auto_branch=False,
+            test_timeout=600,
+            max_parallel_tasks=0,
+        ),
         skills=SkillsConfig(enabled=()),
         mcp=McpConfig(
             enabled=True,

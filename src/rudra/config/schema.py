@@ -188,12 +188,18 @@ class ToolsConfig:
     `test_timeout` is a real key rather than a constant because Angular's
     Karma builder hangs indefinitely without a browser (C11.3), and no one
     number fits both a three-second unit suite and an integration run.
+
+    `max_parallel_tasks` clamps the parallel loop's fan-out. `0` (the
+    default) honors the server's batching hint exactly; a positive value
+    lowers the fan-out to `min(server, value)` and can never raise it above
+    the server's number.
     """
 
     shell: bool
     shell_in_auto: bool
     auto_branch: bool
     test_timeout: int
+    max_parallel_tasks: int
 
 
 @dataclass(frozen=True)
@@ -336,6 +342,7 @@ DEFAULTS: dict[str, Any] = {
         "shell_in_auto": False,
         "auto_branch": False,
         "test_timeout": 600,
+        "max_parallel_tasks": 0,
     },
     # The nine DEFAULT_ENABLED ships as data in rudra.skills.registry, not
     # duplicated here -- loader.py fills it in when the key is absent.

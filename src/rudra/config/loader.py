@@ -73,7 +73,7 @@ _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
 _SKILLS_KEYS = frozenset({"enabled"})
 _TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch"})
-_TOOLS_INT_KEYS = frozenset({"test_timeout"})
+_TOOLS_INT_KEYS = frozenset({"test_timeout", "max_parallel_tasks"})
 _TOOLS_KEYS = _TOOLS_BOOL_KEYS | _TOOLS_INT_KEYS
 _MCP_BOOL_KEYS = frozenset({"enabled", "mcp_in_auto"})
 _MCP_LIST_KEYS = frozenset({"disabled_servers", "allow", "deny", "readonly"})
@@ -296,8 +296,13 @@ def validate(
         # bool is a subclass of int, so `test_timeout = true` would otherwise
         # pass isinstance and quietly become a one-second timeout.
         if isinstance(value, bool) or not isinstance(value, int):
-            raise ConfigError(f"[tools] {key} must be a whole number of seconds, got {value!r}.")
-        if value <= 0:
+            unit = "" if key == "max_parallel_tasks" else " of seconds"
+            raise ConfigError(f"[tools] {key} must be a whole number{unit}, got {value!r}.")
+        if key == "max_parallel_tasks":
+            # A count, not a duration: 0 is meaningful (honor the server).
+            if value < 0:
+                raise ConfigError(f"[tools] {key} must be 0 or greater, got {value!r}.")
+        elif value <= 0:
             raise ConfigError(f"[tools] {key} must be greater than 0, got {value!r}.")
 
     for key, value in merged.get("mcp", {}).items():
