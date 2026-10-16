@@ -14,7 +14,7 @@ import pytest
 from rich.console import Console
 
 from rudra.context.usage import RunUsage
-from rudra.git.core import MergeResult
+from rudra.git.core import FileStatus, MergeResult
 from rudra.loop.engine import LoopContext, Outcome
 from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.loop.parallel import BatchResult, build_worktree_context, run_parallel_batch
@@ -39,6 +39,7 @@ class FakeGit:
         *,
         merge_results: dict[str, MergeResult] | None = None,
         commit_fail_ids: set[str] | None = None,
+        clean_worktree_ids: set[str] | None = None,
     ) -> None:
         self.worktree_adds: list[tuple[Path, str | None, str]] = []
         self.worktree_removes: list[Path] = []
@@ -47,11 +48,16 @@ class FakeGit:
         self.merge_aborts: int = 0
         self.resets: list[str] = []
         self.heads: list[str] = []
+        self.status_calls: list[Path] = []
         self._merge_results = merge_results or {}
         # Task ids whose worktree HAS work but whose commit_all fails (a repo
         # pre-commit hook rejection or a git error). Keyed by worktree name,
         # which make_worktree sets to the task id.
         self._commit_fail_ids = commit_fail_ids or set()
+        # Task ids whose worktree `status` reports CLEAN (no changes). Anything
+        # else reads as dirty, so the two commit_all==False cases are
+        # distinguishable per worktree.
+        self._clean_worktree_ids = clean_worktree_ids or set()
         self._head_counter = 0
 
     def worktree_add(
@@ -72,6 +78,13 @@ class FakeGit:
     def commit_all(self, worktree_path, message, *, gate, console, cfg) -> bool:
         self.commits.append((Path(worktree_path), message))
         return Path(worktree_path).name not in self._commit_fail_ids
+
+    def status(self, project_path, *, gate, console, cfg, all_untracked=False):
+        self.status_calls.append(Path(project_path))
+        name = Path(project_path).name
+        if name in self._clean_worktree_ids:
+            return []  # clean: nothing to commit
+        return [FileStatus(index="A", worktree=" ", path=f"{name}.py")]  # dirty
 
     def merge(self, project_path, ref, *, gate, console, cfg) -> MergeResult:
         self.merges.append(ref)
@@ -460,6 +473,42 @@ async def test_commit_all_failure_redoes_not_discards(harness: Harness):
     assert harness.base.usage.merge_conflicts == 0
     assert git.merge_aborts == 0
     # Both worktrees still cleaned up.
+    assert len(git.worktree_removes) == 2
+
+
+async def test_empty_done_worktree_stays_done(harness: Harness):
+    """A DONE task whose CLEAN worktree makes commit_all return False stays DONE.
+
+    commit_all returns False both for a real commit failure (work present) AND
+    for a clean worktree (nothing to commit). The latter is a legitimate no-op
+    DONE -- the serial empty-diff / inherited-pass branch (OPEN-27), reachable
+    when a redo batch forks from a base that already satisfies the task. It
+    must NOT be forced to redo for ever.
+    """
+    frontier = frontier_of("t1", "t2")
+    # t2: commit_all returns False AND its worktree is clean -> no-op DONE.
+    git = FakeGit(commit_fail_ids={"t2"}, clean_worktree_ids={"t2"})
+    await _run(
+        harness,
+        frontier,
+        git=git,
+        run_task=make_run_task(harness.recorder),
+        after_merge_check=lambda task: True,
+    )
+
+    t1, t2 = frontier
+    assert t1.status is TaskStatus.DONE
+    assert t2.status is TaskStatus.DONE  # clean no-op stays DONE, never redone
+    # Nothing to merge for t2 (its branch never merged); no abort/reset.
+    t2_branch = next(b for _, b, _ in git.worktree_adds if b and b.startswith("rudra-wt/sess-t2-"))
+    assert t2_branch not in git.merges
+    assert len(git.merges) == 1  # only t1
+    assert git.merge_aborts == 0
+    assert git.resets == []
+    assert harness.base.usage.merge_conflicts == 0
+    # t2's status was consulted to make the distinction, and its worktree is
+    # still cleaned up.
+    assert (harness.worktrees_root / "t2") in git.status_calls
     assert len(git.worktree_removes) == 2
 
 

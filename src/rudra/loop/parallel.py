@@ -341,13 +341,16 @@ def _merge_back(
 ) -> None:
     """Commit the worktree, merge it, and keep or undo the result.
 
-    A failed `commit_all` is a failed merge-back, NOT a no-op: if the worktree
-    holds real work a repo pre-commit hook rejected (or git errored), the
-    branch stays at base HEAD, `merge` reports "already up to date" (ok=True),
-    `after_merge_check` passes on a main tree that does NOT contain the work,
-    and the task would stay DONE with its code silently discarded alongside the
-    worktree -- the exact silent-wrong-result the merge+check net must exclude.
-    So an uncommittable DONE task returns to PENDING without merging.
+    A `commit_all` that returns False is read against the worktree's status:
+    a CLEAN worktree is a legitimate no-op DONE (nothing to commit, nothing to
+    merge -- the serial empty-diff / inherited-pass case, OPEN-27) and STAYS
+    DONE; a DIRTY worktree means the commit genuinely failed (a repo pre-commit
+    hook rejected real work, or git errored), which is a failed merge-back and
+    returns the task to PENDING WITHOUT merging. The latter is the
+    silent-wrong-result the net must exclude: an uncommitted branch stays at
+    base HEAD, `merge` reports "already up to date" (ok=True),
+    `after_merge_check` passes on a tree WITHOUT the work, and the task would
+    stay DONE with its code discarded alongside the worktree.
 
     On a merge that is `not ok` -- conflict OR any other failure -- ALWAYS
     abort (Task 7 review: an unreadable status reports conflicted=False, and
@@ -359,6 +362,21 @@ def _merge_back(
     common = {"gate": main_gate, "console": console, "cfg": cfg}
 
     if not git_ops.commit_all(handle.path, f"rudra task {task.id}", **common):
+        # commit_all returns False for TWO different situations (git/core.py):
+        # a CLEAN worktree (nothing to commit) and a real commit failure (work
+        # present, commit rejected -- a repo pre-commit hook, a git error).
+        # Distinguish by the worktree's own status, so a legitimate no-op DONE
+        # -- the serial loop's empty-diff / inherited-pass branch (OPEN-27),
+        # reachable here when a redo batch forks from a base that already
+        # satisfies the task -- is not forced to redo for ever.
+        entries = git_ops.status(handle.path, **common)
+        if entries is not None and not entries:
+            # Clean: nothing was there to commit, nothing to merge. A no-op
+            # DONE, exactly like the serial empty-diff DONE. Stays DONE.
+            return
+        # Dirty, or status unreadable (None): the commit genuinely failed, or
+        # we cannot prove the worktree clean -- redo rather than risk the
+        # silent discard round 1 closed.
         task.status = TaskStatus.PENDING
         _append_note(
             task,
