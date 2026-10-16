@@ -96,6 +96,11 @@ class ProviderEntry:
     `--stream`. Never 0: on a server that sends keepalives it is the only
     bound a stalled stream has."""
 
+    reads_batching_hint: bool = False
+    """Whether to ask this endpoint's `/v1/models` how many concurrent requests
+    it recommends (`llm/batching.py`). Only the OpenAI-wire providers can
+    answer; an endpoint that does not simply reads as serial."""
+
     accepts_session_id: bool = False
     """Whether this provider accepts an `extra_body={"session_id": ...}` on the
     request (OpenAI-wire providers do; ollama/anthropic/google do not). Vaayu
@@ -160,6 +165,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "openai_compatible": ProviderEntry(
             name="openai_compatible",
+            reads_batching_hint=True,
             accepts_session_id=True,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
@@ -182,6 +188,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "vaayu": ProviderEntry(
             name="vaayu",
+            reads_batching_hint=True,
             accepts_session_id=True,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
@@ -198,6 +205,7 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "openai": ProviderEntry(
             name="openai",
+            reads_batching_hint=True,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
             needs_api_key=True,
