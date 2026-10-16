@@ -336,6 +336,18 @@ class RunUsage:
     # its attempt back (OPEN-161). Run-level for `env_syncs`' reason: the
     # refund is Rudra's decision about the budget, not anything a role did.
     dependency_gates: int = 0
+    # The optimistic worktree-parallel batch's diagnostics (Vaayu fan-out,
+    # Layer 1). Run-level for `env_syncs`' reason: the scheduler, not any one
+    # role, fans out, creates worktrees and redoes a collided merge.
+    #   parallel_tasks   -- the largest batch dispatched concurrently so far
+    #   worktrees_created -- every isolated checkout this run made
+    #   merge_conflicts  -- every merge-back that conflicted and sent its task
+    #                        back to PENDING to redo
+    # On today's serial path (cap == 1, or a non-git project) all three stay
+    # zero, so `usage.json` says plainly whether the run fanned out at all.
+    parallel_tasks: int = 0
+    worktrees_created: int = 0
+    merge_conflicts: int = 0
 
     def beliefs_for(self, role: str) -> dict[str, str]:
         """`role`'s write-belief map, created on first use.
@@ -364,6 +376,29 @@ class RunUsage:
     def record_dependency_gate(self) -> None:
         """One gate that failed only on undeclared packages (OPEN-161)."""
         self.dependency_gates += 1
+
+    def record_parallel_batch(self, n: int) -> None:
+        """A batch of `n` tasks dispatched concurrently; keep the max seen.
+
+        A max rather than a sum: the question this answers is "how wide did
+        this run ever fan out", not "how many tasks ran in parallel over the
+        whole run". Negative or junk `n` cannot lower a prior peak.
+        """
+        try:
+            self.parallel_tasks = max(self.parallel_tasks, int(n))
+        except (TypeError, ValueError):  # a diagnostic must not end a run
+            pass
+
+    def record_worktrees_created(self, n: int) -> None:
+        """`n` isolated checkouts were created for a parallel batch."""
+        try:
+            self.worktrees_created += max(0, int(n))
+        except (TypeError, ValueError):  # a diagnostic must not end a run
+            pass
+
+    def record_merge_conflict(self) -> None:
+        """One merge-back conflicted and sent its task back to PENDING."""
+        self.merge_conflicts += 1
 
     def _slot(self, role: str) -> RoleUsage:
         if role not in self.per_role:
@@ -684,6 +719,9 @@ class RunUsage:
                 "env_syncs": self.env_syncs,
                 "env_sync_seconds": round(self.env_sync_seconds, 3),
                 "dependency_gates": self.dependency_gates,
+                "parallel_tasks": self.parallel_tasks,
+                "worktrees_created": self.worktrees_created,
+                "merge_conflicts": self.merge_conflicts,
             },
         }
 

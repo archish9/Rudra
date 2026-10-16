@@ -9,7 +9,7 @@ from rich.console import Console
 
 from rudra.config.loader import build_config
 from rudra.git import core
-from tests.conftest_git import AutoGate, make_repo
+from tests.conftest_git import AutoGate, git, head_sha, make_repo
 
 
 @pytest.fixture
@@ -85,3 +85,32 @@ def test_merge_failure_without_conflict_is_not_conflicted(repo: Path, env: dict)
 def test_new_subcommands_are_not_read_only():
     for name in ("worktree", "merge", "commit", "add"):
         assert name not in core.READ_ONLY_SUBCOMMANDS
+
+
+def test_head_returns_the_current_sha(repo: Path, env: dict):
+    assert core.head(repo, **env) == head_sha(repo)
+
+
+def test_head_none_outside_a_repository(tmp_path: Path, env: dict):
+    bare = tmp_path / "not-a-repo"
+    bare.mkdir()
+    assert core.head(bare, **env) is None
+
+
+def test_reset_hard_restores_a_prior_commit(repo: Path, env: dict):
+    first = head_sha(repo)
+    (repo / "b.txt").write_text("two\n", encoding="utf-8")
+    git(repo, "add", "b.txt")
+    git(repo, "commit", "-q", "-m", "second")
+    assert head_sha(repo) != first
+    assert (repo / "b.txt").exists()
+
+    assert core.reset_hard(repo, first, **env) is True
+
+    assert head_sha(repo) == first
+    # `--hard` discards the working-tree file the undone commit introduced.
+    assert not (repo / "b.txt").exists()
+
+
+def test_reset_is_not_read_only():
+    assert "reset" not in core.READ_ONLY_SUBCOMMANDS

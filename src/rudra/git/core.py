@@ -458,6 +458,29 @@ def merge_abort(project_path: Path, *, gate: Any, console: Console, cfg: Any) ->
     return _run(project_path, ["merge", "--abort"], gate=gate, console=console, cfg=cfg).ok
 
 
+def head(project_path: Path, *, gate: Any, console: Console, cfg: Any) -> str | None:
+    """The commit `HEAD` points at, or None when git could not answer.
+
+    Read-only (`rev-parse` is already in READ_ONLY_SUBCOMMANDS), so it runs
+    past every rule and mode -- the parallel scheduler reads it before a
+    merge to record the ref `reset_hard` would undo to.
+    """
+    result = _run(project_path, ["rev-parse", "HEAD"], gate=gate, console=console, cfg=cfg)
+    if not result.ok:
+        return None
+    sha = result.stdout.strip()
+    return sha or None
+
+
+def reset_hard(project_path: Path, ref: str, *, gate: Any, console: Console, cfg: Any) -> bool:
+    """`git reset --hard <ref>`: undo a regressed merge back to `ref`.
+
+    Mutates the working tree, so `reset` is deliberately NOT a read-only
+    subcommand -- it runs gated, like `merge` and `worktree`.
+    """
+    return _run(project_path, ["reset", "--hard", ref], gate=gate, console=console, cfg=cfg).ok
+
+
 __all__ = [
     "BRANCH_PREFIX",
     "GIT_TIMEOUT_SECONDS",
@@ -473,11 +496,13 @@ __all__ = [
     "commit_all",
     "current_branch",
     "diff",
+    "head",
     "is_clean",
     "is_repo",
     "log",
     "merge",
     "merge_abort",
+    "reset_hard",
     "status",
     "worktree_add",
     "worktree_remove",
