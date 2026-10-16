@@ -97,6 +97,18 @@ class Task:
     # ones: a task that burned three attempts is the one a user most wants
     # the number for. `save` uses asdict, so nothing there needed changing.
     seconds: float = 0.0
+    # Every reason the parallel driver (loop/parallel.py) sent this task back
+    # to PENDING to redo, in order: a merge conflict with a sibling, a merge
+    # that was not ok, an integration-gate regression, or a worktree whose
+    # work could not be committed. Beside `note` and append-only for `halts`'
+    # reason (CLAUDE.md §8a shape 4): `run_task` OVERWRITES `note` on the
+    # redo, so the only reason the prior attempt was discarded would vanish
+    # exactly when the task later succeeded. Empty in a serial run.
+    redo_reasons: tuple[str, ...] = ()
+    # The last worktree id/path this task ran in before a redo, or "" in a
+    # serial run. Diagnostic: it names where the discarded attempt happened,
+    # so a reader of `redo_reasons` can find the lost work (CLAUDE.md §8a).
+    worktree: str = ""
 
 
 @dataclass
@@ -277,6 +289,8 @@ class Ledger:
                 # volatile file, but a run in flight during an upgrade
                 # must not crash on it.
                 seconds=entry.get("seconds", 0.0),
+                redo_reasons=tuple(entry.get("redo_reasons", ())),
+                worktree=entry.get("worktree", ""),
             )
             for entry in payload.get("tasks", [])
         ]

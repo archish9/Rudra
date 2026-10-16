@@ -112,6 +112,22 @@ def _append_note(task: Task, text: str) -> None:
     task.note = f"{task.note}\n{text}".strip() if task.note else text
 
 
+def _redo(handle: _Handle, text: str) -> None:
+    """Send a task back to PENDING and record WHY, durably (CLAUDE.md §8a shape 4).
+
+    `note` carries the reason for the model that reads the next blocker, but
+    `run_task` OVERWRITES `note` on the redo -- so the reason would vanish
+    exactly when the task later succeeds. `redo_reasons` is append-only state
+    beside the note for that reason, and `worktree` names where the discarded
+    attempt ran so a reader can find its lost work.
+    """
+    task = handle.task
+    task.status = TaskStatus.PENDING
+    _append_note(task, text)
+    task.redo_reasons = (*task.redo_reasons, text)
+    task.worktree = str(handle.path)
+
+
 def build_worktree_context(
     base: LoopContext,
     worktree_path: Path,
@@ -377,9 +393,8 @@ def _merge_back(
         # Dirty, or status unreadable (None): the commit genuinely failed, or
         # we cannot prove the worktree clean -- redo rather than risk the
         # silent discard round 1 closed.
-        task.status = TaskStatus.PENDING
-        _append_note(
-            task,
+        _redo(
+            handle,
             f"redo: the work for {task.id} could not be committed in its "
             f"worktree; re-run against the merged tree",
         )
@@ -390,21 +405,19 @@ def _merge_back(
 
     if not result.ok:
         git_ops.merge_abort(main, **common)
-        task.status = TaskStatus.PENDING
         if usage is not None:
             usage.record_merge_conflict()
         siblings = ", ".join(merged_ids) if merged_ids else "an earlier sibling in this batch"
-        _append_note(
-            task,
+        _redo(
+            handle,
             f"redo: merging this task conflicted with {siblings}; re-run against the merged tree",
         )
         return
 
     if not after_merge_check(task):
         git_ops.reset_hard(main, pre, **common)
-        task.status = TaskStatus.PENDING
-        _append_note(
-            task,
+        _redo(
+            handle,
             f"redo: the integration gate regressed after merging {task.id}; "
             f"reset the main tree to {pre}; re-run against the merged tree",
         )
@@ -414,4 +427,184 @@ def _merge_back(
     merged_ids.append(task.id)
 
 
-__all__ = ["BatchResult", "build_worktree_context", "run_parallel_batch"]
+def _no_regression(now: frozenset[str], base: frozenset[str]) -> bool:
+    """Did the integration gate NOT regress after a merge? (design §6)
+
+    `now <= base`: the merged tree fails no key the base did not already
+    fail. Any exception -> True, which KEEPS the merge: reverting good work
+    over a flaky integration gate is worse than keeping a merge that might
+    have regressed, and the next task's own gate still catches a real break.
+    """
+    try:
+        return now <= base
+    except Exception:  # noqa: BLE001 -- a flaky gate must not revert good work
+        return True
+
+
+def _make_after_merge_check(run_main_gate: Any, base: frozenset[str]) -> Any:
+    """An after_merge_check bound to THIS batch's base gate state.
+
+    A factory, not a loop-body lambda, so `base` is bound now rather than read
+    late, and run_parallel_work stays free of ruff's E731/B023.
+    """
+
+    def check(task: Task) -> bool:
+        return _no_regression(run_main_gate(), base)
+
+    return check
+
+
+async def run_parallel_work(
+    request: str,
+    *,
+    context: LoopContext,
+    planner: Any,
+    ledger: Any,
+    run_task: Any = None,
+    git_ops: Any = None,
+) -> Any:
+    """The work()-level driver for the optimistic parallel path (Task 9a).
+
+    Mirrors loop/engine.py::work EXACTLY -- the empty-ledger / stale-failure
+    consult, the STOP_RUN stop, the BLOCKED MAX_BLOCKED_CONSULTS bound, the
+    Ctrl-C cancel, and the review/summary tail -- but works a FRONTIER of up
+    to effective_fanout PENDING tasks per iteration through run_parallel_batch
+    rather than one task through run_task. Returns exactly what work() returns.
+
+    `run_task` and `git_ops` default to the engine's and rudra.git.core, and
+    are injected so this is unit-testable with fakes. The engine helpers are
+    imported lazily, both to break the engine<->parallel import cycle (engine
+    imports THIS module only inside work()) and so a test that monkeypatches
+    engine.review_once / engine._sync_project_env is honoured at call time.
+    """
+    from rudra.loop.engine import (
+        MAX_BLOCKED_CONSULTS,
+        _stale_failure_list,
+        _sync_project_env,
+        effective_fanout,
+        notice_if_suspended,
+        review_once,
+        summarise,
+        summarise_architecture,
+        write_usage_log,
+    )
+    from rudra.loop.engine import run_task as engine_run_task
+
+    if run_task is None:
+        run_task = engine_run_task
+    if git_ops is None:
+        git_ops = _git_core
+
+    await _sync_project_env(context)
+    consulted_on_empty = False
+    consulted_on_stale = False
+    blocked_consults = 0
+    cancelled = False
+
+    while True:
+        frontier = list(ledger.resumable())[: effective_fanout(context)]
+        if not frontier:
+            # Mirror work(): a stale red suite with an empty ledger is asked
+            # about before "is anything missing?", and either consult's task
+            # is worked on the next turn of this loop.
+            if context.failure_baseline and not consulted_on_stale:
+                consulted_on_stale = True
+                await planner(
+                    ledger,
+                    request,
+                    stage="breakdown",
+                    reason="stale_failures",
+                    feedback=_stale_failure_list(context.failure_baseline),
+                )
+                continue
+            if consulted_on_empty:
+                break
+            consulted_on_empty = True
+            await planner(ledger, request, stage="breakdown", reason="ledger_empty")
+            continue
+
+        # The ONE base-commit gate state this batch forks from and merges
+        # against (design §6). Read once here; after_merge_check re-reads it
+        # after each merge to catch a regression against this same base.
+        base = context.run_main_gate()
+        after_merge_check = _make_after_merge_check(context.run_main_gate, base)
+
+        try:
+            result = await run_parallel_batch(
+                frontier,
+                context=context,
+                ledger=ledger,
+                base_baseline=base,
+                baseline_failed=bool(base),
+                make_worktree=context.make_worktree,
+                reroot=context.reroot,
+                run_task=run_task,
+                git_ops=git_ops,
+                after_merge_check=after_merge_check,
+                console=context.console,
+                cfg=context.cfg,
+            )
+        except asyncio.CancelledError:
+            # A cooperative stop (Ctrl-C), mirroring work(). The batch's own
+            # `finally` has already removed every worktree; each unfinished
+            # frontier task goes back to PENDING so Ledger.resumable() (which
+            # excludes IN_PROGRESS) picks it up on --continue.
+            for task in frontier:
+                if task.status in (TaskStatus.PENDING, TaskStatus.IN_PROGRESS):
+                    task.status = TaskStatus.PENDING
+                    task.note = "cancelled by the user"
+            ledger.save(context.paths.ledger_json)
+            cancelled = True
+            break
+
+        ledger.save(context.paths.ledger_json)
+
+        if result.stop is not None:
+            context.console.print(
+                f"\n[bold red]Run stopped early.[/bold red] [dim]{result.stop.note}[/dim]"
+            )
+            break
+
+        # Every BLOCKED task consults the planner, in ascending id order (the
+        # order BatchResult.results is reduced in), all under the one bound.
+        stop_run = False
+        for task, _ in result.results:
+            if task.status is not TaskStatus.BLOCKED:
+                continue
+            blocked_consults += 1
+            if blocked_consults > MAX_BLOCKED_CONSULTS:
+                context.console.print(
+                    f"\n[bold red]Stopping.[/bold red] [dim]{blocked_consults - 1} tasks "
+                    f"blocked and re-planning is not making progress.[/dim]"
+                )
+                stop_run = True
+                break
+            consulted_on_empty = False
+            # What this consult adds is worked next, not after every pending
+            # task the block may be starving (OPEN-158), exactly as work() does.
+            with ledger.unblocking(task.id):
+                await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
+        if stop_run:
+            break
+
+    run_usage = getattr(context, "usage", None)
+
+    # Both are model calls; a user who just pressed Ctrl-C is not waiting
+    # through two more inferences. The usage log is still written -- a
+    # cancelled run still cost tokens and wall clock. (Mirrors work()'s tail.)
+    if not cancelled:
+        if any(task.status is TaskStatus.DONE for task in ledger.tasks):
+            await review_once(context, ledger)
+        await summarise_architecture(context, ledger)
+
+    notice_if_suspended(getattr(context.subagents, "trace", None), run_usage)
+    write_usage_log(context.paths.logs / "usage.json", run_usage)
+    return summarise(ledger, context.console, run_usage, cancelled=cancelled)
+
+
+__all__ = [
+    "BatchResult",
+    "build_worktree_context",
+    "run_parallel_batch",
+    "run_parallel_work",
+]

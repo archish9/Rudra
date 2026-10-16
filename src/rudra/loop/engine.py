@@ -25,7 +25,8 @@ from rich.markup import escape
 
 from rudra.context.middleware import log_model_call
 from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
-from rudra.git.core import is_repo, status
+from rudra.git.core import is_clean, is_repo, status
+from rudra.llm.providers import effective_base_url
 from rudra.loop.bounds import (
     CONVERGING,
     UNREADABLE,
@@ -107,6 +108,19 @@ class LoopContext:
     # first use by `_sync_project_env`, and not persisted, for
     # `failure_baseline`'s reason.
     project_env: Any = None
+    # The three factories the optimistic parallel driver needs, all None in a
+    # serial run (Task 9a). `None` is the switch: `_should_parallelize`
+    # requires all three, so work() runs its serial body byte-identically
+    # until create_main_agent wires them (Task 9b). Injected here rather than
+    # built in the loop so loop/parallel.py is unit-testable with fakes.
+    #
+    # reroot(worktree_path) -> (backend, gate): a backend+gate rooted at one
+    # worktree. make_worktree(task) -> Path: where a task's checkout goes.
+    # run_main_gate() -> frozenset[str]: the main tree's current failure keys
+    # (empty = green), read before and after a merge to catch a regression.
+    reroot: Any = None
+    make_worktree: Any = None
+    run_main_gate: Any = None
 
 
 def _digest(path: Path) -> str:
@@ -1870,6 +1884,49 @@ def _stale_failure_list(keys: frozenset[str]) -> str:
     return "\n".join(f"  {key}" for key in sorted(keys))
 
 
+def effective_fanout(context: LoopContext) -> int:
+    """How many tasks this run may work concurrently (Vaayu fan-out, Task 9).
+
+    `1` whenever there is no limiter -- the serial path, byte-identical to
+    before. Otherwise the endpoint's own `recommended_client_concurrency`
+    (`limiter.limit_for` of the CODER role's resolved base_url, since the
+    coder is the agent that fans out), clamped by `[tools] max_parallel_tasks`:
+    `0` honors the server exactly, and a positive value can only LOWER the
+    fan-out (`min`), never raise it above the server's number. Never below 1.
+    """
+    if context.limiter is None:
+        return 1
+    cap = context.limiter.limit_for(effective_base_url(context.cfg.model_for("coder")))
+    mpt = context.cfg.tools.max_parallel_tasks
+    return cap if mpt == 0 else max(1, min(cap, mpt))
+
+
+def _should_parallelize(context: LoopContext) -> bool:
+    """May work() fan out this run across worktrees? (Task 9)
+
+    Every clause is a reason the serial path is correct and the parallel one
+    is not yet safe, so all must hold:
+
+    * `effective_fanout > 1` -- the endpoint said a client may batch and the
+      user did not clamp it to 1;
+    * the project is a clean git repository -- worktrees need `.git`, and
+      fanning out over the user's uncommitted work would entangle it with the
+      batch's merges (is_clean already excludes Rudra's own `.rudra/`);
+    * the three factories are wired -- `None` until create_main_agent builds
+      them (Task 9b), so this feature is DORMANT until then.
+
+    Cheap checks first (no git call at fanout 1 or when unwired).
+    """
+    if effective_fanout(context) <= 1:
+        return False
+    if context.reroot is None or context.make_worktree is None or context.run_main_gate is None:
+        return False
+    gate = context.subagents.gate
+    if not is_repo(context.project_path, gate=gate, console=context.console, cfg=context.cfg):
+        return False
+    return is_clean(context.project_path, gate=gate, console=context.console, cfg=context.cfg)
+
+
 async def work(
     request: str,
     *,
@@ -1888,6 +1945,16 @@ async def work(
     here ends the run and `--continue` picks the pending tasks up. See
     plan() for why, and OPEN-83 for what the alternative would cost.
     """
+    # The one fork (Task 9a). When the endpoint allows a batch, the project
+    # is a clean repo, and the worktree factories are wired (Task 9b), the
+    # whole pending-loop is driven by the optimistic parallel driver instead.
+    # Lazy import to break the engine<->parallel cycle (parallel imports this
+    # module at its top). Everything below is the serial body, UNCHANGED.
+    if _should_parallelize(context):
+        from rudra.loop.parallel import run_parallel_work
+
+        return await run_parallel_work(request, context=context, planner=planner, ledger=ledger)
+
     # Before any agent that holds a shell runs (OPEN-120) -- and not in
     # plan(), whose promise is that `--plan` writes nothing into the project.
     # No planner stage holds `execute`, so nothing is lost by waiting.
@@ -2020,6 +2087,7 @@ __all__ = [
     "SUMMARISER_ROLE",
     "attempt_snapshot",
     "changed_since",
+    "effective_fanout",
     "flush_usage",
     "git_snapshot",
     "tree_snapshot",
