@@ -74,11 +74,26 @@ class ModelRetryMiddleware(AgentMiddleware):
     constructible without a run, and every OPEN-41 test builds it that way.
     """
 
-    def __init__(self, role: str = "agent", *, trace: Any = None, usage: Any = None) -> None:
+    def __init__(
+        self,
+        role: str = "agent",
+        *,
+        trace: Any = None,
+        usage: Any = None,
+        base_url: str | None = None,
+        limiter: Any = None,
+    ) -> None:
         super().__init__()
         self.role = role
         self.trace = trace
         self.usage = usage
+        # The endpoint this role reaches and the run's EndpointLimiter. Only
+        # `awrap_model_call` reads them: the sync path is the off-graph
+        # probe/summariser, which are serial and stay ungated. A limiter is
+        # PER RUN -- never cache one at module scope, an asyncio.Semaphore
+        # binds to the loop it is first awaited in.
+        self.base_url = base_url
+        self.limiter = limiter
         self._served = False
 
     def _provider(self) -> str:
@@ -253,6 +268,13 @@ class ModelRetryMiddleware(AgentMiddleware):
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def awrap_model_call(self, request: Any, handler: Any) -> Any:
+        sem = self.limiter.semaphore_for(self.base_url) if self.limiter is not None else None
+        if sem is None:
+            return await self._retrying_call(request, handler)
+        async with sem:
+            return await self._retrying_call(request, handler)
+
+    async def _retrying_call(self, request: Any, handler: Any) -> Any:
         delays = retry_delays()
         for attempt in range(len(delays) + 1):
             try:

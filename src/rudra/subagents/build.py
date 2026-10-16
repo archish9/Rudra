@@ -29,6 +29,7 @@ from rudra.facts import facts_block
 # because the planner's PROJECT STRUCTURE block is capped by the same number.
 from rudra.filesystem.tree import TREE_MAX_ENTRIES
 from rudra.llm import build_model
+from rudra.llm.providers import effective_base_url
 from rudra.middleware import (
     ContentPathMiddleware,
     DelegationGuardMiddleware,
@@ -295,6 +296,14 @@ def _middleware_for(spec: RudraSubagent, context: Any, model: Any, task: str = "
             spec.role,
             trace=getattr(context, "trace", None),
             usage=getattr(context, "usage", None),
+            # Resolved only when a limiter exists: stand-in contexts (and
+            # every ungated run) never need the endpoint.
+            base_url=(
+                effective_base_url(context.cfg.model_for(spec.role))
+                if getattr(context, "limiter", None) is not None
+                else None
+            ),
+            limiter=getattr(context, "limiter", None),
         ),
         # OPEN-103. Outside every wrapper below that reads a tool call,
         # because an unregistered call has no tool for any of them to act on:

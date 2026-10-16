@@ -79,6 +79,9 @@ class LoopContext:
     # The run's token tally. Optional: every 9c-era test builds a
     # LoopContext without one.
     usage: Any = None
+    # The run's EndpointLimiter, or None. Shared by reference with
+    # SubagentContext; optional for the reason `usage` is.
+    limiter: Any = None
     # The run's MemoryStore, or None when it could not be built. Shared by
     # reference with SubagentContext -- one run, one palace handle. Optional
     # for the reason `usage` is.

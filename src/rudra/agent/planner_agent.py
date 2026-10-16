@@ -41,6 +41,7 @@ from rudra.context.usage import model_time_of, model_wait_note
 from rudra.facts import facts_block
 from rudra.filesystem import TREE_MAX_ENTRIES, as_virtual_paths, is_greenfield, project_tree
 from rudra.llm import build_model
+from rudra.llm.providers import effective_base_url
 from rudra.loop.tools import BLOCKED_RECOVERY, create_ledger_tools, render_ledger
 from rudra.middleware import (
     PLANNER_MEMORY_SOURCES,
@@ -368,6 +369,8 @@ def build_planner_middleware(
     stage_tools: tuple[str, ...] = (),
     console: Any = None,
     can_read: bool = True,
+    base_url: str | None = None,
+    limiter: Any = None,
 ) -> list:
     """The planner's middleware stack, with both D4 workarounds gated.
 
@@ -461,7 +464,9 @@ def build_planner_middleware(
         # registered correctly and reported nothing, so a planner absorbing
         # a third of its requests looked exactly like a slow model -- and
         # those have opposite fixes.
-        ModelRetryMiddleware("planner", trace=trace, usage=usage),
+        ModelRetryMiddleware(
+            "planner", trace=trace, usage=usage, base_url=base_url, limiter=limiter
+        ),
         # After the param fixer, so a repaired path is judged as the call it
         # became rather than as the one the model mistyped. The planner is
         # where OPEN-10 was measured: four identical failing read_file calls
@@ -667,6 +672,7 @@ def create_planner_agent(
     memory: Any = None,
     trace: Any = None,
     session_id: str | None = None,
+    limiter: Any = None,
 ):
     """Create one stage of the planner (S10b.1).
 
@@ -745,6 +751,8 @@ def create_planner_agent(
         stage_tools=tuple(getattr(tool, "name", "") for tool in custom_tools),
         console=console,
         can_read=can_read,
+        base_url=effective_base_url(cfg.model_for("planner")),
+        limiter=limiter,
     )
     if gate is not None:
         # First in the list: a denied call must be stopped before any other

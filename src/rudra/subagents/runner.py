@@ -422,6 +422,10 @@ class SubagentContext:
     # them, so the coder, tester and reviewer were invisible while they
     # did the run's actual work.
     trace: Any = None
+    # The run's EndpointLimiter, or None (no gating). Shared by reference:
+    # one run, one semaphore per endpoint. Per run and never module-level --
+    # an asyncio.Semaphore binds to the loop it is first awaited in.
+    limiter: Any = None
 
 
 @dataclass(frozen=True)
