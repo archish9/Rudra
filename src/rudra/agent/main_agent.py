@@ -12,6 +12,8 @@ from rich.markup import escape
 from rudra.config import get_config
 from rudra.facts import FactStore, facts_block
 from rudra.git.core import auto_branch
+from rudra.llm.batching import resolve_endpoint_concurrency
+from rudra.llm.concurrency import EndpointLimiter
 from rudra.llm.retry import ProviderUnavailable
 from rudra.loop import plan, work
 from rudra.loop.plan_view import (
@@ -871,12 +873,18 @@ async def create_main_agent(
     # because the run that needs explaining is the one still going.
     archive_models = model_facts(cfg)
     archive_env = env_facts(cfg)
+    # The ONE startup read of the per-endpoint batching hint. Never raises
+    # (an unreachable endpoint reads as 1). The limiter is built per run,
+    # never a module global: a semaphore is bound to one event loop.
+    endpoint_limits = resolve_endpoint_concurrency(cfg)
+    limiter = EndpointLimiter(endpoint_limits)
     write_run_meta(
         paths,
         project_path=project_path,
         session_id=session_id,
         models=archive_models,
         env=archive_env,
+        batching={base: {"concurrency": n} for base, n in endpoint_limits.items()},
     )
 
     # Where this run reports itself, besides the folder it writes
@@ -1013,6 +1021,16 @@ async def create_main_agent(
         trace = TraceSink(level=trace_level)
         trace.add(console_consumer(console, trace_level))
 
+        try:
+            for base, n in endpoint_limits.items():
+                trace.notice(f"{base} -> client concurrency {n}", role="rudra", name="batching")
+                if n > 1:
+                    console.print(
+                        f"[dim]Vaayu batching -> {escape(str(base))}: {n} concurrent[/dim]"
+                    )
+        except Exception:  # noqa: BLE001 -- bookkeeping never ends a run
+            pass
+
         # The run's record (C9.5). NOT behind a flag: the point of a record is
         # that it exists when somebody wants it, which is always after the
         # fact. Safe to write by default only because A1.95's redaction
@@ -1070,6 +1088,7 @@ async def create_main_agent(
             memory=memory_store,
             trace=trace,
             telemetry=telemetry,
+            limiter=limiter,
         )
         loop_context = LoopContext(
             subagents=subagent_context,
@@ -1079,6 +1098,7 @@ async def create_main_agent(
             paths=paths,
             usage=usage,
             memory=memory_store,
+            limiter=limiter,
         )
 
         # One Ledger, shared by reference: the planner's tools mutate it and the
@@ -1139,6 +1159,7 @@ async def create_main_agent(
                 # The same id consult_planner uses as the stage thread --
                 # one spelling, from planner_agent.stage_thread_id.
                 session_id=stage_thread_id(session_id, stage),
+                limiter=limiter,
             )
 
         async def planner_callback(

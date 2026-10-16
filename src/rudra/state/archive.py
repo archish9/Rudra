@@ -337,6 +337,7 @@ def run_meta(
     session_id: str,
     models: dict[str, Any] | None = None,
     env: dict[str, Any] | None = None,
+    batching: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """What ran, where, on what. The fields both meta files share (OPEN-106).
 
@@ -351,7 +352,7 @@ def run_meta(
     reaching it would put a secret in a directory the user is told to
     attach to an issue.
     """
-    return {
+    meta: dict[str, Any] = {
         "meta_version": META_VERSION,
         "run_id": session_id,
         "project_path": str(Path(project_path).resolve()),
@@ -360,6 +361,10 @@ def run_meta(
         "models": models or {},
         "env": env or {},
     }
+    if batching is not None:
+        # {base_url: {"concurrency": N}} -- numbers only, never a key.
+        meta["batching"] = batching
+    return meta
 
 
 def write_run_meta(
@@ -369,6 +374,7 @@ def write_run_meta(
     session_id: str,
     models: dict[str, Any] | None = None,
     env: dict[str, Any] | None = None,
+    batching: dict[str, Any] | None = None,
 ) -> Path | None:
     """Write `logs/meta.json` at run START. Returns where, or None (OPEN-106).
 
@@ -390,7 +396,13 @@ def write_run_meta(
         directory.mkdir(parents=True, exist_ok=True)
         destination = directory / META_NAME
         meta = {
-            **run_meta(project_path=project_path, session_id=session_id, models=models, env=env),
+            **run_meta(
+                project_path=project_path,
+                session_id=session_id,
+                models=models,
+                env=env,
+                batching=batching,
+            ),
             "started_at": time.time(),
         }
         destination.write_text(json.dumps(meta, indent=2), encoding="utf-8")
