@@ -50,6 +50,7 @@ _LOG_FORMAT = "%H%x00%an%x00%s"
 _SLUG_SEPARATORS = re.compile(r"[^a-z0-9]+")
 
 BRANCH_PREFIX = "rudra/"
+WORKTREE_BRANCH_PREFIX = "rudra-wt/"
 
 # Enough branches for any real run; needing more is not a naming collision,
 # it is a sign auto_branch is being used wrongly.
@@ -369,20 +370,115 @@ def auto_branch(
     return BranchOutcome(name, None)
 
 
+def worktree_add(
+    project_path: Path,
+    worktree_path: Path,
+    *,
+    gate: Any,
+    console: Console,
+    cfg: Any,
+    ref: str = "HEAD",
+    branch: str | None = None,
+) -> bool:
+    """`git worktree add -b <branch> <path> <ref>`: an isolated checkout for one task.
+
+    The branch defaults to `rudra-wt/<directory name>`, so the caller can
+    derive it from the path it already holds.
+    """
+    name = branch or f"{WORKTREE_BRANCH_PREFIX}{Path(worktree_path).name}"
+    result = _run(
+        project_path,
+        ["worktree", "add", "-b", name, str(worktree_path), ref],
+        gate=gate,
+        console=console,
+        cfg=cfg,
+    )
+    return result.ok
+
+
+def worktree_remove(
+    project_path: Path,
+    worktree_path: Path,
+    *,
+    gate: Any,
+    console: Console,
+    cfg: Any,
+    force: bool = True,
+) -> bool:
+    argv = ["worktree", "remove"]
+    if force:
+        argv.append("--force")
+    argv.append(str(worktree_path))
+    return _run(project_path, argv, gate=gate, console=console, cfg=cfg).ok
+
+
+def commit_all(worktree_path: Path, message: str, *, gate: Any, console: Console, cfg: Any) -> bool:
+    """Stage everything and commit it; False when there was nothing to commit.
+
+    Nothing-to-commit is decided from `status --porcelain` after staging,
+    not from git's message, which is localised and prints on stdout.
+    """
+    common = {"gate": gate, "console": console, "cfg": cfg}
+    if not _run(worktree_path, ["add", "-A"], **common).ok:
+        return False
+    pending = _run(worktree_path, ["status", "--porcelain"], **common)
+    if not pending.ok or not pending.stdout.strip():
+        return False
+    return _run(worktree_path, ["commit", "-m", message], **common).ok
+
+
+@dataclass(frozen=True)
+class MergeResult:
+    """Outcome of `merge`. `conflicted` is only ever True alongside `ok=False`."""
+
+    ok: bool
+    conflicted: bool
+
+
+# Porcelain code pairs git prints for an unmerged path.
+_UNMERGED_PAIRS = frozenset({"DD", "AU", "UD", "UA", "DU", "AA", "UU"})
+
+
+def merge(project_path: Path, ref: str, *, gate: Any, console: Console, cfg: Any) -> MergeResult:
+    """`git merge --no-edit <ref>`, telling a conflict from any other failure.
+
+    A non-zero exit alone is not a conflict (unknown ref, dirty tree, a
+    denied command). Conflict means git left unmerged paths behind.
+    """
+    common = {"gate": gate, "console": console, "cfg": cfg}
+    result = _run(project_path, ["merge", "--no-edit", ref], **common)
+    if result.ok:
+        return MergeResult(ok=True, conflicted=False)
+    entries = status(project_path, **common)
+    conflicted = any(e.index + e.worktree in _UNMERGED_PAIRS for e in entries or [])
+    return MergeResult(ok=False, conflicted=conflicted)
+
+
+def merge_abort(project_path: Path, *, gate: Any, console: Console, cfg: Any) -> bool:
+    return _run(project_path, ["merge", "--abort"], gate=gate, console=console, cfg=cfg).ok
+
+
 __all__ = [
     "BRANCH_PREFIX",
     "GIT_TIMEOUT_SECONDS",
     "READ_ONLY_SUBCOMMANDS",
     "BranchOutcome",
+    "WORKTREE_BRANCH_PREFIX",
     "Commit",
     "FileStatus",
+    "MergeResult",
     "auto_branch",
     "branch_exists",
     "branch_slug",
+    "commit_all",
     "current_branch",
     "diff",
     "is_clean",
     "is_repo",
     "log",
+    "merge",
+    "merge_abort",
     "status",
+    "worktree_add",
+    "worktree_remove",
 ]
