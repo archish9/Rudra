@@ -205,7 +205,11 @@ PROVIDERS: Mapping[str, ProviderEntry] = MappingProxyType(
         ),
         "openai": ProviderEntry(
             name="openai",
-            reads_batching_hint=True,
+            # Canonical api.openai.com never advertises the Vaayu batching
+            # field, so probing it is a pointless startup GET /v1/models to a
+            # hosted provider. Only vaayu/openai_compatible (self-hosted
+            # OpenAI-wire servers) can carry it.
+            reads_batching_hint=False,
             lc_prefix="openai",
             max_output_kwarg="max_tokens",
             needs_api_key=True,

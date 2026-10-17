@@ -107,4 +107,7 @@ def test_bearer_only_when_key_given():
 
 def test_provider_flags():
     flagged = {name for name, entry in PROVIDERS.items() if entry.reads_batching_hint}
-    assert flagged == {"vaayu", "openai_compatible", "openai"}
+    # Canonical `openai` is deliberately excluded: api.openai.com never carries
+    # the batching field, so it is not worth a startup probe (only self-hosted
+    # OpenAI-wire servers can).
+    assert flagged == {"vaayu", "openai_compatible"}

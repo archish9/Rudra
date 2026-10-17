@@ -45,6 +45,9 @@ dependencies = [
     # Every OpenAI-compatible endpoint — vLLM, OpenRouter, LM Studio, Groq,
     # Together — goes through ChatOpenAI with a base_url. See TODO.md C1.2.
     "langchain-openai>=1.4.1",
+    # Imported directly by llm/batching.py for the Vaayu /v1/models hint
+    # probe; was transitive only (via langchain-openai -> openai).
+    "httpx>=0.27.0",
     "langsmith>=0.10.9",
     # MCP (Step 13, C4.1). Servers are reached through three meta-tools, so
     # this is the only new runtime dependency MCP support adds; it pulls
