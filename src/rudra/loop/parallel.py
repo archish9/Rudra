@@ -53,6 +53,16 @@ from rudra.loop.ledger import Task, TaskStatus
 # `git worktree add -b`.
 _WORKTREE_BRANCH = "rudra-wt/{session}-{task}-{nonce}"
 
+# A task re-batched this many times by a merge conflict or an integration-gate
+# regression is not converging. The serial path's `max_fix_attempts` ceiling is
+# captured fresh per `run_task` call (`task.attempts + max_fix_attempts`) and so
+# moves UP every redo -- it does NOT bound redos. This is the parallel path's
+# own termination guard: without it a task that conflicts with a sibling every
+# batch would cycle through PENDING -> worktree -> redo for ever. At the cap the
+# task is BLOCKED so it LEAVES the frontier (routes to the planner, or stops),
+# exactly as the serial loop's C6.5a two-identical-signatures bound does.
+MAX_PARALLEL_REDOS = 3
+
 
 @dataclass(frozen=True)
 class BatchResult:
@@ -527,6 +537,13 @@ async def run_parallel_work(
         # against (design §6). Read once here; after_merge_check re-reads it
         # after each merge to catch a regression against this same base.
         base = context.run_main_gate()
+        # Seed the stale-failure baseline from the real main tree, mirroring
+        # work(): if main is still red once the ledger drains, the empty-ledger
+        # branch above asks `breakdown` about those failures before "is anything
+        # missing?". Set each batch so it tracks the merged tree; the very-last
+        # empty iteration edge is acceptable for Layer 1 (Task 9a concern).
+        context.failure_baseline = base
+        context.baseline_failed = bool(base)
         after_merge_check = _make_after_merge_check(context.run_main_gate, base)
 
         try:
@@ -564,6 +581,24 @@ async def run_parallel_work(
                 f"\n[bold red]Run stopped early.[/bold red] [dim]{result.stop.note}[/dim]"
             )
             break
+
+        # A task the batch sent back to PENDING for the MAX_PARALLEL_REDOS'th
+        # time is not converging (HARD, Task 9a review). Block it BEFORE the
+        # consult loop so it leaves the frontier -- its BLOCKED status then
+        # routes it to the planner below, or trips MAX_BLOCKED_CONSULTS and
+        # stops the run, instead of cycling through another worktree for ever.
+        capped = False
+        for task, _ in result.results:
+            if task.status is TaskStatus.PENDING and len(task.redo_reasons) >= MAX_PARALLEL_REDOS:
+                task.status = TaskStatus.BLOCKED
+                _append_note(
+                    task,
+                    f"redo cap reached: {task.id} did not converge after "
+                    f"{len(task.redo_reasons)} redos; blocking",
+                )
+                capped = True
+        if capped:
+            ledger.save(context.paths.ledger_json)
 
         # Every BLOCKED task consults the planner, in ascending id order (the
         # order BatchResult.results is reduced in), all under the one bound.
@@ -603,6 +638,7 @@ async def run_parallel_work(
 
 
 __all__ = [
+    "MAX_PARALLEL_REDOS",
     "BatchResult",
     "build_worktree_context",
     "run_parallel_batch",

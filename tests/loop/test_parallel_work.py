@@ -62,7 +62,7 @@ class FakeCfg:
 class FakeGit:
     """Records git ops; merge results configurable per branch order."""
 
-    def __init__(self, *, fail_second_merge: bool = False) -> None:
+    def __init__(self, *, fail_second_merge: bool = False, fail_all_merges: bool = False) -> None:
         self.worktree_adds: list[tuple[Path, str | None]] = []
         self.worktree_removes: list[Path] = []
         self.commits: list[Path] = []
@@ -70,6 +70,7 @@ class FakeGit:
         self.merge_aborts = 0
         self.resets: list[str] = []
         self._fail_second_merge = fail_second_merge
+        self._fail_all_merges = fail_all_merges
         self._head = 0
 
     def worktree_add(
@@ -94,7 +95,7 @@ class FakeGit:
 
     def merge(self, project_path, ref, *, gate, console, cfg):
         self.merges.append(ref)
-        if self._fail_second_merge and len(self.merges) == 2:
+        if self._fail_all_merges or (self._fail_second_merge and len(self.merges) == 2):
             return MergeResult(ok=False, conflicted=True)
         return MergeResult(ok=True, conflicted=False)
 
@@ -507,6 +508,72 @@ async def test_redo_reasons_durable(tmp_path: Path):
     original = t2.redo_reasons
     t2.note = "fresh attempt text"
     assert t2.redo_reasons == original
+
+
+async def test_parallel_work_redo_cap_blocks(tmp_path: Path, monkeypatch):
+    """A task that keeps conflicting is BLOCKED at MAX_PARALLEL_REDOS, not cycled."""
+    review_calls, summ_calls = patch_tail(monkeypatch)
+    ctx = build_context(
+        tmp_path,
+        limiter=EndpointLimiter({_CODER_URL: 3}),
+        make_worktree=make_worktree_for(tmp_path),
+        reroot=reroot_fn,
+        run_main_gate=lambda: frozenset(),
+    )
+    ledger = Ledger(tasks=[Task(id="t1", description="a")])
+    git = FakeGit(fail_all_merges=True)
+    recorder: list = []
+    planner = FakePlanner()
+
+    await run_parallel_work(
+        "do it",
+        context=ctx,
+        planner=planner,
+        ledger=ledger,
+        run_task=make_run_task(recorder),
+        git_ops=git,
+    )
+
+    t1 = ledger.tasks[0]
+    # It left the frontier as BLOCKED, with exactly the cap's worth of reasons.
+    assert t1.status is TaskStatus.BLOCKED
+    assert len(t1.redo_reasons) == parallel.MAX_PARALLEL_REDOS
+    assert any("converge" in r.lower() for r in t1.redo_reasons[-1:]) or t1.note
+    # It ran exactly MAX_PARALLEL_REDOS batches, then stopped cycling.
+    assert recorder.count("t1") == parallel.MAX_PARALLEL_REDOS
+    # And then it routed to the planner exactly once (BLOCKED handling).
+    assert planner.blocked_consults() == 1
+
+
+async def test_parallel_work_seeds_stale_baseline(tmp_path: Path, monkeypatch):
+    """context.failure_baseline is seeded from run_main_gate each batch."""
+    patch_tail(monkeypatch)
+    red = frozenset({"pkg::test_x"})
+    ctx = build_context(
+        tmp_path,
+        limiter=EndpointLimiter({_CODER_URL: 3}),
+        make_worktree=make_worktree_for(tmp_path),
+        reroot=reroot_fn,
+        run_main_gate=lambda: red,
+    )
+    ledger = Ledger(tasks=[Task(id="t1", description="a")])
+    git = FakeGit()
+    planner = FakePlanner()
+
+    await run_parallel_work(
+        "do it",
+        context=ctx,
+        planner=planner,
+        ledger=ledger,
+        run_task=make_run_task([]),
+        git_ops=git,
+    )
+
+    # The main tree's red gate is now the stale-failure baseline.
+    assert ctx.failure_baseline == red
+    assert ctx.baseline_failed is True
+    # A red main with a drained ledger consulted the stale-failure stage.
+    assert any(c["reason"] == "stale_failures" for c in planner.calls)
 
 
 def test_task_redo_reasons_and_worktree_roundtrip(tmp_path: Path):

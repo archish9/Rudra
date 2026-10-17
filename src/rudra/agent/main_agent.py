@@ -24,7 +24,13 @@ from rudra.loop.plan_view import (
     render_plan,
 )
 from rudra.state import ensure_layout
-from rudra.state.archive import env_facts, model_facts, project_slug, write_run_meta
+from rudra.state.archive import (
+    archive_home,
+    env_facts,
+    model_facts,
+    project_slug,
+    write_run_meta,
+)
 from rudra.telemetry import build_telemetry
 from rudra.ui.prompt import ask_off_loop
 
@@ -1090,6 +1096,58 @@ async def create_main_agent(
             telemetry=telemetry,
             limiter=limiter,
         )
+        # The three factories the optimistic parallel driver needs (Task 9b).
+        # ALWAYS set; `_should_parallelize` keeps the path dormant unless the
+        # endpoint's fan-out hint is > 1 AND the project is a clean repo, so
+        # wiring them changes nothing for a cap-1 endpoint (today's default).
+        # Closures so they capture this run's cfg, sources, routes, the main
+        # gate and the shared grants -- they do no I/O at build time, so the
+        # existing startup tests neither slow nor break.
+        def make_worktree(task: Any) -> Path:
+            # A leaf dir for THIS task, OUTSIDE the project tree, under the same
+            # XDG state base state/archive.py uses for run data -- never inside
+            # the user's repo (design §10 risk 2). `archive_home()` is that one
+            # definition of the base ($XDG_STATE_HOME/rudra/runs); its parent is
+            # $XDG_STATE_HOME/rudra, where the worktrees sit beside the runs.
+            # The parent (<project-slug>/<session>) is created; the leaf is NOT
+            # -- `git worktree add` creates it. The uuid stops a REDO of the
+            # same id in a later batch colliding with the earlier attempt's dir.
+            parent = archive_home().parent / "worktrees" / project_slug(project_path) / session_id
+            parent.mkdir(parents=True, exist_ok=True)
+            return parent / f"{task.id}-{uuid.uuid4().hex[:8]}"
+
+        def reroot(worktree_path: Path):
+            # A backend + gate rooted at one worktree, reusing this run's
+            # sources/routes (`routes` == route_prefixes(sources)) and SHARING
+            # the resolved grants object -- session grants, auto-accept and the
+            # rules are one policy across worktrees; only the root differs
+            # (design §10.1). `gate.grants` rather than the `grants` parameter:
+            # a single-shot run passes `grants=None` and the main gate made its
+            # own, so reading it back off the gate is what keeps every worktree
+            # sharing ONE grants object. The single global path normalizer is
+            # left as-is: strip_project_root yields a relative path each
+            # per-worktree backend resolves against its own root.
+            wt_backend = build_backend(cfg, worktree_path, sources)
+            wt_gate = build_gate(cfg, worktree_path, routes, grants=gate.grants)
+            return wt_backend, wt_gate
+
+        def run_main_gate() -> frozenset[str]:
+            # The MAIN tree's current failure keys -- read before and after each
+            # merge-back to catch an integration regression. changed_files=() is
+            # correct: the blocking stages (typecheck/test) are whole-project. A
+            # failed gate is treated as green (empty keys) so a flaky gate never
+            # forces a revert of good work, and this never raises (§10.1).
+            from rudra.loop.regressions import failure_keys
+            from rudra.verify import verify_project
+
+            try:
+                report = verify_project(
+                    project_path, changed_files=(), gate=gate, console=console, cfg=cfg
+                )
+                return failure_keys(report)
+            except Exception:  # noqa: BLE001 -- a flaky gate must not revert good work
+                return frozenset()
+
         loop_context = LoopContext(
             subagents=subagent_context,
             project_path=project_path,
@@ -1099,6 +1157,9 @@ async def create_main_agent(
             usage=usage,
             memory=memory_store,
             limiter=limiter,
+            reroot=reroot,
+            make_worktree=make_worktree,
+            run_main_gate=run_main_gate,
         )
 
         # One Ledger, shared by reference: the planner's tools mutate it and the
