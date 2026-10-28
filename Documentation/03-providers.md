@@ -223,6 +223,61 @@ NVIDIA_API_KEY=nvapi-...
 
 ---
 
+## Vaayu — the main local-first target
+
+Vaayu is Rudra's primary target (a local-first coding engine). It speaks the
+OpenAI wire protocol, so it has its own `provider = "vaayu"` entry rather than
+reusing `openai_compatible`:
+
+```toml
+# .rudra/config.toml
+[model.default]
+provider = "vaayu"
+base_url = "https://your-vaayu-host/v1"   # default if omitted: http://localhost:8000/v1
+model = "vaayu"
+context_tokens = 16384                     # match the server's max_seq_len
+
+[model.planner]
+provider = "vaayu"
+base_url = "https://your-vaayu-host/v1"
+model = "vaayu"
+context_tokens = 16384
+
+[model.coder]
+provider = "vaayu"
+base_url = "https://your-vaayu-host/v1"
+model = "vaayu"
+context_tokens = 16384
+```
+
+No API key is needed — Vaayu runs locally and the provider supplies a placeholder
+that `ChatOpenAI` is happy with. Check reachability with `rudra models test`
+before a run; it must show **`Reach: ok`** and **`Tools: ok`**.
+
+What is Vaayu-specific and already handled for you:
+
+- **`session_id` is required.** Vaayu rejects a session-less request with
+  `HTTP 400` (`REQUIRE_SESSION_ID`) — it keys its cross-turn prefix cache on the
+  session. Rudra sends `session_id` automatically in the request body for every
+  agent call, so you do not set anything.
+- **Tool calling is parsed server-side.** Vaayu returns standard OpenAI
+  `tool_calls`; Rudra needs no provider-specific handling. (Models served through
+  Vaayu — e.g. MiniMax, Qwen — emit their own native tool-call syntax, which
+  Vaayu translates.)
+- **Batching hint.** Rudra reads the server's recommended client concurrency from
+  `GET /v1/models`. A streamed-MoE server typically advertises serial
+  (`recommended_client_concurrency: 1`), so the worktree-parallel fan-out stays
+  off and the run is one-at-a-time; that is expected, not a misconfiguration.
+
+> **Streamed tool calls and wrapper-less models.** Rudra runs with `--stream`.
+> A model whose native tool call has a wrapper marker (MiniMax, Qwen) streams
+> cleanly. A model that emits a bare JSON object with *no* marker (e.g. Llama-3.x)
+> cannot be buffered mid-stream, so its tool call can leak into the message
+> content when streamed. If you ever point a role at such a model, run that role
+> non-streamed. This does not affect MiniMax or Qwen.
+
+---
+
 ## Anthropic
 
 ```toml
