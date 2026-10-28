@@ -4,18 +4,15 @@ Context loaded into every fresh Claude Code session. This file documents the
 **architecture and the rules**. It is **not a ledger** — open work, closed
 work, run history and bug reports live in the `TODO*` files, never here.
 
-**Read `TODO.md` next** — it is the live list of what is open, and opens with a
-**Fix next** queue whose `Next:` line names the item to work.
+**Read `TODO.md` next** — it is the single live ledger: what is open and the
+order to work it. It opens with a **Fix next** queue whose `Next:` line names the
+item to work.
 
-**The three ledgers (all gitignored; move content between them, never delete):**
-
-| File | Owns |
-|---|---|
-| `TODO.md` | Pending items and the order to work them, and nothing else. Opens with the **Fix next** queue. A finished row is removed, not struck; row numbers are permanent IDs |
-| `TODO-closed.md` | Every `DONE`/`WONTFIX` item with its reproduction and closing section, the code-review findings, each live run's board, and the live-reference material (test baseline, fresh-project recipe, model availability, watch items, *Rules*). Its index table at the top is the map |
-| `TODO-old.md` | The Steps 0–16 build ledger: §0 (locked decisions D1–D19), §0.1 (middleware disposition), §E (execution order), §F (deepagents 0.7.4 findings), and the `A*`/`C*`/`S*`/`U*` items |
-
-When a reference below says §0, §F, U.7 or A1.46, it means `TODO-old.md`.
+**`TODO.md` is the only ledger** (gitignored). A finished row is removed, not
+struck; row numbers are permanent IDs. There is no separate closed or historical
+ledger: a closed item's row is deleted, not moved. Older references elsewhere in
+this file to `TODO-closed.md` or `TODO-old.md` (and to its §0 / §F / U.7 / A1.46
+anchors) point at files that no longer exist.
 
 **Four lessons that change how a session behaves:**
 
@@ -72,7 +69,7 @@ while the user stays in control.
 
 ## 2. Session Rules (for Claude Code, not for Rudra)
 
-1. **Read `TODO.md` at the start of every session** — it holds only what is open and the order to work it. Update its *Fix next* queue in the same edit as any filing, closing or live run; if anything disagrees with it, the queue wins. Closed items, boards and reference text live in `TODO-closed.md`; historical decisions and step order in `TODO-old.md`.
+1. **Read `TODO.md` at the start of every session** — it holds only what is open and the order to work it. Update its *Fix next* queue in the same edit as any filing, closing or live run; if anything disagrees with it, the queue wins. `TODO.md` is the only ledger: a closed item's row is removed, not moved to another file.
 2. **Never fix a bug on discovery.** Add it to `TODO.md` as `PENDING` with file:line evidence first. Then fix it. Then mark `DONE`. Non-negotiable.
 3. **Evidence-based only.** Every claim about the codebase must cite `file.py:line`. No assumptions. If you cannot verify, say so.
 4. **Verify before claiming done.** Run the command, show the output. `ruff check`, `pytest`, actual CLI invocation.
