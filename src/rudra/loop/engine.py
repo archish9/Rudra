@@ -1502,7 +1502,15 @@ async def summarise_architecture(context: LoopContext, ledger: Ledger) -> None:
         if model is None:
             from rudra.llm import build_model
 
-            model = build_model("default", context.cfg)
+            # OPEN-167: this is the one build_model call outside a graph/probe,
+            # so it must carry the run's session_id itself. Without it a
+            # provider that requires one (Vaayu: REQUIRE_SESSION_ID) answers
+            # 400 "names no session" and Architecture Notes silently never
+            # fold. factory.py gates it on accepts_session_id, so a provider
+            # that ignores session_id is unaffected. Same source as every
+            # thread id in this file (context.subagents.session_id).
+            session_id = getattr(getattr(context, "subagents", None), "session_id", None)
+            model = build_model("default", context.cfg, session_id=session_id)
 
         # The one model call in this file that does not go through a
         # subagent or a planner stage, so it is the one that needs the

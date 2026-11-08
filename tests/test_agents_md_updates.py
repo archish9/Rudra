@@ -132,6 +132,49 @@ def test_the_summariser_writes_architecture_notes(tmp_path):
     assert "recursive-descent" in body
 
 
+def test_the_summariser_passes_the_run_session_id_to_build_model(tmp_path, monkeypatch):
+    """OPEN-167: the out-of-graph summariser builds its model directly, so it
+    must hand `build_model` the run's `session_id` itself. A provider that
+    requires it (Vaayu: `REQUIRE_SESSION_ID`) answers `400 "names no session"`
+    otherwise, and Architecture Notes silently never fold. Every other
+    `build_model` call site (probe, subagents, planner) passes it; this one did
+    not (`loop/engine.py:1505`).
+    """
+    import rudra.llm as llm
+
+    paths = _paths(tmp_path)
+    ledger = Ledger()
+    task = ledger.add("write the parser")
+    task.status = TaskStatus.DONE
+
+    captured: dict[str, Any] = {}
+
+    class FakeModel:
+        async def ainvoke(self, messages):
+            @dataclass
+            class Reply:
+                content: str
+
+            return Reply(content="notes")
+
+    def fake_build_model(role, cfg=None, *, session_id=None):
+        captured["session_id"] = session_id
+        return FakeModel()
+
+    monkeypatch.setattr(llm, "build_model", fake_build_model)
+
+    @dataclass
+    class FakeSubagents:
+        session_id: str = "run-open167"
+
+    context = _context(tmp_path, paths, None)  # no _model seam -> real build path
+    context.subagents = FakeSubagents()
+
+    asyncio.run(summarise_architecture(context, ledger))
+
+    assert captured.get("session_id") == "run-open167"
+
+
 def test_the_summariser_is_skipped_when_nothing_finished(tmp_path):
     paths = _paths(tmp_path)
 
