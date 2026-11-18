@@ -167,3 +167,29 @@ async def test_unanswered_prompt_declines(tmp_path, monkeypatch):
         engine.detect_upgrade_intent("Upgrade flask to 3.0", {}), kg.adverse_upgrades("flask")
     )
     assert await engine.resolve_known_bad(decision, ctx) is False
+
+
+async def test_guard_fails_open_when_detection_raises(tmp_path, monkeypatch, dispatched):
+    ctx = loop_context(tmp_path, kg=kg_with_adverse(tmp_path, "flask", "3.0"))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("pathological input")
+
+    monkeypatch.setattr(engine, "detect_upgrade_intent", boom)
+    outcome, _ = await run_upgrade(ctx)
+    assert outcome is Outcome.DONE and dispatched
+
+
+async def test_attended_proceed_choice_returns_true(tmp_path, monkeypatch):
+    from rudra.loop.upgrade_guard import detect_upgrade_intent, evaluate_guard
+    from rudra.ui import Chosen
+
+    monkeypatch.setattr("rudra.permissions.stdin_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        "rudra.ui.prompt.ask", lambda state, *, console, **kw: Chosen(values=("proceed",))
+    )
+    kg = kg_with_adverse(tmp_path, "flask", "3.0")
+    decision = evaluate_guard(
+        detect_upgrade_intent("Upgrade flask to 3.0", {}), kg.adverse_upgrades("flask")
+    )
+    assert await engine.resolve_known_bad(decision, loop_context(tmp_path, kg=kg)) is True

@@ -854,12 +854,16 @@ def guard_task(task: Task, context: LoopContext) -> GuardDecision:
     Unblocked whenever there is nothing to consult: no graph, no detectable
     upgrade, no adverse edge. A fresh project must never be gated.
     """
-    if context.kg is None:
+    try:
+        if context.kg is None:
+            return evaluate_guard(None, [])
+        intent = detect_upgrade_intent(task.description, {})
+        if intent is None:
+            return evaluate_guard(None, [])
+        return evaluate_guard(intent, context.kg.adverse_upgrades(intent.package))
+    except Exception:  # noqa: BLE001 -- the guard fails open; it never ends a run
+        _LOG.debug("upgrade guard failed open", exc_info=True)
         return evaluate_guard(None, [])
-    intent = detect_upgrade_intent(task.description, {})
-    if intent is None:
-        return evaluate_guard(None, [])
-    return evaluate_guard(intent, context.kg.adverse_upgrades(intent.package))
 
 
 _KNOWN_BAD_CHOICES = (
@@ -916,11 +920,11 @@ def _guard_notice(context: LoopContext, text: str, name: str) -> None:
         _LOG.debug("could not emit the %s notice", name, exc_info=True)
 
 
-def _guard_summary(task: Task, decision: GuardDecision, context: LoopContext) -> str:
+def _guard_summary(task: Task, decision: GuardDecision, *, verb: str) -> str:
     intent = decision.intent
     target = f"{intent.package} {intent.version or '(unversioned)'}" if intent else "?"
     runs = ", ".join(sorted({e.run_id for e in decision.evidence})) or "unknown"
-    return f"{task.id}: upgrade of {target} matches a failed run (evidence run {runs})"
+    return f"{task.id}: upgrade of {target} {verb} a failed run (evidence run {runs})"
 
 
 def _supersede_upgrade(context: LoopContext, task: Task) -> None:
@@ -1036,7 +1040,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     # is written for it (record_block_memory is deliberately not called).
     decision = guard_task(task, context)
     if decision.blocked:
-        _guard_notice(context, _guard_summary(task, decision, context), UPGRADE_GUARD_NOTICE)
+        _guard_notice(context, _guard_summary(task, decision, verb="matches"), UPGRADE_GUARD_NOTICE)
         if context.usage is not None:
             context.usage.record_upgrade_guard("coder")
         if not await resolve_known_bad(decision, context):
@@ -1048,7 +1052,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             context.usage.record_upgrade_override("coder")
         _guard_notice(
             context,
-            _guard_summary(task, decision, context).replace("matches", "overridden despite"),
+            _guard_summary(task, decision, verb="proceeds despite"),
             UPGRADE_OVERRIDE_NOTICE,
         )
 
