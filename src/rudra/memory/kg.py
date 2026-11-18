@@ -12,6 +12,8 @@ provenance field `query_entity` returns.
 
 from __future__ import annotations
 
+import re
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rudra.loop.upgrade_guard import AdverseUpgrade
@@ -20,6 +22,23 @@ from rudra.memory.degrade import degrades
 UPGRADED_TO = "upgraded_to"
 _SEP = "::"
 _ADVERSE_CONFIDENCE = 0.6
+
+
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _canonical_when(when: str) -> str:
+    """mempalace accepts only YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ; anything
+    else is rejected and, behind @degrades, silently dropped. Never raises."""
+    if not when or _DATE.fullmatch(when):
+        return when
+    try:
+        parsed = datetime.fromisoformat(when)
+        parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError, OverflowError):
+        head = str(when)[:10]
+        return head if _DATE.fullmatch(head) else ""
 
 
 class ProjectKG:
@@ -35,6 +54,7 @@ class ProjectKG:
 
         Path(self.palace_path).mkdir(parents=True, exist_ok=True)
         name = package.lower()
+        when = _canonical_when(when)
         with KnowledgeGraph(db_path=self.graph_path) as kg:
             kg.add_triple(
                 name,
@@ -53,6 +73,7 @@ class ProjectKG:
 
         Path(self.palace_path).mkdir(parents=True, exist_ok=True)
         name = package.lower()
+        when = _canonical_when(when)
         with KnowledgeGraph(db_path=self.graph_path) as kg:
             # Re-opening the edge is what clears the adverse record: the
             # closed edge stays as history, a current one now exists.

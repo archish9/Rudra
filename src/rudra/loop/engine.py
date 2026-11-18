@@ -936,7 +936,7 @@ def _supersede_upgrade(context: LoopContext, task: Task) -> None:
         if intent is None or not intent.version:
             return
         written = context.kg.record_successful_upgrade(
-            intent.package, intent.version, when=datetime.now().date().isoformat()
+            intent.package, intent.version, when=datetime.now(timezone.utc).isoformat()
         )
         if written and context.usage is not None:
             context.usage.record_kg_edge("coder")
@@ -1603,7 +1603,7 @@ def record_block_memory(context: Any, task: Task) -> None:
         intent.version,
         run_id=context.subagents.session_id,
         reason=(task.note or "").split("\n")[0],
-        when=datetime.now().date().isoformat(),
+        when=datetime.now(timezone.utc).isoformat(),
     )
 
 
