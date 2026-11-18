@@ -193,3 +193,27 @@ async def test_attended_proceed_choice_returns_true(tmp_path, monkeypatch):
         detect_upgrade_intent("Upgrade flask to 3.0", {}), kg.adverse_upgrades("flask")
     )
     assert await engine.resolve_known_bad(decision, loop_context(tmp_path, kg=kg)) is True
+
+
+async def test_inherited_verdict_does_not_supersede(tmp_path, monkeypatch, dispatched):
+    from rudra.loop.regressions import INHERITED
+
+    kg = kg_with_adverse(tmp_path, "flask", "3.0")
+    ctx = loop_context(tmp_path, kg=kg)
+    monkeypatch.setattr(engine, "resolve_known_bad", answer(True))
+    monkeypatch.setattr(engine, "verdict_for", lambda report, inherited: INHERITED)
+    outcome, _ = await run_upgrade(ctx)
+    assert outcome is Outcome.DONE
+    assert len(kg.adverse_upgrades("flask")) == 1
+    assert "coder" in ctx.usage.per_role
+    assert ctx.usage.per_role["coder"].kg_edges_written == 0
+
+
+async def test_passed_without_manifest_change_does_not_supersede(tmp_path, monkeypatch, dispatched):
+    kg = kg_with_adverse(tmp_path, "flask", "3.0")
+    ctx = loop_context(tmp_path, kg=kg)
+    monkeypatch.setattr(engine, "resolve_known_bad", answer(True))
+    monkeypatch.setattr(engine, "changed_since", lambda ctx, before: ("app.py",))
+    outcome, _ = await run_upgrade(ctx)
+    assert outcome is Outcome.DONE
+    assert len(kg.adverse_upgrades("flask")) == 1

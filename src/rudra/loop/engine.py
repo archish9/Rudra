@@ -34,7 +34,11 @@ from rudra.loop.bounds import (
     failure_signature,
     tests_produced_no_judgement,
 )
-from rudra.loop.dependencies import local_module_names, missing_packages
+from rudra.loop.dependencies import (
+    dependency_manifest_touched,
+    local_module_names,
+    missing_packages,
+)
 from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.loop.regressions import INHERITED, PASSED, REGRESSED, failure_keys, verdict_for
 from rudra.loop.upgrade_guard import GuardDecision, detect_upgrade_intent, evaluate_guard
@@ -927,9 +931,11 @@ def _guard_summary(task: Task, decision: GuardDecision, *, verb: str) -> str:
     return f"{task.id}: upgrade of {target} {verb} a failed run (evidence run {runs})"
 
 
-def _supersede_upgrade(context: LoopContext, task: Task) -> None:
+def _supersede_upgrade(context: LoopContext, task: Task, *, upgrade_proven: bool) -> None:
     """Record the overridden upgrade's success so the graph stops blocking it."""
-    if context.kg is None or task.id not in context.overridden_upgrades:
+    # Only a PROVEN upgrade heals the record: the gate genuinely passed (not an
+    # inherited red) and a dependency manifest actually changed this run.
+    if not upgrade_proven or context.kg is None or task.id not in context.overridden_upgrades:
         return
     try:
         intent = detect_upgrade_intent(task.description, {})
@@ -944,12 +950,13 @@ def _supersede_upgrade(context: LoopContext, task: Task) -> None:
         _LOG.debug("could not supersede the adverse edge", exc_info=True)
 
 
-def _on_task_done(context: LoopContext, task: Task) -> None:
+def _on_task_done(context: LoopContext, task: Task, *, verdict: Any) -> None:
     """Everything a DONE task writes to memory. The one copy both DONE
     returns in `run_task` call."""
     record_task_in_memory(context.paths, task)
     record_task_memory(context, task)
-    _supersede_upgrade(context, task)
+    proven = verdict is PASSED and dependency_manifest_touched(task.files_touched) is not None
+    _supersede_upgrade(context, task, upgrade_proven=proven)
 
 
 async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outcome:
@@ -1236,7 +1243,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                     else _inherited_nothing_note(report, inherited, context.project_path)
                 )
                 outcome = _stop(Outcome.DONE)
-                _on_task_done(context, task)
+                _on_task_done(context, task, verdict=verdict)
                 return outcome
             task.note = _wrote_nothing_note(blocker_text, report, context.project_path)
             # Then the blocker moves on to THIS gate (OPEN-131). Only the
@@ -1328,7 +1335,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # anyway (OPEN-23).
             task.note = "" if verdict is PASSED else _inherited_note(report, inherited)
             outcome = _stop(Outcome.DONE)
-            _on_task_done(context, task)
+            _on_task_done(context, task, verdict=verdict)
             return outcome
 
         signature = failure_signature(report)
