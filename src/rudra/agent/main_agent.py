@@ -1096,6 +1096,7 @@ async def create_main_agent(
             telemetry=telemetry,
             limiter=limiter,
         )
+
         # The three factories the optimistic parallel driver needs (Task 9b).
         # ALWAYS set; `_should_parallelize` keeps the path dormant unless the
         # endpoint's fan-out hint is > 1 AND the project is a clean repo, so
