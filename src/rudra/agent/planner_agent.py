@@ -166,6 +166,12 @@ Ask only what you cannot infer from the request or the codebase. Batch
 related questions into a SINGLE ask_user() call; the user is shown them
 one at a time. You have {max_questions} questions for this whole run.
 
+Spend them on the real purpose, not the surface wording -- what is the
+moment the user wishes this existed? Where you can, offer a guess they can
+correct instead of an open question ("I'm assuming X because Y -- right?"):
+a guess they can correct is faster for both of you than a blank question,
+and a wrong guess still teaches you more than silence.
+
 When a question has a set of likely answers, put them in that question's
 `options` — with a short `description` each — and set `multi_select` when
 more than one may apply. NEVER write the choices into your reply instead:
@@ -209,7 +215,9 @@ pass. If it is not needed for what the user asked, it is not in the design.
 you should be able to say what it does, how it is used, and what it depends
 on. If you cannot describe a piece without describing its internals, the
 boundary is wrong. A file that would hold several unrelated jobs is doing
-too much -- say where it splits.
+too much -- say where it splits. Split by responsibility, not by technical
+layer: the code that would change together for one reason should live
+together, so a single change lands in one place.
 
 Keep each one short and concrete. "src/parser.rs holds parsing, src/main.rs
 holds the CLI" is a decision; three paragraphs about separation of concerns
@@ -246,6 +254,11 @@ are dispatched at a finished file and change nothing. When the layout says
 this project is a single file, that file is ONE task -- not one task per
 section, per stylesheet or per script. add_tasks will refuse a list that
 splits one file up, and say so.
+
+Right-size each task so it ends with an independently testable deliverable
+-- the smallest unit of work a reviewer could accept or reject by itself.
+Fold the setup, config and scaffolding a task needs into that same task;
+split only where one part could stand or fall without the other.
 
 Work that needs tests gets its own task.
 

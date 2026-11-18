@@ -165,6 +165,33 @@ def test_the_breakdown_prompt_is_the_task_one(tmp_path: Path):
     assert "ask_user" not in prompt
 
 
+# --- OPEN-168: active enrichment of the inlined brainstorming/writing-plans ---
+
+
+def test_breakdown_keeps_the_open17_bad_examples(tmp_path: Path):
+    """The OPEN-17 guardrails are load-bearing: enrichment must not drop them."""
+    prompt = _prompt(tmp_path, "breakdown")
+    assert "create the project structure" in prompt
+    assert "understand the requirements through clarifying questions" in prompt
+    assert "propose 2-3 architectural approaches" in prompt
+    assert "present the detailed design for approval" in prompt
+
+
+def test_clarify_prefers_a_correctable_guess_to_a_question(tmp_path: Path):
+    """brainstorming: a guess they can correct often beats a question."""
+    assert "a guess they can correct" in _prompt(tmp_path, "clarify").lower()
+
+
+def test_architect_says_files_that_change_together_live_together(tmp_path: Path):
+    """writing-plans: split by responsibility, not technical layer."""
+    assert "change together" in _prompt(tmp_path, "architect").lower()
+
+
+def test_breakdown_wants_each_task_testable_on_its_own(tmp_path: Path):
+    """writing-plans: each task ends with an independently testable deliverable."""
+    assert "independently testable" in _prompt(tmp_path, "breakdown").lower()
+
+
 @pytest.mark.parametrize("stage", ["clarify", "architect", "breakdown"])
 def test_no_stage_prompt_claims_it_can_finish_anything(tmp_path: Path, stage: str):
     """S9c.1: the gate decides done, and every stage must say so."""
