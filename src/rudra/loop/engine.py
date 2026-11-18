@@ -87,6 +87,9 @@ class LoopContext:
     # reference with SubagentContext -- one run, one palace handle. Optional
     # for the reason `usage` is.
     memory: Any = None
+    # The run's ProjectKG, or None when it could not be built. Optional for
+    # the reason `memory` is.
+    kg: Any = None
     # What the gate was failing on when it last ran, as loop/regressions.py
     # keys (OPEN-23). Mutated by run_task, read by the next task, and
     # deliberately NOT persisted: a fresh process starts empty, every failure
@@ -1438,15 +1441,37 @@ def record_block_memory(context: Any, task: Task) -> None:
     on the difference (OPEN-153). Only the palace's copy is cut; the note
     itself stays verbatim for the ledger and the planner.
     """
+    from rudra.loop.dependencies import dependency_manifest_touched
+    from rudra.loop.upgrade_guard import detect_upgrade_intent
+
     store = getattr(context, "memory", None)
-    if store is None:
-        return
-    store.write(
-        MemoryEntry(
-            content=fit_content(f"Blocked: {task.description}. Reason: {task.note or 'unknown'}."),
-            room="blockers",
-            added_by="rudra",
+    if store is not None:
+        store.write(
+            MemoryEntry(
+                content=fit_content(
+                    f"Blocked: {task.description}. Reason: {task.note or 'unknown'}."
+                ),
+                room="blockers",
+                added_by="rudra",
+            )
         )
+
+    # The structured twin of the prose above: a blocked task that changed a
+    # dependency manifest AND names a concrete version is an upgrade that
+    # went bad. Facts are not plumbed to this call site, so intent is read
+    # from the description alone.
+    kg = getattr(context, "kg", None)
+    if kg is None or dependency_manifest_touched(task.files_touched) is None:
+        return
+    intent = detect_upgrade_intent(task.description, {})
+    if intent is None or intent.version is None:
+        return
+    kg.record_adverse_upgrade(
+        intent.package,
+        intent.version,
+        run_id=context.subagents.session_id,
+        reason=(task.note or "").split("\n")[0],
+        when=datetime.now().isoformat(),
     )
 
 
