@@ -72,7 +72,7 @@ _AGENT_KEYS = frozenset(
 _PERMISSION_KEYS = frozenset({"mode", "allow", "deny", "floor_disable"})
 _COMPAT_KEYS = frozenset({"task_anchor", "sandbox_paths"})
 _SKILLS_KEYS = frozenset({"enabled"})
-_TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch"})
+_TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch", "proceed_known_bad"})
 _TOOLS_INT_KEYS = frozenset({"test_timeout", "max_parallel_tasks"})
 _TOOLS_KEYS = _TOOLS_BOOL_KEYS | _TOOLS_INT_KEYS
 _MCP_BOOL_KEYS = frozenset({"enabled", "mcp_in_auto"})
@@ -570,6 +570,7 @@ def build_config(
     allow_shell: bool | None = None,
     allow_mcp: bool | None = None,
     stream_tokens: bool | None = None,
+    allow_known_bad: bool | None = None,
 ) -> Config:
     """Read all five layers, merge, validate, construct."""
     root = Path(project_root) if project_root is not None else Path.cwd()
@@ -610,6 +611,7 @@ def build_config(
                 allow_shell,
                 allow_mcp=allow_mcp,
                 stream_tokens=stream_tokens,
+                allow_known_bad=allow_known_bad,
             ),
         ),
     ]
@@ -667,6 +669,7 @@ def get_config(
     allow_shell: bool | None = None,
     allow_mcp: bool | None = None,
     stream_tokens: bool | None = None,
+    allow_known_bad: bool | None = None,
 ) -> Config:
     """Return the process-wide Config, loading it on first use.
 
@@ -683,6 +686,7 @@ def get_config(
             allow_shell=allow_shell,
             allow_mcp=allow_mcp,
             stream_tokens=stream_tokens,
+            allow_known_bad=allow_known_bad,
         )
     return _config
 

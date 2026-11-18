@@ -200,6 +200,9 @@ class ToolsConfig:
     auto_branch: bool
     test_timeout: int
     max_parallel_tasks: int
+    # Whether an unattended run may proceed on a task whose upgrade the
+    # knowledge graph records as having failed before. Off: fail-safe.
+    proceed_known_bad: bool = False
 
 
 @dataclass(frozen=True)
@@ -343,6 +346,7 @@ DEFAULTS: dict[str, Any] = {
         "auto_branch": False,
         "test_timeout": 600,
         "max_parallel_tasks": 0,
+        "proceed_known_bad": False,
     },
     # The nine DEFAULT_ENABLED ships as data in rudra.skills.registry, not
     # duplicated here -- loader.py fills it in when the key is absent.

@@ -243,6 +243,13 @@ class RoleUsage:
     # still halt the stage. Before this, run `8f160d92c6da` spent 2191.3 s of
     # 4088.0 on six such calls, and they succeeded.
     greenfield_reads_answered: int = 0
+    # Upgrade-guard diagnostics (Phase 1): a task refused or overridden
+    # because the knowledge graph holds a failed run of the same upgrade, and
+    # the graph edges a run wrote. What a refusal prevents is a coder
+    # invocation that never happens, which leaves no mark on calls or seconds.
+    upgrade_guards_fired: int = 0
+    upgrade_overrides: int = 0
+    kg_edges_written: int = 0
     # Wall clock this role spent inside model calls, in seconds (C9.6).
     # Measured by Rudra rather than reported by a provider, which makes it
     # the one number that is always there: token counts are frequently
@@ -571,6 +578,18 @@ class RunUsage:
         """
         self._slot(role).greenfield_reads_answered += 1
 
+    def record_upgrade_guard(self, role: str) -> None:
+        """One task the upgrade guard found a known-bad edge for."""
+        self._slot(role).upgrade_guards_fired += 1
+
+    def record_upgrade_override(self, role: str) -> None:
+        """One guarded task the user (or --allow-known-bad) chose to run."""
+        self._slot(role).upgrade_overrides += 1
+
+    def record_kg_edge(self, role: str) -> None:
+        """One knowledge-graph edge written (a superseding success)."""
+        self._slot(role).kg_edges_written += 1
+
     def record_completion_file_refused(self, role: str) -> None:
         """One write refused for announcing completion instead of being a file.
 
@@ -684,6 +703,9 @@ class RunUsage:
                 "installs_refused": tally.installs_refused,
                 "commands_explained": tally.commands_explained,
                 "greenfield_reads_answered": tally.greenfield_reads_answered,
+                "upgrade_guards_fired": tally.upgrade_guards_fired,
+                "upgrade_overrides": tally.upgrade_overrides,
+                "kg_edges_written": tally.kg_edges_written,
                 "seconds": round(tally.seconds, 3),
             }
             for role, tally in self.per_role.items()

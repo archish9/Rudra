@@ -102,6 +102,9 @@ def test_recording_accumulates_per_role():
         # Added by OPEN-116: file reads on a greenfield planner stage, which
         # holds no file tools, answered with the route instead of the echo.
         "greenfield_reads_answered": 0,
+        "upgrade_guards_fired": 0,
+        "upgrade_overrides": 0,
+        "kg_edges_written": 0,
     }
     assert data["planner"]["calls"] == 1
 
@@ -412,6 +415,9 @@ def test_seconds_per_call_is_never_stored() -> None:
         "installs_refused",
         "commands_explained",
         "greenfield_reads_answered",
+        "upgrade_guards_fired",
+        "upgrade_overrides",
+        "kg_edges_written",
         "seconds",
     }
 
@@ -736,3 +742,17 @@ def test_installs_refused_is_counted_per_role():
     usage.record_install_refused("tester")
 
     assert usage.as_dict()["tester"]["installs_refused"] == 2
+
+
+def test_upgrade_guard_counters_increment_and_serialize() -> None:
+    usage = RunUsage()
+    usage.record_upgrade_guard("coder")
+    usage.record_upgrade_override("coder")
+    usage.record_kg_edge("coder")
+    usage.record_kg_edge("coder")
+    slot = usage.per_role["coder"]
+    assert (slot.upgrade_guards_fired, slot.upgrade_overrides, slot.kg_edges_written) == (1, 1, 2)
+    serialized = usage.as_dict()["coder"]
+    assert serialized["upgrade_guards_fired"] == 1
+    assert serialized["upgrade_overrides"] == 1
+    assert serialized["kg_edges_written"] == 2

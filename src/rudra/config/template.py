@@ -154,6 +154,11 @@ shell_in_auto = false
 # on where you are. It never fails a run.
 auto_branch = false
 
+# Whether --auto may run a dependency upgrade the project's memory records as
+# having failed before. Off: such a task is blocked rather than repeated.
+# `--allow-known-bad` turns it on for one run.
+proceed_known_bad = false
+
 # How long a test command may run before Rudra kills it, in seconds. Angular's
 # Karma builder hangs forever when no browser is installed, and inside a fix
 # loop a hang stalls the loop instead of failing a round.

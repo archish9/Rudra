@@ -273,6 +273,7 @@ def cli_layer(
     *,
     allow_mcp: bool | None = None,
     stream_tokens: bool | None = None,
+    allow_known_bad: bool | None = None,
 ) -> dict[str, Any]:
     """Layer 5. Only flags the user actually passed appear."""
     layer: dict[str, Any] = {}
@@ -285,8 +286,13 @@ def cli_layer(
         layer["agent"] = agent
     if permission_mode is not None:
         layer["permissions"] = {"mode": permission_mode}
+    tools: dict[str, Any] = {}
     if allow_shell is not None:
-        layer["tools"] = {"shell_in_auto": allow_shell}
+        tools["shell_in_auto"] = allow_shell
+    if allow_known_bad is not None:
+        tools["proceed_known_bad"] = allow_known_bad
+    if tools:
+        layer["tools"] = tools
     if allow_mcp is not None:
         layer["mcp"] = {"mcp_in_auto": allow_mcp}
     return layer

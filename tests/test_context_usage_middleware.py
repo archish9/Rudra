@@ -102,6 +102,9 @@ def test_sync_hook_records_the_reported_counts():
         # Added by OPEN-116, zero for the reason OPEN-103's line gives: a
         # greenfield read is a TOOL call GreenfieldReadMiddleware answered.
         "greenfield_reads_answered": 0,
+        "upgrade_guards_fired": 0,
+        "upgrade_overrides": 0,
+        "kg_edges_written": 0,
     }
     assert result.result[0].content == "hi"
 
