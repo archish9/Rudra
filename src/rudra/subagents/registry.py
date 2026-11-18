@@ -283,6 +283,25 @@ def _rules_for(fs_tools: tuple[str, ...]) -> str:
     return rules
 
 
+# Methodology inlined, not read at runtime, for OPEN-17's reason (see
+# agent/planner_agent.py:8-22): adapted from the superpowers corpus
+# (https://github.com/obra/superpowers, MIT, Copyright (c) 2025 Jesse Vincent).
+# test-driven-development and systematic-debugging, retargeted for a coder that
+# has no shell (the gate runs the tests) and is re-invoked per fix attempt.
+_CODER_METHOD = """## METHOD
+Write the SIMPLEST code that fully satisfies the task -- complete and
+behaviour-covering, but nothing the task did not ask for (YAGNI). Structure it so
+each piece could be tested on its own. When the task is a bugfix, make the
+MINIMAL change that addresses the described failure.
+
+When the verification gate hands you a failure, do not patch the symptom:
+  1. Read the exact error text -- all of it, including the line it names.
+  2. Trace it to its ROOT CAUSE in the code you can see, and fix the cause.
+  3. Make the SMALLEST single change that fixes that cause -- no unrelated edits.
+  4. If the same failure returns after your change, the approach is wrong:
+     reconsider it rather than re-patching the same spot.
+"""
+
 _CODER_PROMPT = """You are an expert code generator for Rudra.
 
 Your job: complete the ONE TASK you are given, writing every file it needs.
@@ -318,8 +337,20 @@ wrote, type checks it, runs the tests, and scans for placeholders. If it
 fails you will be asked again with the exact errors, so a stub only costs
 a round trip.
 
+{coder_method}
 {finish_rules}
 Do not start work the task did not ask for.
+"""
+
+# Adapted from superpowers test-driven-development (MIT, Jesse Vincent), inlined
+# for OPEN-17's reason: the tester owns the red-green cycle the shell-less coder
+# cannot run.
+_TESTER_METHOD = """## METHOD
+You own the red-green cycle the coder cannot run. For behaviour you add a test
+for, after run_tests() confirm the test actually RAN and that it would FAIL for
+the right reason without the code before it passes with it (red before green) --
+a test that never ran, or that passes for the wrong reason, proves nothing. Name
+one behaviour per test and assert what the code DOES, never what a mock does.
 """
 
 _TESTER_PROMPT = """You are a test engineer for Rudra.
@@ -363,6 +394,7 @@ exactly what happened.
 - Do NOT run `git commit` or `git push`. Deciding what to commit is the
   user's, and you cannot see what else is in their working tree
 
+{tester_method}
 ## OUTPUT
 Only your final message reaches the caller. It must contain the verdict and
 the failure output, not a summary of your intentions.
@@ -386,11 +418,17 @@ You have no write, edit, delete, or shell tools. This is deliberate. Do not
 ask for them and do not describe patches as if you had applied them.
 
 ## WHAT TO REPORT
+Report findings in this priority order:
 - Correctness bugs first: wrong logic, unhandled errors, off-by-one, bad types
 - Then missing tests for the behaviour that changed
 - Then clarity problems that would mislead a reader
 
-Every finding gets a `file:line` and one sentence saying what is wrong.
+Every finding gets a `file:line`, a severity tier, and one sentence saying what
+is wrong. The tiers (adapted from superpowers requesting-code-review, MIT):
+- **Critical** -- breaks correctness or security; must be fixed
+- **Important** -- should be fixed before this work is relied on
+- **Minor** -- worth noting, safe to defer
+
 Skip style and formatting -- a linter already ran.
 
 ## WHEN THERE IS NOTHING WRONG
@@ -434,7 +472,9 @@ CODER = RudraSubagent(
     name="coder",
     description="Writes one complete source file from a specification. No shell access.",
     system_prompt=_CODER_PROMPT.format(
-        path_rules=_rules_for(_WRITER_FS), finish_rules=_FINISH_RULES
+        path_rules=_rules_for(_WRITER_FS),
+        coder_method=_CODER_METHOD,
+        finish_rules=_FINISH_RULES,
     ),
     role="coder",
     fs_tools=_WRITER_FS,
@@ -461,7 +501,9 @@ TESTER = RudraSubagent(
     name="tester",
     description="Writes tests for existing code, runs the suite, and reports what failed.",
     system_prompt=_TESTER_PROMPT.format(
-        path_rules=_rules_for(_TESTER_FS), finish_rules=_FINISH_RULES
+        path_rules=_rules_for(_TESTER_FS),
+        tester_method=_TESTER_METHOD,
+        finish_rules=_FINISH_RULES,
     ),
     role="tester",
     fs_tools=_TESTER_FS,

@@ -406,3 +406,56 @@ def test_the_finish_rules_cover_overwriting_a_file_you_produced():
     # Still a category and never a filename -- the pin above still holds.
     for enumerated in ("DONE", ".txt", ".md"):
         assert enumerated not in _FINISH_RULES, enumerated
+
+
+# --- OPEN-168: superpowers methodology inlined per stage ----------------------
+# The coder/tester/reviewer prompts carry an adapted, stage-scoped superpowers
+# methodology inlined (not read at runtime), the same mechanism OPEN-17 proved
+# for the planner. See docs/superpowers/specs/2026-11-18-skills-per-stage-inline.
+
+
+def test_the_coder_is_told_to_find_root_cause_before_fixing():
+    """systematic-debugging, adapted: on a blocker, fix the cause not the symptom."""
+    from rudra.subagents.registry import CODER
+
+    p = CODER.system_prompt.lower()
+    assert "root cause" in p
+    assert "smallest" in p or "single change" in p or "one change" in p
+
+
+def test_the_coder_is_told_to_write_minimal_testable_code():
+    """test-driven-development + YAGNI, adapted for a shell-less coder."""
+    from rudra.subagents.registry import CODER
+
+    assert "minimal" in CODER.system_prompt.lower()
+
+
+def test_the_coder_methodology_does_not_tell_it_to_run_tests():
+    """The coder has no shell: the adapted TDD/debug block must not add a run order."""
+    from rudra.subagents.registry import CODER
+
+    assert "run the tests yourself" not in CODER.system_prompt.lower()
+
+
+def test_the_tester_owns_the_red_green_cycle():
+    """test-driven-development, adapted: the tester owns the cycle the coder cannot."""
+    from rudra.subagents.registry import TESTER
+
+    p = TESTER.system_prompt.lower()
+    assert "fail" in p
+    assert "red" in p or "watch it fail" in p or "for the right reason" in p
+
+
+def test_the_tester_keeps_the_assert_real_behaviour_rule():
+    """writing-good-tests: assert real behaviour, never mock internals."""
+    from rudra.subagents.registry import TESTER
+
+    assert "mock" in TESTER.system_prompt.lower()
+
+
+def test_the_reviewer_tiers_its_findings():
+    """requesting-code-review, adapted: each finding carries a severity tier."""
+    from rudra.subagents.registry import REVIEWER
+
+    p = REVIEWER.system_prompt
+    assert "Critical" in p and "Important" in p and "Minor" in p
