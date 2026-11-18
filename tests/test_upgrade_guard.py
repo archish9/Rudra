@@ -75,3 +75,21 @@ def test_other_package_does_not_block():
 
 def test_no_intent_never_blocks():
     assert not evaluate_guard(None, []).blocked
+
+
+def test_update_pkg_followed_by_noun_is_not_intent():
+    assert detect_upgrade_intent("update flask routes to return JSON", {}) is None
+
+
+def test_update_readme_or_docs_is_not_intent():
+    assert detect_upgrade_intent("update README", {}) is None
+    assert detect_upgrade_intent("update docs", {}) is None
+
+
+def test_later_real_upgrade_is_found_after_a_non_intent_verb():
+    got = detect_upgrade_intent("update the docs, then upgrade flask to 3.0", {})
+    assert got == UpgradeIntent("flask", "3.0")
+
+
+def test_update_to_version_still_detected():
+    assert detect_upgrade_intent("update flask to 3.0", {}) == UpgradeIntent("flask", "3.0")

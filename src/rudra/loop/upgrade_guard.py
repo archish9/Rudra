@@ -58,10 +58,24 @@ _NOT_A_PACKAGE = frozenset(
         "version",
         "it",
         "them",
+        "readme",
+        "docs",
+        "documentation",
+        "changelog",
+        "license",
+        "code",
+        "tests",
+        "test",
+        "config",
+        "comments",
     }
 )
 
 _JOINERS = frozenset({"and", "&", "+", "or"})
+
+# What may follow an unversioned package for the task to still be an upgrade
+# OF it: "upgrade flask to latest", "update flask in pyproject", "bump x from y".
+_AFTER_PACKAGE = frozenset({"to", "in", "from", "latest"})
 
 
 @dataclass(frozen=True)
@@ -109,22 +123,26 @@ def _intent_in(text: str) -> UpgradeIntent | None:
     raw = text.lower().split()
     words = [word.strip(_EDGE_PUNCTUATION) for word in raw]
     for index, word in enumerate(words):
-        if word not in UPGRADE_VERBS:
+        if word not in UPGRADE_VERBS or index + 1 >= len(words):
             continue
-        if index + 1 >= len(words):
-            return None
         package = words[index + 1]
         if package in _NOT_A_PACKAGE or not _PACKAGE.fullmatch(package):
-            return None
+            continue
         # "upgrade flask, requests" / "upgrade flask and requests"
         if raw[index + 1].endswith(","):
-            return None
+            continue
         rest = words[index + 2 :]
         if rest and rest[0] in _JOINERS:
-            return None
+            continue
         if rest and rest[0] == "to":
             rest = rest[1:]
+            if not rest:
+                continue
         match = _VERSION.fullmatch(rest[0]) if rest else None
+        if match is None and rest and rest[0] not in _AFTER_PACKAGE:
+            # "update flask routes to ...": a noun follows, so this edits
+            # code that uses flask rather than upgrading it.
+            continue
         return UpgradeIntent(package=package, version=match.group(1) if match else None)
     return None
 
