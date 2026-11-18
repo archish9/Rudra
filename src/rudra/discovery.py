@@ -16,6 +16,7 @@ forbids a tool that has no gloss, so a new tool cannot slip in undescribed.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -100,4 +101,123 @@ def tool_rows(project_path: Path, cfg: Any = None) -> list[ToolRow]:  # noqa: AR
     return sorted(rows, key=lambda r: r.name)
 
 
-__all__ = ["ToolRow", "tool_rows"]
+# Where each superpowers skill is applied in Rudra after OPEN-168. The inline
+# adaptation lives in prompt text (not machine-readable), so this map is Rudra's
+# own statement of fact, kept beside the catalog. "" = not applied anywhere.
+SKILL_STAGE_MAP: dict[str, str] = {
+    "brainstorming": "planner: clarify (inlined)",
+    "writing-plans": "planner: architect + breakdown (inlined)",
+    "test-driven-development": "coder + tester (inlined)",
+    "systematic-debugging": "coder fix-loop (inlined)",
+    "verification-before-completion": "the deterministic gate (Python)",
+    "requesting-code-review": "reviewer rubric (inlined)",
+    "executing-plans": "the loop engine (Python)",
+    "subagent-driven-development": "the loop engine (Python)",
+    "using-superpowers": "bootstrap primer (indexed for coder/tester)",
+    "receiving-code-review": "",
+    "dispatching-parallel-agents": "",
+    "finishing-a-development-branch": "",
+    "writing-skills": "",
+}
+
+
+class SkillRow(NamedTuple):
+    """One row of the `/skills` listing."""
+
+    name: str
+    description: str
+    enabled: bool
+    applied_at: str
+
+
+class McpRow(NamedTuple):
+    """One row of the `/mcp` listing."""
+
+    name: str
+    transport: str
+    endpoint: str
+
+
+_FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+
+
+def _skill_description(skill_md: Path) -> str:
+    """The `description:` from a SKILL.md frontmatter, or ''.
+
+    Parsed leniently: a corpus skill that cannot be read must not crash the
+    listing.
+    """
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    match = _FRONTMATTER.match(text)
+    if not match:
+        return ""
+    try:
+        import yaml
+
+        data = yaml.safe_load(match.group(1))
+    except Exception:  # noqa: BLE001 - a malformed frontmatter is just no description
+        return ""
+    if isinstance(data, dict):
+        return str(data.get("description", "")).strip()
+    return ""
+
+
+def skill_rows(cfg: Any = None) -> list[SkillRow]:
+    """Every vendored skill, its description, whether it is enabled, and where
+    it is applied in Rudra (post-OPEN-168), sorted by name.
+    """
+    from rudra.skills.registry import BUNDLES
+
+    enabled = set(getattr(getattr(cfg, "skills", None), "enabled", ()) or ())
+    rows: list[SkillRow] = []
+    for bundle in BUNDLES:
+        for name in bundle.skill_names():
+            is_enabled = name in enabled
+            applied = SKILL_STAGE_MAP.get(name, "")
+            if not applied and is_enabled:
+                applied = "indexed (coder/tester)"
+            rows.append(
+                SkillRow(
+                    name=name,
+                    description=_skill_description(bundle.skills_path / name / "SKILL.md"),
+                    enabled=is_enabled,
+                    applied_at=applied,
+                )
+            )
+    return sorted(rows, key=lambda r: r.name)
+
+
+def mcp_rows(project_path: Path, cfg: Any = None) -> list[McpRow]:
+    """Configured MCP servers (from `.mcp.json`), never their env. Empty when
+    no `.mcp.json`, when it is malformed, or when a server is disabled in cfg.
+    """
+    from rudra.mcp.config import McpConfigError, mcp_json_path, read_mcp_json
+
+    try:
+        entries = read_mcp_json(mcp_json_path(project_path))
+    except McpConfigError:
+        return []
+    disabled = set(getattr(getattr(cfg, "mcp", None), "disabled_servers", ()) or ())
+    rows: list[McpRow] = []
+    for entry in entries:
+        if entry.name in disabled:
+            continue
+        endpoint = entry.command or entry.url or ""
+        if entry.command and entry.args:
+            endpoint = f"{entry.command} {' '.join(entry.args)}"
+        rows.append(McpRow(name=entry.name, transport=entry.transport, endpoint=endpoint))
+    return sorted(rows, key=lambda r: r.name)
+
+
+__all__ = [
+    "SKILL_STAGE_MAP",
+    "McpRow",
+    "SkillRow",
+    "ToolRow",
+    "mcp_rows",
+    "skill_rows",
+    "tool_rows",
+]

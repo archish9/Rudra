@@ -42,3 +42,52 @@ def test_coder_fs_tools_match_the_registry(tmp_path: Path):
     rows = {r.name: r for r in tool_rows(tmp_path, _cfg(tmp_path))}
     for t in REGISTRY["coder"].fs_tools:
         assert "coder" in rows[t].agents
+
+
+def test_skill_rows_mark_systematic_debugging_applied(tmp_path: Path):
+    from rudra.discovery import skill_rows
+
+    rows = {r.name: r for r in skill_rows(_cfg(tmp_path))}
+    assert "systematic-debugging" in rows
+    assert rows["systematic-debugging"].enabled
+    assert rows["systematic-debugging"].applied_at  # where it is inlined
+
+
+def test_skill_rows_cover_all_vendored_skills(tmp_path: Path):
+    from rudra.discovery import skill_rows
+    from rudra.skills.registry import BUNDLES
+
+    vendored = {name for b in BUNDLES for name in b.skill_names()}
+    assert {r.name for r in skill_rows(_cfg(tmp_path))} == vendored
+
+
+def test_skill_rows_have_descriptions(tmp_path: Path):
+    from rudra.discovery import skill_rows
+
+    for r in skill_rows(_cfg(tmp_path)):
+        assert r.description
+
+
+def test_mcp_rows_empty_when_no_config(tmp_path: Path):
+    from rudra.discovery import mcp_rows
+
+    assert mcp_rows(tmp_path, _cfg(tmp_path)) == []
+
+
+def test_mcp_rows_never_leak_env(tmp_path: Path):
+    import json
+
+    from rudra.discovery import mcp_rows
+
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "mem": {"command": "mempalace", "args": ["mcp"], "env": {"SECRET": "xyz"}}
+                }
+            }
+        )
+    )
+    rows = mcp_rows(tmp_path, _cfg(tmp_path))
+    assert any(r.name == "mem" for r in rows)
+    assert "xyz" not in repr(rows)

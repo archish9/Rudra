@@ -41,6 +41,10 @@ if TYPE_CHECKING:  # pragma: no cover - `rudra.loop` imports the engine
 
 REPL_COMMANDS: dict[str, str] = {
     "/help": "Show this help message",
+    "/commands": "List the REPL commands (same as /help)",
+    "/tools": "List the tools each agent can call",
+    "/skills": "List the skills and where each is applied",
+    "/mcp": "List configured MCP servers and their tools",
     "/tree": "Print the project file tree",
     "/continue": "Work the tasks the last run left pending (also: continue)",
     "/exit": "Quit Rudra",
@@ -63,6 +67,9 @@ class ReplIntent(StrEnum):
     EMPTY = "empty"
     EXIT = "exit"
     HELP = "help"
+    TOOLS = "tools"
+    SKILLS = "skills"
+    MCP = "mcp"
     TREE = "tree"
     CONTINUE = "continue"
     UNKNOWN = "unknown"
@@ -88,8 +95,14 @@ def classify_input(text: str) -> ReplIntent:
         return ReplIntent.EXIT
     if cmd in CONTINUE_WORDS:
         return ReplIntent.CONTINUE
-    if cmd == "/help":
+    if cmd in ("/help", "/commands"):
         return ReplIntent.HELP
+    if cmd == "/tools":
+        return ReplIntent.TOOLS
+    if cmd == "/skills":
+        return ReplIntent.SKILLS
+    if cmd == "/mcp":
+        return ReplIntent.MCP
     if cmd == "/tree":
         return ReplIntent.TREE
     if cmd.startswith("/"):

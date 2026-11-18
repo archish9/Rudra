@@ -36,6 +36,42 @@ def test_help_renders_from_that_table(capsys):
         assert command in printed
 
 
+# --- OPEN-169: discovery commands ----------------------------------------
+
+
+def test_slash_tools_classifies():
+    from rudra.cli_repl import ReplIntent, classify_input
+
+    assert classify_input("/tools") is ReplIntent.TOOLS
+
+
+def test_slash_skills_classifies():
+    from rudra.cli_repl import ReplIntent, classify_input
+
+    assert classify_input("/skills") is ReplIntent.SKILLS
+
+
+def test_slash_mcp_classifies():
+    from rudra.cli_repl import ReplIntent, classify_input
+
+    assert classify_input("/mcp") is ReplIntent.MCP
+
+
+def test_slash_commands_is_help():
+    """/commands folds into the same overview as /help."""
+    from rudra.cli_repl import ReplIntent, classify_input
+
+    assert classify_input("/commands") is ReplIntent.HELP
+
+
+def test_help_points_at_discovery(capsys):
+    from rudra.cli import _print_help
+
+    _print_help()
+    out = capsys.readouterr().out
+    assert "/tools" in out and "/skills" in out and "/mcp" in out
+
+
 # --- @-mentions ----------------------------------------------------------
 
 
