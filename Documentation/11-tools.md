@@ -6,6 +6,8 @@ This is about the tools **the model** uses — the things it calls while working
 
 You do not call these yourself. You read this page for three reasons: to understand what Rudra can do to your machine, to read an approval prompt or an audit line and know what it means, and to write allow/deny rules that name real tools.
 
+In the REPL, **`/tools`** prints this catalogue live — every tool, the agents that hold it, and a one-line gloss — read straight from the registry, so it always matches your build. (`/skills` and `/mcp` do the same for skills and MCP servers.)
+
 ---
 
 ## The short version

@@ -67,10 +67,18 @@ rudra> /exit
 
 | Command | Does |
 |---|---|
-| `/help` | List available commands |
+| `/help` or `/commands` | List available commands |
+| `/tools` | List the tools each agent can call (name, agents, one-line gloss) |
+| `/skills` | List the skills, whether each is enabled, and where it is applied |
+| `/mcp` | List configured MCP servers and the meta-tools that reach them |
 | `/tree` | Print the project file tree |
 | `/continue` or `/resume` | Work the tasks the last run left pending — the REPL's [`--continue`](#--continue) |
 | `/exit` or `/quit` | Leave |
+
+`/tools`, `/skills` and `/mcp` are **discovery**: they list what Rudra can do.
+You do not invoke an agent's tool by typing it — the model calls tools while
+working. `/tools` and `/skills` read the live registries, so they reflect your
+actual build; see [Tools](11-tools.md) and [Skills](12-skills.md).
 
 `exit` and `quit` work without the slash, and so do `continue` and `resume` —
 the whole line, so `continue the auth work` is still a request. Pressing `Esc`

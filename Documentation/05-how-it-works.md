@@ -329,6 +329,11 @@ token, and each line is cut at a few hundred characters. Long model replies are 
 in outline only. `Ctrl-C` in the REPL interrupts the current input and returns you to the
 prompt; it does not cancel an agent turn already in flight.
 
+**Discovering what Rudra can do.** In the REPL, `/tools`, `/skills` and `/mcp` list the
+agents' tools, the skills (and where each is applied), and any configured MCP servers —
+read live from the registries. They are discovery, not invocation: the model calls tools
+during a run; you do not type them.
+
 **Memory between runs is narrow, and it is not the conversation.** What carries forward
 is `facts.json`, `AGENTS.md`, and the long-term store in `.rudra/memory/` — decisions,
 finished tasks, blockers, preferences. Checkpoints are written but never replayed, so
