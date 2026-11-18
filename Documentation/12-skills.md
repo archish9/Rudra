@@ -16,9 +16,9 @@ Rudra ships a methodology library — [superpowers](https://github.com/obra/supe
 
 A skill is a written procedure the model reads when it recognises a situation — not code, not a tool. `test-driven-development` explains how to write a failing test first; `systematic-debugging` explains how to find a root cause instead of guessing at fixes.
 
-They work by **progressive disclosure**. Only each skill's name and one-line description sit in the model's prompt. When one matches the task at hand, the model reads the full document with `read_file`. Fourteen skills cost a handful of lines of context until one is actually needed.
+They reach the model two ways in Rudra (see [How skills reach the model](#how-skills-reach-the-model)). The **index** works by **progressive disclosure**: only each skill's name and one-line description sit in the coder's and tester's prompt, and the full document is read with `read_file` when a task calls for it, so fourteen skills cost a handful of lines until one is needed. Separately, where a skill's methodology is load-bearing for a stage, its *adapted* form is **inlined** into that stage's prompt, so it applies on every run and every model rather than when one chooses to open a file.
 
-That is why shipping a large library is cheap: the cost is disk, not context.
+That is why shipping a large library is cheap: the index cost is disk, not context.
 
 ---
 
@@ -28,24 +28,54 @@ That is why shipping a large library is cheap: the cost is disk, not context.
 
 Nine are enabled by default. The other five are on disk and readable but stay out of the prompt index until there is evidence they help rather than crowd it.
 
-| Skill | Use it when | Default |
-|---|---|:-:|
-| `using-superpowers` | starting any conversation — this is the bootstrap that makes the model reach for the rest | ✅ |
-| `brainstorming` | before any creative work: features, components, new behaviour | ✅ |
-| `writing-plans` | you have requirements for a multi-step task, before touching code | ✅ |
-| `executing-plans` | you have a written plan to work through with review checkpoints | ✅ |
-| `test-driven-development` | implementing any feature or bugfix, before writing implementation code | ✅ |
-| `systematic-debugging` | any bug, test failure or surprise, **before** proposing a fix | ✅ |
-| `verification-before-completion` | about to claim something works, before committing | ✅ |
-| `requesting-code-review` | finishing a task or feature, before merging | ✅ |
-| `receiving-code-review` | acting on review feedback, especially when it seems questionable | ✅ |
-| `using-git-worktrees` | feature work needing isolation from your working tree | — |
-| `finishing-a-development-branch` | implementation done, deciding how to integrate | — |
-| `subagent-driven-development` | executing a plan with independent tasks in one session | — |
-| `dispatching-parallel-agents` | 2+ independent tasks with no shared state | — |
-| `writing-skills` | authoring or editing skills themselves | — |
+The **In Rudra** column says where each skill's methodology actually acts —
+see [How skills reach the model](#how-skills-reach-the-model) below. `rudra`
+REPL users can print this live with **`/skills`**.
+
+| Skill | Use it when | Default | In Rudra |
+|---|---|:-:|---|
+| `using-superpowers` | starting any conversation — this is the bootstrap that makes the model reach for the rest | ✅ | bootstrap primer (indexed for coder/tester) |
+| `brainstorming` | before any creative work: features, components, new behaviour | ✅ | planner · clarify (inlined) |
+| `writing-plans` | you have requirements for a multi-step task, before touching code | ✅ | planner · architect + breakdown (inlined) |
+| `executing-plans` | you have a written plan to work through with review checkpoints | ✅ | the loop engine (Python) |
+| `test-driven-development` | implementing any feature or bugfix, before writing implementation code | ✅ | coder + tester (inlined) |
+| `systematic-debugging` | any bug, test failure or surprise, **before** proposing a fix | ✅ | coder fix-loop (inlined) |
+| `verification-before-completion` | about to claim something works, before committing | ✅ | the deterministic gate (Python) |
+| `requesting-code-review` | finishing a task or feature, before merging | ✅ | reviewer rubric (inlined) |
+| `receiving-code-review` | acting on review feedback, especially when it seems questionable | ✅ | indexed (coder/tester) |
+| `using-git-worktrees` | feature work needing isolation from your working tree | — | — |
+| `finishing-a-development-branch` | implementation done, deciding how to integrate | — | — |
+| `subagent-driven-development` | executing a plan with independent tasks in one session | — | the loop engine (Python) |
+| `dispatching-parallel-agents` | 2+ independent tasks with no shared state | — | — |
+| `writing-skills` | authoring or editing skills themselves | — | — |
 
 The nine map onto what Rudra already does: plan before coding, test, verify, review, fix. That is not a coincidence — they were chosen against those requirements.
+
+## How skills reach the model
+
+A skill reaches the model two ways, and the **In Rudra** column above says
+which:
+
+1. **Inlined into a stage prompt (since OPEN-168).** For the stages where a
+   skill's methodology is load-bearing, the *adapted* methodology is written
+   directly into that agent's system prompt — so it shapes every call on every
+   model, not only when the model chooses to open a file. `systematic-debugging`
+   and `test-driven-development` are inlined into the coder (root-cause before a
+   fix; minimal, testable code); `test-driven-development`'s red-green into the
+   tester; `requesting-code-review`'s severity rubric into the reviewer;
+   `brainstorming` and `writing-plans` into the three planner stages. The
+   adaptation drops the parts written for a single-agent harness (e.g. "write a
+   design doc", "run the suite yourself") that do not fit Rudra's split
+   architecture.
+2. **Indexed for on-demand reading (progressive disclosure).** The coder and
+   tester still carry the full index, so any enabled skill can be read in full by
+   path when a task calls for depth the inline summary does not cover.
+
+Group B — `verification-before-completion`, `executing-plans`,
+`subagent-driven-development` — is **embodied in Python**, not a prompt: the
+deterministic gate *is* verification-before-completion, and the loop engine *is*
+executing-plans / subagent-driven-development. Those are enforced by code, more
+reliably than a model reading a file, so they are not inlined as prompt text.
 
 ---
 

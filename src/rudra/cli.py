@@ -1708,6 +1708,15 @@ def main(
                     elif intent is ReplIntent.HELP:
                         _print_help()
                         continue
+                    elif intent is ReplIntent.TOOLS:
+                        _print_tools(project_path)
+                        continue
+                    elif intent is ReplIntent.SKILLS:
+                        _print_skills(project_path)
+                        continue
+                    elif intent is ReplIntent.MCP:
+                        _print_mcp(project_path)
+                        continue
                     elif intent is ReplIntent.TREE:
                         # markup=False: filenames are data, not Rich markup.
                         # A file named `[draft].md` would otherwise be parsed
@@ -1866,6 +1875,80 @@ def _print_help() -> None:
     console.print()
     console.print(
         Panel(table, title="[bold cyan]Rudra Help[/bold cyan]", border_style="cyan", padding=(1, 2))
+    )
+    console.print()
+
+
+def _print_tools(project_path: Path) -> None:
+    """List every tool the model can call, with its gloss and the agents that
+    hold it (OPEN-169). Read-only discovery; does not invoke anything."""
+    from rudra.discovery import tool_rows
+
+    table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+    table.add_column("Tool", style="bold", no_wrap=True)
+    table.add_column("Agents", style="dim", no_wrap=True)
+    table.add_column("What it does")
+    for row in tool_rows(project_path):
+        table.add_row(row.name, ", ".join(row.agents), row.description)
+    console.print()
+    console.print(
+        Panel(table, title="[bold cyan]Tools[/bold cyan]", border_style="cyan", padding=(1, 2))
+    )
+    console.print("[dim]  Tools are called by the agents during a run, not typed here.[/dim]")
+    console.print()
+
+
+def _print_skills(project_path: Path) -> None:
+    """List the vendored skills, whether each is enabled, and where it is
+    applied in Rudra after OPEN-168 (OPEN-169)."""
+    from rudra.config import get_config
+    from rudra.discovery import skill_rows
+
+    table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+    table.add_column("Skill", style="bold", no_wrap=True)
+    table.add_column("On", no_wrap=True)
+    table.add_column("Applied at", style="dim", no_wrap=True)
+    table.add_column("What it is")
+    for row in skill_rows(get_config(project_path)):
+        table.add_row(
+            row.name,
+            "[green]yes[/green]" if row.enabled else "[dim]no[/dim]",
+            row.applied_at or "[dim]—[/dim]",
+            row.description,
+        )
+    console.print()
+    console.print(
+        Panel(table, title="[bold cyan]Skills[/bold cyan]", border_style="cyan", padding=(1, 2))
+    )
+    console.print()
+
+
+def _print_mcp(project_path: Path) -> None:
+    """List configured MCP servers and the meta-tools, or say none (OPEN-169).
+    Never prints a server's env."""
+    from rudra.config import get_config
+    from rudra.discovery import mcp_rows
+
+    rows = mcp_rows(project_path, get_config(project_path))
+    if not rows:
+        console.print()
+        console.print("  [dim]No MCP servers configured[/dim] (declare them in .mcp.json).")
+        console.print()
+        return
+    table = Table(show_header=True, header_style="bold cyan", box=None, padding=(0, 2))
+    table.add_column("Server", style="bold", no_wrap=True)
+    table.add_column("Transport", no_wrap=True)
+    table.add_column("Endpoint")
+    for row in rows:
+        table.add_row(escape(row.name), escape(row.transport), escape(row.endpoint))
+    console.print()
+    console.print(
+        Panel(
+            table, title="[bold cyan]MCP servers[/bold cyan]", border_style="cyan", padding=(1, 2)
+        )
+    )
+    console.print(
+        "[dim]  Reached through: list_mcp_tools · describe_mcp_tool · call_mcp_tool[/dim]"
     )
     console.print()
 
