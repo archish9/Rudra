@@ -12,11 +12,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from rudra.decide.catalog import TASK_TRIAGE
 
 _log = logging.getLogger("rudra.decide")
+
+CALIBRATION_FILE = "calibration.json"
+META_FILE = "meta.json"
 
 # Only these two questions have a label derivable from today's archive
 # (LABEL-SOURCES.md). Everything else ships zero-shot until S4-S6 instrument it.
@@ -143,3 +150,148 @@ def build_dataset(runs_dir, question_set: dict) -> list[tuple[object, dict, dict
             rows.append(({"task": str(task.get("description", ""))}, questions, targets))
 
     return rows
+
+
+# --- Task 2: fit + calibrate + honest floor ---------------------------------
+
+
+@dataclass(frozen=True)
+class QFit:
+    n_rows: int
+    served: bool
+    note: str
+
+
+@dataclass(frozen=True)
+class FitReport:
+    per_question: dict[str, QFit]
+    calibration_written: bool
+
+
+def _lazy_calibrate():
+    """Import laya's calibrate module. Lazy: laya is a sidecar, absent in core."""
+    import laya_mlx.calibrate as calibrate  # noqa: PLC0415 - guarded optional import
+
+    return calibrate
+
+
+def _bucket_serves(qtype: str, thresholds: dict) -> bool:
+    """A question is served iff a fitted abstention bucket covers its qtype.
+
+    Thresholds are keyed by option-count bucket (``"score:1-3"``, ``"noul"``);
+    the key starts with the qtype name, so a family match is enough and avoids
+    reproducing laya's exact bucket ranges here.
+    """
+    return any(k == qtype or str(k).startswith(f"{qtype}:") for k in thresholds)
+
+
+def _row_counts(rows, question_set: dict) -> dict[str, int]:
+    counts = {qid: 0 for qid in question_set}
+    for _state, _questions, targets in rows:
+        for qid in targets:
+            if qid in counts:
+                counts[qid] += 1
+    return counts
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".meta.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def fit_calibration(
+    agent,
+    rows,
+    question_set: dict,
+    out_dir,
+    *,
+    backend: str,
+    model_id: str,
+    calibrate=None,
+    now: str | None = None,
+) -> FitReport:
+    """Fit laya calibration from labelled ``rows`` and save it under ``out_dir``.
+
+    Writes ``calibration.json`` (laya's temperatures, via ``save_calibration``)
+    and ``meta.json`` (backend, model id, fitted_at, row counts, and the
+    abstention-threshold map — which ``save_calibration`` does NOT persist)
+    **only when at least one question is served**. laya's own floor decides:
+    ``fit_abstention_thresholds`` returns ``{}`` when no option-count bucket
+    reached its sample minimum, and an unserved question stays zero-shot. Never
+    fabricates a threshold. ``calibrate`` is injectable so tests stay weight-free.
+    """
+    out = Path(out_dir)
+    counts = _row_counts(rows, question_set)
+
+    if not rows:
+        per_q = {
+            qid: QFit(n_rows=0, served=False, note="no label in archive") for qid in question_set
+        }
+        _log_report(per_q, backend)
+        return FitReport(per_question=per_q, calibration_written=False)
+
+    cal = calibrate or _lazy_calibrate()
+    records = cal.records_from_labeled(agent, rows)
+    agent.fit_temperatures(records)
+    thresholds = dict(
+        cal.fit_abstention_thresholds(records, agent.temperature, agent.temperature_by_options)
+        or {}
+    )
+
+    per_q: dict[str, QFit] = {}
+    for qid, q in question_set.items():
+        n = counts.get(qid, 0)
+        qtype = q.get("type", "?") if isinstance(q, dict) else "?"
+        if n == 0:
+            per_q[qid] = QFit(n, False, "no label in archive")
+        elif _bucket_serves(qtype, thresholds):
+            per_q[qid] = QFit(n, True, "served")
+        else:
+            per_q[qid] = QFit(n, False, "declined: too few rows for a gate")
+
+    served_any = any(qf.served for qf in per_q.values())
+    if served_any:
+        agent.save_calibration(str(out / CALIBRATION_FILE))
+        _atomic_write_json(
+            out / META_FILE,
+            {
+                "backend": backend,
+                "model_id": model_id,
+                "fitted_at": now or datetime.now(timezone.utc).isoformat(),
+                "row_counts": counts,
+                "thresholds": thresholds,
+            },
+        )
+
+    _log_report(per_q, backend)
+    return FitReport(per_question=per_q, calibration_written=served_any)
+
+
+def _log_report(per_q: dict[str, QFit], backend: str) -> None:
+    try:
+        _log.info(
+            "decide_fit",
+            extra={
+                "event": {
+                    "kind": "decide_fit",
+                    "backend": backend,
+                    "per_question": {
+                        qid: {"n_rows": qf.n_rows, "served": qf.served, "note": qf.note}
+                        for qid, qf in per_q.items()
+                    },
+                }
+            },
+        )
+    except Exception:  # noqa: BLE001 - a diagnostic must never fail a fit
+        pass
