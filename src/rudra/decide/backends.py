@@ -27,6 +27,8 @@ class DecideBackend(Protocol):
 
     def load_calibration(self, path: str) -> None: ...
 
+    def fit(self, rows, question_set: dict, out_dir): ...
+
 
 class _AgentBackend:
     """Holds a loaded laya agent and delegates ``predict`` to it."""
@@ -39,6 +41,19 @@ class _AgentBackend:
     def load_calibration(self, path: str) -> None:
         """Install a saved calibration onto the agent (temperatures/binning)."""
         self._agent.load_calibration(path)
+
+    def fit(self, rows, question_set: dict, out_dir):
+        """Fit calibration from labelled ``rows`` and save under ``out_dir``.
+
+        Keeps the raw laya agent encapsulated: ``fit_calibration`` needs the
+        agent itself (``fit_temperatures``/``save_calibration``), which only
+        this wrapper holds.
+        """
+        from rudra.decide.fit import fit_calibration  # noqa: PLC0415 - avoid import cycle
+
+        return fit_calibration(
+            self._agent, rows, question_set, out_dir, backend=self.name, model_id=self.model_id
+        )
 
     def predict(self, state: Any, questions: dict, min_confidence: float) -> dict:
         """Gated prediction: ``{qid: answer}`` with ``abstention`` populated.
