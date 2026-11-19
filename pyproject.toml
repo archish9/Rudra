@@ -85,16 +85,6 @@ dependencies = [
     "langfuse>=4.15.2",
 ]
 
-[project.optional-dependencies]
-# Markers select the wheel; runtime still selects the backend by capability.
-# laya-mlx is verified torch-free (mlx + mlx-metal only). The laya[onnx]
-# transitive deps are UNVERIFIED on this machine (see NOTES-output-schema.md);
-# torch/transformers must never move into core `dependencies`.
-decide = [
-    "laya-mlx; platform_machine == 'arm64' and sys_platform == 'darwin'",
-    "laya[onnx]; platform_machine != 'arm64' or sys_platform != 'darwin'",
-]
-
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",

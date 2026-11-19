@@ -175,13 +175,19 @@ src/rudra/
 │                           SPAN_DEADLINE ContextVar its middleware reads, and the
 │                           span_deadline contextmanager that owns the reset.
 │                           0.0 is no bound
-├── decide/                 In-process typed-decision layer (laya), behind the
-│                           optional `decide` extra. Backend chosen by
-│                           capability, MLX → ONNX → unavailable. Always safe:
-│                           an unavailable or malformed answer is an abstain,
-│                           and the caller falls back to Vaayu. Every decision
-│                           is logged. torch/transformers never enter core deps
-│                           (`tests/decide/test_no_torch_in_core.py`)
+├── decide/                 In-process typed-decision layer (laya). Backend chosen
+│                           by capability, MLX → ONNX → unavailable. Always
+│                           safe: an unavailable or malformed answer is an
+│                           abstain, and the caller falls back to Vaayu. Every
+│                           decision is logged. laya is a SIDECAR install, NOT
+│                           a project dependency: `laya-mlx` pins numpy<2 and
+│                           `laya[onnx]` pulls torch/nvidia, so either in the
+│                           lock would downgrade core numpy or pull torch.
+│                           Install out-of-band into your own environment:
+│                           `pip install laya-mlx` (Apple Silicon) or
+│                           `pip install 'laya[onnx]'` (elsewhere). Absent, the
+│                           engine is unavailable and Vaayu answers.
+│                           `tests/decide/test_no_torch_in_core.py` pins core
 ├── loop/                   The agentic loop. ledger · bounds · regressions ·
 │                           decomposition · dependencies · tools · engine.
 │                           ledger/bounds/regressions/decomposition import
