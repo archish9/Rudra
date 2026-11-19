@@ -175,6 +175,13 @@ src/rudra/
 │                           SPAN_DEADLINE ContextVar its middleware reads, and the
 │                           span_deadline contextmanager that owns the reset.
 │                           0.0 is no bound
+├── decide/                 In-process typed-decision layer (laya), behind the
+│                           optional `decide` extra. Backend chosen by
+│                           capability, MLX → ONNX → unavailable. Always safe:
+│                           an unavailable or malformed answer is an abstain,
+│                           and the caller falls back to Vaayu. Every decision
+│                           is logged. torch/transformers never enter core deps
+│                           (`tests/decide/test_no_torch_in_core.py`)
 ├── loop/                   The agentic loop. ledger · bounds · regressions ·
 │                           decomposition · dependencies · tools · engine.
 │                           ledger/bounds/regressions/decomposition import
