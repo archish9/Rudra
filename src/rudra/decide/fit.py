@@ -25,6 +25,19 @@ _log = logging.getLogger("rudra.decide")
 CALIBRATION_FILE = "calibration.json"
 META_FILE = "meta.json"
 
+
+def resolve_calibration_dir(cfg) -> Path:
+    """The calibration directory: ``[decide] calibration_dir`` if set, else the
+    global default ``$XDG_STATE_HOME/rudra/calibration``. Both ``rudra decide
+    fit`` and ``DecisionEngine.build`` resolve through here so they agree."""
+    explicit = getattr(getattr(cfg, "decide", None), "calibration_dir", None)
+    if explicit:
+        return Path(explicit)
+    from rudra.state.archive import calibration_home  # noqa: PLC0415 - avoid import cycle
+
+    return calibration_home()
+
+
 # Only these two questions have a label derivable from today's archive
 # (LABEL-SOURCES.md). Everything else ships zero-shot until S4-S6 instrument it.
 _DERIVABLE = ("complexity", "domain")

@@ -21,16 +21,24 @@ DEFAULT_MLX_REPO = "convaiinnovations/laya"
 @runtime_checkable
 class DecideBackend(Protocol):
     name: str
+    model_id: str
 
     def predict(self, state: Any, questions: dict, min_confidence: float) -> dict: ...
+
+    def load_calibration(self, path: str) -> None: ...
 
 
 class _AgentBackend:
     """Holds a loaded laya agent and delegates ``predict`` to it."""
 
-    def __init__(self, name: str, agent: Any) -> None:
+    def __init__(self, name: str, agent: Any, model_id: str = "") -> None:
         self.name = name
         self._agent = agent
+        self.model_id = model_id
+
+    def load_calibration(self, path: str) -> None:
+        """Install a saved calibration onto the agent (temperatures/binning)."""
+        self._agent.load_calibration(path)
 
     def predict(self, state: Any, questions: dict, min_confidence: float) -> dict:
         """Gated prediction: ``{qid: answer}`` with ``abstention`` populated.
@@ -82,7 +90,9 @@ def _load_onnx(cfg: Any) -> Any:
 
 def _try_mlx(cfg: Any) -> DecideBackend | None:
     try:
-        return _AgentBackend("mlx", _load_mlx(cfg))
+        return _AgentBackend(
+            "mlx", _load_mlx(cfg), _decide_setting(cfg, "mlx_repo", DEFAULT_MLX_REPO)
+        )
     except Exception as exc:  # ImportError, missing MLX, checkpoint/download failure
         log.debug("mlx backend unavailable: %s", exc)
         return None
@@ -90,7 +100,9 @@ def _try_mlx(cfg: Any) -> DecideBackend | None:
 
 def _try_onnx(cfg: Any) -> DecideBackend | None:
     try:
-        return _AgentBackend("onnx", _load_onnx(cfg))
+        return _AgentBackend(
+            "onnx", _load_onnx(cfg), _decide_setting(cfg, "onnx_model", DEFAULT_MLX_REPO)
+        )
     except Exception as exc:
         log.debug("onnx backend unavailable: %s", exc)
         return None
