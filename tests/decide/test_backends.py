@@ -10,7 +10,7 @@ class _Fake:
     def __init__(self, name: str) -> None:
         self.name = name
 
-    def predict(self, state, questions):
+    def predict(self, state, questions, min_confidence):
         return {}
 
 

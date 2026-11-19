@@ -22,7 +22,7 @@ DEFAULT_MLX_REPO = "convaiinnovations/laya"
 class DecideBackend(Protocol):
     name: str
 
-    def predict(self, state: Any, questions: dict) -> dict: ...
+    def predict(self, state: Any, questions: dict, min_confidence: float) -> dict: ...
 
 
 class _AgentBackend:
@@ -32,8 +32,33 @@ class _AgentBackend:
         self.name = name
         self._agent = agent
 
-    def predict(self, state: Any, questions: dict) -> dict:
-        return self._agent.predict(state, questions)
+    def predict(self, state: Any, questions: dict, min_confidence: float) -> dict:
+        """Gated prediction: ``{qid: answer}`` with ``abstention`` populated.
+
+        Plain ``agent.predict`` omits the ``abstention`` key, which the
+        normalizer reads as abstain; only the gated ``decide`` carries it.
+        """
+        if self.name == "mlx":
+            import laya_mlx
+
+            result = laya_mlx.decide(
+                self._agent,
+                state,
+                questions=questions,
+                return_details=True,
+                min_confidence=min_confidence,
+            )
+            return result.values
+        # TODO(S3): onnx gated call is unverified on this machine
+        import laya
+
+        return laya.decide(
+            self._agent,
+            state,
+            questions=questions,
+            return_details=True,
+            min_confidence=min_confidence,
+        ).values
 
 
 def _decide_setting(cfg: Any, field: str, default: Any) -> Any:
