@@ -206,6 +206,18 @@ class ToolsConfig:
 
 
 @dataclass(frozen=True)
+class DecideConfig:
+    """The laya decision layer. `calibration_dir` None means "derive from
+    state/paths.py at use time"; no absolute path is baked in here."""
+
+    enabled: bool = True
+    backend: str = "auto"  # auto | mlx | onnx | off
+    mlx_repo: str = "convaiinnovations/laya"
+    onnx_model: str = "convaiinnovations/laya"
+    calibration_dir: str | None = None
+
+
+@dataclass(frozen=True)
 class SkillsConfig:
     """Which skills enter an agent's prompt index. Un-reserved in Step 11b.
 
@@ -348,6 +360,13 @@ DEFAULTS: dict[str, Any] = {
         "max_parallel_tasks": 0,
         "proceed_known_bad": False,
     },
+    "decide": {
+        "enabled": True,
+        "backend": "auto",
+        "mlx_repo": "convaiinnovations/laya",
+        "onnx_model": "convaiinnovations/laya",
+        "calibration_dir": None,
+    },
     # The nine DEFAULT_ENABLED ships as data in rudra.skills.registry, not
     # duplicated here -- loader.py fills it in when the key is absent.
     "skills": {},
@@ -400,6 +419,7 @@ __all__ = [
     "VALID_PROVIDERS",
     "AgentConfig",
     "CompatConfig",
+    "DecideConfig",
     "ModelConfig",
     "PermissionsConfig",
     "ToolsConfig",

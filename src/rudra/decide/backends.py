@@ -15,7 +15,7 @@ from typing import Any, Protocol, runtime_checkable
 
 log = logging.getLogger("rudra.decide.backends")
 
-DEFAULT_MLX_REPO = "aac6fef/laya-mlx"
+DEFAULT_MLX_REPO = "convaiinnovations/laya"
 
 
 @runtime_checkable
