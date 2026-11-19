@@ -56,15 +56,17 @@ class ProjectKG:
         name = package.lower()
         when = _canonical_when(when)
         with KnowledgeGraph(db_path=self.graph_path) as kg:
+            # One closed [when, when] edge: opened and immediately closed, so it
+            # reads as "not current" (adverse) in a single write.
             kg.add_triple(
                 name,
                 UPGRADED_TO,
                 version,
                 valid_from=when,
+                valid_to=when,
                 confidence=_ADVERSE_CONFIDENCE,
                 source_closet=f"{run_id}{_SEP}{reason[:200]}",
             )
-            kg.invalidate(name, UPGRADED_TO, version, ended=when)
         return True
 
     @degrades(default=False)
@@ -75,9 +77,12 @@ class ProjectKG:
         name = package.lower()
         when = _canonical_when(when)
         with KnowledgeGraph(db_path=self.graph_path) as kg:
-            # Re-opening the edge is what clears the adverse record: the
-            # closed edge stays as history, a current one now exists.
-            kg.add_triple(name, UPGRADED_TO, version, valid_from=when, confidence=1.0)
+            # Native supersede atomically closes any open same-version edge at
+            # `when` and opens the success at that same instant. The adverse
+            # record stays as closed history; a current, full-confidence edge
+            # now exists. (A plain add_triple is a no-op when an open edge for
+            # the triple already exists, so the heal would silently not fire.)
+            kg.supersede(name, UPGRADED_TO, version, version, at=when, confidence=1.0)
         return True
 
     @degrades(default=[])
