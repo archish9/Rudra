@@ -64,6 +64,21 @@ You should see `Rudra v0.2.0`.
 
 Full walkthrough, including OS-specific notes: **[Installation](Documentation/01-getting-started.md)**.
 
+### Install laya (required)
+
+Rudra makes some of its decisions with a small **local** model, **laya**, and **won't
+start a run without it**. Install the build for your OS into the same environment, once:
+
+| Your machine | Command |
+|---|---|
+| **Apple Silicon** Mac | `pip install laya-mlx` |
+| **Linux / Windows / Intel Mac** | `pip install 'laya[onnx]'` |
+
+With `uv`, prefix with `uv pip` (e.g. `uv pip install laya-mlx`). The ONNX build is large —
+it pulls PyTorch — and the model checkpoint (~850 MB) downloads once on first use. Why it's
+a separate install rather than bundled, and how to run without it if you truly must:
+**[laya](Documentation/16-laya.md)**.
+
 ---
 
 ## Connect a model
@@ -540,6 +555,32 @@ Setup, settings, a full worked example, and what to do when a server misbehaves:
 
 ---
 
+## Decisions on your machine: laya
+
+Part of what an agent does between your prompt and the code isn't *writing* — it's small
+**typed decisions**: is this request too vague to start, which recovery to try when a task
+is blocked, whether a task even needs tests. Rudra makes those with
+[**laya**](https://github.com/NandhaKishorM/laya) — a tiny model that answers a fixed
+question (pick-one / score / yes-no) in one fast pass, **on your machine**, and says when
+it isn't sure. When laya is confident Rudra skips a round-trip to your main model; when it
+isn't, or a decision hasn't moved onto laya yet, your model answers as before. laya never
+writes code and never guesses blindly — unsure always means fall back.
+
+**laya is required** — Rudra won't start a run without it — but it is **not** a bundled
+dependency: the Apple-Silicon build pins NumPy below 2, the portable build pulls in
+PyTorch, and no single wheel covers every OS. So you install the right build once (see
+[Install laya](#install-laya-required) above), and Rudra keeps its base install small and
+NumPy-2-clean for it. If laya is missing, Rudra stops with a pointer to the install guide
+rather than silently doing less.
+
+If you genuinely can't run laya on your platform, `[decide] enabled = false` turns the
+decision layer off and Rudra runs as it did before — your model answers everything.
+
+Full detail — why it's required, per-OS install, the `[decide]` settings, and
+troubleshooting: **[laya](Documentation/16-laya.md)**.
+
+---
+
 ## Documentation
 
 | Guide | What's inside |
@@ -559,6 +600,7 @@ Setup, settings, a full worked example, and what to do when a server misbehaves:
 | **[13. Context and Memory](Documentation/13-context-and-memory.md)** | The one setting that matters (`context_tokens`), what a run costs, and what Rudra remembers between runs |
 | **[14. MCP](Documentation/14-mcp.md)** | Attach an outside tool server, control what it may do, and see a real one working |
 | **[15. Memory](Documentation/15-memory.md)** | MemPalace: what Rudra remembers about your project, how it comes back, and how to read, prune, export and restore it |
+| **[16. laya](Documentation/16-laya.md)** | The required local decision model: what it is, why it's a separate per-OS install, the `[decide]` settings, and how to run without it |
 
 New here? Read **[Getting Started](Documentation/01-getting-started.md)**, then **[Choosing a Model](Documentation/03-providers.md)**. Before an unattended run, read **[Permissions](Documentation/09-permissions.md)** and **[Tools](Documentation/11-tools.md)**. If the agent seems to lose track of what it was doing, read **[Context and Memory](Documentation/13-context-and-memory.md)** — it is almost always one unset setting — the same setting decides whether it recalls anything from earlier runs, which is **[Memory](Documentation/15-memory.md)**. Want it to reach tools Rudra doesn't ship? **[MCP](Documentation/14-mcp.md)**.
 

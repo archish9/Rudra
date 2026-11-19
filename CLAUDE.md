@@ -176,17 +176,30 @@ src/rudra/
 │                           span_deadline contextmanager that owns the reset.
 │                           0.0 is no bound
 ├── decide/                 In-process typed-decision layer (laya). Backend chosen
-│                           by capability, MLX → ONNX → unavailable. Always
-│                           safe: an unavailable or malformed answer is an
-│                           abstain, and the caller falls back to Vaayu. Every
-│                           decision is logged. laya is a SIDECAR install, NOT
-│                           a project dependency: `laya-mlx` pins numpy<2 and
-│                           `laya[onnx]` pulls torch/nvidia, so either in the
-│                           lock would downgrade core numpy or pull torch.
-│                           Install out-of-band into your own environment:
-│                           `pip install laya-mlx` (Apple Silicon) or
-│                           `pip install 'laya[onnx]'` (elsewhere). Absent, the
-│                           engine is unavailable and Vaayu answers.
+│                           by capability, MLX → ONNX → unavailable. Within a
+│                           run the engine is always safe: an unavailable or
+│                           malformed answer is an abstain and the caller falls
+│                           back to Vaayu; `DecisionEngine.build` never raises.
+│                           Every decision is logged. laya is a REQUIRED but
+│                           separately-installed dependency, NOT a locked one:
+│                           `laya-mlx` pins numpy<2 and `laya[onnx]` pulls
+│                           torch/nvidia, so either in the lock would downgrade
+│                           core numpy or pull torch for everyone. Installed
+│                           out-of-band per OS: `pip install laya-mlx` (Apple
+│                           Silicon) or `pip install 'laya[onnx]'` (elsewhere).
+│                           **A RUN-ENTRY GATE requires it**: when `[decide]
+│                           enabled` is true (default) and laya is not importable
+│                           for this OS, `RudraAgent.run()` (main_agent.py:339)
+│                           STOPS the run before planning and points the user to
+│                           `Documentation/16-laya.md` — the gate is additive and
+│                           separate from the engine's own graceful degradation,
+│                           so it never fires for `--version`/`doctor`/`init`/
+│                           `config` (they build no RudraAgent). `[decide]
+│                           enabled = false` is the one opt-out (runs without
+│                           laya, always Vaayu); `backend = "off"` does NOT lift
+│                           the requirement (installed-but-unused). `backends.py::
+│                           laya_installed` is the importability probe the gate
+│                           and `doctor` share.
 │                           `tests/decide/test_no_torch_in_core.py` pins core
 │                           torch-free
 ├── loop/                   The agentic loop. ledger · bounds · regressions ·

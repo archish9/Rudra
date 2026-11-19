@@ -99,6 +99,27 @@ rudra --version
 
 You want `Rudra v0.2.0`. If you get `0.0.0+unknown`, the package isn't properly installed — re-run your install step. If you get `command not found`, see [Troubleshooting](06-troubleshooting.md#command-not-found-rudra).
 
+## Install laya (required)
+
+Rudra makes some of its decisions with a small **local** model, **laya**, and will not
+start a run without it. Install the build for your OS into the **same environment** you
+just installed Rudra into:
+
+| Your machine | Command |
+|---|---|
+| Apple Silicon Mac (M-series) | `pip install laya-mlx` |
+| Linux, Windows, or Intel Mac | `pip install 'laya[onnx]'` |
+
+With `uv`, prefix with `uv pip` — `uv pip install laya-mlx` on Apple Silicon, or
+`uv pip install 'laya[onnx]'` everywhere else. The ONNX build is large (it pulls PyTorch),
+and laya's model checkpoint (~850 MB) downloads once on first use. Confirm it with
+`rudra doctor`.
+
+laya is a separate install on purpose — `laya-mlx` pins NumPy below 2 and `laya[onnx]`
+pulls PyTorch, neither of which belongs in everyone's base install. Why it's required, the
+`[decide]` settings, and how to run without it if you truly can't install it:
+**[laya](16-laya.md)**.
+
 ---
 
 ## Give Rudra a model
