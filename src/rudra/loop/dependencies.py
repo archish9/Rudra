@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
 
 from rudra.verify.result import FAILED, VerifyReport
@@ -146,4 +146,35 @@ def local_module_names(project_path: Path) -> frozenset[str]:
     return frozenset(names)
 
 
-__all__ = ["local_module_names", "missing_packages"]
+MANIFEST_BASENAMES: frozenset[str] = frozenset(
+    {
+        "requirements.txt",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "Pipfile",
+        "package.json",
+    }
+)
+
+
+def dependency_manifest_touched(files: Sequence[str]) -> str | None:
+    """The first path whose basename is a dependency manifest, else None.
+
+    Also matches the `requirements*.txt` family (requirements-dev.txt).
+    """
+    for f in files:
+        name = PurePosixPath(f.replace("\\", "/")).name
+        if name in MANIFEST_BASENAMES or (
+            name.startswith("requirements") and name.endswith(".txt")
+        ):
+            return f
+    return None
+
+
+__all__ = [
+    "MANIFEST_BASENAMES",
+    "dependency_manifest_touched",
+    "local_module_names",
+    "missing_packages",
+]

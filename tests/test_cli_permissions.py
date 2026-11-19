@@ -209,3 +209,19 @@ def test_the_notice_still_works_with_no_grants_at_all(tmp_path):
 
     reset_config()
     assert "permissions:" in _permission_notice(build_config(tmp_path))
+
+
+def test_allow_known_bad_flag_reaches_the_config(tmp_path, monkeypatch):
+    monkeypatch.setattr("rudra.permissions.stdin_is_interactive", lambda: False)
+    runner.invoke(app, ["-d", str(tmp_path), "--auto", "--allow-known-bad", "x"])
+    from rudra.config.loader import get_config
+
+    assert get_config().tools.proceed_known_bad is True
+
+
+def test_known_bad_proceed_defaults_off(tmp_path, monkeypatch):
+    monkeypatch.setattr("rudra.permissions.stdin_is_interactive", lambda: False)
+    runner.invoke(app, ["-d", str(tmp_path), "--auto", "x"])
+    from rudra.config.loader import get_config
+
+    assert get_config().tools.proceed_known_bad is False

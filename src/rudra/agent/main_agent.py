@@ -774,6 +774,19 @@ def build_memory_store(project_path: Path, cfg: Any, console: Console) -> Any:
         return None
 
 
+def build_project_kg(memory_store: Any) -> Any:
+    """The project's knowledge graph, beside the palace the store opened.
+
+    None exactly when there is no store, so the upgrade guard is off where
+    memory is off and on wherever it is on -- never off by omission.
+    """
+    if memory_store is None:
+        return None
+    from rudra.memory.kg import ProjectKG
+
+    return ProjectKG(memory_store.palace_path)
+
+
 def _open_run_log(
     paths: Any,
     session_id: str,
@@ -1078,6 +1091,7 @@ async def create_main_agent(
         # the rule the gate, the FactStore and the Ledger all follow. Two
         # MemoryStores would hold two ChromaDB handles on one palace.
         memory_store = build_memory_store(project_path, cfg, console)
+        project_kg = build_project_kg(memory_store)
 
         subagent_context = SubagentContext(
             project_path=project_path,
@@ -1157,6 +1171,7 @@ async def create_main_agent(
             paths=paths,
             usage=usage,
             memory=memory_store,
+            kg=project_kg,
             limiter=limiter,
             reroot=reroot,
             make_worktree=make_worktree,

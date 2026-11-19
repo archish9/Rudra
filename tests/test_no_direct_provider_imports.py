@@ -161,8 +161,11 @@ MEMORY_PACKAGE = "mempalace"
 # cache layout that can drift under it (D12 named the wrong cache, which is
 # what happens when the layout is described rather than executed).
 #
-# Adding a third entry here should require the same kind of argument.
-MEMORY_MODULES = ("memory/store.py", "memory/prefetch.py")
+# Adding another entry here should require the same kind of argument.
+# memory/kg.py: the temporal graph is a distinct vendor surface (a SQLite
+# graph, not the ChromaDB vector collection), so it earns its site the way
+# prefetch.py did.
+MEMORY_MODULES = ("memory/store.py", "memory/prefetch.py", "memory/kg.py")
 
 
 def test_only_the_memory_store_imports_mempalace() -> None:

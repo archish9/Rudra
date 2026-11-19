@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
@@ -34,9 +34,14 @@ from rudra.loop.bounds import (
     failure_signature,
     tests_produced_no_judgement,
 )
-from rudra.loop.dependencies import local_module_names, missing_packages
+from rudra.loop.dependencies import (
+    dependency_manifest_touched,
+    local_module_names,
+    missing_packages,
+)
 from rudra.loop.ledger import Ledger, Task, TaskStatus
 from rudra.loop.regressions import INHERITED, PASSED, REGRESSED, failure_keys, verdict_for
+from rudra.loop.upgrade_guard import GuardDecision, detect_upgrade_intent, evaluate_guard
 from rudra.memory.degrade import last_failure
 from rudra.memory.entry import MemoryEntry, fit_content
 from rudra.middleware.content_paths import (
@@ -87,6 +92,9 @@ class LoopContext:
     # reference with SubagentContext -- one run, one palace handle. Optional
     # for the reason `usage` is.
     memory: Any = None
+    # The run's ProjectKG, or None when it could not be built. Optional for
+    # the reason `memory` is.
+    kg: Any = None
     # What the gate was failing on when it last ran, as loop/regressions.py
     # keys (OPEN-23). Mutated by run_task, read by the next task, and
     # deliberately NOT persisted: a fresh process starts empty, every failure
@@ -98,6 +106,13 @@ class LoopContext:
     # place its failure and a green one both leave it empty. In memory for
     # the same reason, and False in a fresh process -- the blocking direction.
     baseline_failed: bool = False
+    # Task ids whose known-bad upgrade the user chose to run anyway. In
+    # memory, for `failure_baseline`'s reason: a fresh process asks again.
+    overridden_upgrades: set[str] = field(default_factory=set)
+    # The run's upgrade intent, detected ONCE from `ledger.request` (the user's
+    # own words, not a planner-rephrased subtask); None when the run is not an
+    # upgrade. In memory like the other run-scoped fields.
+    upgrade_intent: Any = None
     # How many subagent runs in a row never produced a turn (OPEN-33).
     # Mutated by run_task, reset by any run that does produce one. Not
     # persisted, for the reason `failure_baseline` is not: a fresh process
@@ -837,11 +852,129 @@ def _refund_dependency_gate(task: Task, report: Any, context: LoopContext, spent
     return True
 
 
+UPGRADE_GUARD_NOTICE = "upgrade-guard"
+UPGRADE_OVERRIDE_NOTICE = "upgrade-override"
+
+
+def guard_task(task: Task, context: LoopContext) -> GuardDecision:
+    """Whether the knowledge graph records this task's upgrade as harmful.
+
+    Unblocked whenever there is nothing to consult: no graph, no detectable
+    upgrade, no adverse edge. A fresh project must never be gated.
+    """
+    try:
+        if context.kg is None:
+            return evaluate_guard(None, [])
+        intent = context.upgrade_intent
+        if intent is None:
+            return evaluate_guard(None, [])
+        return evaluate_guard(intent, context.kg.adverse_upgrades(intent.package))
+    except Exception:  # noqa: BLE001 -- the guard fails open; it never ends a run
+        _LOG.debug("upgrade guard failed open", exc_info=True)
+        return evaluate_guard(None, [])
+
+
+_KNOWN_BAD_CHOICES = (
+    ("decline", "Decline", "block this task", "d"),
+    ("proceed", "Proceed", "run the upgrade anyway", "p"),
+)
+
+
+async def resolve_known_bad(decision: GuardDecision, context: LoopContext) -> bool:
+    """Whether a task the guard blocked may run anyway.
+
+    Unattended (`--auto`, or no terminal) the answer is the config flag, and
+    it is False by default. Attended, the user is asked, and no answer --
+    EOF, Ctrl-C, a closed pipe -- is a decline: an upgrade a run already
+    failed must never be repeated because a prompt went unanswered.
+    """
+    from rudra.permissions import stdin_is_interactive
+
+    cfg = context.cfg
+    flag = bool(getattr(getattr(cfg, "tools", None), "proceed_known_bad", False))
+    mode = getattr(getattr(cfg, "permissions", None), "mode", "ask")
+    if mode == "auto" or not stdin_is_interactive():
+        return flag
+
+    from rudra.ui import Cancelled, Choice, Chosen, initial
+    from rudra.ui.prompt import ask as ask_selection
+    from rudra.ui.prompt import ask_off_loop
+
+    console = context.console
+    console.print(f"\n[bold yellow]{escape(decision.explanation())}[/bold yellow]")
+    choices = tuple(
+        Choice(value=v, label=label, description=desc, hotkey=key)
+        for v, label, desc, key in _KNOWN_BAD_CHOICES
+    )
+    try:
+        outcome = await ask_off_loop(
+            lambda: ask_selection(initial(choices), console=console),
+            name="rudra-known-bad",
+        )
+    except (EOFError, KeyboardInterrupt):
+        return False
+    if isinstance(outcome, Cancelled) or not isinstance(outcome, Chosen) or not outcome.values:
+        return False
+    return outcome.values[0] == "proceed"
+
+
+def _guard_notice(context: LoopContext, text: str, name: str) -> None:
+    trace = getattr(context.subagents, "trace", None)
+    if trace is None:
+        return
+    try:
+        trace.notice(text, role="rudra", name=name)
+    except Exception:  # noqa: BLE001 -- observability never ends a run
+        _LOG.debug("could not emit the %s notice", name, exc_info=True)
+
+
+def _guard_summary(task: Task, decision: GuardDecision, *, verb: str) -> str:
+    intent = decision.intent
+    target = f"{intent.package} {intent.version or '(unversioned)'}" if intent else "?"
+    runs = ", ".join(sorted({e.run_id for e in decision.evidence})) or "unknown"
+    return f"{task.id}: upgrade of {target} {verb} a failed run (evidence run {runs})"
+
+
+def _supersede_upgrade(context: LoopContext, task: Task, *, upgrade_proven: bool) -> None:
+    """Record the overridden upgrade's success so the graph stops blocking it."""
+    # Only a PROVEN upgrade heals the record: the gate genuinely passed (not an
+    # inherited red) and a dependency manifest actually changed this run.
+    if not upgrade_proven or context.kg is None or task.id not in context.overridden_upgrades:
+        return
+    try:
+        intent = context.upgrade_intent
+        if intent is None or not intent.version:
+            return
+        written = context.kg.record_successful_upgrade(
+            intent.package, intent.version, when=datetime.now(timezone.utc).isoformat()
+        )
+        if written and context.usage is not None:
+            context.usage.record_kg_edge("coder")
+    except Exception:  # noqa: BLE001 -- bookkeeping never ends a run
+        _LOG.debug("could not supersede the adverse edge", exc_info=True)
+
+
+def _on_task_done(context: LoopContext, task: Task, *, verdict: Any) -> None:
+    """Everything a DONE task writes to memory. The one copy both DONE
+    returns in `run_task` call."""
+    record_task_in_memory(context.paths, task)
+    record_task_memory(context, task)
+    proven = verdict is PASSED and dependency_manifest_touched(task.files_touched) is not None
+    _supersede_upgrade(context, task, upgrade_proven=proven)
+
+
 async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outcome:
     """Write, verify, fix, reverify -- until the gate passes or we stop.
 
     Only this function writes DONE, and only on VerifyReport.passed.
     """
+    # The run's upgrade intent comes from the user's request, never from this
+    # subtask's description, which the planner has rephrased. Fails open.
+    try:
+        context.upgrade_intent = detect_upgrade_intent(ledger.request or "", {})
+    except Exception:  # noqa: BLE001 -- detection never ends a run
+        _LOG.debug("upgrade intent detection failed open", exc_info=True)
+        context.upgrade_intent = None
     tested = False
     blocker_text = ""
     # Gates this call gave back for failing only on undeclared packages
@@ -918,6 +1051,28 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     # apply to whatever the loop is bounded by, and two counters that must
     # agree are how `_is_build_output` drifted into three spellings (OPEN-64).
     budget = task.attempts + context.cfg.agent.max_fix_attempts
+
+    # The upgrade guard: BEFORE any coder invocation. A task whose upgrade
+    # the knowledge graph records as having failed is refused here, not
+    # discovered failing again. No new failure occurred, so no adverse edge
+    # is written for it (record_block_memory is deliberately not called).
+    decision = guard_task(task, context)
+    if decision.blocked:
+        _guard_notice(context, _guard_summary(task, decision, verb="matches"), UPGRADE_GUARD_NOTICE)
+        if context.usage is not None:
+            context.usage.record_upgrade_guard("coder")
+        if not await resolve_known_bad(decision, context):
+            task.status = TaskStatus.BLOCKED
+            task.note = decision.explanation()
+            return _stop(Outcome.BLOCKED)
+        context.overridden_upgrades.add(task.id)
+        if context.usage is not None:
+            context.usage.record_upgrade_override("coder")
+        _guard_notice(
+            context,
+            _guard_summary(task, decision, verb="proceeds despite"),
+            UPGRADE_OVERRIDE_NOTICE,
+        )
 
     while task.attempts < budget:
         dispatch += 1
@@ -1099,8 +1254,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
                     else _inherited_nothing_note(report, inherited, context.project_path)
                 )
                 outcome = _stop(Outcome.DONE)
-                record_task_in_memory(context.paths, task)
-                record_task_memory(context, task)
+                _on_task_done(context, task, verdict=verdict)
                 return outcome
             task.note = _wrote_nothing_note(blocker_text, report, context.project_path)
             # Then the blocker moves on to THIS gate (OPEN-131). Only the
@@ -1192,8 +1346,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # anyway (OPEN-23).
             task.note = "" if verdict is PASSED else _inherited_note(report, inherited)
             outcome = _stop(Outcome.DONE)
-            record_task_in_memory(context.paths, task)
-            record_task_memory(context, task)
+            _on_task_done(context, task, verdict=verdict)
             return outcome
 
         signature = failure_signature(report)
@@ -1438,15 +1591,36 @@ def record_block_memory(context: Any, task: Task) -> None:
     on the difference (OPEN-153). Only the palace's copy is cut; the note
     itself stays verbatim for the ledger and the planner.
     """
+    from rudra.loop.dependencies import dependency_manifest_touched
+
     store = getattr(context, "memory", None)
-    if store is None:
-        return
-    store.write(
-        MemoryEntry(
-            content=fit_content(f"Blocked: {task.description}. Reason: {task.note or 'unknown'}."),
-            room="blockers",
-            added_by="rudra",
+    if store is not None:
+        store.write(
+            MemoryEntry(
+                content=fit_content(
+                    f"Blocked: {task.description}. Reason: {task.note or 'unknown'}."
+                ),
+                room="blockers",
+                added_by="rudra",
+            )
         )
+
+    # The structured twin of the prose above: a blocked task that changed a
+    # dependency manifest AND names a concrete version is an upgrade that
+    # went bad. Facts are not plumbed to this call site, so intent is read
+    # from the run's request, cached on the context by `run_task`.
+    kg = getattr(context, "kg", None)
+    if kg is None or dependency_manifest_touched(task.files_touched) is None:
+        return
+    intent = getattr(context, "upgrade_intent", None)
+    if intent is None or intent.version is None:
+        return
+    kg.record_adverse_upgrade(
+        intent.package,
+        intent.version,
+        run_id=context.subagents.session_id,
+        reason=(task.note or "").split("\n")[0],
+        when=datetime.now(timezone.utc).isoformat(),
     )
 
 

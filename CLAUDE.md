@@ -193,7 +193,11 @@ src/rudra/
 │                           that only runs the tests (first word run/rerun/
 │                           execute + a test word, declined by a closed writing-
 │                           verb set). Words are edge-stripped of punctuation,
-│                           never split inside
+│                           never split inside. upgrade_guard.py + run_task's top:
+│                           a task re-upgrading a package the KG holds an adverse
+│                           edge for is BLOCKED with the evidence unless
+│                           `proceed_known_bad` / `--allow-known-bad`; an override
+│                           that passes supersedes the edge. Fails open
 ├── memory/                 Long-term memory. store.py is the ONLY module that
 │                           imports mempalace, and imports it lazily (chromadb
 │                           pulls onnxruntime/grpcio/opentelemetry, which at
@@ -205,7 +209,10 @@ src/rudra/
 │                           recall block; the write spine lives in loop/engine.py
 │                           beside the AGENTS.md writer. export.py owns both halves
 │                           of the round trip; prefetch.py warms chromadb's ONNX
-│                           MiniLM through mempalace's own code path
+│                           MiniLM through mempalace's own code path. kg.py is
+│                           the SECOND mempalace site (temporal graph, SQLite,
+│                           not ChromaDB): adverse `upgraded_to` edges;
+│                           `_canonical_when` keeps `when` mempalace-legal
 ├── trace/                  The run trace. events · render · stream · sink ·
 │                           debug. Imports nothing from agent/, loop/ or
 │                           subagents/. ONE event vocabulary, three consumers:
@@ -690,7 +697,7 @@ switch). Nothing is reserved — `RESERVED_SECTIONS` is `{}`. MCP *servers* live
 `.mcp.json`; the `[mcp]` section is about which of them Rudra uses. Unknown keys
 are fatal and suggest the nearest valid name.
 
-`[tools]` carries `shell`, `shell_in_auto`, `auto_branch` and `test_timeout`.
+`[tools]` carries `shell`, `shell_in_auto`, `auto_branch`, `proceed_known_bad` and `test_timeout`.
 
 `rudra init` scaffolds the file; `rudra config list` shows every effective value
 and the layer that set it. There is no `rudra config set`.
@@ -815,6 +822,7 @@ git config core.hooksPath .githooks  # once per clone: run all three gates on pu
 .venv/bin/rudra --no-debug "..."     # skip .rudra/run/logs/debug-<id>.jsonl (on by default)
 .venv/bin/rudra log --last           # replay a past run from its transcript
 .venv/bin/rudra --auto --allow-shell "..."   # ...and commands too, opted in explicitly
+.venv/bin/rudra --allow-known-bad "..."      # proceed past the KG upgrade guard
 .venv/bin/rudra --plan "..."         # show the plan and stop — writes nothing
 .venv/bin/rudra                      # REPL
 ```

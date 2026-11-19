@@ -1443,6 +1443,11 @@ def main(
         "--allow-shell",
         help="Let --auto run commands too (off by default: nobody reads them first)",
     ),
+    allow_known_bad: bool = typer.Option(
+        False,
+        "--allow-known-bad",
+        help="Let --auto run a dependency upgrade a past run recorded as failing",
+    ),
     allow_mcp: bool = typer.Option(
         False,
         "--allow-mcp",
@@ -1541,6 +1546,7 @@ def main(
         permission_mode=permission_mode,
         allow_shell=True if allow_shell else None,
         allow_mcp=True if allow_mcp else None,
+        allow_known_bad=True if allow_known_bad else None,
     )
 
     from rudra.permissions import disabled_floor_notice, stdin_is_interactive
@@ -1747,6 +1753,7 @@ def main(
                         permission_mode=permission_mode,
                         allow_shell=True if allow_shell else None,
                         allow_mcp=True if allow_mcp else None,
+                        allow_known_bad=True if allow_known_bad else None,
                     )
 
                     # A new request over pending work asks first (OPEN-162).

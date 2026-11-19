@@ -6,7 +6,11 @@ verbatim: run `4989aefefacb` t1, t11 and t12, and run `ea0cafc09997` t4.
 
 from __future__ import annotations
 
-from rudra.loop.dependencies import local_module_names, missing_packages
+from rudra.loop.dependencies import (
+    dependency_manifest_touched,
+    local_module_names,
+    missing_packages,
+)
 from rudra.verify.pipeline import _parse_findings
 from rudra.verify.result import FAILED, PASSED, StageResult, VerifyReport
 
@@ -226,3 +230,17 @@ def test_local_module_names_are_the_project_s_packages_and_modules(tmp_path):
     assert {"app", "routers", "todos", "main"} <= names
     assert "sqlalchemy" not in names, "the venv is build output, not the project"
     assert "README" not in names
+
+
+def test_detects_requirements():
+    assert dependency_manifest_touched(["src/app.py", "requirements.txt"]) == "requirements.txt"
+
+
+def test_detects_pyproject_and_requirements_variants():
+    assert dependency_manifest_touched(["requirements-dev.txt"]) == "requirements-dev.txt"
+    assert dependency_manifest_touched(["pyproject.toml"]) == "pyproject.toml"
+    assert dependency_manifest_touched(["a/b/requirements.txt"]) == "a/b/requirements.txt"
+
+
+def test_no_manifest_returns_none():
+    assert dependency_manifest_touched(["src/app.py", "tests/test_app.py"]) is None
