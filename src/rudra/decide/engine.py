@@ -87,7 +87,7 @@ class DecisionEngine:
             return _unavailable(questions)
         name = self._backend.name
         return {
-            qid: to_decision(qid, q["type"], (result or {}).get(qid) or {}, name)
+            qid: to_decision(qid, (q or {}).get("type", "?"), (result or {}).get(qid) or {}, name)
             for qid, q in questions.items()
         }
 

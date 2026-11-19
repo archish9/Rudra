@@ -52,3 +52,23 @@ def test_load_failure_means_not_this_backend(monkeypatch):
     monkeypatch.setattr(backends, "_load_mlx", boom)
     monkeypatch.setattr(backends, "_load_onnx", boom)
     assert select_backend(_cfg()) is None
+
+
+def test_mlx_predict_uses_the_gated_decide_call(monkeypatch):
+    import sys
+    import types
+
+    calls = {}
+    values = {"q": {"noul": 0.1, "abstention": "passed"}}
+
+    def fake_decide(agent, state, **kwargs):
+        calls.update(kwargs)
+        return types.SimpleNamespace(values=values)
+
+    stub = types.ModuleType("laya_mlx")
+    stub.decide = fake_decide
+    monkeypatch.setitem(sys.modules, "laya_mlx", stub)
+
+    out = backends._AgentBackend("mlx", object()).predict("s", {"q": {}}, 0.75)
+    assert out is values
+    assert calls["return_details"] is True and calls["min_confidence"] == 0.75

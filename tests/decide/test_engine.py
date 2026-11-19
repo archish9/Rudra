@@ -93,3 +93,9 @@ def test_record_writes_a_decision_log_line(caplog):
     events = [r.event for r in caplog.records if hasattr(r, "event")]
     assert events and events[0]["kind"] == DECISION_EVENT
     assert events[0]["question_id"] == "q1" and events[0]["acted"] is True
+
+
+def test_malformed_question_abstains(monkeypatch):
+    eng = _engine(monkeypatch, _Fake({}))
+    d = eng.decide("hi", {"q": {"instructions": "no type"}})["q"]
+    assert d.abstain and not should_act(d)
