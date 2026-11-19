@@ -72,3 +72,54 @@ def test_mlx_predict_uses_the_gated_decide_call(monkeypatch):
     out = backends._AgentBackend("mlx", object()).predict("s", {"q": {}}, 0.75)
     assert out is values
     assert calls["return_details"] is True and calls["min_confidence"] == 0.75
+
+
+# --- laya_installed: importability only, no laya needed ---------------------
+
+
+def _fake_modules(monkeypatch, present: set[str]) -> None:
+    import sys
+
+    for name in ("laya", "laya_mlx"):
+        if name in present:
+            monkeypatch.setitem(sys.modules, name, SimpleNamespace())
+        else:
+            monkeypatch.setitem(sys.modules, name, None)  # import raises ImportError
+
+
+def test_laya_installed_mlx_only(monkeypatch):
+    _fake_modules(monkeypatch, {"laya_mlx"})
+    assert backends.laya_installed(_cfg("auto")) is True
+    assert backends.laya_installed(_cfg("mlx")) is True
+    assert backends.laya_installed(_cfg("onnx")) is False
+
+
+def test_laya_installed_onnx_only(monkeypatch):
+    _fake_modules(monkeypatch, {"laya"})
+    assert backends.laya_installed(_cfg("auto")) is True
+    assert backends.laya_installed(_cfg("onnx")) is True
+    assert backends.laya_installed(_cfg("mlx")) is False
+
+
+def test_laya_installed_neither(monkeypatch):
+    _fake_modules(monkeypatch, set())
+    for choice in ("auto", "mlx", "onnx", "off"):
+        assert backends.laya_installed(_cfg(choice)) is False
+
+
+def test_off_still_requires_laya_installed(monkeypatch):
+    _fake_modules(monkeypatch, {"laya"})
+    assert backends.laya_installed(_cfg("off")) is True
+    _fake_modules(monkeypatch, set())
+    assert backends.laya_installed(_cfg("off")) is False
+
+
+def test_laya_installed_never_loads(monkeypatch):
+    import sys
+
+    def boom(*a, **k):
+        raise AssertionError("load called")
+
+    monkeypatch.setitem(sys.modules, "laya_mlx", SimpleNamespace(load=boom))
+    monkeypatch.setitem(sys.modules, "laya", SimpleNamespace(onnx_agent=boom))
+    assert backends.laya_installed(_cfg()) is True

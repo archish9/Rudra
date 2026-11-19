@@ -887,6 +887,24 @@ def doctor_command(
         )
     table.add_row("shell", "warn" if cfg.tools.shell_in_auto else "ok", escape(shell_state))
 
+    from rudra.decide.backends import laya_build
+    from rudra.decide.gate import DOC, INSTALL_HINT
+
+    _laya = laya_build(cfg)
+    if _laya:
+        table.add_row("laya", "ok", escape(f"importable, {_laya} build"))
+    else:
+        _needed = getattr(getattr(cfg, "decide", None), "enabled", True)
+        table.add_row(
+            "laya",
+            "warn" if _needed else "-",
+            escape(
+                f"not installed. {INSTALL_HINT}. See {DOC}"
+                if _needed
+                else f"not installed; [decide] enabled = false. See {DOC}"
+            ),
+        )
+
     if not offline:
         from rudra.llm.probe import probe_role, roles_to_probe
 

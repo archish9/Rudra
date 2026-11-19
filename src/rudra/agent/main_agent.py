@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from rudra.config import get_config
+from rudra.decide.gate import require_laya
 from rudra.facts import FactStore, facts_block
 from rudra.git.core import auto_branch
 from rudra.llm.batching import resolve_endpoint_concurrency
@@ -357,6 +358,14 @@ class RudraAgent:
         recorder could not catch.
         """
         self._notice(f"run {self.session_id} started", "run")
+        blocked = require_laya(get_config())
+        if blocked is not None:
+            # Before any planning or model call. A failed AgentResult is the
+            # channel cli.py already turns into an error panel and exit 1.
+            self._notice(f"laya required: {blocked}", "laya-gate")
+            self._notice(f"run {self.session_id} ended: failed: {blocked}", "run")
+            self._last_message = blocked
+            return AgentResult(False, blocked)
         try:
             result = await self._run()
         except BaseException as exc:

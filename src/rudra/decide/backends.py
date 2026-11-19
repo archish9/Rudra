@@ -108,3 +108,32 @@ def select_backend(cfg: Any) -> DecideBackend | None:
     if choice in ("auto", "onnx"):
         return _try_onnx(cfg)
     return None
+
+
+def _importable(module: str) -> bool:
+    """True iff ``import module`` succeeds. Imports only; never loads a model."""
+    try:
+        __import__(module)
+    except Exception as exc:  # ImportError, or a broken native dependency
+        log.debug("%s not importable: %s", module, exc)
+        return False
+    return True
+
+
+def laya_build(cfg: Any) -> str | None:
+    """Which laya build is importable here ("mlx" / "onnx"), else None.
+
+    Honours a forced ``backend``; "off" still probes, because off means
+    installed-but-unused. Never calls ``load``.
+    """
+    choice = _decide_setting(cfg, "backend", "auto")
+    if choice in ("auto", "off", "mlx") and _importable("laya_mlx"):
+        return "mlx"
+    if choice in ("auto", "off", "onnx") and _importable("laya"):
+        return "onnx"
+    return None
+
+
+def laya_installed(cfg: Any) -> bool:
+    """True iff a laya package usable for ``cfg`` is importable on this machine."""
+    return laya_build(cfg) is not None
