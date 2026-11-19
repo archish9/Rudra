@@ -102,6 +102,13 @@ Per-run files present: `ledger.json`, `facts.json`, `meta.json`,
   abstain→Vaayu safety path, which S1 already guarantees. The ordering in
   `TODO.md` (176 clarify, 177 recovery, 178 triage, 179 mcp/skill) stands —
   fit-readiness is not the gate, the abstain path is.
-- **Task 3 stubs land for:** #2 (clarify), #1 (failure-class recovery outcome),
-  #3 `needs_tests`. Not #4 (no call site yet) and not #3 `complexity`/`domain`
-  (already derivable).
+- **Task 3 stub (landed):** `decide/log.py::record_label` — one swallow-failure
+  `kind="decision_label"` emitter (metadata only) for #2, #1, and #3
+  `needs_tests`. It is the shared primitive those decisions' sessions call **at
+  the point the label is knowable**, because every one of those labels is a
+  recovery/clarify/dispatch OUTCOME that does not exist until S4–S6 build the
+  decision site (0 outcome rows exist today). Wiring a speculative emission into
+  `planner_agent.py` / `engine.py` / `parallel.py` now would add input-only rows
+  that cannot be fit and churn files S4–S6 own; the tested primitive is the
+  correct stub. No stub for #4 (no call site yet) or #3 `complexity`/`domain`
+  (already derivable from the archive).

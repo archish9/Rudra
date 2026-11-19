@@ -12,6 +12,7 @@ import logging
 from rudra.decide.engine import Decision
 
 DECISION_EVENT = "decision"
+LABEL_EVENT = "decision_label"
 
 _logger = logging.getLogger("rudra.decide")
 
@@ -42,4 +43,37 @@ def record(decision: Decision, *, acted: bool) -> None:
             },
         )
     except Exception:  # noqa: BLE001 - a diagnostic must never fail the run
+        pass
+
+
+def record_label(
+    *,
+    question_id: str,
+    stage: str,
+    features: dict,
+    label: object,
+    pending: bool = False,
+) -> None:
+    """Emit one training-label row for a decision laya cannot yet fit from the
+    archive (see ``LABEL-SOURCES.md``). Metadata only -- ``features`` carry the
+    caller's chosen scalar signals, never raw prompt/state text.
+
+    ``pending=True`` records an input row whose outcome label is not yet known
+    (e.g. a blocked-task cause before the recovery converges). Never raises.
+    """
+    try:
+        _logger.info(
+            "decision_label",
+            extra={
+                "event": {
+                    "kind": LABEL_EVENT,
+                    "question_id": question_id,
+                    "stage": stage,
+                    "features": {str(k): _scalar(v) for k, v in (features or {}).items()},
+                    "label": _scalar(label),
+                    "pending": pending,
+                }
+            },
+        )
+    except Exception:  # noqa: BLE001 - bookkeeping may never end a run
         pass
