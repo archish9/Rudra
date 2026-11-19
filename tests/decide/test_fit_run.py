@@ -129,6 +129,30 @@ def test_nothing_served_writes_no_file(tmp_path):
     assert agent.saved_to is None
 
 
+def test_fitter_crash_degrades_to_zero_shot_not_raise(tmp_path):
+    # laya-mlx fit_temperatures does `import torch`, absent in the mlx-only
+    # install: once a qtype clears MIN_TYPE_N it raises. The fit must degrade to
+    # zero-shot and report why, never crash the command.
+    class _TorchlessAgent(_StubAgent):
+        def fit_temperatures(self, records, compute_ece=False, seed=0):
+            raise ModuleNotFoundError("No module named 'torch'")
+
+    cal = _FakeCalibrate({"score:1-3": 0.8})
+    report = fit_calibration(
+        _TorchlessAgent(),
+        _rows(40),
+        {"complexity": TASK_TRIAGE["complexity"]},
+        tmp_path,
+        backend="mlx",
+        model_id="m",
+        calibrate=cal,
+    )
+    assert report.calibration_written is False
+    assert report.per_question["complexity"].served is False
+    assert "torch" in report.per_question["complexity"].note.lower()
+    assert not (tmp_path / "calibration.json").exists()
+
+
 def test_no_rows_reports_no_label_and_skips_laya(tmp_path):
     cal = _FakeCalibrate({"score:1-3": 0.8})
     agent = _StubAgent()

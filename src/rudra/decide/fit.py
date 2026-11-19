@@ -254,13 +254,24 @@ def fit_calibration(
         _log_report(per_q, backend)
         return FitReport(per_question=per_q, calibration_written=False)
 
+    # The fitters can fail for a reason that is not "bad data": laya-mlx's
+    # fit_temperatures does `import torch`, absent in the mlx-only install, so
+    # once a qtype clears its sample floor it raises. A fit that cannot run is
+    # reported and the questions stay zero-shot -- never a crash, never a
+    # fabricated gate (CLAUDE.md 8a: bookkeeping may not end a run).
     cal = calibrate or _lazy_calibrate()
-    records = cal.records_from_labeled(agent, rows)
-    agent.fit_temperatures(records)
-    thresholds = dict(
-        cal.fit_abstention_thresholds(records, agent.temperature, agent.temperature_by_options)
-        or {}
-    )
+    fit_error: str | None = None
+    thresholds: dict = {}
+    try:
+        records = cal.records_from_labeled(agent, rows)
+        agent.fit_temperatures(records)
+        thresholds = dict(
+            cal.fit_abstention_thresholds(records, agent.temperature, agent.temperature_by_options)
+            or {}
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed fit degrades, never raises
+        fit_error = f"fit unavailable: {type(exc).__name__}: {exc}"
+        _log.warning("decide fit degraded to zero-shot: %s", fit_error)
 
     per_q: dict[str, QFit] = {}
     for qid, q in question_set.items():
@@ -268,6 +279,8 @@ def fit_calibration(
         qtype = q.get("type", "?") if isinstance(q, dict) else "?"
         if n == 0:
             per_q[qid] = QFit(n, False, "no label in archive")
+        elif fit_error is not None:
+            per_q[qid] = QFit(n, False, fit_error)
         elif _bucket_serves(qtype, thresholds):
             per_q[qid] = QFit(n, True, "served")
         else:
