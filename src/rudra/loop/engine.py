@@ -109,6 +109,10 @@ class LoopContext:
     # Task ids whose known-bad upgrade the user chose to run anyway. In
     # memory, for `failure_baseline`'s reason: a fresh process asks again.
     overridden_upgrades: set[str] = field(default_factory=set)
+    # The run's upgrade intent, detected ONCE from `ledger.request` (the user's
+    # own words, not a planner-rephrased subtask); None when the run is not an
+    # upgrade. In memory like the other run-scoped fields.
+    upgrade_intent: Any = None
     # How many subagent runs in a row never produced a turn (OPEN-33).
     # Mutated by run_task, reset by any run that does produce one. Not
     # persisted, for the reason `failure_baseline` is not: a fresh process
@@ -861,7 +865,7 @@ def guard_task(task: Task, context: LoopContext) -> GuardDecision:
     try:
         if context.kg is None:
             return evaluate_guard(None, [])
-        intent = detect_upgrade_intent(task.description, {})
+        intent = context.upgrade_intent
         if intent is None:
             return evaluate_guard(None, [])
         return evaluate_guard(intent, context.kg.adverse_upgrades(intent.package))
@@ -938,7 +942,7 @@ def _supersede_upgrade(context: LoopContext, task: Task, *, upgrade_proven: bool
     if not upgrade_proven or context.kg is None or task.id not in context.overridden_upgrades:
         return
     try:
-        intent = detect_upgrade_intent(task.description, {})
+        intent = context.upgrade_intent
         if intent is None or not intent.version:
             return
         written = context.kg.record_successful_upgrade(
@@ -964,6 +968,13 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
 
     Only this function writes DONE, and only on VerifyReport.passed.
     """
+    # The run's upgrade intent comes from the user's request, never from this
+    # subtask's description, which the planner has rephrased. Fails open.
+    try:
+        context.upgrade_intent = detect_upgrade_intent(ledger.request or "", {})
+    except Exception:  # noqa: BLE001 -- detection never ends a run
+        _LOG.debug("upgrade intent detection failed open", exc_info=True)
+        context.upgrade_intent = None
     tested = False
     blocker_text = ""
     # Gates this call gave back for failing only on undeclared packages
@@ -1581,7 +1592,6 @@ def record_block_memory(context: Any, task: Task) -> None:
     itself stays verbatim for the ledger and the planner.
     """
     from rudra.loop.dependencies import dependency_manifest_touched
-    from rudra.loop.upgrade_guard import detect_upgrade_intent
 
     store = getattr(context, "memory", None)
     if store is not None:
@@ -1598,11 +1608,11 @@ def record_block_memory(context: Any, task: Task) -> None:
     # The structured twin of the prose above: a blocked task that changed a
     # dependency manifest AND names a concrete version is an upgrade that
     # went bad. Facts are not plumbed to this call site, so intent is read
-    # from the description alone.
+    # from the run's request, cached on the context by `run_task`.
     kg = getattr(context, "kg", None)
     if kg is None or dependency_manifest_touched(task.files_touched) is None:
         return
-    intent = detect_upgrade_intent(task.description, {})
+    intent = getattr(context, "upgrade_intent", None)
     if intent is None or intent.version is None:
         return
     kg.record_adverse_upgrade(

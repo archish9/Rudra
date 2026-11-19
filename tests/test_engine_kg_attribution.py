@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from rudra.loop.engine import LoopContext, record_block_memory
 from rudra.loop.ledger import Task, TaskStatus
+from rudra.loop.upgrade_guard import detect_upgrade_intent
 
 
 class RecordingKG:
@@ -42,7 +43,9 @@ def blocked_task(description: str, files_touched: tuple[str, ...], note: str) ->
 def test_blocked_dep_upgrade_writes_adverse_edge() -> None:
     kg = RecordingKG()
     task = blocked_task("Upgrade flask to 3.0", ("requirements.txt",), "broke 4 tests\n...")
-    record_block_memory(loop_context(kg=kg), task)
+    ctx = loop_context(kg=kg)
+    ctx.upgrade_intent = detect_upgrade_intent("upgrade flask to 3.0", {})
+    record_block_memory(ctx, task)
     assert kg.adverse == [("flask", "3.0", "run42", "broke 4 tests")]
 
 
@@ -57,3 +60,18 @@ def test_blocked_non_dep_task_writes_no_edge() -> None:
 def test_no_kg_is_a_silent_noop() -> None:
     task = blocked_task("Upgrade flask to 3.0", ("requirements.txt",), "boom")
     record_block_memory(loop_context(kg=None), task)
+
+
+def test_attribution_reads_run_intent_not_description() -> None:
+    from rudra.loop.upgrade_guard import detect_upgrade_intent
+
+    kg = RecordingKG()
+    ctx = loop_context(kg=kg)
+    ctx.upgrade_intent = detect_upgrade_intent("upgrade flask to 3.0", {})
+    task = blocked_task(
+        "Update requirements.txt: change flask==2.2.5 to flask==3.0.x",
+        ("requirements.txt",),
+        "broke 4 tests\n...",
+    )
+    record_block_memory(ctx, task)
+    assert kg.adverse == [("flask", "3.0", "run42", "broke 4 tests")]

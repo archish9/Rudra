@@ -96,7 +96,8 @@ def answer(value: bool):
 
 async def run_upgrade(ctx):
     ledger = Ledger()
-    task = ledger.add("Upgrade flask to 3.0")
+    ledger.request = "upgrade flask to 3.0"
+    task = ledger.add("Update requirements.txt: change flask==2.2.5 to flask==3.0.x")
     outcome = await run_task(task, ledger, context=ctx)
     return outcome, task
 
@@ -135,6 +136,28 @@ async def test_auto_mode_proceeds_with_flag(tmp_path, dispatched):
     )
     outcome, _ = await run_upgrade(ctx)
     assert outcome is Outcome.DONE
+
+
+async def test_non_upgrade_request_never_gates(tmp_path, dispatched):
+    """A rephrased-looking description alone is not intent: the request decides."""
+    ctx = loop_context(tmp_path, kg=kg_with_adverse(tmp_path, "flask", "3.0"))
+    ledger = Ledger()
+    ledger.request = "add a health endpoint"
+    task = ledger.add("Upgrade flask to 3.0")
+    assert await run_task(task, ledger, context=ctx) is Outcome.DONE
+
+
+async def test_guard_reads_the_request_not_the_subtask_description(
+    tmp_path, monkeypatch, dispatched
+):
+    """The live gap: the planner rephrases the request into subtasks."""
+    ctx = loop_context(tmp_path, kg=kg_with_adverse(tmp_path, "flask", "3.0"))
+    monkeypatch.setattr(engine, "resolve_known_bad", answer(False))
+    ledger = Ledger()
+    ledger.request = "upgrade flask to 3.0"
+    task = ledger.add("Replace flask.Markup with markupsafe.Markup in app.py")
+    outcome = await run_task(task, ledger, context=ctx)
+    assert outcome is Outcome.BLOCKED and dispatched == []
 
 
 async def test_empty_graph_never_gates(tmp_path, dispatched):
