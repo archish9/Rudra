@@ -99,3 +99,15 @@ def test_malformed_question_abstains(monkeypatch):
     eng = _engine(monkeypatch, _Fake({}))
     d = eng.decide("hi", {"q": {"instructions": "no type"}})["q"]
     assert d.abstain and not should_act(d)
+
+
+def test_non_dict_question_value_abstains_not_raises(monkeypatch):
+    off = DecisionEngine.build(_cfg(enabled=False))
+    out = off.decide("s", {"q": "noul"})
+    assert out["q"].backend == "unavailable"
+    assert should_act(out["q"]) is False
+
+    eng = _engine(monkeypatch, _Fake(result={}))
+    out = eng.decide("s", {"q": "noul"})
+    assert out["q"].abstain is True
+    assert should_act(out["q"]) is False

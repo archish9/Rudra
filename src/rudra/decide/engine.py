@@ -32,11 +32,16 @@ DEFAULT_MIN_CONFIDENCE = 0.75
 _KNOWN_BACKENDS = {"auto", "mlx", "onnx", "off"}
 
 
+def _qdict(q: object) -> dict:
+    """A question value that is not a dict is treated as empty, never raised on."""
+    return q if isinstance(q, dict) else {}
+
+
 def _unavailable(questions: dict) -> dict[str, Decision]:
     return {
         qid: Decision(
             question_id=qid,
-            kind=(q or {}).get("type", "?"),
+            kind=_qdict(q).get("type", "?"),
             value=None,
             probabilities=None,
             prediction_set=None,
@@ -87,7 +92,7 @@ class DecisionEngine:
             return _unavailable(questions)
         name = self._backend.name
         return {
-            qid: to_decision(qid, (q or {}).get("type", "?"), (result or {}).get(qid) or {}, name)
+            qid: to_decision(qid, _qdict(q).get("type", "?"), (result or {}).get(qid) or {}, name)
             for qid, q in questions.items()
         }
 

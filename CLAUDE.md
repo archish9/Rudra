@@ -188,6 +188,7 @@ src/rudra/
 │                           `pip install 'laya[onnx]'` (elsewhere). Absent, the
 │                           engine is unavailable and Vaayu answers.
 │                           `tests/decide/test_no_torch_in_core.py` pins core
+│                           torch-free
 ├── loop/                   The agentic loop. ledger · bounds · regressions ·
 │                           decomposition · dependencies · tools · engine.
 │                           ledger/bounds/regressions/decomposition import
