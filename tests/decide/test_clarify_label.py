@@ -49,9 +49,7 @@ def test_unasked_converged_run_is_labelled_false():
 
 
 def test_coerces_feature_types():
-    row = clarify_label_row(
-        greenfield=1, asked=0, questions_n="5", run_succeeded=1, attempted=True
-    )
+    row = clarify_label_row(greenfield=1, asked=0, questions_n="5", run_succeeded=1, attempted=True)
     f = row["features"]
     assert f["greenfield"] is True and f["asked"] is False
     assert f["questions_n"] == 5 and isinstance(f["questions_n"], int)
