@@ -25,6 +25,8 @@ from rich.markup import escape
 
 from rudra.context.middleware import log_model_call
 from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
+from rudra.decide.gates import skip_clarify
+from rudra.filesystem import is_greenfield
 from rudra.git.core import is_clean, is_repo, status
 from rudra.llm.providers import effective_base_url
 from rudra.loop.bounds import (
@@ -136,6 +138,16 @@ class LoopContext:
     reroot: Any = None
     make_worktree: Any = None
     run_main_gate: Any = None
+    # The run's in-process DecisionEngine (laya), or None when the decision
+    # layer is not wired. Built once at run setup (main_agent) and shared by
+    # reference. None here means every laya gate falls back to today's path --
+    # the safe direction, and what every pre-OPEN-176 test gets by default.
+    decide: Any = None
+    # Whether a human can answer a prompt this run (TTY + mode != auto). Needed
+    # by the clarify gate (OPEN-176): a non-interactive run never skips clarify,
+    # because clarify still records facts without asking. Defaults False so a
+    # LoopContext built without it never skips -- the safe direction.
+    interactive: bool = False
 
 
 def _digest(path: Path) -> str:
@@ -2042,7 +2054,33 @@ async def plan(
     # up in full at docs/superpowers/plans/2026-09-02-open-83-planner-
     # provider-error-is-fatal.md §5(b); do not implement it without asking
     # again, and do not re-file the asymmetry as a defect.
+    # OPEN-176: let laya decide whether clarify can be skipped (removes its
+    # Vaayu round-trip). The predict() is a blocking forward pass, so offload
+    # it; skip_clarify returns False on every uncertain/unavailable path, so a
+    # None engine or any doubt runs all three stages exactly as before.
+    skip = False
+    engine = getattr(context, "decide", None)
+    if engine is not None:
+        skip = await asyncio.to_thread(
+            skip_clarify,
+            engine,
+            request,
+            greenfield=is_greenfield(context.project_path),
+            interactive=getattr(context, "interactive", False),
+            max_questions=context.cfg.agent.max_questions,
+        )
+        if skip:
+            trace = getattr(getattr(context, "subagents", None), "trace", None)
+            if trace is not None:
+                trace.notice(
+                    "clarify skipped: laya judged the request unambiguous",
+                    role="planner",
+                    name="clarify-gate",
+                )
+
     for stage in ("clarify", "architect", "breakdown"):
+        if stage == "clarify" and skip:
+            continue
         await planner(ledger, request, stage=stage, reason="initial")
 
     return ledger

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -10,6 +11,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from rudra.config import get_config
+from rudra.decide.engine import DecisionEngine
 from rudra.decide.gate import require_laya
 from rudra.facts import FactStore, facts_block
 from rudra.git.core import auto_branch
@@ -1172,6 +1174,14 @@ async def create_main_agent(
             except Exception:  # noqa: BLE001 -- a flaky gate must not revert good work
                 return frozenset()
 
+        # The run's one DecisionEngine (laya), built once here and shared by
+        # reference through LoopContext (OPEN-176; S5-S7 reuse it). `build`
+        # never raises and returns an unavailable engine when laya is absent
+        # or [decide] is off, so every gate then falls back to Vaayu. Built off
+        # the loop thread: an MLX cold load reads a checkpoint off disk and
+        # would otherwise block setup (and Ctrl-C) for a minute.
+        decide_engine = await asyncio.to_thread(DecisionEngine.build, cfg)
+
         loop_context = LoopContext(
             subagents=subagent_context,
             project_path=project_path,
@@ -1185,6 +1195,8 @@ async def create_main_agent(
             reroot=reroot,
             make_worktree=make_worktree,
             run_main_gate=run_main_gate,
+            decide=decide_engine,
+            interactive=interactive,
         )
 
         # One Ledger, shared by reference: the planner's tools mutate it and the
