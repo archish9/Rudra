@@ -41,7 +41,13 @@ def test_fit_with_unavailable_backend_exits_zero(tmp_path, monkeypatch):
 
 
 def test_status_with_unavailable_backend(tmp_path, monkeypatch):
-    monkeypatch.setattr("rudra.decide.backends.select_backend", lambda cfg: None)
+    # `decide status` goes through DecisionEngine.build, which calls the
+    # select_backend bound into rudra.decide.engine (engine.py does
+    # `from ...backends import select_backend`). Patch THAT name, not
+    # backends.*, or an installed laya makes the engine build a real backend
+    # and the patch never bites. (`decide fit` late-imports, so its tests patch
+    # backends.* correctly.)
+    monkeypatch.setattr("rudra.decide.engine.select_backend", lambda cfg: None)
     result = runner.invoke(app, ["decide", "status", "-d", str(tmp_path)])
     assert result.exit_code == 0
     assert "unavailable" in result.output.lower()

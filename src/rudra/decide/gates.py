@@ -55,3 +55,38 @@ def skip_clarify(
     skip = should_act(d) and not_ambiguous
     record(d, acted=skip)
     return skip
+
+
+def clarify_label_row(
+    *,
+    greenfield,
+    asked,
+    questions_n,
+    run_succeeded,
+    attempted: bool,
+) -> dict | None:
+    """Build one ``needs_clarification`` training row, or None if unlabelable.
+
+    The honest label -- was clarification actually needed? -- is a run OUTCOME,
+    unknowable when the clarify gate fires, so this is built at run end
+    (LABEL-SOURCES.md §#2 Task 3). A run that worked no task has no outcome, so
+    returns None. ``label`` is the ``asked`` proxy: it imitates today's clarify
+    trigger rather than judging true ambiguity (a known leak, LABEL-SOURCES:44),
+    so every raw signal is kept in ``features`` and a later fit re-derives the
+    gold label from them without re-instrumenting. Pure: primitives in, dict
+    out, the shape ``decide.log.record_label`` consumes.
+    """
+    if not attempted:
+        return None
+    return {
+        "question_id": "needs_clarification",
+        "stage": "clarify",
+        "features": {
+            "greenfield": bool(greenfield),
+            "asked": bool(asked),
+            "questions_n": int(questions_n),
+            "run_converged": bool(run_succeeded),
+        },
+        "label": bool(asked),
+        "pending": False,
+    }

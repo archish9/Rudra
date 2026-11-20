@@ -13,7 +13,10 @@ from rich.markup import escape
 from rudra.config import get_config
 from rudra.decide.engine import DecisionEngine
 from rudra.decide.gate import require_laya
+from rudra.decide.gates import clarify_label_row
+from rudra.decide.log import record_label
 from rudra.facts import FactStore, facts_block
+from rudra.filesystem import is_greenfield
 from rudra.git.core import auto_branch
 from rudra.llm.batching import resolve_endpoint_concurrency
 from rudra.llm.concurrency import EndpointLimiter
@@ -241,6 +244,37 @@ class RudraAgent:
         # telemetry and runs after run() has returned or raised.
         self._last_message = ""
         self.iterations = 0
+        # OPEN-176 label accrual. `_greenfield_at_start` is captured in run()
+        # BEFORE any write (a greenfield project stops being one once the run
+        # builds in it); `_run_succeeded` is the run's own verdict. close()
+        # folds both into one needs_clarification training row.
+        self._greenfield_at_start = False
+        self._run_succeeded = False
+
+    def _record_clarify_label(self) -> None:
+        """Emit one needs_clarification training row at run end (OPEN-176).
+
+        The label -- was clarification needed? -- is a run OUTCOME, so it is
+        recorded here, not when the clarify gate fired. Only for a run that
+        worked a task (a plan-only / no-work run has no outcome). Reads facts
+        and the ledger defensively because a hand-built RudraAgent carries
+        either as anything; never raises (CLAUDE.md 8a).
+        """
+        try:
+            tasks = getattr(self._ledger, "tasks", []) or []
+            attempted = any(getattr(t, "attempts", 0) for t in tasks)
+            asked = any(f.source == "asked" for _, f in self._facts.items())
+            row = clarify_label_row(
+                greenfield=self._greenfield_at_start,
+                asked=asked,
+                questions_n=get_config().agent.max_questions,
+                run_succeeded=self._run_succeeded,
+                attempted=attempted,
+            )
+            if row is not None:
+                record_label(**row)
+        except Exception:  # noqa: BLE001 - instrumentation may never end a run
+            pass
 
     def _write_usage_log(self) -> None:
         """This run's tally, whatever way the run ended (OPEN-79).
@@ -267,6 +301,11 @@ class RudraAgent:
         if self._db_conn is not None:
             await self._db_conn.close()
             self._db_conn = None
+        # Accrue the needs_clarification training row while the debug log is
+        # still attached (close() detaches it below) and before the archive
+        # copies it out (OPEN-176).
+        self._record_clarify_label()
+
         # Before the archive, because the archive copies it (OPEN-79).
         # work() writes this as its last statement, so a run that declined
         # the plan, died in a planner stage or crashed wrote none at all --
@@ -360,6 +399,9 @@ class RudraAgent:
         recorder could not catch.
         """
         self._notice(f"run {self.session_id} started", "run")
+        # Before planning or any write: a greenfield project stops being one as
+        # soon as the run builds in it (OPEN-176 label feature).
+        self._greenfield_at_start = is_greenfield(self.context.project_path)
         blocked = require_laya(get_config())
         if blocked is not None:
             # Before any planning or model call. A failed AgentResult is the
@@ -373,7 +415,9 @@ class RudraAgent:
         except BaseException as exc:
             self._notice(f"run {self.session_id} ended: {type(exc).__name__}", "run")
             self._last_message = f"ended: {type(exc).__name__}"
+            self._run_succeeded = False
             raise
+        self._run_succeeded = result.success
         verdict = "ok" if result.success else "failed"
         self._notice(f"run {self.session_id} ended: {verdict}: {result.message}", "run")
         # Kept for close(), which runs after this and has no result to read:
