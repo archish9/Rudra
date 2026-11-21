@@ -3,9 +3,30 @@
 > Recorded on branch `laya-decision-integration` (the main-checkout `04-clarify-gating.md`
 > cannot be edited from this worktree). Force-added like `NOTES-output-schema.md`.
 
-**Status: laya decision path live-proven on real MLX; end-to-end Rudra run PENDING
-an endpoint.** Owner accepted the MLX-level proof (2026-11-20) and keeps OPEN-176
-PENDING the end-to-end run (owner rule `no-close-until-live-verified`).
+**Status: VERIFIED end-to-end on Vaayu (2026-11-21).** The 2026-11-20 MLX-only
+proof below stands; the end-to-end `rudra --plan` runs that were PENDING an
+endpoint have now run against Vaayu and pass all three paths. OPEN-176 meets
+`no-close-until-live-verified`.
+
+## End-to-end live run — Vaayu, 2026-11-21
+Vaayu back up (`https://a.taila2bfc0.ts.net/v1`, `http_code=200`; `rudra models
+test` → Construct/Reach/Tools ok, 26.2s/call, ctx 16384). Driven under the
+`scratchpad/live_run.py` pty harness (`interactive=True`) with `--plan --stream`
+against the greenfield project `~/rudra-verify/open176-skip` (`max_questions=5`).
+The `"kind":"decision"` record in each run's `debug-<id>.jsonl` is the headline
+evidence:
+
+| Run | Request | `[decide] backend` | decision record | clarify stage |
+|---|---|---|---|---|
+| 7f736a03118e | "create a Python script that prints the numbers 1 to 100" | auto→mlx | `backend:mlx, abstain:false, value:0.0952, conf:0.9048, acted:true` | **SKIPPED** — `clarify-gate` NOTICE "clarify skipped: laya judged the request unambiguous"; 0 `ask_user`; a 1-task plan still produced |
+| b96112db149c | "make it better" | auto→mlx | `backend:mlx, abstain:true, route:review, value:0.2761, conf:0.7239, acted:false` | **RAN** — no skip NOTICE; 2 `ask_user` calls |
+| bde222ce1b2d | "create a Python script that prints the numbers 1 to 100" | off | `backend:unavailable, abstain:true, value:null, acted:false` | **RAN (not skipped)** — no skip NOTICE even on a maximally-clear request, because `should_act` requires `backend != unavailable` |
+
+Proves the full gate matrix live: confident-not-ambiguous → skip the Vaayu
+clarify round-trip; abstain → clarify runs; backend off → clarify runs. Run 3
+was wall-capped at 540s mid-clarify (the decision is logged at gate time, before
+the cap), which is why it shows 0 `ask_user`; the load-bearing fact is the absent
+skip NOTICE + `backend:unavailable`.
 
 ## Environment
 `laya-mlx==0.7.0` installed into the dev `.venv` (sidecar, NOT in `uv.lock`; a
@@ -34,7 +55,7 @@ Conclusion: the gate is **not inert** — some clear requests skip at the safe 0
 gate today. Calibration (when torch-at-fit + rows accrue) would help the
 borderline band, not enable the feature.
 
-## What did NOT run — the end-to-end `rudra --plan` run
+## (HISTORICAL — 2026-11-20) What had NOT run then — now done, see the Vaayu section above
 Showing the clarify Vaayu turn actually removed in `.rudra/run/logs/`. Blocked:
 no reachable generative backend on 2026-11-20.
 
@@ -46,7 +67,7 @@ no reachable generative backend on 2026-11-20.
   accepts_session_id=True`, `factory.py:133`) and NVIDIA `400`s
   `Unsupported parameter(s): session_id`. Filed as **OPEN-181**.
 
-## To finish (when an endpoint returns)
+## (HISTORICAL) The procedure that was followed — ran 2026-11-21, results above
 Run under a pty (so `interactive=True`; `--auto` forces `interactive=False` →
 gate never fires) with `--plan` (runs plan() incl. the clarify gate, then stops —
 no writes):
