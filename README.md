@@ -79,18 +79,10 @@ it pulls PyTorch — and the model checkpoint (~850 MB) downloads once on first 
 a separate install rather than bundled, and how to run without it if you truly must:
 **[laya](Documentation/16-laya.md)**.
 
-> **If you installed with `uv`, a later `uv sync` uninstalls laya.** laya is
-> deliberately kept out of `uv.lock` (locking it would force NumPy 1.x or PyTorch
-> onto everyone), so `uv sync` treats it as extraneous and removes it on every run.
-> Two ways to keep it:
-> ```bash
-> uv sync --inexact        # leaves packages that aren't in the lock alone
-> ./scripts/dev-sync.sh    # uv sync --inexact, then reinstalls laya if it's missing
-> ```
-> If a plain `uv sync` already dropped it, just re-run the install line above. You
-> won't be left guessing either way — Rudra refuses to start without laya and points
-> you back here. (`pipx` and plain-virtualenv installs are unaffected; only `uv sync`
-> rebuilds the environment from the lock.)
+> **Installed with `uv`?** A later `uv sync` uninstalls laya — it's intentionally not in
+> `uv.lock` — so sync with `uv sync --inexact` or `./scripts/dev-sync.sh` instead. `pipx`
+> and plain-virtualenv installs aren't affected. Full detail:
+> **[Keeping laya installed across updates](Documentation/01-getting-started.md#keeping-laya-installed-across-updates)**.
 
 ---
 
