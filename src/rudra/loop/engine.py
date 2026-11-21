@@ -1468,6 +1468,11 @@ async def recover_or_consult(
             )
         if action is RecoveryAction.RERUN_GATE and can_rerun:
             report = await _verify(task, context)
+            # The gate just ran: update what the NEXT task inherits, exactly as
+            # run_task does after any gate, so a now-green suite is not carried
+            # forward as a stale red baseline.
+            context.failure_baseline = failure_keys(report)
+            context.baseline_failed = not report.passed
             if getattr(report, "passed", False):
                 task.status = TaskStatus.DONE
                 task.note = "recovered: the gate passed on re-run (transient/environment failure)"

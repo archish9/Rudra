@@ -176,6 +176,7 @@ async def test_flaky_rerun_still_failing_falls_back_to_planner(tmp_path, monkeyp
 
     class _Report:
         passed = False
+        blocker = None  # failure_keys short-circuits on a blocker-less report
 
     async def _fake_verify(t, c):
         return _Report()
