@@ -63,8 +63,15 @@ def load_matching_calibration(backend, cfg) -> bool:
         return False
 
 
-# S1 has no per-question threshold; S2 adds them.
 DEFAULT_MIN_CONFIDENCE = 0.75
+# Per-question overrides of the act gate. Most decisions hold the conservative
+# default; failure_class (OPEN-177 loop recovery) is lowered because its only
+# acting class, missing_dependency, drives a CHEAP and BOUNDED recovery (one
+# "declare the package" task, caught by MAX_BLOCKED_CONSULTS if wrong), and the
+# calibrated checkpoint rates even a clear missing-module gate at ~0.61 -- below
+# 0.75 it could never act. flaky_or_environment (~0.28) and wrong_approach
+# (~0.32) still sit below this gate, so they keep abstaining to the planner.
+QUESTION_THRESHOLDS: dict[str, float] = {"failure_class": 0.60}
 _KNOWN_BACKENDS = {"auto", "mlx", "onnx", "off"}
 
 
@@ -117,23 +124,38 @@ class DecisionEngine:
     def available(self) -> bool:
         return self._backend is not None
 
+    def _threshold_for(self, qid: str) -> float:
+        return QUESTION_THRESHOLDS.get(qid, self._threshold)
+
     def decide(self, state, questions: dict) -> dict[str, Decision]:
         """Decide every question. Synchronous: laya's forward pass blocks.
 
         Async-loop callers must offload via ``asyncio.to_thread(engine.decide, ...)``.
+
+        Questions are grouped by their per-question act threshold
+        (``QUESTION_THRESHOLDS``) and each group predicted at its own
+        ``min_confidence``, because laya applies one threshold per predict call.
+        A failing group abstains without taking down the others.
         """
         if self._backend is None:
             return _unavailable(questions)
-        try:
-            result = self._backend.predict(state, questions, self._threshold)
-        except Exception as exc:  # noqa: BLE001 - one bad call must not end the run
-            _log.warning("decision call failed (%s): %s", type(exc).__name__, exc)
-            return _unavailable(questions)
         name = self._backend.name
-        return {
-            qid: to_decision(qid, _qdict(q).get("type", "?"), (result or {}).get(qid) or {}, name)
-            for qid, q in questions.items()
-        }
+        groups: dict[float, dict] = {}
+        for qid, q in questions.items():
+            groups.setdefault(self._threshold_for(qid), {})[qid] = q
+        out: dict[str, Decision] = {}
+        for threshold, group in groups.items():
+            try:
+                result = self._backend.predict(state, group, threshold)
+            except Exception as exc:  # noqa: BLE001 - one bad call must not end the run
+                _log.warning("decision call failed (%s): %s", type(exc).__name__, exc)
+                out.update(_unavailable(group))
+                continue
+            for qid, q in group.items():
+                out[qid] = to_decision(
+                    qid, _qdict(q).get("type", "?"), (result or {}).get(qid) or {}, name
+                )
+        return out
 
 
 from rudra.decide.normalize import to_decision  # noqa: E402 - normalize imports Decision

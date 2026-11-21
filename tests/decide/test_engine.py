@@ -95,6 +95,26 @@ def test_record_writes_a_decision_log_line(caplog):
     assert events[0]["question_id"] == "q1" and events[0]["acted"] is True
 
 
+def test_failure_class_uses_a_lower_per_question_threshold(monkeypatch):
+    # failure_class is gated at its own threshold; other questions keep the
+    # default. Each question group is predicted at its own min_confidence.
+    seen: dict = {}
+
+    class _Multi:
+        name = "mlx"
+
+        def predict(self, state, questions, min_confidence):
+            for qid in questions:
+                seen[qid] = min_confidence
+            return {qid: {} for qid in questions}
+
+    eng = _engine(monkeypatch, _Multi())
+    eng.decide("s", {"failure_class": {"type": "choice"}, "other": {"type": "noul"}})
+    assert seen["failure_class"] == engine_mod.QUESTION_THRESHOLDS["failure_class"]
+    assert seen["failure_class"] < engine_mod.DEFAULT_MIN_CONFIDENCE
+    assert seen["other"] == engine_mod.DEFAULT_MIN_CONFIDENCE
+
+
 def test_malformed_question_abstains(monkeypatch):
     eng = _engine(monkeypatch, _Fake({}))
     d = eng.decide("hi", {"q": {"instructions": "no type"}})["q"]
