@@ -25,13 +25,14 @@ from rich.markup import escape
 
 from rudra.context.middleware import log_model_call
 from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
-from rudra.decide.gates import skip_clarify
+from rudra.decide.gates import RecoveryAction, recovery_route, skip_clarify
 from rudra.filesystem import is_greenfield
 from rudra.git.core import is_clean, is_repo, status
 from rudra.llm.providers import effective_base_url
 from rudra.loop.bounds import (
     CONVERGING,
     UNREADABLE,
+    _exception_lines,
     convergence,
     failure_signature,
     tests_produced_no_judgement,
@@ -975,6 +976,30 @@ def _on_task_done(context: LoopContext, task: Task, *, verdict: Any) -> None:
     _supersede_upgrade(context, task, upgrade_proven=proven)
 
 
+def _record_block_signal(task: Task, report: Any, context: LoopContext) -> None:
+    """Store what the laya loop-recovery gate needs when a task goes BLOCKED.
+
+    The gate's exception lines, MASKED exactly as C6.5a's signature is
+    (`_exception_lines`), and the undeclared packages the gate named
+    (`missing_packages`). Both are derived from the report that is live here and
+    gone by the time the consult runs -- and, in the parallel path, computed in
+    a worktree that is removed before the consult. Pure bookkeeping: never
+    raises, and leaves the fields empty when there is nothing to classify.
+    """
+    try:
+        blocker = getattr(report, "blocker", None)
+        tail = getattr(blocker, "output_tail", "") if blocker is not None else ""
+        task.block_gate_output = "\n".join(_exception_lines(tail)) if tail else ""
+        try:
+            is_local = local_module_names(context.project_path).__contains__
+            task.block_packages = missing_packages(report, is_local)
+        except Exception:  # noqa: BLE001 - a package parse must not end a run
+            task.block_packages = ()
+    except Exception:  # noqa: BLE001 - diagnostic capture may never fail a run
+        task.block_gate_output = ""
+        task.block_packages = ()
+
+
 async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outcome:
     """Write, verify, fix, reverify -- until the gate passes or we stop.
 
@@ -1374,6 +1399,7 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
             # re-plan around a failure it was told nothing about, and the
             # palace stored a bug with no bug in it (CR-C4).
             task.note = f"no progress: the same failure twice\n\n{blocker_text}"
+            _record_block_signal(task, report, context)
             outcome = _stop(Outcome.BLOCKED)
             record_block_memory(context, task)
             return outcome
@@ -1395,9 +1421,70 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         line = _exhaustion_line(task, answered, last_gate, context)
         head = f"{task.attempts} attempts exhausted" + (f"\n{line}" if line else "")
         task.note = f"{head}\n\n{blocker_text}".rstrip()
+    _record_block_signal(task, last_gate, context)
     outcome = _stop(Outcome.BLOCKED)
     record_block_memory(context, task)
     return outcome
+
+
+async def recover_or_consult(
+    task: Task,
+    ledger: Ledger,
+    request: str,
+    *,
+    context: LoopContext,
+    planner: Any,
+    can_rerun: bool,
+) -> None:
+    """Take a laya deterministic recovery for a BLOCKED task, or re-consult.
+
+    The one path both block-consult sites use (work() and run_parallel_work).
+    When the laya decision layer is confident about the failure's cause and a
+    safe deterministic recovery applies, take it and SKIP the planner re-consult
+    (a Vaayu round-trip, OPEN-177). Otherwise -- unavailable, abstain, a class
+    with no safe recovery, a flaky class where the gate cannot be re-run here, a
+    missing-dependency block with no parsed package, or a block with no gate
+    output -- re-consult ``breakdown`` exactly as today.
+
+    ``can_rerun`` is True only where the blocked task's code is in the working
+    tree (serial ``work()``); the parallel path's worktree is removed before the
+    consult, so RERUN_GATE there degrades to a re-consult.
+
+    Mutates the ledger/task. Everything it adds is worked NEXT, inside the one
+    ``ledger.unblocking(task.id)`` window the planner path already used
+    (OPEN-158), so the recovery task carries ``unblocks`` and is inserted ahead
+    of the first pending task. The laya call runs off the event loop
+    (``asyncio.to_thread``) because the forward pass blocks.
+    """
+    engine = getattr(context, "decide", None)
+    with ledger.unblocking(task.id):
+        action = None
+        if engine is not None and engine.available() and task.block_gate_output:
+            action = await asyncio.to_thread(
+                recovery_route,
+                engine,
+                task.block_gate_output,
+                packages=task.block_packages,
+            )
+        if action is RecoveryAction.RERUN_GATE and can_rerun:
+            report = await _verify(task, context)
+            if getattr(report, "passed", False):
+                task.status = TaskStatus.DONE
+                task.note = "recovered: the gate passed on re-run (transient/environment failure)"
+                _on_task_done(context, task, verdict=PASSED)
+                return
+            # Still failing: re-running again will not help -> re-consult below.
+        elif action is RecoveryAction.ADD_DEP_TASK and task.block_packages:
+            names = ", ".join(task.block_packages)
+            ledger.add(
+                f"The gate for task {task.id} failed only because these packages are "
+                f"not installed: {names}. Declare them in the project's dependency "
+                f"manifest (pyproject.toml dependencies, or requirements.txt) so the "
+                f"gate can import them. Do not change the blocked task's code; only add "
+                f"the dependency declaration."
+            )
+            return
+        await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
 
 
 _STATUS_MARK = {
@@ -2249,10 +2336,13 @@ async def work(
                 )
                 break
             consulted_on_empty = False
-            # What this consult adds is worked next, not after every pending
-            # task the block may be starving (OPEN-158).
-            with ledger.unblocking(task.id):
-                await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
+            # A laya deterministic recovery may skip the planner re-consult here
+            # (OPEN-177); otherwise this re-consults exactly as before. What it
+            # adds is worked next (OPEN-158). can_rerun=True: serial work()
+            # leaves the blocked task's code in the working tree.
+            await recover_or_consult(
+                task, ledger, request, context=context, planner=planner, can_rerun=True
+            )
 
     run_usage = getattr(context, "usage", None)
 

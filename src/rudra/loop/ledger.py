@@ -109,6 +109,16 @@ class Task:
     # serial run. Diagnostic: it names where the discarded attempt happened,
     # so a reader of `redo_reasons` can find the lost work (CLAUDE.md §8a).
     worktree: str = ""
+    # The signal the laya loop-recovery gate (OPEN-177) reads when this task is
+    # BLOCKED: the gate's exception lines, MASKED exactly as C6.5a's signature
+    # is (`loop/bounds.py::_exception_lines`), and the undeclared packages the
+    # gate named (`loop/dependencies.py::missing_packages`). Set at the moment a
+    # task goes BLOCKED; "" / () when the block produced no gate output (e.g. the
+    # parallel redo cap), which the gate reads as "nothing to classify". Written
+    # to ledger.json (masked, so strictly less sensitive than `note` beside it);
+    # transient -- a resume never re-consults a BLOCKED task.
+    block_gate_output: str = ""
+    block_packages: tuple[str, ...] = ()
 
 
 @dataclass
@@ -291,6 +301,8 @@ class Ledger:
                 seconds=entry.get("seconds", 0.0),
                 redo_reasons=tuple(entry.get("redo_reasons", ())),
                 worktree=entry.get("worktree", ""),
+                block_gate_output=entry.get("block_gate_output", ""),
+                block_packages=tuple(entry.get("block_packages", ())),
             )
             for entry in payload.get("tasks", [])
         ]
