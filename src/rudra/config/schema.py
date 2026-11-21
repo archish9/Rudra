@@ -215,6 +215,10 @@ class DecideConfig:
     mlx_repo: str = "convaiinnovations/laya"
     onnx_model: str = "convaiinnovations/laya"
     calibration_dir: str | None = None
+    # Refresh calibration from the run archive at run end, when it can run.
+    # The fit needs torch (fit-time only): ONNX bundles it, so auto-fit works;
+    # MLX ships none, so it is a logged no-op (Documentation/16-laya.md).
+    auto_fit: bool = True
 
 
 @dataclass(frozen=True)

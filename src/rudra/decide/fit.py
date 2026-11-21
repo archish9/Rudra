@@ -10,6 +10,7 @@ Python over the archive JSON, so it builds with the sidecar absent.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import os
@@ -321,3 +322,105 @@ def _log_report(per_q: dict[str, QFit], backend: str) -> None:
         )
     except Exception:  # noqa: BLE001 - a diagnostic must never fail a fit
         pass
+
+
+# --- Run-end auto-fit (OPEN-182) --------------------------------------------
+#
+# Calibration refreshes itself from the archive at run end WHERE IT CAN. The
+# fit needs torch (fit-time only; runtime loads the JSON torch-free): the ONNX
+# build bundles torch, so auto-fit calibrates with no user action; the MLX build
+# ships none, so the hook is a logged no-op and that machine stays zero-shot
+# until the user installs torch and runs `rudra decide fit` once (see
+# Documentation/16-laya.md). The hook never raises (CLAUDE.md 8a).
+
+# Only refit once this many archived runs have landed since the last fit, so an
+# active machine does not re-fit the whole archive on every single run end.
+AUTO_FIT_MIN_NEW_RUNS = 5
+
+
+def _torch_available() -> bool:
+    """Cheap probe for torch (the fit-time dependency) without importing it.
+
+    The whole MLX-vs-ONNX split turns on this: ``find_spec`` returns None on an
+    MLX box (no torch) so the hook short-circuits before building any dataset.
+    """
+    return importlib.util.find_spec("torch") is not None
+
+
+def _runs_newer_than(runs_dir, since_iso: str) -> int:
+    """Count archived runs whose ``ledger.json`` was written after ``since_iso``."""
+    try:
+        since = datetime.fromisoformat(since_iso).timestamp()
+    except Exception:  # noqa: BLE001 - an unparseable stamp means "fit now"
+        return AUTO_FIT_MIN_NEW_RUNS
+    count = 0
+    for ledger_path in Path(runs_dir).glob("*/*/ledger.json"):
+        try:
+            if ledger_path.stat().st_mtime > since:
+                count += 1
+        except OSError:
+            continue
+    return count
+
+
+def should_auto_fit(cfg, runs_dir, out_dir) -> bool:
+    """Whether the run-end hook should fit now. Pure read; never raises.
+
+    True iff ``[decide] auto_fit`` is on, torch is importable (so the fit can
+    actually run), and either nothing has been fitted yet or at least
+    ``AUTO_FIT_MIN_NEW_RUNS`` archived runs are newer than the last fit.
+    """
+    decide = getattr(cfg, "decide", None)
+    if not getattr(decide, "auto_fit", False):
+        return False
+    if not _torch_available():
+        return False
+    meta_path = Path(out_dir) / META_FILE
+    if not meta_path.is_file():
+        return True
+    try:
+        fitted_at = json.loads(meta_path.read_text()).get("fitted_at")
+    except Exception:  # noqa: BLE001 - a bad meta reads as "never fitted"
+        return True
+    if not fitted_at:
+        return True
+    return _runs_newer_than(runs_dir, fitted_at) >= AUTO_FIT_MIN_NEW_RUNS
+
+
+def run_fit(cfg, runs_dir=None):
+    """The one fit path, shared by ``rudra decide fit`` and the auto-fit hook.
+
+    Selects the backend, builds the dataset from the archive, fits, and lets the
+    backend write ``calibration.json`` + ``meta.json``. Returns the ``FitReport``,
+    or None when no backend is available (laya absent / ``backend = "off"``).
+    """
+    from rudra.decide.backends import select_backend  # noqa: PLC0415 - avoid import cycle
+    from rudra.state.archive import archive_home  # noqa: PLC0415 - avoid import cycle
+
+    backend = select_backend(cfg)
+    if backend is None:
+        return None
+    rd = runs_dir if runs_dir is not None else archive_home()
+    rows = build_dataset(rd, TASK_TRIAGE)
+    out_dir = resolve_calibration_dir(cfg)
+    return backend.fit(rows, TASK_TRIAGE, out_dir)
+
+
+def maybe_auto_fit(cfg):
+    """Run-end hook: fit when ``should_auto_fit`` allows it, else a no-op.
+
+    Returns the ``FitReport`` when it fit, else None. Never raises -- a failed or
+    skipped calibration must not end a run (CLAUDE.md 8a). The ``decide_fit``
+    diagnostic is logged by ``fit_calibration`` itself.
+    """
+    try:
+        from rudra.state.archive import archive_home  # noqa: PLC0415 - avoid import cycle
+
+        runs_dir = archive_home()
+        out_dir = resolve_calibration_dir(cfg)
+        if not should_auto_fit(cfg, runs_dir, out_dir):
+            return None
+        return run_fit(cfg, runs_dir)
+    except Exception as exc:  # noqa: BLE001 - auto-fit may never end a run
+        _log.warning("auto-fit skipped: %s", exc)
+        return None

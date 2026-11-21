@@ -276,6 +276,23 @@ class RudraAgent:
         except Exception:  # noqa: BLE001 - instrumentation may never end a run
             pass
 
+    async def _maybe_auto_fit(self) -> None:
+        """Refresh laya calibration from the run archive at run end (OPEN-182).
+
+        Automatic where the fit can run (the ONNX build bundles torch); a no-op
+        where it cannot (the MLX build ships none -> Documentation/16-laya.md).
+        Runs off-thread so the torch fit never blocks teardown, and never raises
+        (CLAUDE.md 8a). The `decide_fit` diagnostic is logged by the fitter.
+        """
+        try:
+            from rudra.decide.fit import maybe_auto_fit
+
+            report = await asyncio.to_thread(maybe_auto_fit, get_config())
+            if report is not None and getattr(report, "calibration_written", False):
+                self._notice("laya calibration refreshed from the run archive", "decide-autofit")
+        except Exception:  # noqa: BLE001 - auto-fit may never end a run
+            pass
+
     def _write_usage_log(self) -> None:
         """This run's tally, whatever way the run ended (OPEN-79).
 
@@ -342,6 +359,12 @@ class RudraAgent:
                 models=self._archive_models,
                 env=self._archive_env,
             )
+        # Refresh laya calibration from the archive (incl. this run, just
+        # archived) where the fit can run -- OPEN-182. After the archive so this
+        # run's rows count; before the debug detach below so the decide_fit
+        # event and the NOTICE land in this run's own log.
+        await self._maybe_auto_fit()
+
         # After the archive, and that ordering is OPEN-69's: archive_run
         # logs the line naming where it copied this run to, and detaching
         # first would keep that line out of the file it describes.

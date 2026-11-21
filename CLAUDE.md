@@ -201,7 +201,19 @@ src/rudra/
 │                           laya_installed` is the importability probe the gate
 │                           and `doctor` share.
 │                           `tests/decide/test_no_torch_in_core.py` pins core
-│                           torch-free
+│                           torch-free. CALIBRATION is per-machine state at
+│                           `$XDG_STATE_HOME/rudra/calibration` (never committed/
+│                           shipped), fit from the archive by `rudra decide fit`
+│                           and loaded torch-free at runtime. Fitting needs torch
+│                           (fit-time only): the ONNX build bundles it, the MLX
+│                           build ships none. `[decide] auto_fit` (default true)
+│                           runs `fit.maybe_auto_fit` at run end from
+│                           `RudraAgent.close()` AFTER the archive, guarded by a
+│                           cheap torch find_spec + an N-new-runs threshold, so
+│                           it calibrates automatically on ONNX and is a logged
+│                           no-op on MLX. ONNX itself is UNVERIFIED (TODO S3 in
+│                           backends.py), so ONNX auto-fit is wired+unit-tested,
+│                           not live-proven
 ├── loop/                   The agentic loop. ledger · bounds · regressions ·
 │                           decomposition · dependencies · tools · engine.
 │                           ledger/bounds/regressions/decomposition import

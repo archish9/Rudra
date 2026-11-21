@@ -113,6 +113,7 @@ enabled = true                      # the decision layer as a whole
 backend = "auto"                    # auto | mlx | onnx | off
 mlx_repo = "convaiinnovations/laya"  # Apple-Silicon checkpoint
 onnx_model = "convaiinnovations/laya"
+auto_fit = true                     # refresh calibration from the archive at run end
 ```
 
 - `backend = "auto"` (the default) picks the right build for your machine — MLX on Apple
@@ -123,6 +124,60 @@ onnx_model = "convaiinnovations/laya"
   platform, set this and Rudra runs exactly as it did before laya — every decision goes to
   your main model, and the install requirement is lifted. This is the one supported way to
   run Rudra without laya.
+- **`auto_fit = true` (the default)** refreshes calibration automatically at the end of a
+  run — see **Calibration** below for what that means and the one case (Apple Silicon) where
+  it needs a one-time setup step. Set `auto_fit = false` to turn the run-end refresh off.
+
+---
+
+## Calibration
+
+laya answers every decision **with a confidence number**, and Rudra acts on a decision only
+when that confidence clears a floor (otherwise it falls back to your main model). A raw model
+is often **mis-calibrated** — its "90% sure" is right only 70% of the time, or the reverse —
+so the floor fires on the wrong cases. **Calibration rescales the confidence so the number
+tells the truth**, which is what makes "act vs. ask the main model" a sound decision.
+
+Calibration is learned from your own **archived runs** (`rudra decide fit` turns past runs
+into a small `calibration.json`), and it is **per machine** — it lives in
+`$XDG_STATE_HOME/rudra/calibration/` (not shipped, not committed), and each machine builds
+its own from its own history. At runtime the file loads with **no extra dependency**; until a
+machine has one, every decision runs **zero-shot** (raw confidence), which is correct, just
+less sharp.
+
+**Fitting the calibration needs PyTorch** — but only at fit time, never at run time. This is
+the one place the two builds differ:
+
+| Your build | PyTorch present? | Calibration |
+|---|---|---|
+| **ONNX** (Linux / Windows / Intel Mac — `laya[onnx]`) | **yes**, bundled with the install | **Automatic.** With `auto_fit = true` (default) it refreshes at run end, no action needed. |
+| **MLX** (Apple Silicon — `laya-mlx`) | **no** (the MLX build ships none) | One-time setup — see below. Until then it stays zero-shot. |
+
+**Apple Silicon (MLX) — the one-time step.** The run-end auto-fit is a no-op here because the
+MLX build ships no PyTorch. To calibrate, install PyTorch into the environment `rudra` runs
+from, then fit once:
+
+```bash
+uv pip install torch          # or: pip install torch — into rudra's environment
+rudra decide fit              # reads your archived runs, writes calibration.json
+```
+
+PyTorch is only needed for that `fit`; you may uninstall it afterward and calibration still
+loads at run time. Once a calibration exists, `auto_fit` keeps it fresh **only while PyTorch
+remains installed** — so on Apple Silicon, either keep PyTorch installed for automatic
+refreshes, or re-run `rudra decide fit` by hand after PyTorch is gone.
+
+**What actually gets calibrated.** Only decisions with enough labelled rows in your archive —
+today `complexity` and `domain`. `rudra decide status` shows each decision's gate
+(`calibrated` vs `zero-shot`). Note the status view marks a decision `calibrated` when a
+bucket of its *type* was fitted, so a same-type decision can show `calibrated` by family even
+though it had no rows of its own; the row counts in `rudra decide fit`'s output are the
+precise picture.
+
+> **Note (ONNX is not yet live-verified).** All of laya's end-to-end verification to date is
+> on the MLX build. The ONNX backend — and therefore automatic calibration on ONNX — is wired
+> and unit-tested but has not been run on a real ONNX machine. Treat ONNX auto-calibration as
+> "should work," not "proven," until it is exercised on that platform.
 
 ---
 
