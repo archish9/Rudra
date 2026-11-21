@@ -22,7 +22,9 @@ would not have happened, and never suppress one when unsure.
 
 from __future__ import annotations
 
-from rudra.decide.catalog import CLARIFY_NEEDED
+from enum import Enum
+
+from rudra.decide.catalog import CLARIFY_NEEDED, FAILURE_CLASS
 from rudra.decide.engine import should_act
 from rudra.decide.log import record
 
@@ -55,6 +57,65 @@ def skip_clarify(
     skip = should_act(d) and not_ambiguous
     record(d, acted=skip)
     return skip
+
+
+# --- #1: blocked-task recovery routing (loop/engine.py + loop/parallel.py) ---
+#
+# On a BLOCKED task Rudra re-consults the breakdown planner (a Vaayu call). When
+# laya is confident about the failure's cause AND a safe deterministic recovery
+# exists, take that recovery and skip the re-consult. Only two classes qualify
+# (S5 design amendment, Option 2); every other class, abstain, review, or
+# unavailable returns None, so the caller re-consults exactly as today. laya can
+# never CAUSE an unsafe recovery -- it only shortcuts a path that already works.
+
+
+class RecoveryAction(Enum):
+    """A deterministic recovery the loop can take without the planner."""
+
+    RERUN_GATE = "rerun_gate"  # re-run the verification gate once, no subagent
+    ADD_DEP_TASK = "add_dep_task"  # synthesize a "declare & install <pkg>" task
+
+
+def recovery_route(
+    engine,
+    gate_output: str,
+    *,
+    packages: tuple[str, ...],
+) -> RecoveryAction | None:
+    """Classify a BLOCKED gate failure; return a recovery or None (re-consult).
+
+    ``gate_output`` is the blocker text the loop already computes
+    (``loop/engine.py::_blocker_text``), MASKED by the caller exactly as
+    ``loop/bounds.py::_exception_lines`` masks it -- the decide layer never
+    imports the loop. ``packages`` is what ``loop/dependencies.py::
+    missing_packages`` parsed from the gate (data, not laya's guess).
+
+    Returns:
+    * ``RERUN_GATE`` when laya is confident the cause is
+      ``flaky_or_environment``;
+    * ``ADD_DEP_TASK`` when laya is confident the cause is
+      ``missing_dependency`` AND at least one package name was parsed;
+    * ``None`` otherwise (abstain / review / unavailable, a class with no safe
+      deterministic recovery, or missing_dependency with no parsed package) --
+      the caller re-consults the planner.
+
+    Logs the decision either way (acted iff a recovery is returned).
+    """
+    d = engine.decide({"gate_output": gate_output}, FAILURE_CLASS)["failure_class"]
+    action = _recovery_for(d, packages)
+    record(d, acted=action is not None)
+    return action
+
+
+def _recovery_for(decision, packages: tuple[str, ...]) -> RecoveryAction | None:
+    if not should_act(decision):
+        return None
+    cls = decision.value
+    if cls == "flaky_or_environment":
+        return RecoveryAction.RERUN_GATE
+    if cls == "missing_dependency" and packages:
+        return RecoveryAction.ADD_DEP_TASK
+    return None
 
 
 def clarify_label_row(
