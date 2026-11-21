@@ -72,6 +72,18 @@ uv pip install laya-mlx        # Apple Silicon
 uv pip install 'laya[onnx]'    # everywhere else
 ```
 
+**A plain `uv sync` uninstalls laya.** laya is deliberately kept out of `uv.lock`
+(above), so `uv sync` sees it as extraneous and removes it — its plan shows
+`- laya-mlx==…`. Keep it one of two ways:
+
+```bash
+uv sync --inexact        # leaves packages that are not in the lock alone
+./scripts/dev-sync.sh    # uv sync --inexact, then reinstalls laya if it is missing
+```
+
+If a plain `uv sync` already dropped it, re-run the install line above (or
+`scripts/dev-sync.sh`).
+
 Notes:
 
 - The `laya[onnx]` wheel is **large** — it pulls PyTorch and CUDA packages. This is
@@ -133,6 +145,10 @@ prefix. Verify with `rudra doctor`.
 different environment than the one `rudra` runs from. Run `rudra doctor` — it prints which
 interpreter Rudra is using — and `pip install` into that same one (or `uv pip install` from
 the project).
+
+**It worked, then disappeared after `uv sync`.** Expected: laya is not in `uv.lock`, so a
+plain `uv sync` uninstalls it. Reinstall with the line for your OS, and from now on sync
+with `uv sync --inexact` or `scripts/dev-sync.sh` so it is left in place.
 
 **The download is slow or blocked.** The ~850 MB checkpoint comes from the Hugging Face
 Hub on first use. On a restricted network, pre-fetch it on a machine that can reach the Hub,

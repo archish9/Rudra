@@ -1009,4 +1009,8 @@ or the halt that ended the run.
   present.
 - **A local `.venv` drifts from `uv.lock` and will lie to you.** Run `uv sync`
   before believing a local failure, and prefer `uv run` — which reconciles first —
-  when the answer matters.
+  when the answer matters. **But a plain `uv sync` uninstalls laya** — it is a
+  required sidecar kept out of the lock (§3), so `uv sync` sees it as extraneous
+  (`- laya-mlx==…` in its plan). Sync with `uv sync --inexact` or
+  `scripts/dev-sync.sh` (which also reinstalls laya if it is missing); plain
+  `uv sync` leaves `rudra` hitting the run-entry gate until laya is reinstalled.
