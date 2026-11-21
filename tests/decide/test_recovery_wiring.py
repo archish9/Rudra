@@ -229,6 +229,33 @@ def test_block_signal_is_masked_like_exception_lines():
     assert "/Users/x/proj/app.py" not in task.block_gate_output
 
 
+def test_block_signal_names_a_collection_import_error_package():
+    # A pytest COLLECTION ImportError (outcome ERROR) is excluded by
+    # missing_packages, but _record_block_signal must still name the package so
+    # ADD_DEP_TASK can fire for the dominant missing-dependency shape (OPEN-177).
+    from rudra.loop.engine import _record_block_signal
+
+    class _Blocker:
+        name = "test"
+        outcome = "error"  # a collection error, NOT FAILED
+        output_tail = (
+            "E   ModuleNotFoundError: No module named 'rudra_fx_client'\n"
+            "ImportError while importing test module"
+        )
+        findings = ()
+
+    class _Report:
+        blocker = _Blocker()
+        passed = False
+
+    class _Ctx:
+        project_path = Path("/tmp/does-not-matter")
+
+    task = Task(id="t1", description="x")
+    _record_block_signal(task, _Report(), _Ctx())
+    assert task.block_packages == ("rudra_fx_client",)
+
+
 def test_both_sites_use_recover_or_consult():
     # Both block-consult sites route through the one helper so laya recovery is
     # not half-wired. The blocked-planner call survives only inside the helper

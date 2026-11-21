@@ -124,6 +124,27 @@ def missing_packages(report: VerifyReport, is_local: Callable[[str], bool]) -> t
     return tuple(sorted(found))
 
 
+def missing_modules_in_text(text: str, is_local: Callable[[str], bool]) -> tuple[str, ...]:
+    """Top-level module names a ``No module named 'X'`` text names as missing.
+
+    A LOOSER reading than ``missing_packages`` for one job (OPEN-177 loop
+    recovery): ``missing_packages`` answers "did the gate fail ONLY on packages"
+    and so is gated on ``blocker.outcome == FAILED``, which EXCLUDES a pytest
+    COLLECTION ImportError (outcome ERROR) -- the dominant missing-dependency
+    shape. This reads the block's own exception text directly, so a collection
+    import error still yields the package name a ``missing_dependency`` recovery
+    needs. Same safety filter as ``missing_packages``: a local module or a
+    stdlib name is never returned, so the recovery never declares one of those.
+    Sorted and de-duplicated to the top-level name.
+    """
+    found: set[str] = set()
+    for name in _NO_MODULE.findall(text or ""):
+        top = name.split(".")[0]
+        if top and not is_local(top) and top not in _STDLIB:
+            found.add(top)
+    return tuple(sorted(found))
+
+
 def local_module_names(project_path: Path) -> frozenset[str]:
     """Every name an `import` could resolve to inside this project.
 
@@ -176,5 +197,6 @@ __all__ = [
     "MANIFEST_BASENAMES",
     "dependency_manifest_touched",
     "local_module_names",
+    "missing_modules_in_text",
     "missing_packages",
 ]

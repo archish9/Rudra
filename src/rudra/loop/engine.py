@@ -40,6 +40,7 @@ from rudra.loop.bounds import (
 from rudra.loop.dependencies import (
     dependency_manifest_touched,
     local_module_names,
+    missing_modules_in_text,
     missing_packages,
 )
 from rudra.loop.ledger import Ledger, Task, TaskStatus
@@ -992,7 +993,14 @@ def _record_block_signal(task: Task, report: Any, context: LoopContext) -> None:
         task.block_gate_output = "\n".join(_exception_lines(tail)) if tail else ""
         try:
             is_local = local_module_names(context.project_path).__contains__
-            task.block_packages = missing_packages(report, is_local)
+            # missing_packages is gated on blocker.outcome == FAILED, which
+            # excludes a pytest COLLECTION ImportError (outcome ERROR) -- the
+            # dominant missing-dependency shape. Fall back to reading the block's
+            # own exception text so ADD_DEP_TASK can still name the package
+            # (OPEN-177; both apply the same non-local/non-stdlib filter).
+            task.block_packages = missing_packages(report, is_local) or missing_modules_in_text(
+                task.block_gate_output, is_local
+            )
         except Exception:  # noqa: BLE001 - a package parse must not end a run
             task.block_packages = ()
     except Exception:  # noqa: BLE001 - diagnostic capture may never fail a run
