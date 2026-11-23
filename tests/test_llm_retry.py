@@ -77,6 +77,40 @@ def test_connection_errors_are_retryable_by_name() -> None:
     assert is_transient(APIConnectionError("Connection error.")) is True
 
 
+def test_mid_stream_server_drop_is_retryable_by_name() -> None:
+    """A server that drops the socket mid-body is a flap, not a verdict (OPEN-184).
+
+    langchain_openai streams raw over httpx, so a Vaayu mid-generate drop reaches
+    retry.py as httpx.RemoteProtocolError('peer closed connection without sending
+    complete message body (incomplete chunked read)') -- no HTTP status, so
+    is_transient must say True from the class name alone. httpx.ReadError (the
+    connection broke mid-read) is the same shape. A client-side LocalProtocolError
+    -- WE sent a malformed request -- fails identically on retry, so it stays
+    non-transient: the fix matches "remoteprotocol", not bare "protocol".
+    """
+
+    class RemoteProtocolError(Exception):
+        pass
+
+    class ReadError(Exception):
+        pass
+
+    class LocalProtocolError(Exception):
+        pass
+
+    assert (
+        is_transient(
+            RemoteProtocolError(
+                "peer closed connection without sending complete message body "
+                "(incomplete chunked read)"
+            )
+        )
+        is True
+    )
+    assert is_transient(ReadError("connection reset while reading")) is True
+    assert is_transient(LocalProtocolError("illegal header value")) is False
+
+
 def test_a_plain_error_is_not_retryable() -> None:
     assert is_transient(ValueError("something in Rudra broke")) is False
 
