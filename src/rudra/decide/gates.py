@@ -27,7 +27,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from rudra.decide.catalog import CLARIFY_NEEDED, FAILURE_CLASS, TASK_TRIAGE, tool_select
+from rudra.decide.catalog import (
+    CLARIFY_NEEDED,
+    FAILURE_CLASS,
+    TASK_TRIAGE,
+    skill_select,
+    tool_select,
+)
 from rudra.decide.engine import should_act
 from rudra.decide.log import record
 
@@ -259,6 +265,68 @@ def mcp_hint(engine, task_text: str, visible_tools: Sequence[Any]) -> McpHint | 
     )
     record(d, acted=hint is not None)
     return hint
+
+
+# --- #4b: skill pre-selection hint (subagents/build.py prompt build) ----------
+#
+# The superpowers corpus rides on deepagents' SkillsMiddleware as a
+# progressive-disclosure INDEX (descriptions in the prompt, bodies pulled on
+# demand) -- there is no fat inlined blob to prune (07a amendment). So this
+# helper removes NOTHING: it returns an ordered HINT ("read these SKILL.md
+# first") = laya's top-k over the candidate skills UNION an always-on process
+# floor laya may never drop. A confident answer emits floor + top-k (laya's
+# ranked picks ahead of the floor-only remainder); abstain / review /
+# unavailable emits [] -- no hint, every skill stays equally indexed as today.
+# Because nothing is removed, a wrong pick can only fail to PROMOTE a skill,
+# never drop the one that mattered.
+
+
+def skill_topk(
+    engine,
+    task_text: str,
+    candidates: Sequence[str],
+    *,
+    k: int = 3,
+    always_on: Sequence[str] = (),
+) -> list[str]:
+    """Rank ``candidates`` for ``task_text``; return the hint ``floor + top-k``.
+
+    ``candidates`` are the skill names available to this stage (the corpus
+    skills in ``[skills] enabled``). ``always_on`` is the process floor always
+    kept, intersected with ``candidates`` (a floor skill that is not a candidate
+    cannot be hinted). Returns laya's top-``k`` picks (ranked by probability,
+    or the single chosen label when no probabilities are emitted) followed by
+    any floor skill not already picked, de-duplicated with order preserved.
+
+    Returns ``[]`` on abstain / review / unavailable, or when there are no
+    candidates (and then makes no laya call) -- the caller injects no hint and
+    every skill stays equally indexed, exactly as today. Logs the decision.
+    """
+    names = list(candidates)
+    if not names:
+        return []
+
+    d = engine.decide({"task": task_text}, skill_select(names))["skills_topk"]
+    if not should_act(d):
+        record(d, acted=False)
+        return []
+
+    probs = d.probabilities
+    if isinstance(probs, dict) and probs:
+        ranked = sorted((n for n in names if n in probs), key=lambda n: (-probs[n], n))
+        topk = ranked[:k]
+    elif isinstance(d.value, str) and d.value in names:
+        topk = [d.value]
+    else:
+        topk = []
+
+    floor = [n for n in always_on if n in names]
+    out: list[str] = []
+    for name in (*topk, *floor):
+        if name not in out:
+            out.append(name)
+    record(d, acted=bool(out))
+    return out
 
 
 def clarify_label_row(
