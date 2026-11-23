@@ -119,6 +119,57 @@ def test_the_fallback_cache_is_still_readable_by_deepagents(tmp_path: Path) -> N
         blocked.chmod(0o700)
 
 
+def test_a_sentinel_stamped_but_corrupt_primary_cache_is_rebuilt(tmp_path: Path) -> None:
+    """OPEN-172: the sentinel alone is not enough on the primary path either.
+
+    A clean `_build` is atomic, so it cannot leave a sentinel beside a
+    partial tree -- but the cache home lives on disk and an external actor
+    (or a crash in some other tool) can delete a rendered skill while
+    leaving `.complete` in place. deepagents' `_list_skills` then skips the
+    skill whose `SKILL.md` is gone, so the coder silently runs with a
+    subset. The sentinel must be re-validated against `enabled`, not
+    trusted.
+    """
+    first = ensure_cache(BUNDLES, DEFAULT_ENABLED, cache_home=tmp_path)
+    assert (first.root / SENTINEL).is_file()
+    # External corruption: a rendered skill loses its SKILL.md, sentinel stays.
+    (first.root / "active" / "brainstorming" / "SKILL.md").unlink()
+
+    second = ensure_cache(BUNDLES, DEFAULT_ENABLED, cache_home=tmp_path)
+
+    assert (second.root / "active" / "brainstorming" / "SKILL.md").is_file()
+    assert (second.root / SENTINEL).is_file()
+    assert second.fell_back is False
+
+
+def test_a_sentinel_stamped_but_corrupt_fallback_scratch_is_rebuilt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """OPEN-172: the read-only fallback reuses a shared scratch on the
+    sentinel alone, and `prune_stale` never cleans scratch, so a corrupted
+    scratch is served forever. Re-validate it before reuse."""
+    scratch_home = tmp_path / "scratch"
+    scratch_home.mkdir()
+    monkeypatch.setattr("rudra.skills.cache.tempfile.gettempdir", lambda: str(scratch_home))
+    blocked = tmp_path / "readonly"
+    blocked.mkdir()
+    blocked.chmod(0o500)
+    try:
+        first = ensure_cache(BUNDLES, DEFAULT_ENABLED, cache_home=blocked)
+        assert first.fell_back is True
+        assert (first.root / SENTINEL).is_file()
+        # Corrupt the shared scratch, leaving its sentinel behind.
+        (first.root / "active" / "brainstorming" / "SKILL.md").unlink()
+
+        second = ensure_cache(BUNDLES, DEFAULT_ENABLED, cache_home=blocked)
+
+        assert second.fell_back is True
+        assert (second.root / "active" / "brainstorming" / "SKILL.md").is_file()
+        assert (second.root / SENTINEL).is_file()
+    finally:
+        blocked.chmod(0o700)
+
+
 def test_an_empty_enabled_set_still_renders_the_library(tmp_path: Path) -> None:
     """`enabled = []` means "index nothing", not "build nothing".
 
