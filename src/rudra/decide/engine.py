@@ -71,7 +71,17 @@ DEFAULT_MIN_CONFIDENCE = 0.75
 # calibrated checkpoint rates even a clear missing-module gate at ~0.61 -- below
 # 0.75 it could never act. flaky_or_environment (~0.28) and wrong_approach
 # (~0.32) still sit below this gate, so they keep abstaining to the planner.
-QUESTION_THRESHOLDS: dict[str, float] = {"failure_class": 0.60}
+# mcp_tool (OPEN-179) is lowered furthest: it only PRE-SELECTS one MCP tool to
+# inject as a prompt hint, and a wrong pick costs a single wasted turn (the agent
+# falls back to the `list_mcp_tools`/`describe_mcp_tool` meta-tools, which stay
+# registered) -- a strictly safer consequence than failure_class's recovery task.
+# Set from a measured zero-shot probe over a focused 4-tool `[mcp] allow` set
+# (mempalace): the clearly-correct pick for a "search memory" task rates ~0.40-
+# 0.44, an off-target "store a memory" ~0.28, an MCP-irrelevant "implement fib"
+# ~0.26. 0.35 lets the correct pick ACT while the ambiguous and irrelevant ones
+# (and the ~0.025 noise of 40 opaque ids) still abstain -> today's path. Narrow
+# the visible set further to raise a pick's confidence; it never widens the gate.
+QUESTION_THRESHOLDS: dict[str, float] = {"failure_class": 0.60, "mcp_tool": 0.35}
 _KNOWN_BACKENDS = {"auto", "mlx", "onnx", "off"}
 
 

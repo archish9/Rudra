@@ -310,18 +310,27 @@ def skill_topk(
     or the single chosen label when no probabilities are emitted) followed by
     any floor skill not already picked, de-duplicated with order preserved.
 
-    Returns ``[]`` on abstain / review / unavailable, or when there are no
-    candidates (and then makes no laya call) -- the caller injects no hint and
-    every skill stays equally indexed, exactly as today. Logs the decision.
+    On abstain / review (laya ran but is unsure) returns just the floor -- the
+    process core is task-independent and safe to promote regardless (owner
+    2026-11-23). Returns ``[]`` for an UNAVAILABLE engine (laya never ran, so the
+    prompt stays byte-identical to ``backend="off"``) and when there are no
+    candidates (then makes no laya call). Logs the decision.
     """
     names = list(candidates)
     if not names:
         return []
 
     d = engine.decide({"task": task_text}, skill_select(names))["skills_topk"]
+    floor = [n for n in always_on if n in names]
     if not should_act(d):
-        record(d, acted=False)
-        return []
+        # laya ran but is unsure -> still promote the always-on process core
+        # (task-independent, safe), owner 2026-11-23. But an UNAVAILABLE engine
+        # means laya never ran: emit nothing so `backend="off"` renders the
+        # prompt byte-identical to today (the caller already guards on
+        # engine.available(); this keeps the contract true standalone too).
+        hint = [] if d.backend == "unavailable" else floor
+        record(d, acted=bool(hint))
+        return hint
 
     probs = d.probabilities
     if isinstance(probs, dict) and probs:
@@ -332,7 +341,6 @@ def skill_topk(
     else:
         topk = []
 
-    floor = [n for n in always_on if n in names]
     out: list[str] = []
     for name in (*topk, *floor):
         if name not in out:

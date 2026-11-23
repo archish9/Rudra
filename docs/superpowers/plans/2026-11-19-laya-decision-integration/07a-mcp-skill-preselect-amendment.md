@@ -82,6 +82,41 @@ build_agent context" branch.)
 `None` if laya's pick is not visible, or on abstain/no-servers — never hints a tool
 the agent cannot call (plan 07 Review Focus).
 
+## Pre-flight probe + gate tuning (owner 2026-11-23, Task 4 prep)
+
+A scratchpad probe ran REAL MLX laya against the live mempalace server (40 MCP
+tools) and the 14-skill corpus before the live run, to check the hints could
+clear the 0.75 gate. They could not, zero-shot:
+
+- `mcp_tool` over 40 opaque ids: **conf 0.025** (≈uniform). Descriptions did not
+  help (often hurt). Narrowed to 4 tools, ids-only: a clearly-correct "search
+  memory" pick rates ~0.40; an off-target "store a memory" ~0.28; an
+  MCP-irrelevant "implement fib" ~0.26.
+- `skills_topk` over 14 skills: 0.09–0.13 (floor-of-noise) on every task.
+
+Both are the same zero-shot ceiling OPEN-178's complexity/domain hit (~0.37).
+Owner's ruling (chosen over ship-as-abstain / abandon):
+
+1. **Lower the `mcp_tool` act gate to 0.35** (`engine.QUESTION_THRESHOLDS`),
+   below `failure_class`'s 0.60, because a wrong MCP hint costs only one wasted
+   turn (the meta-tools stay registered) — a safer consequence than any other
+   gated decision. At 0.35 the correct "search" pick ACTS while the off-target
+   and irrelevant picks (and the 0.025 noise of the full catalog) still abstain
+   → today's path. The gate is evidence-set to where the correct pick acts and
+   the rest abstain, not tuned to force a demo.
+2. **Narrow the visible MCP set** to raise a pick's confidence — a user scopes
+   `[mcp] allow` to a focused set. The live project uses a 4-tool memory-ops set.
+   Narrowing only ever *raises* confidence; it never widens the gate.
+3. **`skill_topk` emits the always-on floor even on abstain** (not `[]`). The
+   process core is task-independent and safe to promote regardless, so the skill
+   hint is deterministic and useful even though laya cannot rank skills
+   zero-shot; laya only *reorders/adds* once calibrated. An UNAVAILABLE engine
+   still yields `[]` so `backend="off"` stays byte-identical to today. (This
+   supersedes the earlier "abstain → []" wording in Task 2's row above.)
+
+`skills_topk`'s own gate stays 0.75 (laya never promotes a skill zero-shot; the
+floor carries the hint). Both are revisited once calibration rows accrue.
+
 ## Net-cost gate (unchanged, binding)
 
 A hint that does not cut exploration is a net loss (laya call + bigger prompt). The

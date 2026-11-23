@@ -73,17 +73,21 @@ def test_confident_ranking_returns_floor_union_topk():
     assert len(out) == len(set(out))
 
 
-def test_abstain_returns_empty_hint():
+def test_abstain_returns_just_the_floor():
+    # laya ran but is unsure -> promote the always-on process core only
+    # (task-independent, safe). owner 2026-11-23.
     eng = _FakeEngine(_decision(value="writing-plans", abstain=True, route="review"))
-    assert skill_topk(eng, "x", CANDIDATES, k=2, always_on=FLOOR) == []
+    assert skill_topk(eng, "x", CANDIDATES, k=2, always_on=FLOOR) == list(FLOOR)
 
 
-def test_review_route_returns_empty_hint():
+def test_review_route_returns_just_the_floor():
     eng = _FakeEngine(_decision(value="writing-plans", route="review"))
-    assert skill_topk(eng, "x", CANDIDATES, k=2, always_on=FLOOR) == []
+    assert skill_topk(eng, "x", CANDIDATES, k=2, always_on=FLOOR) == list(FLOOR)
 
 
 def test_unavailable_returns_empty_hint():
+    # laya never ran -> no hint at all, so backend="off" stays byte-identical
+    # to today (and no floor leaks in).
     eng = _FakeEngine(_decision(value=None, abstain=True, route="review", backend="unavailable"))
     assert skill_topk(eng, "x", CANDIDATES, k=2, always_on=FLOOR) == []
 
