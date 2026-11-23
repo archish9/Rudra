@@ -282,11 +282,39 @@ in `.rudra/run/logs/`.
       `uv run pytest -q` not down; `TODO.md` updated (OPEN-175 → DONE, `file:line`
       evidence); committed to the branch, **not merged**.
 
-## Live verification (fill at end of S3)
+## Live verification (DONE 2026-11-19)
 
-- [ ] `rudra decide status` output (backend + served/zero-shot): …
-- [ ] `rudra decide fit --runs <archive>` per-question report + row counts: …
-- [ ] Confirm "nothing served" is the correct, expected result on this archive.
+Run via `uv run --with laya-mlx rudra decide …` (ephemeral sidecar; no change to
+`.venv` or `uv.lock`). `laya-mlx==0.7.0`, MLX, `convaiinnovations/laya`.
+
+- [x] `rudra decide status`: `backend: mlx (convaiinnovations/laya)`,
+      `Calibration: none (zero-shot)`, all 5 catalog decisions (needs_clarification,
+      failure_class, needs_tests, complexity, domain) **zero-shot**. Loaded the
+      checkpoint torch-free.
+- [x] `rudra decide fit` on the real archive (63 runs): dataset built —
+      **complexity 135 rows, domain 225 rows, needs_tests 0 (no label)** — fit
+      degraded to zero-shot, **no calibration written**, exit 0. Correct, expected
+      result (below-floor + the torch finding below).
+- [x] "Nothing served" confirmed as the correct result on this archive.
+
+### Load-bearing finding — fitting needs torch, inference does not
+
+laya-mlx's `fit_temperatures` → `_fit_unclamped_temperature` does `import torch`,
+and the mlx-only install ships **no torch**. So once a qtype clears its sample
+floor (`MIN_TYPE_N`), temperature fitting raises `ModuleNotFoundError`.
+**Inference (`predict`/`decide`, hence every S4–S7 decision) is torch-free** —
+only the *fit* step needs torch. The pipeline now degrades to zero-shot and
+reports the reason rather than crashing (commit `2dc251d`). Consequences:
+
+- **S4–S7 are unaffected** — they call `decide`, not `fit`; zero-shot + abstain→
+  Vaayu is exactly S3's handoff state.
+- To actually *fit* calibration on Apple-Silicon MLX, torch must be installed
+  alongside laya-mlx (`uv run --with laya-mlx --with torch rudra decide fit`).
+  **Owner decision deferred:** whether to document torch as a fit-time-only
+  requirement, add it to the `decide` extra (weighed against "no torch in core"),
+  or leave fitting for the ONNX path (laya[onnx] pulls torch anyway). Not blocking
+  S3: the pipeline, floor honesty, staleness guard, and CLI are proven; real fits
+  begin once S4–S6 instrument outcome rows AND torch is available at fit time.
 
 ## Handoff
 

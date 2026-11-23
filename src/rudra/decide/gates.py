@@ -22,9 +22,10 @@ would not have happened, and never suppress one when unsure.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import Enum
 
-from rudra.decide.catalog import CLARIFY_NEEDED, FAILURE_CLASS
+from rudra.decide.catalog import CLARIFY_NEEDED, FAILURE_CLASS, TASK_TRIAGE
 from rudra.decide.engine import should_act
 from rudra.decide.log import record
 
@@ -116,6 +117,83 @@ def _recovery_for(decision, packages: tuple[str, ...]) -> RecoveryAction | None:
     if cls == "missing_dependency" and packages:
         return RecoveryAction.ADD_DEP_TASK
     return None
+
+
+# --- #3: pre-dispatch task triage (loop/engine.py::run_task) -----------------
+#
+# One laya forward pass over TASK_TRIAGE before the coder is dispatched. Each
+# sub-decision gates a concrete, SAFE shortcut and only when laya is confident;
+# abstain / review / unavailable -> that field's safe default, which is today's
+# full path (run the tester, default budget, label nothing). laya can never
+# CAUSE more work than today -- it only ever removes the tester or raises the
+# budget.
+
+# P(tests needed) must be strictly below this to skip the tester. should_act
+# already requires answer_confidence >= the gate threshold (>= 0.75, so for a
+# noul max(P) >= 0.75); a passing "false" answer then has P(true) <= 0.25. This
+# margin pins that direction and refuses a merely-leaning answer -- untested
+# code must never ship on a guess. Symmetric with AMBIGUITY_MARGIN above.
+NEEDS_TESTS_MARGIN = 0.25
+
+# complexity is a score over TASK_TRIAGE's three ordered levels (0 trivial,
+# 1 normal, 2 hard). Only a confident HARD score (value at or above this, i.e.
+# clearly level 2) raises the fix budget; the threshold sits between normal and
+# hard so a middling score does not. Raising only -- never starving (S6 Review
+# Focus): a wrong label must not block a hard task early.
+HARD_COMPLEXITY_LEVEL = 1.5
+# The DELTA added to the configured max_fix_attempts for a hard task. A delta,
+# not an absolute ceiling, so the caller's budget (attempts + default + extra)
+# can only ever rise above the floor -- there is no clamp to get wrong.
+HARD_EXTRA_ATTEMPTS = 2
+
+
+@dataclass(frozen=True)
+class Triage:
+    """What laya read off a pending task before the coder is dispatched.
+
+    Every field is the safe default unless laya was confident: ``skip_tests``
+    False runs the tester as today, ``extra_attempts`` 0 uses the configured
+    budget unchanged, ``domain`` None labels nothing. The caller treats a None
+    engine the same by building ``Triage.safe()``.
+    """
+
+    skip_tests: bool
+    extra_attempts: int
+    domain: str | None
+
+    @classmethod
+    def safe(cls) -> Triage:
+        """The all-defaults triage -- no engine, or an unavailable one."""
+        return cls(skip_tests=False, extra_attempts=0, domain=None)
+
+
+def triage(engine, task_text: str) -> Triage:
+    """Read a pending task with laya in one forward pass. Logs all three.
+
+    ``task_text`` is passed as the ``task`` state field the TASK_TRIAGE
+    instructions reference. Blocking: an async-loop caller offloads via
+    ``asyncio.to_thread``. Never raises on an unavailable/abstaining answer --
+    every field degrades to its safe default (``engine.decide`` itself never
+    raises; see ``DecisionEngine.decide``).
+    """
+    answers = engine.decide({"task": task_text}, TASK_TRIAGE)
+    nt = answers["needs_tests"]
+    cx = answers["complexity"]
+    dm = answers["domain"]
+
+    skip_tests = (
+        should_act(nt) and isinstance(nt.value, (int, float)) and nt.value < NEEDS_TESTS_MARGIN
+    )
+    raise_budget = (
+        should_act(cx) and isinstance(cx.value, (int, float)) and cx.value >= HARD_COMPLEXITY_LEVEL
+    )
+    extra_attempts = HARD_EXTRA_ATTEMPTS if raise_budget else 0
+    domain = dm.value if (should_act(dm) and isinstance(dm.value, str)) else None
+
+    record(nt, acted=bool(skip_tests))
+    record(cx, acted=extra_attempts > 0)
+    record(dm, acted=domain is not None)
+    return Triage(skip_tests=bool(skip_tests), extra_attempts=extra_attempts, domain=domain)
 
 
 def clarify_label_row(
