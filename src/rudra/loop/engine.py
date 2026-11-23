@@ -25,7 +25,7 @@ from rich.markup import escape
 
 from rudra.context.middleware import log_model_call
 from rudra.context.usage import SUSPENDED_NOTICE_SECONDS, render_usage
-from rudra.decide.gates import RecoveryAction, recovery_route, skip_clarify
+from rudra.decide.gates import RecoveryAction, Triage, recovery_route, skip_clarify, triage
 from rudra.filesystem import is_greenfield
 from rudra.git.core import is_clean, is_repo, status
 from rudra.llm.providers import effective_base_url
@@ -1095,7 +1095,21 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
     # (`task.attempts -= 1` on an invocation the provider never served) has to
     # apply to whatever the loop is bounded by, and two counters that must
     # agree are how `_is_build_output` drifted into three spellings (OPEN-64).
-    budget = task.attempts + context.cfg.agent.max_fix_attempts
+    #
+    # Pre-dispatch triage (OPEN-178 / S6): laya reads the task once before any
+    # coder invocation. `extra_attempts` is a DELTA (0 unless confident-hard),
+    # so the budget can only ever rise above the floor -- a wrong label never
+    # starves a task. `skip_tests` gates the tester dispatch far below. An
+    # unavailable or unwired engine yields Triage.safe() (tester runs, no
+    # delta): today's path, the safe direction. The laya forward pass blocks,
+    # so it runs off the event loop.
+    engine = getattr(context, "decide", None)
+    task_triage = (
+        await asyncio.to_thread(triage, engine, task.description)
+        if engine is not None and engine.available()
+        else Triage.safe()
+    )
+    budget = task.attempts + context.cfg.agent.max_fix_attempts + task_triage.extra_attempts
 
     # The upgrade guard: BEFORE any coder invocation. A task whose upgrade
     # the knowledge graph records as having failed is refused here, not
@@ -1321,7 +1335,12 @@ async def run_task(task: Task, ledger: Ledger, *, context: LoopContext) -> Outco
         # in place rather than looping is deliberate: `continue` here would
         # send the *coder* round again and spend an attempt on work that
         # already passed.
-        if report.passed and not tested and tests_produced_no_judgement(report):
+        if (
+            report.passed
+            and not tested
+            and not task_triage.skip_tests
+            and tests_produced_no_judgement(report)
+        ):
             tested = True
             tester_result = await run_subagent(
                 "tester",
