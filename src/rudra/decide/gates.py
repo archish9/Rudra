@@ -22,10 +22,12 @@ would not have happened, and never suppress one when unsure.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
-from rudra.decide.catalog import CLARIFY_NEEDED, FAILURE_CLASS, TASK_TRIAGE
+from rudra.decide.catalog import CLARIFY_NEEDED, FAILURE_CLASS, TASK_TRIAGE, tool_select
 from rudra.decide.engine import should_act
 from rudra.decide.log import record
 
@@ -194,6 +196,69 @@ def triage(engine, task_text: str) -> Triage:
     record(cx, acted=extra_attempts > 0)
     record(dm, acted=domain is not None)
     return Triage(skip_tests=bool(skip_tests), extra_attempts=extra_attempts, domain=domain)
+
+
+# --- #4a: MCP tool pre-selection hint (subagents/build.py prompt build) -------
+#
+# The agent today burns `list_mcp_tools -> describe_mcp_tool -> call_mcp_tool`
+# (mcp/tools.py), 2-3 Vaayu turns, before it can use any MCP tool. When laya is
+# confident which VISIBLE tool fits the task, the caller injects that tool's id +
+# schema into the prompt so the agent skips straight to the call. A HINT only:
+# the exploration tools stay registered (capability is never removed), and laya
+# can only ever name a tool already visible to this subagent -- a pick outside
+# the visible set, an abstain/review, an unavailable engine, or no visible tools
+# all return None and the agent explores exactly as today.
+
+
+@dataclass(frozen=True)
+class McpHint:
+    """The pre-selected MCP tool to inject into a coder/tester prompt.
+
+    Carries the chosen tool's own id, description and JSON input schema so the
+    prompt can show the agent what to call and with what shape -- the model
+    still writes the argument VALUES. Built only from a tool the subagent can
+    actually see (``mcp/tools.py::_visible``).
+    """
+
+    tool_id: str
+    description: str
+    input_schema: dict
+
+
+def mcp_hint(engine, task_text: str, visible_tools: Sequence[Any]) -> McpHint | None:
+    """Pre-pick one MCP tool for ``task_text`` from ``visible_tools``, or None.
+
+    ``visible_tools`` is the tool list already filtered to this subagent's
+    allow/deny visibility (``mcp/tools.py::_visible``); each element is
+    duck-typed with ``.id``, ``.description`` and ``.input_schema`` (an MCP
+    ``ToolInfo``). The caller resolves it -- the decide layer never imports the
+    MCP client or the loop.
+
+    Returns an ``McpHint`` naming the chosen tool and carrying its schema when
+    laya is confident (``should_act``) AND the chosen id is one of the visible
+    tools; otherwise ``None`` (abstain / review / unavailable / a pick outside
+    the visible set / no visible tools), so the caller's agent explores as today.
+
+    Logs the decision (acted iff a hint is returned). Makes no laya call when
+    there is nothing to pick.
+    """
+    by_id = {t.id: t for t in visible_tools}
+    if not by_id:
+        return None
+
+    d = engine.decide({"task": task_text}, tool_select(list(by_id)))["mcp_tool"]
+    chosen = by_id.get(d.value) if should_act(d) else None
+    hint = (
+        McpHint(
+            tool_id=chosen.id,
+            description=chosen.description or "",
+            input_schema=chosen.input_schema,
+        )
+        if chosen is not None
+        else None
+    )
+    record(d, acted=hint is not None)
+    return hint
 
 
 def clarify_label_row(
