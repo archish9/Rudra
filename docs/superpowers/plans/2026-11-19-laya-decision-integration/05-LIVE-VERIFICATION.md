@@ -87,3 +87,53 @@ shows `decision … acted:true` + an `ADD_DEP_TASK` task inserted with
 abstain→planner (outcome 2); plus `[decide] backend="off"` showing
 `backend:unavailable` → planner (outcome 3, fixture `~/rudra-verify/open177-off`
 ready). Re-run freely (owner rule).
+
+## CLOSED 2026-11-23 — all three outcomes captured live on Vaayu
+A stable Vaayu window was reached. Each outcome was captured on the real
+loop + real laya (MLX), `--auto --allow-shell --stream`, `timeout=600`.
+Fixtures hardened so the agent cannot "solve" the block (package + tests set
+read-only via `[permissions] deny`, including `execute:*` — a bare `edit_file:*x*`
+does NOT match `dir/x.py` because wcmatch `*` will not cross `/`; use
+`dir/**` or `**/*x*`).
+
+**Outcome 1 — missing-dependency block → ADD_DEP_TASK, planner skipped**
+(`~/rudra-verify/open177-dep`, run `debug-43c6c64982a5`):
+```
+decision: {question_id: failure_class, backend: mlx, value: missing_dependency,
+           confidence: 0.6014, abstain: false, route: auto, acted: true}
+ledger:   t1 BLOCKED  block_packages=['rudra_fx_client']
+          t2 DONE  unblocks='t1'  (the CANNED recover_or_consult text:
+            "The gate for task t1 failed only because these packages are not
+             installed: rudra_fx_client. Declare them ...")
+breakdown re-consults for the block = 0  (Vaayu round-trip removed)
+```
+
+**Outcome 2 — non-dependency block → abstain → planner re-consult**
+(`~/rudra-verify/open177-logic`, TypeError in read-only `mypkg/client.py`,
+run `run2f`):
+```
+decision: {question_id: failure_class, value: wrong_approach,
+           confidence: 0.3665, abstain: true, acted: false}
+ledger:   t1 BLOCKED;  t2 DONE unblocks='t1' = a PLANNER task
+          ("Write get_rate ... return 2.0"), NOT the canned string.
+client.py unchanged (deny held) — the block was genuine, not agent-resolved.
+```
+
+**Outcome 3 — `[decide] backend="off"` → laya never consulted → planner**
+(`~/rudra-verify/open177-off`, same missing-import block, run `run3b`):
+```
+decisions logged = 0   (engine.available() is False under backend="off")
+ledger:   t1 BLOCKED;  t2 DONE unblocks='t1' = a PLANNER task
+          ("Install the project in editable mode ..."), canned string absent.
+```
+
+Contrast is the whole proof: the *same* missing-import block yields the canned
+ADD_DEP_TASK with the planner skipped when laya is on (outcome 1) and a planner
+re-consult when laya is off (outcome 3); a block laya is not confident about
+(outcome 2) always re-consults. OPEN-177 CLOSED.
+
+Vaayu stayed flaky through the close (several runs still died mid-stream on
+`RemoteProtocolError`/`ProviderUnavailable`/`StreamChunkTimeoutError`); the
+captures above are from the runs that reached the block before a drop. The
+laya code is not implicated in any Vaayu failure. See OPEN-183 for the
+slow-decode timeout fix.
