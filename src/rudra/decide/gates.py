@@ -280,6 +280,18 @@ def mcp_hint(engine, task_text: str, visible_tools: Sequence[Any]) -> McpHint | 
 # Because nothing is removed, a wrong pick can only fail to PROMOTE a skill,
 # never drop the one that mattered.
 
+# The always-on process core: the superpowers skills that apply to any coding
+# task regardless of its domain. laya reorders/adds on top but may never drop
+# these from the hint (07a amendment, owner 2026-11-23). Intersected with the
+# run's actually-enabled candidates at call time -- a floor skill not enabled
+# cannot be hinted.
+SKILL_FLOOR: tuple[str, ...] = (
+    "using-superpowers",
+    "test-driven-development",
+    "systematic-debugging",
+    "verification-before-completion",
+)
+
 
 def skill_topk(
     engine,

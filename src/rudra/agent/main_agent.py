@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -1248,6 +1248,11 @@ async def create_main_agent(
         # the loop thread: an MLX cold load reads a checkpoint off disk and
         # would otherwise block setup (and Ctrl-C) for a minute.
         decide_engine = await asyncio.to_thread(DecisionEngine.build, cfg)
+
+        # Share the one engine with the subagent dispatch too (OPEN-179): the
+        # writing subagents pre-select an MCP tool + skill hint off it. Built
+        # here because `subagent_context` was constructed before the engine.
+        subagent_context = replace(subagent_context, decide=decide_engine)
 
         loop_context = LoopContext(
             subagents=subagent_context,

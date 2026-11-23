@@ -17,7 +17,12 @@ what deepagents' own default does, since it never propagates the parent's
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import json
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
@@ -55,6 +60,139 @@ from rudra.tools.testing_tools import create_testing_tools
 # the spec then selects by tool name. Names rather than callables because
 # the factories need per-run arguments a frozen spec cannot hold.
 _TOOL_FACTORIES = (create_git_tools, create_testing_tools, create_memory_tools)
+
+if TYPE_CHECKING:
+    from rudra.decide.gates import McpHint
+
+# How many laya-ranked skills to promote in the pre-selection hint (OPEN-179).
+# A hint, not a cap: the process floor is unioned on top and nothing is removed
+# from the index, so this only decides how many task-ranked skills lead.
+SKILL_TOPK_K = 3
+
+
+@dataclass(frozen=True)
+class PromptHints:
+    """laya's pre-selected prompt hints for one coder/tester dispatch (OPEN-179).
+
+    Both are HINTS: ``mcp`` names one tool to call directly (the exploration
+    meta-tools stay registered), ``skills`` promotes a few skill names to read
+    first (every skill stays in the index). Empty/None on abstain or an
+    unavailable engine -> the prompt is byte-identical to today.
+    """
+
+    mcp: McpHint | None = None
+    skills: tuple[str, ...] = field(default_factory=tuple)
+
+
+def _mcp_hint_block(hint: McpHint) -> str:
+    """The 'LIKELY MCP TOOL' block: the pre-picked tool id + schema to inline."""
+    schema = json.dumps(hint.input_schema, indent=2)
+    described = f" — {hint.description}" if hint.description else ""
+    return (
+        "## LIKELY MCP TOOL\n\n"
+        f"For this task the single most likely MCP tool is `{hint.tool_id}`{described}. "
+        "Call it directly with `call_mcp_tool` — you do NOT need to call "
+        "`list_mcp_tools` or `describe_mcp_tool` first. Its arguments schema is:\n\n"
+        f"```json\n{schema}\n```\n\n"
+        "If it turns out not to fit, the meta-tools are still available."
+    )
+
+
+def _skills_hint_block(names: Sequence[str]) -> str:
+    """The 'MOST RELEVANT SKILLS' block, or '' when there is nothing to promote."""
+    chosen = list(names)
+    if not chosen:
+        return ""
+    joined = ", ".join(f"`{n}`" for n in chosen)
+    return (
+        "## MOST RELEVANT SKILLS\n\n"
+        f"These skills are most relevant to this task — read their SKILL.md first: "
+        f"{joined}. Your other skills remain available in the index."
+    )
+
+
+def _skill_candidate_names(sources: Sequence[str] | None) -> list[str]:
+    """The skill names actually indexed for this stage (``<name>/SKILL.md`` dirs).
+
+    Read off the rendered index roots the agent is given (``skills_sources``),
+    so the candidate set laya ranks is exactly what SkillsMiddleware shows the
+    model -- never a guess. Tolerates a missing/unreadable root (returns what it
+    can); the caller treats an empty list as "no skill hint".
+    """
+    if not sources:
+        return []
+    names: list[str] = []
+    for src in sources:
+        try:
+            for entry in sorted(Path(src).iterdir()):
+                if entry.name not in names and (entry / "SKILL.md").is_file():
+                    names.append(entry.name)
+        except OSError:
+            continue
+    return names
+
+
+async def resolve_prompt_hints(spec: RudraSubagent, context: Any, task_text: str) -> PromptHints:
+    """Compute both pre-selection hints off the per-run engine, at dispatch.
+
+    Runs where the engine (``context.decide``) and the MCP client live, off the
+    agent's turn (the laya forward pass blocks, so it is offloaded via
+    ``asyncio.to_thread``). Never raises and never ends a dispatch (CLAUDE.md
+    §8a): an unavailable engine, a blank task, or any failure in either half
+    degrades to no hint, which renders the prompt exactly as today. Computed for
+    the writing specs only (``wants_mcp`` / ``wants_skills``).
+    """
+    engine = getattr(context, "decide", None)
+    if engine is None or not task_text.strip():
+        return PromptHints()
+    try:
+        if not engine.available():
+            return PromptHints()
+    except Exception:  # noqa: BLE001 - a broken engine must not fail dispatch
+        return PromptHints()
+
+    mcp = None
+    if spec.wants_mcp:
+        try:
+            mcp = await _resolve_mcp_hint(spec, context, engine, task_text)
+        except Exception:  # noqa: BLE001 - §8a: degrade to no hint
+            mcp = None
+
+    skills: tuple[str, ...] = ()
+    if spec.wants_skills:
+        try:
+            skills = await _resolve_skill_hint(context, engine, task_text)
+        except Exception:  # noqa: BLE001 - §8a: degrade to no hint
+            skills = ()
+
+    return PromptHints(mcp=mcp, skills=skills)
+
+
+async def _resolve_mcp_hint(
+    spec: RudraSubagent, context: Any, engine: Any, task_text: str
+) -> McpHint | None:
+    client = getattr(context, "mcp", None)
+    mcp_cfg = getattr(getattr(context, "cfg", None), "mcp", None)
+    if client is None or mcp_cfg is None or not getattr(mcp_cfg, "enabled", False):
+        return None
+    from rudra.decide.gates import mcp_hint
+    from rudra.mcp.tools import visible_tools
+
+    allow = mcp_cfg.readonly if spec.mcp_readonly else mcp_cfg.allow
+    tools = await visible_tools(client, allow=allow, deny=mcp_cfg.deny)
+    return await asyncio.to_thread(mcp_hint, engine, task_text, tools)
+
+
+async def _resolve_skill_hint(context: Any, engine: Any, task_text: str) -> tuple[str, ...]:
+    candidates = _skill_candidate_names(getattr(context, "skills_sources", None))
+    if not candidates:
+        return ()
+    from rudra.decide.gates import SKILL_FLOOR, skill_topk
+
+    picked = await asyncio.to_thread(
+        skill_topk, engine, task_text, candidates, k=SKILL_TOPK_K, always_on=SKILL_FLOOR
+    )
+    return tuple(picked)
 
 
 def _model_for(spec: RudraSubagent, cfg: Any = None, *, session_id: str | None = None) -> Any:
@@ -121,7 +259,9 @@ def _mcp_tools_for(spec: RudraSubagent, context: Any) -> list:
     return create_mcp_tools(client, allow=allow, deny=mcp_cfg.deny)
 
 
-def _prompt_for(spec: RudraSubagent, context: Any, task: str = "") -> str:
+def _prompt_for(
+    spec: RudraSubagent, context: Any, task: str = "", hints: PromptHints | None = None
+) -> str:
     """The spec's prompt, plus whatever this project has established.
 
     Rendered here rather than baked into the spec because build_agent runs
@@ -221,6 +361,17 @@ def _prompt_for(spec: RudraSubagent, context: Any, task: str = "") -> str:
         catalog = mcp_catalog_block(client.servers)
         if catalog:
             parts.append(catalog)
+
+    # laya's pre-selection hints (OPEN-179), last so they sit closest to the
+    # task. Both are additive: absent/empty -> this appends nothing and the
+    # prompt is byte-identical to today (the Vaayu prefix-cache invariant,
+    # tests/test_prompt_byte_stability.py). Hints only -- no capability removed.
+    if hints is not None:
+        if hints.mcp is not None:
+            parts.append(_mcp_hint_block(hints.mcp))
+        skill_block = _skills_hint_block(hints.skills)
+        if skill_block:
+            parts.append(skill_block)
     return "\n\n".join(parts)
 
 
@@ -612,7 +763,12 @@ def _nested_subagents(context: Any, *, can_delegate: bool) -> list[dict]:
 
 
 def build_agent(
-    spec: RudraSubagent, context: Any, task: str = "", *, session_id: str | None = None
+    spec: RudraSubagent,
+    context: Any,
+    task: str = "",
+    *,
+    session_id: str | None = None,
+    hints: PromptHints | None = None,
 ) -> Any:
     """A compiled deep agent for this spec, ready to invoke directly.
 
@@ -641,7 +797,7 @@ def build_agent(
     return create_deep_agent(
         model=model,
         tools=tools,
-        system_prompt=_prompt_for(spec, context, task),
+        system_prompt=_prompt_for(spec, context, task, hints=hints),
         backend=context.backend,
         checkpointer=context.checkpointer or InMemorySaver(),
         middleware=_middleware_for(spec, context, model, task),
@@ -690,4 +846,10 @@ def to_subagent_spec(spec: RudraSubagent, context: Any, *, render_prompt: bool =
     }
 
 
-__all__ = ["_prompt_for", "build_agent", "to_subagent_spec"]
+__all__ = [
+    "PromptHints",
+    "_prompt_for",
+    "build_agent",
+    "resolve_prompt_hints",
+    "to_subagent_spec",
+]

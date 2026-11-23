@@ -28,6 +28,27 @@ def _visible(infos: Sequence[Any], allow: Sequence[str], deny: Sequence[str]) ->
     return [info for info in infos if info.id in permitted]
 
 
+async def visible_tools(
+    client: McpClient, *, allow: Sequence[str] = (), deny: Sequence[str] = ()
+) -> list[Any]:
+    """Every MCP tool this subagent may see, as ``ToolInfo`` (id/description/schema).
+
+    The same visibility ``create_mcp_tools`` enforces (``_visible`` with the
+    spec's allow/deny), resolved once for Rudra's own in-process pre-selection
+    (OPEN-179) rather than for the model. Tolerates a server that is down -- a
+    partial listing is better than none, and an empty list means "nothing to
+    hint", never an error. Used off the agent's turn, so it never raises: a
+    total failure returns ``[]``.
+    """
+    infos: list[Any] = []
+    for name in list(client.servers):
+        try:
+            infos.extend(await client.list_tools(name))
+        except McpUnavailable:
+            continue
+    return _visible(infos, allow, deny)
+
+
 def _bad_id(tool_id: str, exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return (
@@ -132,4 +153,4 @@ def create_mcp_tools(
     return [list_mcp_tools, describe_mcp_tool, call_mcp_tool]
 
 
-__all__ = ["create_mcp_tools"]
+__all__ = ["create_mcp_tools", "visible_tools"]
