@@ -156,7 +156,7 @@ def create_mcp_tools(
                 except json.JSONDecodeError as exc:
                     return (
                         f"`arguments` is not valid JSON ({exc}). Pass the tool's "
-                        "arguments as a JSON object, e.g. {\"query\": \"...\"}."
+                        'arguments as a JSON object, e.g. {"query": "..."}.'
                     )
                 if not isinstance(parsed, dict):
                     return (

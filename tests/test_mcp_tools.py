@@ -82,18 +82,14 @@ async def test_call_treats_blank_or_null_string_arguments_as_no_arguments():
 
 async def test_call_rejects_a_non_object_json_string_with_a_sentence():
     tools = by_name(create_mcp_tools(client()))
-    text = await tools["call_mcp_tool"].ainvoke(
-        {"tool_id": "echo__echo", "arguments": "[1, 2, 3]"}
-    )
+    text = await tools["call_mcp_tool"].ainvoke({"tool_id": "echo__echo", "arguments": "[1, 2, 3]"})
     assert "object" in text.lower() or "dict" in text.lower()
     assert "echo:" not in text
 
 
 async def test_call_rejects_an_unparseable_string_with_a_sentence():
     tools = by_name(create_mcp_tools(client()))
-    text = await tools["call_mcp_tool"].ainvoke(
-        {"tool_id": "echo__echo", "arguments": "{not json"}
-    )
+    text = await tools["call_mcp_tool"].ainvoke({"tool_id": "echo__echo", "arguments": "{not json"})
     assert "json" in text.lower()
     assert "echo:" not in text
 
