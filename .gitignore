@@ -227,3 +227,5 @@ coding-files/*
 docs/*
 TODO*
 scripts/out/
+
+test-intregration/*
