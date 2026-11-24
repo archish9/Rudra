@@ -116,6 +116,21 @@ def archive_home(explicit: Path | None = None) -> Path:
     return base / "rudra" / "runs"
 
 
+def calibration_home(explicit: Path | None = None) -> Path:
+    """Where laya calibration lives: `$XDG_STATE_HOME/rudra/calibration`.
+
+    Sibling of `archive_home`'s `runs/`. Calibration is fit from the whole
+    archive (every project's runs), so it is GLOBAL, not project-scoped --
+    `DecisionEngine.build(cfg)` reads it without a project root. Same XDG house
+    style; `explicit` wins so tests run against a tmp_path.
+    """
+    if explicit is not None:
+        return Path(explicit)
+    xdg = os.environ.get("XDG_STATE_HOME")
+    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
+    return base / "rudra" / "calibration"
+
+
 def project_slug(project_path: Path) -> str:
     """A directory name for one project: readable name, then path digest.
 

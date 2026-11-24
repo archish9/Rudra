@@ -227,5 +227,5 @@ coding-files/*
 docs/*
 TODO*
 scripts/out/
-
+scratchpad/
 test-intregration/*

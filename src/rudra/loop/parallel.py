@@ -493,6 +493,7 @@ async def run_parallel_work(
         _sync_project_env,
         effective_fanout,
         notice_if_suspended,
+        recover_or_consult,
         review_once,
         summarise,
         summarise_architecture,
@@ -615,10 +616,14 @@ async def run_parallel_work(
                 stop_run = True
                 break
             consulted_on_empty = False
-            # What this consult adds is worked next, not after every pending
-            # task the block may be starving (OPEN-158), exactly as work() does.
-            with ledger.unblocking(task.id):
-                await planner(ledger, request, stage="breakdown", reason="blocked", task=task)
+            # A laya deterministic recovery may skip the planner re-consult
+            # (OPEN-177); otherwise this re-consults exactly as before, and what
+            # it adds is worked next (OPEN-158), exactly as work() does.
+            # can_rerun=False: this task's worktree was removed by the batch's
+            # `finally`, so its code is no longer in a tree the gate could re-run.
+            await recover_or_consult(
+                task, ledger, request, context=context, planner=planner, can_rerun=False
+            )
         if stop_run:
             break
 

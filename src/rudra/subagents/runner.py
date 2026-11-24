@@ -28,7 +28,7 @@ from rudra.context.deadline import span_deadline
 from rudra.context.usage import model_time_of, model_wait_note
 from rudra.middleware.repeat_guard import NO_PROGRESS_READS
 from rudra.permissions.approval import run_with_approvals
-from rudra.subagents.build import build_agent
+from rudra.subagents.build import build_agent, resolve_prompt_hints
 from rudra.subagents.registry import REGISTRY
 from rudra.trace.stream import StreamState
 from rudra.trace.stream import is_rudra_dedupe as _is_rudra_dedupe
@@ -426,6 +426,11 @@ class SubagentContext:
     # one run, one semaphore per endpoint. Per run and never module-level --
     # an asyncio.Semaphore binds to the loop it is first awaited in.
     limiter: Any = None
+    # The run's in-process laya DecisionEngine, or None when [decide] is off.
+    # Shared by reference like the gate and MCP client: one run, one engine.
+    # Used only to pre-select MCP tool + skill prompt hints for the writing
+    # subagents (OPEN-179); None or unavailable -> no hint, today's prompt.
+    decide: Any = None
 
 
 @dataclass(frozen=True)
@@ -606,11 +611,17 @@ async def run_subagent(
     model_before = model_time_of(getattr(context, "usage", None), spec.role)
     # One id, two uses: the checkpointer thread and the prefix-cache key.
     thread = thread_id or f"{context.session_id}-{name}-{uuid.uuid4().hex[:8]}"
+    # laya pre-selection hints (OPEN-179), resolved at dispatch where the
+    # engine and MCP client both live. Off the agent's turn, never raising:
+    # an unavailable engine or any failure yields no hint, today's prompt.
+    # Resolved before build_agent so a build failure still carries no hint.
+    hints = await resolve_prompt_hints(spec, context, prompt)
+
     try:
         # The prompt IS the task: passing it through is what makes the
         # subagent's memory recall about the work rather than about its own
         # name (CR-C3).
-        agent = build_agent(spec, context, prompt, session_id=thread)
+        agent = build_agent(spec, context, prompt, session_id=thread, hints=hints)
     except Exception as exc:  # noqa: BLE001 - reported, not raised
         log_invocation(
             name,

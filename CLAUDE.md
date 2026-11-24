@@ -175,6 +175,45 @@ src/rudra/
 │                           SPAN_DEADLINE ContextVar its middleware reads, and the
 │                           span_deadline contextmanager that owns the reset.
 │                           0.0 is no bound
+├── decide/                 In-process typed-decision layer (laya). Backend chosen
+│                           by capability, MLX → ONNX → unavailable. Within a
+│                           run the engine is always safe: an unavailable or
+│                           malformed answer is an abstain and the caller falls
+│                           back to Vaayu; `DecisionEngine.build` never raises.
+│                           Every decision is logged. laya is a REQUIRED but
+│                           separately-installed dependency, NOT a locked one:
+│                           `laya-mlx` pins numpy<2 and `laya[onnx]` pulls
+│                           torch/nvidia, so either in the lock would downgrade
+│                           core numpy or pull torch for everyone. Installed
+│                           out-of-band per OS: `pip install laya-mlx` (Apple
+│                           Silicon) or `pip install 'laya[onnx]'` (elsewhere).
+│                           **A RUN-ENTRY GATE requires it**: when `[decide]
+│                           enabled` is true (default) and laya is not importable
+│                           for this OS, `RudraAgent.run()` (main_agent.py:339)
+│                           STOPS the run before planning and points the user to
+│                           `Documentation/16-laya.md` — the gate is additive and
+│                           separate from the engine's own graceful degradation,
+│                           so it never fires for `--version`/`doctor`/`init`/
+│                           `config` (they build no RudraAgent). `[decide]
+│                           enabled = false` is the one opt-out (runs without
+│                           laya, always Vaayu); `backend = "off"` does NOT lift
+│                           the requirement (installed-but-unused). `backends.py::
+│                           laya_installed` is the importability probe the gate
+│                           and `doctor` share.
+│                           `tests/decide/test_no_torch_in_core.py` pins core
+│                           torch-free. CALIBRATION is per-machine state at
+│                           `$XDG_STATE_HOME/rudra/calibration` (never committed/
+│                           shipped), fit from the archive by `rudra decide fit`
+│                           and loaded torch-free at runtime. Fitting needs torch
+│                           (fit-time only): the ONNX build bundles it, the MLX
+│                           build ships none. `[decide] auto_fit` (default true)
+│                           runs `fit.maybe_auto_fit` at run end from
+│                           `RudraAgent.close()` AFTER the archive, guarded by a
+│                           cheap torch find_spec + an N-new-runs threshold, so
+│                           it calibrates automatically on ONNX and is a logged
+│                           no-op on MLX. ONNX itself is UNVERIFIED (TODO S3 in
+│                           backends.py), so ONNX auto-fit is wired+unit-tested,
+│                           not live-proven
 ├── loop/                   The agentic loop. ledger · bounds · regressions ·
 │                           decomposition · dependencies · tools · engine.
 │                           ledger/bounds/regressions/decomposition import
@@ -982,4 +1021,8 @@ or the halt that ended the run.
   present.
 - **A local `.venv` drifts from `uv.lock` and will lie to you.** Run `uv sync`
   before believing a local failure, and prefer `uv run` — which reconciles first —
-  when the answer matters.
+  when the answer matters. **But a plain `uv sync` uninstalls laya** — it is a
+  required sidecar kept out of the lock (§3), so `uv sync` sees it as extraneous
+  (`- laya-mlx==…` in its plan). Sync with `uv sync --inexact` or
+  `scripts/dev-sync.sh` (which also reinstalls laya if it is missing); plain
+  `uv sync` leaves `rudra` hitting the run-entry gate until laya is reinstalled.

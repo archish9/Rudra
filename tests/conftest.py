@@ -55,6 +55,15 @@ _REPO_DOTENV = (pathlib.Path(__file__).parent.parent / ".env").resolve()
 
 
 @pytest.fixture(autouse=True)
+def _laya_gate_satisfied(monkeypatch):
+    """laya is a sidecar install and absent in the dev venv. The run-entry gate
+    (OPEN-180) is exercised by tests/decide/test_gate.py, which overrides this."""
+    from rudra.decide import gate
+
+    monkeypatch.setattr(gate, "laya_installed", lambda cfg: True)
+
+
+@pytest.fixture(autouse=True)
 def _ignore_the_developers_dotenv(monkeypatch):
     from rudra.config import loader
 

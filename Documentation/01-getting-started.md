@@ -99,6 +99,70 @@ rudra --version
 
 You want `Rudra v0.2.0`. If you get `0.0.0+unknown`, the package isn't properly installed — re-run your install step. If you get `command not found`, see [Troubleshooting](06-troubleshooting.md#command-not-found-rudra).
 
+## Install laya (required)
+
+Rudra makes some of its decisions with a small **local** model, **laya**, and will not
+start a run without it. Install the build for your OS into the **same environment** you
+just installed Rudra into:
+
+| Your machine | Command |
+|---|---|
+| Apple Silicon Mac (M-series) | `pip install laya-mlx` |
+| Linux, Windows, or Intel Mac | `pip install 'laya[onnx]'` |
+
+With `uv`, prefix with `uv pip` — `uv pip install laya-mlx` on Apple Silicon, or
+`uv pip install 'laya[onnx]'` everywhere else. The ONNX build is large (it pulls PyTorch),
+and laya's model checkpoint (~850 MB) downloads once on first use. Confirm it with
+`rudra doctor`.
+
+laya is a separate install on purpose — `laya-mlx` pins NumPy below 2 and `laya[onnx]`
+pulls PyTorch, neither of which belongs in everyone's base install. Why it's required, the
+`[decide]` settings, and how to run without it if you truly can't install it:
+**[laya](16-laya.md)**.
+
+### Keeping laya installed across updates
+
+This is the one install detail worth understanding, and it depends on **which option
+above you chose.**
+
+laya is installed out of band (the `pip install laya-mlx` / `uv pip install …` command
+above), and it is deliberately **not** listed in Rudra's `uv.lock`. It cannot be: the
+Apple-Silicon build (`laya-mlx`) pins NumPy below 2, and the ONNX build (`laya[onnx]`)
+pulls PyTorch and CUDA packages. Putting either in the lock would force those on every
+Rudra install — exactly what the separate-install design exists to avoid.
+
+What that means for each install method:
+
+- **Option A — `uv sync`** makes your `.venv` match `uv.lock` *exactly*, which means it
+  **removes anything that isn't in the lock.** Because laya isn't in the lock, **every
+  `uv sync` uninstalls it** — you'll see a `- laya-mlx==…` line in the output — and it
+  happens again each time you `uv sync` to pull updates.
+- **Option B — `pipx`** and **Option C — plain virtualenv** install into an environment
+  that is *not* rebuilt from the lock. Nothing re-syncs it, so laya **stays installed**
+  until you remove it yourself. These paths never hit the problem.
+
+**If you use `uv`,** keep laya by syncing one of these ways instead of a bare `uv sync`:
+
+```bash
+uv sync --inexact        # like uv sync, but leaves packages not in the lock alone
+./scripts/dev-sync.sh    # runs uv sync --inexact, then reinstalls laya for your OS if missing
+```
+
+There is **no** `pyproject.toml` or `uv.toml` setting that makes `uv sync` preserve
+extraneous packages — `--inexact` is a command-line flag only — so this is a habit to
+keep, not something the repo can set for you. If a plain `uv sync` has already removed
+laya, just re-run the install command for your OS above (or `scripts/dev-sync.sh`).
+
+You are never left in a silent, half-broken state: Rudra's run-entry check refuses to
+start without laya and points you straight back to this step, so a missing laya shows up
+immediately rather than as a confusing failure mid-run.
+
+| You installed with | Does `uv sync` remove laya? | What to do |
+|---|---|---|
+| `uv sync` (Option A) | **Yes, every sync** | `uv sync --inexact` or `./scripts/dev-sync.sh`; reinstall if already gone |
+| `pipx` (Option B) | No | Nothing — laya persists |
+| plain virtualenv (Option C) | No, unless you also run `uv sync` | Nothing |
+
 ---
 
 ## Give Rudra a model

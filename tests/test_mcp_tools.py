@@ -53,6 +53,51 @@ async def test_call_invokes_the_server():
     assert "echo: hi" in text
 
 
+async def test_call_accepts_arguments_as_a_json_string():
+    """A model routinely serializes tool args to a JSON string; accept it (OPEN-185).
+
+    Pydantic validates `arguments` against the param type BEFORE the body runs, so
+    the type must admit `str` and the body must parse it. Otherwise every
+    stringified call is rejected with 'Input should be a valid dictionary' and the
+    model, having done everything else right, loops until the failure guard halts
+    it -- which is exactly how OPEN-179 live Run A blocked.
+    """
+    tools = by_name(create_mcp_tools(client()))
+    text = await tools["call_mcp_tool"].ainvoke(
+        {"tool_id": "echo__echo", "arguments": '{"text": "hi"}'}
+    )
+    assert "echo: hi" in text
+
+
+async def test_call_treats_blank_or_null_string_arguments_as_no_arguments():
+    tools = by_name(create_mcp_tools(client()))
+    for blank in ("", "   ", "null"):
+        text = await tools["call_mcp_tool"].ainvoke(
+            {"tool_id": "echo__explode", "arguments": blank}
+        )
+        # reached the tool (which always raises) rather than failing validation
+        assert "valid dictionary" not in text
+        assert "always fails" in text
+
+
+async def test_call_rejects_a_non_object_json_string_with_a_sentence():
+    tools = by_name(create_mcp_tools(client()))
+    text = await tools["call_mcp_tool"].ainvoke(
+        {"tool_id": "echo__echo", "arguments": "[1, 2, 3]"}
+    )
+    assert "object" in text.lower() or "dict" in text.lower()
+    assert "echo:" not in text
+
+
+async def test_call_rejects_an_unparseable_string_with_a_sentence():
+    tools = by_name(create_mcp_tools(client()))
+    text = await tools["call_mcp_tool"].ainvoke(
+        {"tool_id": "echo__echo", "arguments": "{not json"}
+    )
+    assert "json" in text.lower()
+    assert "echo:" not in text
+
+
 async def test_a_denied_id_is_invisible_and_uncallable():
     tools = by_name(create_mcp_tools(client(), deny=["*__explode"]))
     listing = await tools["list_mcp_tools"].ainvoke({})

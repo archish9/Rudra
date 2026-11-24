@@ -367,3 +367,24 @@ def test_editing_config_toml_mid_session_takes_effect_next_turn(
     assert "qwen3-coder:32b" in result.output, result.output
     assert "edited-coder-model" in result.output, result.output
     assert result.output.index("qwen3-coder:32b") < result.output.index("edited-coder-model")
+
+
+def test_doctor_has_a_laya_row_present_and_absent(tmp_path: Path, monkeypatch) -> None:
+    from rudra.decide import backends
+
+    monkeypatch.setattr(backends, "laya_build", lambda cfg: "mlx")
+    out = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"]).output
+    assert "laya" in out and "mlx build" in out
+
+    monkeypatch.setattr(backends, "laya_build", lambda cfg: None)
+    out = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"]).output
+    assert "laya" in out and "16-laya.md" in out
+
+    (tmp_path / ".rudra").mkdir(exist_ok=True)
+    (tmp_path / ".rudra" / "config.toml").write_text(
+        "[decide]\nenabled = false\n", encoding="utf-8"
+    )
+    reset_config()
+    result = runner.invoke(app, ["doctor", "-d", str(tmp_path), "--offline"])
+    assert "enabled = false" in result.output.replace("\n", " "), result.output
+    assert result.exit_code == 0, result.output

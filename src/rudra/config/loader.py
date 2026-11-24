@@ -37,6 +37,7 @@ from rudra.config.schema import (
     VALID_PROVIDERS,
     AgentConfig,
     CompatConfig,
+    DecideConfig,
     McpConfig,
     MemoryConfig,
     ModelConfig,
@@ -53,6 +54,7 @@ _TOP_LEVEL = (
     "permissions",
     "compat",
     "tools",
+    "decide",
     "skills",
     "mcp",
     "memory",
@@ -75,6 +77,7 @@ _SKILLS_KEYS = frozenset({"enabled"})
 _TOOLS_BOOL_KEYS = frozenset({"shell", "shell_in_auto", "auto_branch", "proceed_known_bad"})
 _TOOLS_INT_KEYS = frozenset({"test_timeout", "max_parallel_tasks"})
 _TOOLS_KEYS = _TOOLS_BOOL_KEYS | _TOOLS_INT_KEYS
+_DECIDE_KEYS = frozenset({"enabled", "backend", "mlx_repo", "onnx_model", "calibration_dir"})
 _MCP_BOOL_KEYS = frozenset({"enabled", "mcp_in_auto"})
 _MCP_LIST_KEYS = frozenset({"disabled_servers", "allow", "deny", "readonly"})
 _MCP_KEYS = _MCP_BOOL_KEYS | _MCP_LIST_KEYS | frozenset({"timeout"})
@@ -286,6 +289,10 @@ def validate(
         if not isinstance(value, bool):
             raise ConfigError(f"[compat] {key} must be true or false, got {value!r}.")
 
+    for key in merged.get("decide", {}):
+        if key not in _DECIDE_KEYS:
+            raise ConfigError(f"Unknown key '{key}' in [decide].{_suggest(key, _DECIDE_KEYS)}")
+
     for key, value in merged.get("tools", {}).items():
         if key not in _TOOLS_KEYS:
             raise ConfigError(f"Unknown key '{key}' in [tools].{_suggest(key, _TOOLS_KEYS)}")
@@ -482,6 +489,8 @@ class Config:
     memory: MemoryConfig
     telemetry: TelemetryConfig
     models: dict[str, ModelConfig]
+    # Defaulted so a Config built by hand without [decide] stays valid.
+    decide: DecideConfig = field(default_factory=DecideConfig)
     provenance: dict[str, str] = field(default_factory=dict)
     sources: dict[str, Path | None] = field(default_factory=dict)
     project_root: Path | None = None
@@ -647,6 +656,7 @@ def build_config(
         ),
         compat=CompatConfig(**merged.get("compat", {})),
         tools=ToolsConfig(**merged.get("tools", {})),
+        decide=DecideConfig(**merged.get("decide", {})),
         skills=_build_skills(merged),
         mcp=_build_mcp(merged),
         memory=_build_memory(merged),

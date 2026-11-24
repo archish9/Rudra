@@ -28,6 +28,27 @@ def _visible(infos: Sequence[Any], allow: Sequence[str], deny: Sequence[str]) ->
     return [info for info in infos if info.id in permitted]
 
 
+async def visible_tools(
+    client: McpClient, *, allow: Sequence[str] = (), deny: Sequence[str] = ()
+) -> list[Any]:
+    """Every MCP tool this subagent may see, as ``ToolInfo`` (id/description/schema).
+
+    The same visibility ``create_mcp_tools`` enforces (``_visible`` with the
+    spec's allow/deny), resolved once for Rudra's own in-process pre-selection
+    (OPEN-179) rather than for the model. Tolerates a server that is down -- a
+    partial listing is better than none, and an empty list means "nothing to
+    hint", never an error. Used off the agent's turn, so it never raises: a
+    total failure returns ``[]``.
+    """
+    infos: list[Any] = []
+    for name in list(client.servers):
+        try:
+            infos.extend(await client.list_tools(name))
+        except McpUnavailable:
+            continue
+    return _visible(infos, allow, deny)
+
+
 def _bad_id(tool_id: str, exc: Exception) -> str:
     if isinstance(exc, ValueError):
         return (
@@ -104,20 +125,45 @@ def create_mcp_tools(
         return f"{info.id}\n{info.description}\n\nArguments:\n{schema}"
 
     @tool
-    async def call_mcp_tool(tool_id: str, arguments: dict | None = None) -> str:
+    async def call_mcp_tool(tool_id: str, arguments: dict | str | None = None) -> str:
         """Run one MCP tool.
 
         Args:
             tool_id: The id from `list_mcp_tools`, e.g. `kala__verify`.
             arguments: The tool's arguments, as an object. Get their shape
                 from `describe_mcp_tool` first — a wrong shape is rejected by
-                the server, not repaired. Named `arguments` rather than
-                `args`, which langchain's structured-tool layer mangles into
-                `v__args`.
+                the server, not repaired. A JSON string encoding that object is
+                also accepted (models routinely serialize it), but the decoded
+                value must be an object, not a list or scalar. Named `arguments`
+                rather than `args`, which langchain's structured-tool layer
+                mangles into `v__args`.
 
         Returns:
             Whatever the tool returned, as text.
         """
+        # OPEN-185: `arguments` is typed `dict | str | None` so pydantic admits a
+        # stringified object (the common model habit) instead of rejecting the
+        # whole call with "Input should be a valid dictionary" before this body
+        # ever runs. Parse it here; a non-object or unparseable string is answered
+        # with a sentence the model can act on, not a validation stack trace.
+        if isinstance(arguments, str):
+            text = arguments.strip()
+            if text == "" or text.lower() == "null":
+                arguments = None
+            else:
+                try:
+                    parsed = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    return (
+                        f"`arguments` is not valid JSON ({exc}). Pass the tool's "
+                        "arguments as a JSON object, e.g. {\"query\": \"...\"}."
+                    )
+                if not isinstance(parsed, dict):
+                    return (
+                        "`arguments` must be a JSON object (a dict of name→value), "
+                        'e.g. {"query": "..."} — not a list or a bare value.'
+                    )
+                arguments = parsed
         try:
             info = await client.describe(tool_id)
         except (McpUnavailable, ValueError) as exc:
@@ -132,4 +178,4 @@ def create_mcp_tools(
     return [list_mcp_tools, describe_mcp_tool, call_mcp_tool]
 
 
-__all__ = ["create_mcp_tools"]
+__all__ = ["create_mcp_tools", "visible_tools"]

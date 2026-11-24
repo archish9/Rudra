@@ -121,6 +121,9 @@ app.add_typer(mcp_app, name="mcp")
 memory_app = typer.Typer(help="Inspect and prune this project's long-term memory.")
 app.add_typer(memory_app, name="memory")
 
+decide_app = typer.Typer(help="Fit and inspect the laya decision layer.")
+app.add_typer(decide_app, name="decide")
+
 console = Console()
 
 
@@ -886,6 +889,24 @@ def doctor_command(
             "or [tools] shell_in_auto = true"
         )
     table.add_row("shell", "warn" if cfg.tools.shell_in_auto else "ok", escape(shell_state))
+
+    from rudra.decide.backends import laya_build
+    from rudra.decide.gate import DOC, INSTALL_HINT
+
+    _laya = laya_build(cfg)
+    if _laya:
+        table.add_row("laya", "ok", escape(f"importable, {_laya} build"))
+    else:
+        _needed = getattr(getattr(cfg, "decide", None), "enabled", True)
+        table.add_row(
+            "laya",
+            "warn" if _needed else "-",
+            escape(
+                f"not installed. {INSTALL_HINT}. See {DOC}"
+                if _needed
+                else f"not installed; [decide] enabled = false. See {DOC}"
+            ),
+        )
 
     if not offline:
         from rudra.llm.probe import probe_role, roles_to_probe
@@ -2142,3 +2163,117 @@ def memory_import(
         console.print(f"Nothing to import from {source}.")
         return
     console.print(f"[green]Imported[/green] {stats['drawers']} memories from {source}")
+
+
+# --- decide: the laya decision layer -----------------------------------------
+
+_DECIDE_QUESTIONS = ("CLARIFY_NEEDED", "FAILURE_CLASS", "TASK_TRIAGE")
+
+
+def _all_decide_questions() -> dict:
+    """Every catalog question with a fixed shape (the #4 selections are built at
+    call time from live tool/skill ids, so they have no standing qid here)."""
+    from rudra.decide import catalog
+
+    merged: dict = {}
+    for name in _DECIDE_QUESTIONS:
+        merged.update(getattr(catalog, name))
+    return merged
+
+
+@decide_app.command("fit")
+def decide_fit(
+    runs: Optional[Path] = typer.Option(
+        None, "--runs", help="Archive root to fit from (default: the run archive)."
+    ),
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Fit laya calibration from archived run labels.
+
+    Honest by construction: a question laya's fitters decline (too few rows)
+    stays zero-shot, and nothing is written unless something was served.
+    """
+    from rudra.decide.backends import select_backend
+    from rudra.decide.catalog import TASK_TRIAGE
+    from rudra.decide.fit import build_dataset, resolve_calibration_dir
+    from rudra.state.archive import archive_home
+
+    cfg = _load_config_or_exit(project_dir)
+    backend = select_backend(cfg)
+    if backend is None:
+        console.print(
+            "Decision backend unavailable — nothing to fit. "
+            "Install laya ([cyan]pip install laya-mlx[/cyan] on Apple Silicon, "
+            "[cyan]pip install 'laya[onnx]'[/cyan] elsewhere), or see "
+            "Documentation/16-laya.md."
+        )
+        return
+
+    runs_dir = runs if runs is not None else archive_home()
+    rows = build_dataset(runs_dir, TASK_TRIAGE)
+    out_dir = resolve_calibration_dir(cfg)
+    report = backend.fit(rows, TASK_TRIAGE, out_dir)
+
+    table = Table(title=f"decide fit — backend {backend.name}", header_style="bold")
+    for column in ("Question", "Rows", "Verdict"):
+        table.add_column(column, overflow="fold")
+    for qid, qf in report.per_question.items():
+        verdict = qf.note if not qf.served else "served (calibrated gate)"
+        table.add_row(escape(qid), str(qf.n_rows), escape(verdict))
+    console.print(table)
+    if report.calibration_written:
+        console.print(f"[green]Calibration written[/green] to {out_dir}")
+    else:
+        console.print(
+            "[dim]Nothing served — every question stays zero-shot "
+            "(abstain → the model). No calibration written.[/dim]"
+        )
+
+
+@decide_app.command("status")
+def decide_status(
+    project_dir: Optional[Path] = typer.Option(None, "--project-dir", "-d"),
+) -> None:
+    """Show the active backend and which decisions are served vs zero-shot."""
+    import json as _json
+
+    from rudra.decide.engine import DecisionEngine
+    from rudra.decide.fit import META_FILE, resolve_calibration_dir
+
+    cfg = _load_config_or_exit(project_dir)
+    engine = DecisionEngine.build(cfg)
+    if not engine.available():
+        console.print(
+            "Decision backend: [yellow]unavailable[/yellow] — every decision runs "
+            "zero-shot and falls back to the model. Install laya to enable it."
+        )
+        return
+
+    backend = engine._backend  # noqa: SLF001 - CLI status reads the selected backend
+    console.print(
+        f"Decision backend: [green]{escape(backend.name)}[/green] ({escape(backend.model_id)})"
+    )
+
+    thresholds: dict = {}
+    meta_path = resolve_calibration_dir(cfg) / META_FILE
+    fresh = False
+    if meta_path.is_file():
+        try:
+            meta = _json.loads(meta_path.read_text())
+            fresh = meta.get("backend") == backend.name and meta.get("model_id") == backend.model_id
+            if fresh:
+                thresholds = meta.get("thresholds", {}) or {}
+        except Exception:  # noqa: BLE001 - a bad meta is just "no calibration"
+            fresh = False
+    console.print(
+        f"Calibration: {'[green]loaded[/green]' if fresh else '[dim]none (zero-shot)[/dim]'}"
+    )
+
+    table = Table(title="Decisions", header_style="bold")
+    for column in ("Question", "Type", "Gate"):
+        table.add_column(column, overflow="fold")
+    for qid, q in _all_decide_questions().items():
+        qtype = q.get("type", "?") if isinstance(q, dict) else "?"
+        served = any(k == qtype or str(k).startswith(f"{qtype}:") for k in thresholds)
+        table.add_row(escape(qid), escape(qtype), "calibrated" if served else "zero-shot")
+    console.print(table)

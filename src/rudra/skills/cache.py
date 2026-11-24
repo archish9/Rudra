@@ -89,6 +89,23 @@ def cache_key(bundles: Sequence[Bundle], enabled: frozenset[str]) -> str:
     return digest.hexdigest()[:16]
 
 
+def _rendered_is_valid(root: Path, enabled: frozenset[str]) -> bool:
+    """Whether `root` actually holds every enabled skill deepagents needs.
+
+    The sentinel proves a build FINISHED; it does not prove the tree is
+    still intact. `_build` publishes atomically, so a clean build cannot
+    leave a sentinel beside a partial tree -- but both the cache home and
+    the shared scratch (`prune_stale` never cleans scratch, OPEN-172) live
+    on disk where an external actor can delete a rendered skill while the
+    `.complete` file stays. deepagents' `_list_skills` silently skips any
+    `active/<name>/` with no `SKILL.md`, so the coder would run with a
+    subset. Re-check the one property that drives that skip -- an enabled
+    skill with no `SKILL.md` -- so a corrupted cache self-heals on reuse.
+    """
+    active = root / "active"
+    return all((active / name / "SKILL.md").is_file() for name in enabled)
+
+
 def _build(bundles: Sequence[Bundle], enabled: frozenset[str], target: Path) -> None:
     """Render beside `target`, then publish with one atomic rename.
 
@@ -127,7 +144,10 @@ def ensure_cache(
     key = cache_key(bundles, enabled)
     target = _cache_home(cache_home) / key
 
-    if (target / SENTINEL).is_file():
+    # The sentinel says a build finished; `_rendered_is_valid` says the tree
+    # is still intact. An externally-corrupted cache (sentinel present, a
+    # SKILL.md gone) must re-render, not be served -- OPEN-172.
+    if (target / SENTINEL).is_file() and _rendered_is_valid(target, enabled):
         return SkillCache(root=target)
 
     try:
@@ -138,10 +158,13 @@ def ensure_cache(
         # it -- prune_stale only cleans the cache home -- so on exactly the
         # boxes this path exists for (read-only home, locked-down CI,
         # sandboxed container) every `rudra` invocation wrote a full render
-        # of every skill and abandoned it (CR-A6).
+        # of every skill and abandoned it (CR-A6). The scratch lives in a
+        # world-shared temp dir and nothing prunes it, so re-validate it on
+        # reuse the same way -- a corrupted scratch is otherwise served
+        # forever (OPEN-172).
         scratch = Path(tempfile.gettempdir()) / f"rudra-skills-{key}"
         rendered = scratch / "rendered"
-        if (rendered / SENTINEL).is_file():
+        if (rendered / SENTINEL).is_file() and _rendered_is_valid(rendered, enabled):
             return SkillCache(root=rendered, fell_back=True)
         _build(bundles, enabled, rendered)
         return SkillCache(root=rendered, fell_back=True)

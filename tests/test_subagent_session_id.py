@@ -32,7 +32,7 @@ async def test_run_subagent_uses_one_id_for_thread_and_session(monkeypatch, tmp_
 
     seen = {}
 
-    def boom(spec, context, task="", *, session_id=None):
+    def boom(spec, context, task="", *, session_id=None, hints=None):
         seen["session_id"] = session_id
         raise RuntimeError("stop")
 

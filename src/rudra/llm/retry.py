@@ -55,6 +55,16 @@ _TRANSIENT_NAME_HINTS = (
     "internalserver",
     "apistatus",
     "overloaded",
+    # OPEN-184: a mid-stream server drop. langchain_openai streams raw over
+    # httpx, so when a backend closes the socket before finishing the chunked
+    # body the exception that reaches here is httpx.RemoteProtocolError ("peer
+    # closed connection without sending complete message body") or httpx.ReadError
+    # (the connection broke mid-read) -- both carry no HTTP status, both are a
+    # flap a retry plausibly survives. Deliberately `remoteprotocol`, not bare
+    # `protocol`: httpx.LocalProtocolError means WE sent a malformed request, which
+    # fails identically on retry and must stay non-transient.
+    "remoteprotocol",
+    "readerror",
 )
 
 

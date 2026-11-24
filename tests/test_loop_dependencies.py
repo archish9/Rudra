@@ -9,6 +9,7 @@ from __future__ import annotations
 from rudra.loop.dependencies import (
     dependency_manifest_touched,
     local_module_names,
+    missing_modules_in_text,
     missing_packages,
 )
 from rudra.verify.pipeline import _parse_findings
@@ -244,3 +245,31 @@ def test_detects_pyproject_and_requirements_variants():
 
 def test_no_manifest_returns_none():
     assert dependency_manifest_touched(["src/app.py", "tests/test_app.py"]) is None
+
+
+# --- missing_modules_in_text (OPEN-177): names a missing module from raw text,
+# independent of pytest's blocker outcome, so a COLLECTION ImportError (which
+# missing_packages excludes, being outcome=ERROR not FAILED) still yields the
+# package name the loop-recovery gate needs.
+
+
+def test_missing_modules_in_text_names_a_collection_import_error():
+    text = (
+        "ModuleNotFoundError: No module named 'rudra_fx_client'\n"
+        "ImportError while importing test module"
+    )
+    assert missing_modules_in_text(text, lambda name: False) == ("rudra_fx_client",)
+
+
+def test_missing_modules_in_text_skips_local_and_stdlib():
+    text = "No module named 'mypkg'\nNo module named 'os'\nNo module named 'httpx'"
+    assert missing_modules_in_text(text, {"mypkg"}.__contains__) == ("httpx",)
+
+
+def test_missing_modules_in_text_empty_when_no_missing_module():
+    assert missing_modules_in_text("E   assert 1 == 2", lambda n: False) == ()
+
+
+def test_missing_modules_in_text_dedupes_and_sorts_top_level():
+    text = "No module named 'b.sub'\nNo module named 'a'\nNo module named 'a'"
+    assert missing_modules_in_text(text, lambda n: False) == ("a", "b")
